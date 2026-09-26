@@ -19,8 +19,9 @@ input shows the call and its options; press `1`, `2`, or `3` (see
 Shift+Tab or `/permissions` switches the session's permission mode
 (`manual`, `yolo`, or a mode an installed bundle provides); the status bar
 shows the mode in effect (see [Permission modes](#permission-modes)).
-Models, Workflows, and saved provider keys have
-dedicated views; the API command view exposes the other HTTP/JSON operations
+Models and Workflows have dedicated views, and `/key` opens the full-screen
+[Provider View](#provider-view) (providers, keys, model lists, model tests,
+and model metadata); the API command view exposes the other HTTP/JSON operations
 in `hya.v1`. The input is a multi-line editor with input history; it also
 runs `!command` shell turns, completes `@file` references, and opens a
 command menu on `/` (see [Composer](#composer)). Tab completes slash commands
@@ -28,8 +29,6 @@ using the TUI and server command catalogs. One persistent instruction line
 stays below the input at the bottom of the screen and changes with the
 current view. `?` on an empty input (or `/help`) lists every key and
 command (see [Key help](#key-help)).
-If a backend predates the saved-key list endpoint, the main TUI still opens and
-shows that key listing needs a backend restart with an updated binary.
 
 ## Start it
 
@@ -144,24 +143,10 @@ with it. Next time, `--continue` picks the conversation up again:
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --continue
 ```
 
-To set a provider API key, type `/key set anthropic`, paste the key into the
-concealed prompt, and press Enter. The prompt draws bullets only and clears its
-buffer after submission; Esc cancels. `/keys` lists saved provider IDs, and
-`/key remove anthropic` deletes that provider's saved credential. The backend
-stores the key in its user auth directory; it never sends existing key values
-back to the TUI. Configure that provider's model route in the backend config,
-then restart the backend after adding or removing a key so the route resolves
-the new credentials. OAuth login remains available through the backend CLI.
-After typing `/keys`, read the bottom row: it shows `/key set <provider>` to
-add or replace a key and `/key remove <provider>` to delete one. During
-concealed entry, the row changes to `Paste API key · Enter saves · Esc cancels`.
-
-If `/keys` says key listing is unavailable, restart the backend with hya
-0.41.0 or newer and run the same frontend command again (a backend the TUI
-started restarts with it). For example, a frontend started with `--server`
-on `127.0.0.1:22103` can reconnect after restarting the backend on that
-port; sessions and other main views remain available while its older
-backend is running.
+To add a provider or set its API key, type `/key`: the full-screen
+[Provider View](#provider-view) lists the providers, adds one through a short
+pop-up (name, protocol, base URL, key), and fetches and tests its models.
+Changes apply to the running backend at once; no restart is needed.
 
 ## Commands and keys
 
@@ -186,9 +171,7 @@ backend is running.
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
 | Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In an open list (the command menu, the file list, a picker) it moves the highlight up instead. |
-| `/keys` | List configured providers and provider IDs with saved credentials; never display key values. |
-| `/key set <provider>`, `/login <provider>` | Open concealed entry for a provider API key; Enter saves, Esc cancels. |
-| `/key remove <provider>` | Delete the provider's saved credential. |
+| `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
 | `/workflows`, `/workflow select <name>`, `/workflow run [name]` | View sources and selected state; select or start a Workflow in the selected session. |
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
@@ -232,7 +215,7 @@ custom commands and skills from the server catalog (`ListCommands`, which
 already includes skills tagged `source: "skill"`) remain usable in this
 frontend. Tab suggestions and the command menu also use that catalog.
 Argument completion covers agents, sessions, models, Workflows, pending
-interaction IDs, provider IDs, saved key names, and HTTP operations from the
+interaction IDs, permission modes, and HTTP operations from the
 generated OpenAPI catalog. Suggestions are refreshed with `/refresh` or
 Ctrl+R, and whenever the session or directory changes.
 
@@ -257,7 +240,8 @@ routes. See the [protocol guide](protocol/README.md) for those frames.
 
 `?` on an empty input, or `/help`, opens a help overlay over the screen: a
 filterable list of every key and command, one row each, grouped and tagged —
-`[composer]`, `[transcript]`, `[turns]`, `[prompts]`, `[modes]`, `[pickers]`,
+`[composer]`, `[vim]`, `[transcript]`, `[turns]`, `[prompts]`, `[modes]`,
+`[pickers]`, `[providers]` (the [Provider View](#provider-view)'s keys),
 `[views]`, `[app]` for keys, then every slash command tagged by where it
 comes from: `[local]` (this TUI), `[server]` (the backend's command
 catalog), or `[skill]`. The highlighted row's full description shows,
@@ -268,7 +252,8 @@ With text in the input, `?` types a question mark.
 
 The rows are generated from the key binding tables (`keyBindings` and the
 input's `composerKeyBindings` in `src/keys/bindings.ts`, the `/sessions`
-picker's row actions) and the merged command list, so the overlay cannot
+picker's row actions, the Provider View's `providerKeyRows` in
+`src/state/providers.ts`) and the merged command list, so the overlay cannot
 list a key the TUI does not have or miss one it does; the prompt and picker
 keys come from `src/commands/help.ts` next to those state machines. Keys
 that only a real terminal can send are marked: Shift+Enter reads
@@ -1555,6 +1540,183 @@ the raw id. A `sessionUpdated {title}` frame (see
 updates all three live, with no extra refresh — including a title set by
 another client or generated by the backend after the first turn.
 
+## Provider View
+
+`/key` opens the Provider View: a full-screen place to configure the model
+providers of the backend the TUI talks to. It lists every provider with its
+protocol, where its key comes from, its auth status, and how many models it
+has; a provider opens into its models. From there you add a provider, set or
+remove its API key, pull its latest model list, test a model, and add a
+model or edit a model's metadata. Every change applies to the running
+backend at once (the server rebuilds that provider's route and catalog; see
+[Protocol guide — Providers and keys](protocol/README.md#providers-and-keys)),
+so there is nothing to restart, and the `/model` picker lists the new models
+right away. The key itself is only ever sent to the backend: the view shows
+bullets while you type it and never displays a saved key.
+
+The view replaces the older `/keys`, `/key set|remove <provider>`, and
+`/login <provider>` commands; `/key` takes no arguments.
+
+### Screens
+
+- **List** (`Providers`): one row per provider — `PROVIDER` (the id),
+  `PROTOCOL` (`openai`, `openai-response`, `anthropic`, `google`, …;
+  `offline` for the built-in `hya` row, listed last), `KEY` (`saved key` in
+  `auth/<id>.yaml`, `oauth`, `config key` for an inline `api_key`, or
+  `no key`), `STATUS` (`ready`, `no key`, `key rejected`, `auth required`,
+  `offline`), and `MODELS` (the count).
+- **Detail** (`Providers › <id>`): the header line
+  `gw · openai · https://gw.example/v1 · saved key · ready · 3 models`, then
+  one row per model — `MODEL` (the provider-local id), `NAME` (a display
+  name, when it differs), `SOURCE`, `CTX / OUT` (context and output limits,
+  `64k / 4.1k`, `—` when unknown), and `reasoning` when the model takes
+  reasoning effort variants. `SOURCE` says where the row comes from:
+  `remote` (the provider's model list, kept in the model cache), `config`
+  (only in `config.yaml`), `override` (both; the `config.yaml` entry wins
+  field by field), or `offline`. The last model test's result shows under the
+  rows.
+
+Below the rows: the running call (spinner, label, elapsed seconds,
+`Esc cancels`), a notice with the last outcome (green for success, red for a
+failure), the filter while one is set, and the key line for the screen.
+At about 80 columns the columns shrink (long model ids end in `…`) and the
+key line wraps.
+
+### Keys
+
+| Key | List | Detail |
+| --- | --- | --- |
+| Up / Down | Move over providers | Move over models |
+| Enter | Open the provider | — |
+| `a` | Add a provider (the pop-up below) | — |
+| `k` | Set or replace the highlighted provider's API key | The open provider's |
+| `x` | Remove the provider's saved key (asks first) | The open provider's |
+| `r` | Fetch the provider's latest model list | The open provider's |
+| `t` | — | Test the highlighted model |
+| `m` | — | Add a model by hand |
+| `e` | — | Edit the highlighted model's metadata |
+| `d` | — | Delete the highlighted model's `config.yaml` entry (asks first) |
+| `/` | Filter the rows (Enter keeps the filter, Esc clears it) | Filter the models |
+| Esc | Cancel a running call; else clear the filter; else close the view | Cancel a running call; else clear the filter; else back to the list |
+
+Ctrl+C closes the view and keeps its quit meaning (press again to quit). The
+built-in `hya` provider takes no key and has no list to fetch or edit. `x`
+works on a `saved` or `oauth` key; a key written inline in `config.yaml` is
+left alone. `d` works on a `config` or `override` row; a `remote` row has no
+entry to delete. While a call runs, moving still works and other actions say
+`Busy: … · Esc cancels`. The help overlay (`?`, group `providers`) lists the
+same keys.
+
+### Pop-ups
+
+A pop-up asks one field at a time over the view. Enter checks the field and
+moves on (the last field submits); Esc cancels at any step. Text fields take
+typing, Backspace, Ctrl+U (clear), and pasting; a choice field takes Up/Down
+or its digit; a key field shows only bullets. A field that fails a check
+stays open with the reason in red, and so does a pop-up whose call the server
+refused (`invalid_argument: …`), on the field the error names.
+
+- **Add provider** (`a`, `Add provider · 1/4` … `4/4`): **Name** (the
+  provider id: 1–64 letters, digits, `-`, `_`; not `hya`; not an existing
+  id), **Protocol** (`1 openai` — OpenAI-compatible Chat Completions,
+  `2 openai-response` — OpenAI Responses, `3 anthropic`, `4 google`),
+  **Base URL** (`http://` or `https://`, no credentials), **API key**
+  (optional: Enter with none skips, for local endpoints). Enter on the key
+  adds the provider and fetches its models: the view opens the new provider
+  with `Added gw · 2 models fetched`, or `Added gw · model fetch failed
+  (unavailable): …` — a failed fetch still adds the provider, so you can fix
+  the key (`k`) or the endpoint and press `r`. When the open session (or,
+  without one, the next new session) would run on `hya/offline`, the
+  `/model` picker opens over the view with the new provider's first model
+  highlighted; Enter switches the session (or remembers the choice for the
+  next one), Esc keeps the offline model.
+- **API key** (`k`): one hidden field; Enter saves it to `auth/<id>.yaml`
+  (`Saved the key of gw · applies now`, plus the fetch outcome when the
+  provider had no cached models).
+- **Add model** (`m`, `1/5` … `5/5`): **Model id** (as the provider serves
+  it; `/` and `:` are fine), **Display name**, **Context limit**, **Output
+  limit** (digits only, at most 4294967295; the output limit may not exceed
+  the context limit), **Reasoning** (`default` keeps what the provider
+  reports, `on`, `off`). Only the fields you fill in are saved into the
+  provider's `models:` in `config.yaml`; the row shows `config` (or
+  `override` for a model the remote list also has).
+- **Edit model** (`e`): the same fields but the id, filled with the model's
+  current values. Only the fields you change are sent: a field left as it
+  opened is not written, so values the server merely shows for a model
+  without real metadata (a fallback context limit, `reasoning`) never end up
+  in `config.yaml`. Clearing a field (Ctrl+U) removes that field from the
+  entry, so the remote value (if any) shows again; choosing `default`
+  reasoning removes a `reasoning: true|false`. An edit that changes nothing
+  says `No changes to <id>` and sends nothing. Saving makes a remote model's
+  row `override`.
+- **Confirm** (`x`, `d`): one line — Enter does it, Esc cancels.
+
+### Testing a model
+
+`t` sends one message, `hi`, to the highlighted model with at most 1 output
+token (16 on Responses protocols), no tools, and no system prompt. The call
+may take up to 60 seconds: the running line counts the seconds, the view
+stays usable, and Esc stops waiting (`Test cancelled`). The result line reads
+`✓ gw/alpha replied · 412 ms · finish length · "Hi"` — a `length` finish is a
+normal reply here — or `✗ gw/alpha failed · 90 ms · http_401: …` with the
+provider's error code (`http_<status>`, `transport`, `timeout`,
+`unknown_model`, `incompatible`, `decode`, `auth_expired`,
+`provider_error`). Nothing is written to any session.
+
+### Example
+
+Add a local OpenAI-compatible server and switch the session to it:
+
+1. `/key`, then `a`.
+2. Name `local`, Enter; Enter (`openai`); base URL
+   `http://127.0.0.1:8000/v1`, Enter; no key, Enter.
+3. The view opens `Providers › local` with `Added local · 3 models fetched`;
+   the session was on `hya/offline`, so the model picker opens — choose a
+   model, Enter.
+4. `t` on a model: `✓ local/qwen replied · 38 ms · finish length · "Hi"`.
+5. `e` on it, Display name `Qwen`, Context limit `32768` (Ctrl+U clears the
+   value it opened with), Enter through the rest: the row shows
+   `Qwen · override · 33k / —`, and the provider's entry in `config.yaml`
+   now reads (formatting may differ; only the two changed fields are written):
+
+   ```yaml
+   providers:
+     local:
+       kind: openai
+       base_url: http://127.0.0.1:8000/v1
+       models:
+         - id: qwen
+           name: Qwen
+           limit:
+             context: 32768
+   ```
+
+6. Esc, Esc: back in the chat.
+
+### Provider View interfaces
+
+The view uses the v1 routes of
+[Protocol guide — Providers and keys](protocol/README.md#providers-and-keys);
+after every write it re-reads `GET /v1/providers` and `GET /v1/models` (with
+the rest of the catalog), so its rows and the `/model` picker are current.
+The server's `catalog.updated` notice does not reach v1 event streams, so
+the TUI does not wait for it.
+
+| Action | Call | Body | Reads |
+| --- | --- | --- | --- |
+| Open, after each write | `GET /v1/providers`, `GET /v1/models` | — | `ProviderSummary` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`); `ModelSummary` (`providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `source`) |
+| Add provider | `PUT /v1/providers/{id}` | `{kind, baseUrl, apiKey?}` (no `apiKey` when the key was skipped) | `ProviderUpdate.discovery` (`ok`, `result`, `errorMessage`, `modelCount`) |
+| Refresh (`r`) | `POST /v1/providers/{id}/refresh` | `{}` | `ProviderUpdate.discovery` |
+| Set key (`k`) | `PUT /v1/auth/{id}` | `{apiKey}` | `discovery` when the models were fetched too |
+| Remove key (`x`) | `DELETE /v1/auth/{id}` | — | — |
+| Add / edit model (`m`, `e`) | `PUT /v1/providers/{id}/models` | `{modelId, displayName?, contextLimit?, outputLimit?, reasoning?}` with only the fields filled in (add) or changed (edit); limits as numbers (uint32); a cleared field is sent as `""` / `0` (removed); `reasoning` omitted for `default` | `ProviderUpdate` |
+| Delete override (`d`) | `DELETE /v1/providers/{id}/models?modelId=<percent-encoded>` | — | `ProviderUpdate` |
+| Test (`t`) | `POST /v1/providers/{id}/test` | `{modelId}` | `TestProviderModelResponse` (`ok`, `text`, `finishReason`, `errorCode`, `errorMessage`, `latencyMs`) |
+| Pick a model after adding | `PATCH /v1/sessions/{id}` | `{model: "provider/model"}` | `SessionInfo` (no session: remembered for the next `CreateSession`) |
+
+A failed call shows the server's `code: message` (for example
+`invalid_argument: …` or `not_found: …`) without the method and path.
+
 ## Interface definitions
 
 The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
@@ -1588,28 +1750,26 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator. |
-| `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `source`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`. |
+| `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
-| `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). A 404 marks key listing unavailable without blocking startup. |
-| `PUT /v1/auth/{provider_id}` | `{apiKey: string}` | `SetProviderAuthResponse.status: AuthStatus`; key value is sent only to the backend. |
-| `DELETE /v1/auth/{provider_id}` | No body | `RemoveProviderAuthResponse` (empty). |
+| `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
+| `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |
+| `DELETE /v1/auth/{provider_id}` | No body (Provider View `x`) | `{provider?}` |
 | `GET /v1/workflows` | No body | `ListWorkflowsResponse.workflows: WorkflowSummary[]` |
 | `GET /v1/sessions/{id}/workflow` | No body | `WorkflowState` |
 | `POST /v1/sessions/{id}/workflow` | `{select: {name: string}}` or `{run: {name: string}}` | `SubmitWorkflowCommandResponse` |
 
 The one-row footer sits directly below the input panel. Its content is selected
-from the current view; it makes no HTTP request:
+from the current view; it makes no HTTP request (the Provider View draws its
+own key line; see [Provider View](#provider-view)):
 
 | View or state | Bottom instruction |
 | --- | --- |
 | Chat | `Enter a prompt · /new creates a session · /help lists commands · / opens the command menu` |
-| Models | `Next: /model <provider/model> to switch this session · /help` |
+| Models | `Next: /model <provider/model> to switch this session · /key opens the Provider View · /help` |
 | Workflows | `Next: /workflow select <name> or /workflow run [name]` |
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
-| Saved keys | `Next: /key set <provider> to add · /key remove <provider> to delete · Tab completes` |
-| Saved keys when `GET /v1/auth` is unavailable | `Next: restart backend 0.41.0+ to list saved keys · /help` |
-| Concealed key entry | `Paste API key · Enter saves · Esc cancels` |
 | Chat in a subagent's session | `Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch` |
 | API | `Next: /api GET /v1/health · /help for command syntax` |
 | Help | `Enter a prompt or choose a /command · Tab completes` |
@@ -1702,12 +1862,14 @@ together.
 | `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences`. |
 | `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`). |
-| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, the open Provider View's state, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`; transcript notices spliced in by `withDividers()`, including the dividers derived from compaction summaries in the history. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
 | `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (status bar text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
 | `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
+| `src/state/providers.ts` | The [Provider View](#provider-view)'s pure state: `initialProviderView()`, `providerViewKey()` (screens, filter, busy), the pop-up forms (`addProviderForm()`, `setKeyForm()`, `addModelForm()`, `editModelForm()`, `formKey()`, `formPaste()`, `withSecretLength()`), validation (`validateProviderId()`, `validateBaseUrl()`), row text (`providerLine()`, `modelLine()`, `providerDetailHeader()`, `tokenCount()`, `discoveryNotice()`, `testResultText()`), `providerKeyRows` (footer hint and help), and `defaultModelRef()`. |
+| `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
 | `src/state/catalog.ts` | `/model`/`/agent`/`/sessions` picker row builders: `modelRows()` (tagged by provider), `agentRows()` (visible agents, tagged by default model), `sessionRows()` (the `New session` row + `sessionTree()`, relative time), `relativeTime()`. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
@@ -1716,14 +1878,14 @@ together.
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
 | `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
-| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, concealed key entry, and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, routing keys and pastes to an open Provider View, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
-| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
+| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
 `@opentui/solid/preload` for `bun test` and for `bun src/...` run inside the

@@ -2,7 +2,8 @@
  * Key and command help (G29): the `/help` / `?` overlay and the key help
  * view are generated from the binding tables (`keyBindings`,
  * `composerKeyBindings`, the `/sessions` picker actions) and the merged
- * command list, so they cannot drift from what the keys do. Prompt and
+ * command list, so they cannot drift from what the keys do. The Provider
+ * View's keys come from its own table (state/providers.ts `providerKeyRows`). Prompt and
  * picker keys, which live in state machines (state/prompts.ts `promptKey`,
  * state/picker.ts `pickerKey`) rather than tables, are listed here next to
  * those machines' precedence rules; keep them in step.
@@ -10,10 +11,11 @@
 import type { TextareaAction } from "@opentui/core"
 import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyAction } from "../keys/bindings"
 import type { PickerRow } from "../state/picker"
+import { providerKeyRows } from "../state/providers"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -157,7 +159,9 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
     description: entry.description,
     source: sources[entry.source],
   }))
-  const rows = [...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(), ...commandRows]
+  // The Provider View's keys (`/key`; state/providers.ts `providerKeyRows`, also its footer line).
+  const providerRows: HelpRow[] = providerKeyRows.map((row) => ({ group: "Providers", keys: row.keys, description: row.description }))
+  const rows = [...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(), ...providerRows, ...commandRows]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))
     .sort((a, b) => helpGroups.indexOf(a.row.group) - helpGroups.indexOf(b.row.group) || a.index - b.index)

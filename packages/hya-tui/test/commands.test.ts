@@ -15,7 +15,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     refreshMessages: async () => { calls.push("refreshMessages") },
     openSession: async (id) => { calls.push(`open ${id}`) },
     newSession: async (agent, model) => { calls.push(`new ${agent ?? ""} ${model ?? ""}`.trim()) },
-    beginKeyEntry: (provider) => { calls.push(`key ${provider}`) },
+    openProviders: () => { calls.push("providers") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
     quit: () => { calls.push("quit") },
@@ -35,7 +35,11 @@ test("registers every native slash command with a description", () => {
   const { registry } = harness()
   expect(registry.names().sort()).toEqual([...nativeCommands].sort())
   for (const name of registry.names()) expect(registry.get(name)?.description.length).toBeGreaterThan(0)
-  expect(registry.get("/key")?.argumentHint).toBe("set|remove <provider>")
+  // `/key` opens the Provider View and takes no arguments; `/keys` and `/login` are gone.
+  expect(registry.get("/key")?.argumentHint).toBeUndefined()
+  expect(registry.get("/key")?.complete).toBeUndefined()
+  expect(registry.get("/keys")).toBeUndefined()
+  expect(registry.get("/login")).toBeUndefined()
 })
 
 test("parses a command line into name, words, and the raw argument text", () => {
@@ -55,20 +59,18 @@ test("view commands switch the main panel; /help opens the help overlay", async 
   expect(calls).toEqual(["help", "refresh"])
 })
 
-test("/open resolves list numbers and /login starts concealed key entry", async () => {
+test("/open resolves list numbers and /key opens the Provider View", async () => {
   const { store, calls, run } = harness()
-  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "build", workdir: "/w" }, { id: "hysec_b", agent: "build", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "build", workdir: "/w" }, { id: "hysec_b", agent: "build", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   await run("/open 2")
   await run("/open hysec_x")
-  await run("/login openai")
-  await run("/key set anthropic")
-  expect(calls).toEqual(["open hysec_b", "open hysec_x", "key openai", "key anthropic"])
+  await run("/key")
+  expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
 })
 
 test("usage errors are thrown for incomplete commands", async () => {
   const { run } = harness()
   await expect(run("/open")).rejects.toThrow("Usage: /open <session id or number>")
-  await expect(run("/key")).rejects.toThrow("Usage: /key set|remove <provider> or /login <provider>")
   await expect(run("/answer req_1")).rejects.toThrow("Usage: /answer <interaction id> <text>")
 })
 
@@ -101,7 +103,7 @@ test("/model and /agent with no argument open a picker of the catalog, the sessi
   const { store, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
-    agents: [{ name: "build", description: "Default agent" }], workflows: [], providers: [], savedKeys: [], commands: [],
+    agents: [{ name: "build", description: "Default agent" }], workflows: [], providers: [], commands: [],
   })
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt" } })
   await run("/model")
@@ -116,7 +118,7 @@ test("/model and /agent with no session and no argument remember the picker choi
   const { store, calls, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
-    agents: [{ name: "review" }], workflows: [], providers: [], savedKeys: [], commands: [],
+    agents: [{ name: "review" }], workflows: [], providers: [], commands: [],
   })
   await run("/model")
   await pickers.at(-1)?.onSelect({ id: "openai/gpt", label: "gpt" })
@@ -211,9 +213,9 @@ test("/status shows the WebUI that bare hya serves, or why it is unavailable", a
 
 test("argument completion comes from the command's own completer", () => {
   const { registry, store } = harness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [{ name: "release" }], providers: [{ id: "openai" }], savedKeys: [], commands: [] })
+  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [{ name: "release" }], providers: [{ id: "openai" }], commands: [] })
   expect(registry.complete("/workflow run r", store.completionContext())).toEqual(["/workflow run release"])
-  expect(registry.complete("/login o", store.completionContext())).toEqual(["/login openai"])
+  expect(registry.complete("/key o", store.completionContext())).toEqual([])
   expect(registry.complete("/unknown x", store.completionContext())).toEqual([])
 })
 
@@ -278,7 +280,7 @@ test("/sessions opens a picker with a New session row first, then the tree, the 
       { id: "hysec_1", agent: "build", workdir: "/w", title: "Top" },
       { id: "hysec_2", agent: "review", workdir: "/w", parent: "hysec_1" },
     ],
-    interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    interactions: [], models: [], workflows: [], providers: [], commands: [],
   })
   await run("/sessions")
   expect(calls).toContain("refresh")
@@ -304,7 +306,7 @@ test("/sessions row actions: F2 renames (UpdateSession title), Ctrl+D deletes (D
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" })
   store.applyCatalog({
     sessions: [{ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" }],
-    interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    interactions: [], models: [], workflows: [], providers: [], commands: [],
   })
   await run("/sessions")
   const picker = pickers.at(-1)!

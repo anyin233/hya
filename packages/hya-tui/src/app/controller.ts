@@ -1,7 +1,7 @@
 /**
  * The controller owns everything asynchronous: catalog refreshes, the session
- * event stream, session creation, prompt/command submission, and concealed key
- * entry. It writes results into the store; components only read the store and
+ * event stream, session creation, prompt/command submission, and the
+ * Provider View's calls (app/providers.ts). It writes results into the store; components only read the store and
  * call controller methods.
  *
  * The TUI reads the server projection (sessions, transcript, interactions).
@@ -49,8 +49,8 @@
  * (debounced) for its authoritative `SessionInfo.usage` total.
  */
 import type { HyaClient, Interaction, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
-import { completeCommand, SecretEntry } from "../completion"
-import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
+import { completeCommand } from "../completion"
+import { createCommandRegistry, mergeCommandEntries, openModelPicker, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import { findPattern, rankPaths } from "../composer/mention"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
@@ -63,8 +63,10 @@ import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
+import { defaultModelRef } from "../state/providers"
 import type { AppStore } from "../state/store"
 import { createModeSwitcher } from "./modes"
+import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
@@ -149,7 +151,6 @@ export function createController({ client, store, directory, registry = createCo
   let childAgain = false
   let lastChildRead = 0
   let unsubscribeFocus: (() => void) | undefined
-  const secret = new SecretEntry()
   const status = (text: string): void => store.setStatus(text)
 
   /** Desktop notifications (src/notify.ts): only while unfocused and the preference is on. */
@@ -174,13 +175,13 @@ export function createController({ client, store, directory, registry = createCo
   const modes = createModeSwitcher({ store, client })
 
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, agents, workflows, providers, savedKeys, commands, permissionModes] = await Promise.all([
+    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
-      client.listProviders(), client.listSavedKeys(), client.listCommands(),
+      client.listProviders(), client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
     ])
-    store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, savedKeys, commands, ...(permissionModes ? { permissionModes } : {}) })
+    store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}) })
   }
 
   async function refreshMessages(): Promise<void> {
@@ -464,12 +465,11 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   async function newSession(agentArg?: string, modelArg?: string): Promise<void> {
-    const { agents, models } = store.state
+    const { agents } = store.state
     // A `/model`/`/agent` choice made before any session existed (state/picker.ts, C11/C12) applies to
     // the next `CreateSession` the same way an explicit argument would.
     const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
-    const preferred = agents.find((item) => item.name === agent)?.model
-    const model = modelArg ?? store.state.pendingModel ?? (preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}` : models[0]?.id)
+    const model = modelArg ?? (defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined)
     if (!model) throw new Error("No model is available; configure a provider on the backend")
     const session = await client.createSession(agent, model, directory)
     store.setPendingAgent(undefined)
@@ -479,17 +479,6 @@ export function createController({ client, store, directory, registry = createCo
     status(`Created ${session.id}`)
     // A mode chosen before any session existed applies before the first prompt is admitted.
     await modes.applyPending()
-  }
-
-  function beginKeyEntry(provider: string): void {
-    secret.clear()
-    store.beginSecret(provider)
-    status(`Enter API key for ${provider} · Enter saves · Esc cancels`)
-  }
-
-  function finishKeyEntry(): void {
-    secret.clear()
-    store.endSecret()
   }
 
   /** Open the modal picker; keys go to it (components/Composer.tsx) until a row is chosen, a row action commits, or Esc closes it. */
@@ -592,8 +581,16 @@ export function createController({ client, store, directory, registry = createCo
       .finally(() => { editing = false })
   }
 
+  const providers = createProviderController({
+    store,
+    client,
+    refresh,
+    pickModel: (provider, onChosen) => openModelPicker({ store, client, actions }, { title: `Model · pick one of ${provider}'s models for this session`, highlight: provider, onChosen }),
+  })
+
   const actions: AppActions = {
-    refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh, openHelp, openEditor,
+    refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
+    openProviders: () => providers.open(),
     copyText: (text) => terminal?.copy(text) ?? false,
     cancelTurn: () => turns.cancel(),
     quit,
@@ -645,41 +642,6 @@ export function createController({ client, store, directory, registry = createCo
     return rankPaths(await client.findFiles(findPattern(query), fileLookupLimit), query, fileSuggestionLimit)
   }
 
-  /** Handle one key during concealed key entry. The key never reaches the store. */
-  function secretKey(key: KeyLike): void {
-    const provider = store.state.secretProvider
-    if (!provider) return
-    if (key.name === "escape" || key.name === "esc") {
-      finishKeyEntry()
-      status("Key entry cancelled")
-    } else if (key.name === "backspace") {
-      secret.backspace()
-      store.setSecretMask(secret.mask)
-    } else if (key.name === "return" || key.name === "enter" || key.sequence === "\r") {
-      const value = secret.take()
-      if (!value) {
-        status("API key cannot be empty · Esc cancels")
-        return
-      }
-      finishKeyEntry()
-      void client.setProviderKey(provider, value)
-        .then(async () => {
-          store.setView("keys")
-          await refresh()
-          status(`Saved key for ${provider} · restart backend to apply`)
-        })
-        .catch((error: unknown) => status(`Key save failed: ${String(error)}`))
-    } else if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " ") {
-      secret.append(key.sequence)
-      store.setSecretMask(secret.mask)
-    }
-  }
-
-  function secretPaste(text: string): void {
-    secret.append(text)
-    store.setSecretMask(secret.mask)
-  }
-
   function refreshAll(): void {
     void refresh().then(refreshMessages).catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
   }
@@ -705,9 +667,7 @@ export function createController({ client, store, directory, registry = createCo
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
-      status(webNotice(store.state.web) ?? (store.state.savedKeysAvailable
-        ? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`
-        : `Connected to hya ${version} · key listing needs backend 0.41.0+${missing}${mismatch}`))
+      status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
       store.setView("help")
@@ -722,7 +682,7 @@ export function createController({ client, store, directory, registry = createCo
     if (childTimer) clearTimeout(childTimer)
     refreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)
-    secret.clear()
+    providers.dispose()
     unsubscribeFocus?.()
   }
 
@@ -750,8 +710,10 @@ export function createController({ client, store, directory, registry = createCo
     pickerKey,
     choosePickerRow,
     closePicker,
-    secretKey,
-    secretPaste,
+    /** One key / a paste while the Provider View is open (components/Composer.tsx routes them). */
+    providerKey: (key: KeyLike) => providers.key(key),
+    providerPaste: (text: string) => providers.paste(text),
+    closeProviders: () => providers.close(),
     refreshAll,
     start,
     dispose,

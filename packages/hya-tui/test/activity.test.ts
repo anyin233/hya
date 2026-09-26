@@ -64,7 +64,7 @@ test("a pending permission or question prompt outranks any streaming activity", 
   store.applyCatalog({
     sessions: [session("hysec_1")],
     interactions: [{ id: "perm_1", session: "hysec_1", type: "INTERACTION_TYPE_PERMISSION", title: "bash ls", payload: { action: "run", resource: "bash", tool: "bash" } }],
-    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(session("hysec_1"))
   store.beginTurn()
@@ -73,7 +73,7 @@ test("a pending permission or question prompt outranks any streaming activity", 
   store.applyCatalog({
     sessions: [session("hysec_1")],
     interactions: [{ id: "que_1", session: "hysec_1", type: "INTERACTION_TYPE_QUESTION", title: "Which one?" }],
-    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    models: [], workflows: [], providers: [], commands: [],
   })
   expect(activityText(store.state)).toBe("Waiting for an answer")
 })

@@ -3,7 +3,7 @@
  *
  * It holds a copy of the server projection read over the v1 API (sessions,
  * transcript, interactions, catalogs) plus local UI state (view, status line,
- * concealed key entry). Every field is a Solid signal, so components re-render
+ * the Provider View). Every field is a Solid signal, so components re-render
  * when a mutation runs; mutations are the only way to change state.
  *
  * Streaming: `fold` (a `TranscriptOverlay`) folds stream frames as they
@@ -12,8 +12,9 @@
  * re-render per chunk. `messages` stays the projection; format.ts merges the
  * two for display.
  *
- * The store never holds a secret: key entry keeps only the provider id and the
- * bullet mask here; the key itself stays in `SecretEntry` (see completion.ts).
+ * The store never holds a secret: the Provider View's key fields keep only a
+ * mask length here; the key itself stays in the controller's `SecretEntry`
+ * (see completion.ts, state/providers.ts).
  */
 import { batch, createSignal, type Accessor, type Setter } from "solid-js"
 import { apiOperationNames, operations } from "../api"
@@ -43,6 +44,7 @@ import { mergeInteractions } from "./prompts"
 import { compactionText } from "./format"
 import { manualMode, modeCycle, modeNotice, type ModeConfirm, type PermissionModeInfo } from "./modes"
 import type { ActivePicker, PickerState } from "./picker"
+import type { ProviderViewState } from "./providers"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -64,10 +66,8 @@ export interface AppState {
   readonly interactions: Interaction[]
   readonly agents: AgentSummary[]
   readonly models: ModelSummary[]
+  /** `GET /v1/providers` (id, protocol, key source, auth, model count): the Provider View's list. */
   readonly providers: ProviderSummary[]
-  readonly savedKeys: string[]
-  /** False when the backend has no key-listing route. */
-  readonly savedKeysAvailable: boolean
   readonly backendCommands: CommandSummary[]
   readonly workflows: WorkflowSummary[]
   readonly workflowState: Record<string, unknown> | undefined
@@ -87,9 +87,8 @@ export interface AppState {
   readonly view: View
   readonly apiOutput: string
   readonly status: string
-  /** Provider whose key is being entered; undefined outside key entry. */
-  readonly secretProvider: string | undefined
-  readonly secretMask: string
+  /** The full-screen Provider View (`/key`, state/providers.ts), while open. */
+  readonly providerView: ProviderViewState | undefined
   /** Sidebar mode (state/layout.ts): `auto` follows the terminal width. */
   readonly sidebar: SidebarMode
   /** Terminal width in columns, kept current by the root layout. */
@@ -195,7 +194,7 @@ export interface Divider {
   beforeMessageId?: string
 }
 
-/** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
+/** Rows loaded by one full catalog refresh. */
 export interface Catalog {
   sessions: SessionInfo[]
   interactions: Interaction[]
@@ -204,7 +203,6 @@ export interface Catalog {
   agents?: AgentSummary[]
   workflows: WorkflowSummary[]
   providers: ProviderSummary[]
-  savedKeys: string[] | null
   commands: CommandSummary[]
   /** `GET /v1/permission-modes`; omitted keeps the rows read before. */
   permissionModes?: PermissionModeInfo[]
@@ -221,8 +219,6 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     agents: [],
     models: [],
     providers: [],
-    savedKeys: [],
-    savedKeysAvailable: true,
     backendCommands: [],
     workflows: [],
     workflowState: undefined,
@@ -236,8 +232,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     view: "chat",
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
-    secretProvider: undefined,
-    secretMask: "",
+    providerView: undefined,
     sidebar: "auto",
     columns: 80,
     thinking: false,
@@ -378,8 +373,6 @@ export function createAppStore() {
         if (catalog.agents) set("agents", catalog.agents)
         set("workflows", catalog.workflows)
         set("providers", catalog.providers)
-        set("savedKeysAvailable", catalog.savedKeys !== null)
-        set("savedKeys", catalog.savedKeys ?? [])
         set("backendCommands", catalog.commands)
         if (catalog.permissionModes) set("permissionModes", catalog.permissionModes)
         const selected = state.selected
@@ -650,25 +643,19 @@ export function createAppStore() {
       })
     },
 
-    beginSecret(provider: string): void {
+    /** Open, update, or (`undefined`) close the Provider View. */
+    setProviderView(view: ProviderViewState | undefined): void { set("providerView", view) },
+    /** A catalog refresh (`GET /v1/providers`, `GET /v1/models`) without the rest of `applyCatalog`. */
+    setProviderCatalog(providers: ProviderSummary[], models: ModelSummary[]): void {
       batch(() => {
-        set("secretProvider", provider)
-        set("secretMask", "")
-      })
-    },
-    setSecretMask(mask: string): void { set("secretMask", mask) },
-    endSecret(): void {
-      batch(() => {
-        set("secretProvider", undefined)
-        set("secretMask", "")
+        set("providers", providers)
+        set("models", models)
       })
     },
 
     completionContext(): CompletionContext {
       return {
         backendCommands: state.backendCommands.map((command) => command.name),
-        providers: [...new Set([...state.providers.map((provider) => provider.id), ...state.savedKeys])],
-        savedKeys: state.savedKeys,
         models: state.models.map((model) => model.id),
         sessions: state.sessions.map((session) => session.id),
         workflows: state.workflows.map((workflow) => workflow.name),

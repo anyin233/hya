@@ -12,7 +12,7 @@ test("starts in the chat view with the startup status and no data", () => {
   expect(store.state.sessions).toEqual([])
   expect(store.state.selected).toBeUndefined()
   expect(store.state.cursor).toBe("0")
-  expect(store.state.savedKeysAvailable).toBe(true)
+  expect(store.state.providerView).toBeUndefined()
 })
 
 test("applies a catalog refresh and keeps the selected session in sync", () => {
@@ -24,13 +24,11 @@ test("applies a catalog refresh and keeps the selected session in sync", () => {
     models: [{ id: "hya/offline" }],
     workflows: [{ name: "release" }],
     providers: [{ id: "openai" }],
-    savedKeys: null,
     commands: [{ name: "compact" }],
   })
   expect(store.state.ready).toBe(true)
   expect(store.state.selected?.title).toBe("new")
-  expect(store.state.savedKeysAvailable).toBe(false)
-  expect(store.state.savedKeys).toEqual([])
+  expect(store.state.providers.map((provider) => provider.id)).toEqual(["openai"])
   expect(store.state.backendCommands.map((command) => command.name)).toEqual(["compact"])
   expect(store.state.interactions.map((item) => item.id)).toEqual(["req_1"])
 })
@@ -99,15 +97,14 @@ test("a compaction divider folds into state.dividers and resets on a session swi
   expect(store.state.dividers).toEqual([])
 })
 
-test("tracks concealed key entry by provider and mask only", () => {
+test("opens, updates, and closes the Provider View state", () => {
   const store = createAppStore()
-  store.beginSecret("openai")
-  store.setSecretMask("•••")
-  expect(store.state.secretProvider).toBe("openai")
-  expect(store.state.secretMask).toBe("•••")
-  store.endSecret()
-  expect(store.state.secretProvider).toBeUndefined()
-  expect(store.state.secretMask).toBe("")
+  store.setProviderView({ screen: "list", provider: "gw", model: undefined, filter: "", filtering: false })
+  expect(store.state.providerView?.provider).toBe("gw")
+  store.setProviderView({ ...store.state.providerView!, screen: "detail" })
+  expect(store.state.providerView?.screen).toBe("detail")
+  store.setProviderView(undefined)
+  expect(store.state.providerView).toBeUndefined()
 })
 
 test("builds the completion context from the current catalogs", () => {
@@ -115,11 +112,9 @@ test("builds the completion context from the current catalogs", () => {
   store.applyBootstrap({ agents: [{ name: "build" }], models: [{ id: "hya/offline" }], interactions: [] })
   store.applyCatalog({
     sessions: [session("hysec_1")], interactions: [], models: [{ id: "hya/offline" }], workflows: [{ name: "release" }],
-    providers: [{ id: "openai" }], savedKeys: ["anthropic", "openai"], commands: [{ name: "compact" }],
+    providers: [{ id: "openai" }], commands: [{ name: "compact" }],
   })
   const context = store.completionContext()
-  expect(context.providers).toEqual(["openai", "anthropic"])
-  expect(context.savedKeys).toEqual(["anthropic", "openai"])
   expect(context.agents).toEqual(["build"])
   expect(context.sessions).toEqual(["hysec_1"])
   expect(context.backendCommands).toEqual(["compact"])
@@ -194,7 +189,7 @@ test("a sessionUpdated title/agent/model frame updates the open session and its 
   store.openSession(session("hysec_1", { title: "old" }))
   store.applyCatalog({
     sessions: [session("hysec_1", { title: "old" }), session("hysec_2", { title: "other" })],
-    interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    interactions: [], models: [], workflows: [], providers: [], commands: [],
   })
   // The backend's auto-generated title (no user action): the header/sidebar (state/format.ts) read `selected`/`sessions`.
   store.applyEvent({ seq: "1", session: "hysec_1", sessionUpdated: { title: "Fix the flaky test" } })

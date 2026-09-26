@@ -18,8 +18,8 @@ export interface AppActions {
   refreshMessages(): Promise<void>
   openSession(sessionId: string): Promise<void>
   newSession(agent?: string, model?: string): Promise<void>
-  /** Switch the composer into concealed key entry for `provider`. */
-  beginKeyEntry(provider: string): void
+  /** Open the full-screen Provider View (`/key`; state/providers.ts, app/providers.ts). */
+  openProviders(): void
   scheduleRefresh(): void
   /** Cancel the running turn (`CancelTurn`); throws `No active turn` when none runs. */
   cancelTurn(): Promise<void>

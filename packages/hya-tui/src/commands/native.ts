@@ -81,17 +81,41 @@ function openThemePicker({ store, actions }: CommandContext): void {
   })
 }
 
+/**
+ * Open the `/model` picker: models grouped by provider, the session's model
+ * (or the pending choice) marked. With no session the choice is remembered
+ * for the next one. The Provider View opens it too (after adding a provider
+ * while the session runs on `hya/offline`): `title` and `highlight` (a
+ * provider id: its first model is highlighted) are set then.
+ */
+export function openModelPicker({ store, client, actions }: CommandContext, options: { title?: string; highlight?: string; onChosen?: (model: string) => void } = {}): void {
+  const selected = store.state.selected
+  const current = selected ? modelReference(selected) : (store.state.pendingModel ?? "")
+  // Rows are loaded from the catalog already in `state.models` (no async loading state in the picker itself).
+  const rows = modelRows(store.state.models, current)
+  const first = options.highlight ? rows.findIndex((row) => row.tag === options.highlight) : -1
+  actions.openPicker({
+    title: options.title ?? "Model",
+    // `current` decides the opening highlight: move it to the provider's first model.
+    rows: first < 0 ? rows : rows.map((row, index) => ({ ...row, current: index === first })),
+    onSelect: async (row) => {
+      const session = store.state.selected
+      if (!session) {
+        store.setPendingModel(row.id)
+        store.setStatus(`Model → ${row.id} · applies when the session is created`)
+        options.onChosen?.(row.id)
+        return
+      }
+      store.setSelected(await client.updateSessionModel(session.id, row.id))
+      store.setStatus(`Model → ${row.id}`)
+      options.onChosen?.(row.id)
+      await actions.refresh()
+    },
+  })
+}
+
 const workflowActions = ["select", "run"]
 const switchValues = ["on", "off"]
-
-function keyUsage(): Error { return new Error("Usage: /key set|remove <provider> or /login <provider>") }
-
-async function removeKey(context: CommandContext, provider: string): Promise<void> {
-  await context.client.removeProviderKey(provider)
-  context.store.setView("keys")
-  await context.actions.refresh()
-  context.store.setStatus(`Removed key for ${provider} · restart backend to apply`)
-}
 
 async function respondAndReload(context: CommandContext, respond: Promise<unknown>): Promise<void> {
   await respond
@@ -180,21 +204,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         await actions.refresh()
         return
       }
-      // Rows are loaded from the catalog already in `state.models` (no async loading state in the picker itself).
-      actions.openPicker({
-        title: "Model",
-        rows: modelRows(store.state.models, selected ? modelReference(selected) : (store.state.pendingModel ?? "")),
-        onSelect: async (row) => {
-          if (!selected) {
-            store.setPendingModel(row.id)
-            store.setStatus(`Model → ${row.id} · applies when the session is created`)
-            return
-          }
-          store.setSelected(await client.updateSessionModel(selected.id, row.id))
-          store.setStatus(`Model → ${row.id}`)
-          await actions.refresh()
-        },
-      })
+      openModelPicker({ store, client, actions })
     },
   },
   {
@@ -317,36 +327,9 @@ export const nativeCommandSpecs: CommandSpec[] = [
     },
   },
   {
-    name: "/keys",
-    description: "List saved provider key names",
-    run: async ({ store, actions }) => { store.setView("keys"); await actions.refresh() },
-  },
-  {
     name: "/key",
-    description: "Enter a key in a concealed prompt, or delete a saved key",
-    argumentHint: "set|remove <provider>",
-    complete: ({ words, current, head }, context) => {
-      if (words.length === 1) return matchValues(head, current, ["set", "remove"])
-      if (words.length === 2 && words[0] === "set") return matchValues(head, current, context.providers)
-      if (words.length === 2 && words[0] === "remove") return matchValues(head, current, context.savedKeys)
-      return []
-    },
-    run: async (context, { args }) => {
-      const [action, provider] = args
-      if (!provider || !["set", "remove"].includes(action ?? "")) throw keyUsage()
-      if (action === "remove") await removeKey(context, provider)
-      else context.actions.beginKeyEntry(provider)
-    },
-  },
-  {
-    name: "/login",
-    description: "Alias for /key set",
-    argumentHint: "<provider>",
-    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.providers) : [],
-    run: ({ actions }, { args }) => {
-      if (!args[0]) throw keyUsage()
-      actions.beginKeyEntry(args[0])
-    },
+    description: "Open the Provider View: providers, keys, add a provider, fetch and test models, edit model metadata",
+    run: ({ actions }) => { actions.openProviders() },
   },
   {
     name: "/workflows",

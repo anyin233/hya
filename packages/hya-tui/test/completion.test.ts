@@ -3,8 +3,6 @@ import { completeCommand, SecretEntry } from "../src/completion"
 
 const context = {
   backendCommands: ["compact", "review"],
-  providers: ["anthropic", "openai"],
-  savedKeys: ["anthropic"],
   models: ["anthropic/claude", "openai/gpt"],
   sessions: ["hysec_1"],
   workflows: ["release"],
@@ -16,8 +14,9 @@ const context = {
 test("completes native and backend slash commands with current catalog arguments", () => {
   expect(completeCommand("/mo", context)).toEqual(["/model", "/models"])
   expect(completeCommand("/com", context)).toEqual(["/compact"])
-  expect(completeCommand("/key s", context)).toEqual(["/key set"])
-  expect(completeCommand("/key remove a", context)).toEqual(["/key remove anthropic"])
+  // `/key` takes no arguments: nothing to complete after it.
+  expect(completeCommand("/key s", context)).toEqual([])
+  expect(completeCommand("/ke", context)).toEqual(["/key"])
   expect(completeCommand("/model anth", context)).toEqual(["/model anthropic/claude"])
   expect(completeCommand("/workflow run r", context)).toEqual(["/workflow run release"])
   expect(completeCommand("/api GET /v1/m", context)).toEqual(["/api GET /v1/models"])

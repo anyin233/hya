@@ -157,6 +157,18 @@ export type FakeModel = {
   setTitleReply(title: string): void
   /** Background title request bodies, in arrival order. */
   titleRequests(): unknown[]
+  /**
+   * Serve `GET /v1/models` (the OpenAI list shape, `{object: "list", data:
+   * [{id, object: "model"}]}`) with these ids, so hya's model discovery
+   * (Provider View add / refresh) finds them. Unset (the default) answers
+   * 404, as before, so specs with a pinned `models:` list are unaffected.
+   * `undefined` switches the listing off again.
+   */
+  setModelList(ids: string[] | undefined): void
+  /** Number of `GET /v1/models` requests served (listing on or off). */
+  modelListRequests(): number
+  /** `authorization` header of each `GET /v1/models` request, in arrival order ("" when absent). */
+  modelListAuth(): string[]
   /** Release the oldest pending `hang` step across all in-flight requests. */
   release(): void
   /** Number of pending (unreleased) hangs currently holding a connection open. */
@@ -204,6 +216,9 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   const hangs: Array<() => void> = []
   const titleRequests: unknown[] = []
   let titleReply = ""
+  /** `GET /v1/models` ids (`setModelList`); `undefined` answers 404. */
+  let modelList: string[] | undefined
+  const listAuth: string[] = []
   /** Responses that carry no usage (title replies). */
   const noUsage = new WeakSet<ServerResponse>()
 
@@ -354,6 +369,16 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   const paths: Record<string, Protocol> = { "/v1/chat/completions": "chat", "/v1/responses": "responses" }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method === "GET" && (req.url ?? "").split("?")[0] === "/v1/models") {
+      listAuth.push(String(req.headers.authorization ?? ""))
+      if (!modelList) {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ object: "list", data: modelList.map((id) => ({ id, object: "model", created: 0, owned_by: "e2e" })) }))
+      return
+    }
     const protocol = paths[req.url ?? ""]
     if (req.method !== "POST" || !protocol) {
       res.writeHead(404).end()
@@ -417,6 +442,11 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
       titleReply = title
     },
     titleRequests: () => [...titleRequests],
+    setModelList: (ids) => {
+      modelList = ids
+    },
+    modelListRequests: () => listAuth.length,
+    modelListAuth: () => [...listAuth],
     release: () => {
       hangs.shift()?.()
     },

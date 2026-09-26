@@ -7,7 +7,7 @@ import { createAppStore } from "../src/state/store"
 const open = (extra: Record<string, unknown> = {}) => {
   const store = createAppStore()
   store.applyCatalog({
-    sessions: [], interactions: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    sessions: [], interactions: [], workflows: [], providers: [], commands: [],
     models: [{ id: "fake/model", contextLimit: "1000" }, { id: "fake/nolimit" }],
   })
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", ...extra })
