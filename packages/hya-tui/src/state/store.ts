@@ -44,7 +44,7 @@ import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
 import type { AgentModelsViewState } from "./agentModels"
 import type { DiffViewState } from "./diff"
-import { toggledSidebar, type SidebarMode } from "./layout"
+import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
 import { foldMember, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -55,6 +55,7 @@ import type { ActivePicker, PickerState } from "./picker"
 import type { ProviderViewState } from "./providers"
 import { sessionRow } from "./revert"
 import type { RulesViewState } from "./rules"
+import type { ProjectViewState } from "./projectView"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -198,6 +199,16 @@ export interface AppState {
   readonly activeProjectId: string | undefined
   /** `--remote`: started without a Project for `--dir`. */
   readonly remote: boolean
+  /** Left Projects sidebar mode (state/layout.ts): `auto` follows the terminal width (a wider threshold than the right sidebar). */
+  readonly projectsSidebar: SidebarMode
+  /** The left sidebar has focus: Up/Down move `projectSidebarHighlight`, Enter switches, Esc returns focus to the composer. */
+  readonly projectsSidebarFocus: boolean
+  /** Highlighted row of the left sidebar while it has focus (or the active Project, for a first Enter without moving). */
+  readonly projectSidebarHighlight: string | undefined
+  /** The full-screen Project view (`/project`, `/projects`; state/projectView.ts), while open. */
+  readonly projectView: ProjectViewState | undefined
+  /** The `/sessions` picker's "all projects" toggle (F3): shows every session instead of only the active Project's. */
+  readonly sessionsPickerAllProjects: boolean
 }
 
 /** One billed provider round (`tokensRecorded` with a non-empty `message`). */
@@ -319,6 +330,11 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     projects: [],
     activeProjectId: undefined,
     remote: false,
+    projectsSidebar: "auto",
+    projectsSidebarFocus: false,
+    projectSidebarHighlight: undefined,
+    projectView: undefined,
+    sessionsPickerAllProjects: false,
   }
 }
 
@@ -777,6 +793,15 @@ export function createAppStore() {
       if (id !== state.activeProjectId) set("activeProjectId", id)
     },
     setRemote(value: boolean): void { set("remote", value) },
+
+    setProjectsSidebar(mode: SidebarMode): void { set("projectsSidebar", mode) },
+    toggleProjectsSidebar(): void { set("projectsSidebar", toggledProjectsSidebar(state.projectsSidebar, state.columns)) },
+    setProjectsSidebarFocus(focus: boolean): void { set("projectsSidebarFocus", focus) },
+    setProjectSidebarHighlight(id: string | undefined): void { set("projectSidebarHighlight", id) },
+
+    /** Open, update, or (`undefined`) close the full-screen Project view (`/project`). */
+    setProjectView(view: ProjectViewState | undefined): void { set("projectView", view) },
+    setSessionsPickerAllProjects(value: boolean): void { set("sessionsPickerAllProjects", value) },
 
     completionContext(): CompletionContext {
       return {

@@ -12,6 +12,7 @@ import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
+import { projectsSidebarVisible } from "../state/layout"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
@@ -113,7 +114,8 @@ export function Composer() {
   const mcpOpen = () => store.state.mcpView !== undefined
   const rulesOpen = () => store.state.rulesView !== undefined
   const agentModelsOpen = () => store.state.agentModelsView !== undefined
-  const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentModelsOpen()
+  const projectViewOpen = () => store.state.projectView !== undefined
+  const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentModelsOpen() || projectViewOpen()
   /** A subagent's session is open: prompts are disabled, slash commands still run. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
@@ -401,6 +403,7 @@ export function Composer() {
         else if (diffOpen()) controller.closeDiff()
         else if (mcpOpen()) controller.closeMcp()
         else if (rulesOpen()) controller.closeRules()
+        else if (projectViewOpen()) controller.closeProjectView()
         else controller.closeAgentModels()
       } else {
         consume()
@@ -408,9 +411,17 @@ export function Composer() {
         else if (diffOpen()) controller.diffKey(key)
         else if (mcpOpen()) controller.mcpKey(key)
         else if (rulesOpen()) controller.rulesKey(key)
+        else if (projectViewOpen()) controller.projectViewKey(key)
         else controller.agentModelsKey(key)
         return
       }
+    }
+    // The left Projects sidebar has focus (Ctrl+P): Up/Down/Enter/Esc go to it.
+    if (store.state.projectsSidebarFocus && !store.state.picker && !overlayViewOpen()) {
+      if (key.ctrl && !key.meta && key.name === "c") { store.setProjectsSidebarFocus(false); return }
+      consume()
+      controller.projectsSidebarKey(key)
+      return
     }
     // The yolo confirmation line takes Enter, Esc, and Shift+Tab before the
     // lists and the prompt dock (so they never answer an ask); any other key
@@ -565,6 +576,19 @@ export function Composer() {
         consume()
         store.toggleSidebar()
         return
+      case "toggleProjectsSidebar": {
+        consume()
+        if (store.state.projectsSidebarFocus) {
+          store.setProjectsSidebarFocus(false)
+          store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
+        } else {
+          if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
+          if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
+          store.setProjectsSidebarFocus(true)
+          store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
+        }
+        return
+      }
       case "toggleThinking":
         consume()
         store.setThinking(!store.state.thinking)

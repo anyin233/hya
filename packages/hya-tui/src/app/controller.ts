@@ -82,6 +82,7 @@ import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type Pi
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
 import { defaultModelRef } from "../state/providers"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
+import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
 import type { AppStore } from "../state/store"
 import { createAgentModelsController } from "./agentModels"
@@ -93,6 +94,7 @@ import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
 import { createRevertController } from "./revert"
 import { createRulesController } from "./rules"
+import { createProjectViewController } from "./projectView"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 import { tuiVersion } from "../version"
@@ -585,6 +587,16 @@ export function createController({ client, store, directory, remote = false, reg
     status(`Project ${project.name} · ${target ? "opened its latest session" : "new session"}`)
   }
 
+  /** One key while the left Projects sidebar has focus (Ctrl+P): Up/Down move the highlight, Enter switches, Esc returns focus to the composer. */
+  function projectsSidebarKey(pressed: KeyLike): void {
+    const rows = projectSidebarRows(store.state.projects, store.state.activeProjectId)
+    const highlighted = store.state.projectSidebarHighlight ?? store.state.activeProjectId
+    const outcome = projectsSidebarKeyOutcome(pressed, rows, highlighted)
+    if (outcome.type === "move") store.setProjectSidebarHighlight(outcome.id)
+    else if (outcome.type === "switch") { store.setProjectsSidebarFocus(false); void switchProject(outcome.id) }
+    else if (outcome.type === "blur") store.setProjectsSidebarFocus(false)
+  }
+
   /** Leave a subagent's read-only view: open its parent session. */
   async function returnToParent(): Promise<void> {
     const parent = store.state.selected?.parent
@@ -602,6 +614,9 @@ export function createController({ client, store, directory, remote = false, reg
     const placement = sessionPlacement({ project: activeProject(store.state), directory, remote, ...(options.temporary ? { temporary: true } : {}) })
     if (!placement) {
       status(noProjectStatus)
+      // Without a Project to place it in (a `--remote` start), open the
+      // Project view instead of leaving only the status line to explain it.
+      projectView.open()
       throw new NoProjectError()
     }
     const { agents } = store.state
@@ -732,6 +747,13 @@ export function createController({ client, store, directory, remote = false, reg
   const mcp = createMcpController({ store, client, copyText: (text) => terminal?.copy(text) ?? false })
   const rules = createRulesController({ store, client })
   const agentModels = createAgentModelsController({ store, client, openPicker })
+  const projectView = createProjectViewController({
+    store,
+    client,
+    switchProject,
+    newTemporarySession: () => newSession(undefined, undefined, { temporary: true }),
+    refreshProjects,
+  })
   const revert = createRevertController({ store, client, composer: () => composer, openSession, refresh, openPicker })
 
   const actions: AppActions = {
@@ -744,6 +766,7 @@ export function createController({ client, store, directory, remote = false, reg
     openMcp: () => mcp.open(),
     openRules: () => rules.open(),
     openAgentModels: () => agentModels.open(),
+    openProjectView: () => projectView.open(),
     copyText: (text) => terminal?.copy(text) ?? false,
     undo: () => revert.undo(),
     redo: () => revert.redo(),
@@ -905,6 +928,8 @@ export function createController({ client, store, directory, remote = false, reg
       if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
       else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
       if (remote && !store.state.selected) missing += ` · ${noProjectStatus}`
+      // `--remote`: no Project was ensured; open the Project view so choosing or creating one is the first thing shown.
+      if (remote && !store.state.activeProjectId) projectView.open()
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
@@ -973,6 +998,11 @@ export function createController({ client, store, directory, remote = false, reg
     closeRules: () => rules.close(),
     agentModelsKey: (key: KeyLike) => agentModels.key(key),
     closeAgentModels: () => agentModels.close(),
+    /** One key while the Project view is open (components/Composer.tsx routes it with the other full-screen views). */
+    projectViewKey: (key: KeyLike) => projectView.key(key),
+    closeProjectView: () => projectView.close(),
+    /** One key while the left Projects sidebar has focus (components/Composer.tsx routes it). */
+    projectsSidebarKey,
     /** Shared with the AppContext `ui` prop (app/run.tsx): the Diff view registers its scroller here. */
     ui,
     refreshAll,

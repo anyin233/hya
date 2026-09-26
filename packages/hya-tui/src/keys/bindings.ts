@@ -20,6 +20,7 @@ export type KeyAction =
   | "cycleMode"
   | "refresh"
   | "toggleSidebar"
+  | "toggleProjectsSidebar"
   | "toggleThinking"
   | "toggleTools"
   | "pageUp"
@@ -134,6 +135,12 @@ export const keyBindings: readonly KeyBinding[] = [
     label: "Ctrl+B",
     description: "Show or hide the sidebar (sessions, todos, context)",
     matches: (key) => key.ctrl && !key.meta && key.name === "b",
+  },
+  {
+    action: "toggleProjectsSidebar",
+    label: "Ctrl+P",
+    description: "Focus the left Projects sidebar, opening it first if it is hidden (Up/Down move, Enter switches); press again (or Esc) to return focus to the composer. Visibility alone toggles with /projects-sidebar",
+    matches: (key) => key.ctrl && !key.meta && key.name === "p",
   },
   {
     action: "toggleThinking",
