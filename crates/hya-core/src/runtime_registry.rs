@@ -396,6 +396,24 @@ impl RuntimeRegistry {
     /// Capture the complete view for one admitted turn. Skill discovery is
     /// performed once before capture; a logically unchanged result is a no-op.
     pub fn bind_turn(&self, workdir: &Path) -> Result<TurnBinding, RuntimeRefreshError> {
+        self.bind_with_skills(workdir, || discover_skills_with_builtins(workdir))
+    }
+
+    /// Capture a view with no project: user skills and builtins only.
+    ///
+    /// For catalog listings whose request names no directory (`hya serve`
+    /// has no working directory, ADR-0024). The binding's workdir is the
+    /// empty path; it keys the project-less skill set and is never a turn's
+    /// workdir.
+    pub fn bind_global(&self) -> Result<TurnBinding, RuntimeRefreshError> {
+        self.bind_with_skills(Path::new(""), hya_tool::discover_user_skills_with_builtins)
+    }
+
+    fn bind_with_skills(
+        &self,
+        workdir: &Path,
+        discover: impl FnOnce() -> Vec<SkillCatalogEntry>,
+    ) -> Result<TurnBinding, RuntimeRefreshError> {
         let _publication = self
             .publication
             .lock()
@@ -406,7 +424,7 @@ impl RuntimeRegistry {
         let discovered = if self.pure_skills {
             hya_tool::merge_skill_catalog(Vec::new())
         } else {
-            discover_skills_with_builtins(workdir)
+            discover()
         };
         let existing = current
             .skills

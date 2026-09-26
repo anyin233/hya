@@ -15,7 +15,7 @@ use hya_proto::SessionId;
 use crate::ServerState;
 use crate::agent_model_control::{AgentModelControlError, AgentModelIdentity};
 
-use super::{V1Error, scope_directory};
+use super::{V1Error, request_scope};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -92,8 +92,9 @@ async fn parse_scope_session(session: &str) -> Result<Option<SessionId>, V1Error
         .map_err(|_| V1Error::invalid_argument(format!("invalid session id: {session}")))
 }
 
-/// Bind against the session runtime when a session is supplied, otherwise
-/// the directory root binding.
+/// Bind against the session runtime (at the session's workdir) when a
+/// session is supplied, otherwise the request's directory scope, otherwise
+/// the global (project-less) binding.
 async fn model_binding(
     st: &ServerState,
     headers: &HeaderMap,
@@ -105,19 +106,13 @@ async fn model_binding(
             if !st.engine.session_exists(session).await? {
                 return Err(V1Error::session_not_found(&session.to_string()));
             }
-            let projection = st.engine.read_projection(session).await?;
-            let workdir = projection
-                .session
-                .workdir
-                .clone()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| scope_directory(headers, directory));
+            let workdir = crate::support::reference::session_workdir(st, session).await?;
             Ok(st.engine.bind_session_runtime(session, &workdir).await?)
         }
-        None => Ok(st
-            .engine
-            .bind_root_runtime(&scope_directory(headers, directory))
-            .await?),
+        None => match request_scope(headers, directory)? {
+            Some(scope) => Ok(st.engine.bind_root_runtime(&scope).await?),
+            None => Ok(st.engine.bind_global_runtime().await?),
+        },
     }
 }
 

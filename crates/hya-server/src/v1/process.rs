@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::ServerState;
 use hya_api::v1 as pb;
 
-use super::{V1Error, scope_directory};
+use super::{V1Error, request_scope};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -36,13 +36,18 @@ async fn health() -> Json<pb::GetHealthResponse> {
     })
 }
 
-async fn location(State(st): State<ServerState>) -> Json<pb::LocationInfo> {
-    Json(location_info(&st))
+async fn location(headers: HeaderMap) -> Result<Json<pb::LocationInfo>, V1Error> {
+    let scope = request_scope(&headers, "")?;
+    Ok(Json(location_info(scope.as_deref())))
 }
 
-fn location_info(st: &ServerState) -> pb::LocationInfo {
+/// The backend has no working directory of its own (ADR-0024): `directory`
+/// echoes the request's scope, empty when it named none.
+fn location_info(scope: Option<&std::path::Path>) -> pb::LocationInfo {
     pb::LocationInfo {
-        directory: st.agent.workdir.to_string_lossy().into_owned(),
+        directory: scope
+            .map(|scope| scope.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         hostname: hostname(),
         pid: std::process::id(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -67,10 +72,8 @@ fn hostname() -> String {
 async fn get_config(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::GetConfigResponse>, V1Error> {
-    let request: pb::GetConfigRequest = super::query_request(&[], &query)?;
-    let _scope = scope_directory(&headers, &request.directory);
+    let _request: pb::GetConfigRequest = super::query_request(&[], &query)?;
     Ok(Json(pb::GetConfigResponse {
         values: Some(super::convert::to_struct(st.global.config().await)),
     }))
@@ -78,10 +81,8 @@ async fn get_config(
 
 async fn update_config(
     State(st): State<ServerState>,
-    headers: HeaderMap,
     Json(request): Json<pb::UpdateConfigRequest>,
 ) -> Result<Json<pb::GetConfigResponse>, V1Error> {
-    let _scope = scope_directory(&headers, &request.directory);
     let patch = request
         .patch
         .as_ref()
@@ -133,17 +134,18 @@ async fn bootstrap(
     headers: HeaderMap,
 ) -> Result<Json<pb::Bootstrap>, V1Error> {
     let request: pb::GetBootstrapRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &request.directory);
+    // Without a scope the catalog rows are the global (project-less) view.
+    let workdir = request_scope(&headers, &request.directory)?;
 
-    let agents = super::catalog::agent_rows(&st, &workdir).await?;
+    let agents = super::catalog::agent_rows(&st, workdir.as_deref()).await?;
     let models = super::catalog::model_rows(&st);
     let providers = super::catalog::provider_rows(&st, &models).await;
-    let commands = super::catalog::command_rows(&workdir);
-    let skills = super::catalog::skill_rows(&workdir);
+    let commands = super::catalog::command_rows(workdir.as_deref());
+    let skills = super::catalog::skill_rows(workdir.as_deref());
     let tools = super::catalog::tool_rows(&st);
 
     Ok(Json(pb::Bootstrap {
-        location: Some(location_info(&st)),
+        location: Some(location_info(workdir.as_deref())),
         config: Some(super::convert::to_struct(st.global.config().await)),
         agents,
         models: models.clone(),

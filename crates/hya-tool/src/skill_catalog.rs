@@ -72,13 +72,25 @@ struct SkillFrontmatter {
 /// Default skill search roots for a project workdir (project + user paths).
 #[must_use]
 pub fn skill_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![workdir.join(".hya/skills")];
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    skill_dirs(Some(workdir))
+}
+
+/// User (non-project) skill search roots, for listings with no workdir.
+#[must_use]
+pub fn user_skill_dirs() -> Vec<PathBuf> {
+    skill_dirs(None)
+}
+
+fn skill_dirs(workdir: Option<&Path>) -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dirs = Vec::new();
+    dirs.extend(workdir.map(|workdir| workdir.join(".hya/skills")));
+    if let Some(home) = &home {
         dirs.push(home.join(".config/hya/skills"));
         dirs.push(home.join(".claude/skills"));
     }
-    dirs.push(workdir.join(".agents/skills"));
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    dirs.extend(workdir.map(|workdir| workdir.join(".agents/skills")));
+    if let Some(home) = &home {
         dirs.push(home.join(".codex/skills"));
         dirs.push(home.join(".agents/skills"));
     }
@@ -95,6 +107,13 @@ pub fn discover_skills(workdir: &Path) -> Vec<SkillCatalogEntry> {
 #[must_use]
 pub fn discover_skills_with_builtins(workdir: &Path) -> Vec<SkillCatalogEntry> {
     merge_skill_catalog(discover_skills(workdir))
+}
+
+/// [`discover_skills_with_builtins`] without a project: user skills plus
+/// bundled builtins.
+#[must_use]
+pub fn discover_user_skills_with_builtins() -> Vec<SkillCatalogEntry> {
+    merge_skill_catalog(discover_skills_from_dirs(&user_skill_dirs()))
 }
 
 /// Merge the builtin `hya/core-skills` catalog after native entries.

@@ -78,7 +78,8 @@ message AgentModelState {
 }
 
 message ListAgentModelsRequest {
-  // Directory scope for the agent binding; empty means the process default.
+  // Directory scope for the agent binding (absolute). Optional: when both
+  // it and `session` are empty the global (project-less) binding is used.
   string directory = 1;
   // Bind against this session's runtime when non-empty (its workdir and
   // session overrides); otherwise the directory root binding is used.
@@ -91,7 +92,8 @@ message ListAgentModelsResponse {
 }
 
 message SetAgentModelRequest {
-  // Directory scope for the agent binding; empty means the process default.
+  // Directory scope for the agent binding (absolute). Optional: when both
+  // it and `session` are empty the global (project-less) binding is used.
   string directory = 1;
   // Bind against this session's runtime when non-empty.
   string session = 2;

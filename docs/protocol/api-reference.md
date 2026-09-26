@@ -852,7 +852,7 @@ Effective model state for one catalog agent.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope for the agent binding; empty means the process default. |
+| `directory` (1) | `string` | Directory scope for the agent binding (absolute). Optional: when both it and `session` are empty the global (project-less) binding is used. |
 | `session` (2) | `string` | Bind against this session's runtime when non-empty (its workdir and session overrides); otherwise the directory root binding is used. |
 
 ### `ListAgentModelsResponse`
@@ -867,7 +867,7 @@ Effective model state for one catalog agent.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope for the agent binding; empty means the process default. |
+| `directory` (1) | `string` | Directory scope for the agent binding (absolute). Optional: when both it and `session` are empty the global (project-less) binding is used. |
 | `session` (2) | `string` | Bind against this session's runtime when non-empty. |
 | `agent_id` (3) | `string` | Stable catalog agent id whose preference is being set. |
 | `preference` (4) | `optional AgentModelSelection` | New remembered preference; absent/null clears it. |
@@ -1029,7 +1029,7 @@ Provider/model identity pair. `model_id` is provider-local.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose bound agent catalog should be listed. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `AgentSummary`
@@ -1056,7 +1056,7 @@ One selectable agent.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose model catalog should be listed. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `provider_id` (2) | `string` | Restrict to one provider when non-empty. |
 | `page` (3) | `PageRequest` | Standard pagination controls. |
 
@@ -1090,7 +1090,7 @@ One selectable model.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose provider catalog should be listed. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `ProviderSummary`
@@ -1122,7 +1122,7 @@ One provider route with aggregate auth state.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory context for the provider lookup. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `provider_id` (2) | `string` | Provider identifier. |
 
 ### `ProviderInfo`
@@ -1223,7 +1223,7 @@ A provider after a change, applied live.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose command catalog should be listed. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `CommandSummary`
@@ -1255,7 +1255,7 @@ One slash-command entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose skill catalog should be listed. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `SkillSummary`
@@ -1283,7 +1283,7 @@ One invocable skill.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose tool catalog should be listed. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `ToolSummary`
@@ -1388,7 +1388,7 @@ Pagination outcome attached to every paginated response.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
 | `interactions_only` (3) | `bool` | Deliver only the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session plus the process-wide `catalogUpdated` and `projectsUpdated` notices; skip every session's engine events and their `resync` frames. For a client that follows one session on its session stream and needs only the asks of the others. |
 
@@ -1653,7 +1653,7 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `path` (2) | `string` | File path relative to the directory. |
 | `max_bytes` (3) | `uint64` | Truncate after this many bytes; 0 reads the whole file. |
 
@@ -1671,7 +1671,7 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `path` (2) | `string` | Subdirectory path relative to the directory; empty lists the root. |
 
 ### `DirEntry`
@@ -1697,7 +1697,7 @@ One directory entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `pattern` (2) | `string` | Glob pattern matched against relative paths (`**/*.rs`). |
 | `limit` (3) | `uint32` | Maximum paths to return; 0 uses the server default. |
 
@@ -1713,7 +1713,7 @@ One directory entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `query` (2) | `string` | Search query (regex when the backend enables it, else literal). |
 | `glob` (3) | `string` | Restrict search to files matching this glob; empty searches all. |
 | `limit` (4) | `uint32` | Maximum matches to return; 0 uses the server default. |
@@ -1740,7 +1740,7 @@ One text search match.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `query` (2) | `string` | Symbol name query. |
 | `limit` (3) | `uint32` | Maximum symbols to return; 0 uses the server default. |
 
@@ -1782,7 +1782,7 @@ One pending interaction request.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `session` (2) | `string` | Restrict to one session when non-empty. |
 | `type` (3) | `InteractionType` | Restrict to one interaction type when set. |
 | `page` (4) | `PageRequest` | Standard pagination controls. |
@@ -1894,7 +1894,7 @@ Status of one MCP server.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 
 ### `GetMcpStatusResponse`
 
@@ -1926,7 +1926,7 @@ HTTP/SSE transport: connect to a URL.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name used in tool namespaces. |
 | `command` (3) | `oneof `transport`: CommandTransport` | Transport definition; exactly one kind is set. Launch a local stdio server. |
 | `url` (4) | `oneof `transport`: UrlTransport` | Connect to a remote HTTP server. |
@@ -1937,7 +1937,7 @@ HTTP/SSE transport: connect to a URL.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name to connect. |
 
 ### `DisconnectMcpRequest`
@@ -1945,7 +1945,7 @@ HTTP/SSE transport: connect to a URL.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name to disconnect. |
 
 ### `StartMcpAuthRequest`
@@ -1953,7 +1953,7 @@ HTTP/SSE transport: connect to a URL.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name to authenticate. |
 
 ### `StartMcpAuthResponse`
@@ -1968,7 +1968,7 @@ HTTP/SSE transport: connect to a URL.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name completing the flow. |
 | `code` (3) | `string` | Authorization code returned by the provider callback. |
 
@@ -1977,7 +1977,7 @@ HTTP/SSE transport: connect to a URL.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `name` (2) | `string` | Server name whose credentials should be removed. |
 
 ### `TokenUsage`
@@ -2189,7 +2189,7 @@ Where this backend runs and which directory it serves.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Absolute working directory this backend instance serves. |
+| `directory` (1) | `string` | The request's directory scope, empty when it named none: the backend has no working directory of its own. |
 | `hostname` (2) | `string` | Hostname of the machine running the backend. |
 | `pid` (3) | `uint32` | OS process id of the backend. |
 | `version` (4) | `string` | Backend version string (workspace release version). |
@@ -2199,7 +2199,7 @@ Where this backend runs and which directory it serves.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose effective config should be read; empty means the process default directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 
 ### `GetConfigResponse`
 
@@ -2213,8 +2213,8 @@ Where this backend runs and which directory it serves.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose config should be patched; empty means the process default directory. |
-| `patch` (2) | `google.protobuf.Struct` | JSON object deep-merged into the stored config for that directory. |
+| `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
+| `patch` (2) | `google.protobuf.Struct` | JSON object deep-merged into the stored config. |
 
 ### `UpgradeProcessResponse`
 
@@ -2228,7 +2228,7 @@ Where this backend runs and which directory it serves.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory to bootstrap against; empty means the process default. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
 
 ### `Bootstrap`
 
@@ -2378,7 +2378,7 @@ One Project.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 
 ### `VcsStatus`
 
@@ -2407,7 +2407,7 @@ One changed file.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `raw` (2) | `bool` | Accepted and ignored: the diff is always git's unified patch (`git diff HEAD` plus untracked files). |
 | `paths` (3) | `repeated string` | Restrict to these paths (git pathspecs relative to the scope directory: a file or a directory prefix); empty diffs everything. Over HTTP repeat the query key (`?paths=a&paths=b`). A path that is absolute or contains `..` is `invalid_argument`. |
 
@@ -2423,7 +2423,7 @@ One changed file.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `patch` (2) | `string` | Unified diff patch to apply. |
 
 ### `ApplyPatchResponse`
@@ -2458,11 +2458,11 @@ State snapshot of one PTY session.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required when `cwd` is empty: without either the rpc fails with invalid_argument. |
 | `shell` (2) | `string` | Shell binary name or path; empty picks the default shell. |
 | `cols` (3) | `uint32` | Initial terminal width in columns. |
 | `rows` (4) | `uint32` | Initial terminal height in rows. |
-| `cwd` (5) | `string` | Working directory for the shell; defaults to the scope directory. |
+| `cwd` (5) | `string` | Absolute working directory for the shell; defaults to the scope directory. |
 | `string> env` (6) | `map<string,` | Extra environment variables for the shell process. |
 
 ### `GetPtyRequest`
@@ -3017,7 +3017,7 @@ One git worktree.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope of the owning repository; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 
 ### `ListWorktreesResponse`
 
@@ -3031,7 +3031,7 @@ One git worktree.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope of the owning repository; empty means the process default directory. |
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `name` (2) | `string` | Worktree name; derived from the branch when empty. |
 | `branch` (3) | `string` | Branch to check out; created from the current HEAD when empty. |
 

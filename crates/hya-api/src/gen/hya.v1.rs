@@ -87,7 +87,8 @@ pub struct AgentModelState {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListAgentModelsRequest {
-    /// Directory scope for the agent binding; empty means the process default.
+    /// Directory scope for the agent binding (absolute). Optional: when both
+    /// it and `session` are empty the global (project-less) binding is used.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Bind against this session's runtime when non-empty (its workdir and
@@ -103,7 +104,8 @@ pub struct ListAgentModelsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetAgentModelRequest {
-    /// Directory scope for the agent binding; empty means the process default.
+    /// Directory scope for the agent binding (absolute). Optional: when both
+    /// it and `session` are empty the global (project-less) binding is used.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Bind against this session's runtime when non-empty.
@@ -562,7 +564,8 @@ pub struct ModelRef {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListAgentsRequest {
-    /// Directory whose bound agent catalog should be listed.
+    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -596,7 +599,7 @@ pub struct ListAgentsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListModelsRequest {
-    /// Directory whose model catalog should be listed.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Restrict to one provider when non-empty.
@@ -663,7 +666,7 @@ pub struct ListModelsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProvidersRequest {
-    /// Directory whose provider catalog should be listed.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -715,7 +718,7 @@ pub struct ListProvidersResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetProviderRequest {
-    /// Directory context for the provider lookup.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Provider identifier.
@@ -884,7 +887,8 @@ pub struct TestProviderModelResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsRequest {
-    /// Directory whose command catalog should be listed.
+    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -933,7 +937,8 @@ pub struct ListCommandsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsRequest {
-    /// Directory whose skill catalog should be listed.
+    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -970,7 +975,7 @@ pub struct ListSkillsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListToolsRequest {
-    /// Directory whose tool catalog should be listed.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -3756,7 +3761,7 @@ pub struct Interaction {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListInteractionsRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Restrict to one session when non-empty.
@@ -6437,7 +6442,7 @@ pub struct StreamSessionEventsRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamGlobalEventsRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Skip durable events with `seq` at or below this watermark. Live-only
@@ -7381,7 +7386,9 @@ pub mod events_server {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadFileRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// File path relative to the directory.
@@ -7405,7 +7412,9 @@ pub struct ReadFileResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListDirectoryRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Subdirectory path relative to the directory; empty lists the root.
@@ -7436,7 +7445,9 @@ pub struct ListDirectoryResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FindFilesRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Glob pattern matched against relative paths (`**/*.rs`).
@@ -7454,7 +7465,9 @@ pub struct FindFilesResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchTextRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Search query (regex when the backend enables it, else literal).
@@ -7488,7 +7501,9 @@ pub struct SearchTextResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchSymbolsRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Symbol name query.
@@ -8601,7 +8616,7 @@ pub struct McpServerStatus {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetMcpStatusRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -8636,7 +8651,7 @@ pub struct UrlTransport {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddMcpServerRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Server name used in tool namespaces.
@@ -8664,7 +8679,7 @@ pub mod add_mcp_server_request {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ConnectMcpRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Server name to connect.
@@ -8673,7 +8688,7 @@ pub struct ConnectMcpRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DisconnectMcpRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Server name to disconnect.
@@ -8682,7 +8697,7 @@ pub struct DisconnectMcpRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StartMcpAuthRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Server name to authenticate.
@@ -8697,7 +8712,7 @@ pub struct StartMcpAuthResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompleteMcpAuthRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Server name completing the flow.
@@ -8709,7 +8724,7 @@ pub struct CompleteMcpAuthRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RemoveMcpAuthRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Server name whose credentials should be removed.
@@ -9550,7 +9565,8 @@ pub struct GetLocationRequest {}
 /// Where this backend runs and which directory it serves.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocationInfo {
-    /// Absolute working directory this backend instance serves.
+    /// The request's directory scope, empty when it named none: the backend
+    /// has no working directory of its own.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Hostname of the machine running the backend.
@@ -9565,8 +9581,7 @@ pub struct LocationInfo {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetConfigRequest {
-    /// Directory whose effective config should be read; empty means the
-    /// process default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -9578,11 +9593,10 @@ pub struct GetConfigResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateConfigRequest {
-    /// Directory whose config should be patched; empty means the process
-    /// default directory.
+    /// Ignored: this rpc does not depend on a directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
-    /// JSON object deep-merged into the stored config for that directory.
+    /// JSON object deep-merged into the stored config.
     #[prost(message, optional, tag = "2")]
     pub patch: ::core::option::Option<::pbjson_types::Struct>,
 }
@@ -9600,7 +9614,8 @@ pub struct UpgradeProcessResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetBootstrapRequest {
-    /// Directory to bootstrap against; empty means the process default.
+    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -10566,7 +10581,9 @@ pub struct InitProjectGitResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetVcsStatusRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -10604,7 +10621,9 @@ pub struct VcsFileChange {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetVcsDiffRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Accepted and ignored: the diff is always git's unified patch
@@ -10626,7 +10645,9 @@ pub struct GetVcsDiffResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ApplyPatchRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Unified diff patch to apply.
@@ -12020,7 +12041,8 @@ pub struct ListShellsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreatePtyRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required
+    /// when `cwd` is empty: without either the rpc fails with invalid_argument.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Shell binary name or path; empty picks the default shell.
@@ -12032,7 +12054,8 @@ pub struct CreatePtyRequest {
     /// Initial terminal height in rows.
     #[prost(uint32, tag = "4")]
     pub rows: u32,
-    /// Working directory for the shell; defaults to the scope directory.
+    /// Absolute working directory for the shell; defaults to the scope
+    /// directory.
     #[prost(string, tag = "5")]
     pub cwd: ::prost::alloc::string::String,
     /// Extra environment variables for the shell process.
@@ -14998,8 +15021,9 @@ pub struct Worktree {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListWorktreesRequest {
-    /// Directory scope of the owning repository; empty means the process
-    /// default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -15011,8 +15035,9 @@ pub struct ListWorktreesResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateWorktreeRequest {
-    /// Directory scope of the owning repository; empty means the process
-    /// default directory.
+    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// without one the rpc fails with invalid_argument (the backend has no
+    /// working directory of its own).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Worktree name; derived from the branch when empty.

@@ -98,7 +98,7 @@ message StreamSessionEventsRequest {
 }
 
 message StreamGlobalEventsRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Skip durable events with `seq` at or below this watermark. Live-only
   // frames (`seq = 0`) are always delivered. No history is replayed.

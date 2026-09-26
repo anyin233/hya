@@ -169,6 +169,28 @@ fn json_exec_db_emits_hysec_session_and_sessions_lists_exact_id()
 }
 
 #[test]
+fn exec_records_the_callers_working_directory_as_the_session_workdir()
+-> Result<(), Box<dyn std::error::Error>> {
+    // `hya serve` has no working directory (ADR-0024); `hya exec` is a
+    // client-side command, so it names the caller's cwd explicitly as the
+    // session workdir instead of recording a relative `.`.
+    let env = IsolatedEnv::new("hya-exec-workdir")?;
+    let output = hya_command(&env)
+        .args(["exec", "--json", "hello"])
+        .output()?;
+    assert_success("exec --json", &output);
+    let stdout = String::from_utf8(output.stdout)?;
+    let workdir = session_created_field(&stdout, "workdir")?.ok_or("missing session_created")?;
+    assert_eq!(
+        std::fs::canonicalize(&workdir)?,
+        std::fs::canonicalize(&env.workdir)?,
+        "{stdout}"
+    );
+    assert!(std::path::Path::new(&workdir).is_absolute(), "{workdir}");
+    Ok(())
+}
+
+#[test]
 fn exec_starts_the_root_session_under_the_configured_default_agent()
 -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-exec-default-agent")?;
@@ -508,6 +530,22 @@ fn session_created_id(output: &str) -> Result<Option<String>, Box<dyn std::error
 
 /// The root session's `agent` id from its `session_created` event, if the
 /// JSONL event stream (`--json`) contains one.
+fn session_created_field(
+    output: &str,
+    field: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line)?;
+        if value.pointer("/event/type") == Some(&Value::String("session_created".to_string())) {
+            return Ok(value
+                .pointer(&format!("/event/{field}"))
+                .and_then(Value::as_str)
+                .map(str::to_owned));
+        }
+    }
+    Ok(None)
+}
+
 fn session_created_agent(output: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
     for line in output.lines().filter(|line| !line.trim().is_empty()) {
         let value: Value = serde_json::from_str(line)?;

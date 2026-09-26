@@ -72,7 +72,7 @@ message Interaction {
 }
 
 message ListInteractionsRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Restrict to one session when non-empty.
   string session = 2;

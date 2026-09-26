@@ -94,8 +94,15 @@ fn spawn_background_reclaim_driver(state: ServerState) {
             let Some(run) = state.start_run(session) else {
                 continue;
             };
-            let turn =
-                crate::support::reference::session_agent_with_guidance(&state, session).await;
+            let turn = match crate::support::reference::session_agent_with_guidance(&state, session)
+                .await
+            {
+                Ok(turn) => turn,
+                Err(error) => {
+                    tracing::warn!(%session, "background reclaim skipped: {error}");
+                    continue;
+                }
+            };
             let external_dirs =
                 crate::support::reference::external_directories_at(&state, &turn.agent.workdir)
                     .await;

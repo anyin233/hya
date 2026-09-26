@@ -35,7 +35,9 @@ service Files {
 }
 
 message ReadFileRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // File path relative to the directory.
   string path = 2;
@@ -53,7 +55,9 @@ message ReadFileResponse {
 }
 
 message ListDirectoryRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Subdirectory path relative to the directory; empty lists the root.
   string path = 2;
@@ -89,7 +93,9 @@ message ListDirectoryResponse {
 }
 
 message FindFilesRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Glob pattern matched against relative paths (`**/*.rs`).
   string pattern = 2;
@@ -103,7 +109,9 @@ message FindFilesResponse {
 }
 
 message SearchTextRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Search query (regex when the backend enables it, else literal).
   string query = 2;
@@ -129,7 +137,9 @@ message SearchTextResponse {
 }
 
 message SearchSymbolsRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Symbol name query.
   string query = 2;

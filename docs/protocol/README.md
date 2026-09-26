@@ -12,11 +12,27 @@ over two transports with identical functionality:
 
 ## Base URL and scoping
 
-All HTTP routes live under `/v1`. The backend serves one process-default
-directory; requests that accept a scope take a `directory` field (query
-parameter for GETs, body field otherwise). The `x-hya-directory` request
-header overrides the field on any request. gRPC clients pass the same
-values via the `hya-directory` metadata key.
+All HTTP routes live under `/v1`. The backend has **no working directory**
+of its own (ADR-0024): the client says which directory a request works on.
+Requests that accept a scope take a `directory` field (query parameter for
+GETs, body field otherwise); the `x-hya-directory` request header overrides
+the field on any HTTP request. gRPC clients set the request's `directory`
+field. A scope must be an absolute path on the backend machine; a relative
+one is `invalid_argument`.
+
+Each rpc either needs a scope, prefers one, reads it from its session, or
+ignores it:
+
+| Scope | Rpcs | Without a scope |
+|---|---|---|
+| Required | `ReadFile`, `ListDirectory`, `FindFiles`, `SearchText`, `SearchSymbols`; `GetVcsStatus`, `GetVcsDiff`, `ApplyPatch`; `ListWorktrees`, `CreateWorktree`, `DeleteWorktree`, `ResetWorktree`; `GetCurrentProject`; `CreatePty` (its `cwd`, else the scope) | `invalid_argument` ("this rpc needs a directory scope") |
+| Optional | `ListAgents`, `ListCommands`, `ListSkills`, `GetBootstrap`, `ListAgentModels`, `SetAgentModel` (without `session`) | The global view: builtins, installed bundles, and user skills (`~/.config/hya/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`); no `.hya/commands`, `.hya/skills`, or `.agents/skills` of any project; builtin command templates keep `${path}` unexpanded |
+| From the session | turns (`CreateTurn` prompt, command, and shell), `ForkSession`, `ListAgentModels`/`SetAgentModel` with `session`, workflow commands | Always the session's recorded workdir (and its Project roots for tools); the request scope is not consulted |
+| From the request body | `CreateSession` (`workdir`, `projectId`, or `kind: temporary`; see [Projects and session placement](#projects-and-session-placement)), `ResolveProject`/`EnsureProjectForPath` (`path`) | As documented for each rpc |
+| Ignored | `GetLocation` (echoes the scope in `directory`, empty without one), `GetConfig`, `UpdateConfig`, `ListModels`, `ListProviders`, `GetProvider` and the provider/auth writes, `ListTools`, `ListSavedRules`, MCP rpcs, `ListInteractions`, `StreamGlobalEvents` | Works the same with or without a scope |
+
+`ListWorkflows` does not read its `directory` yet: it lists the workflow
+catalog of the most recently listed session.
 
 ## Versioning
 
@@ -968,7 +984,9 @@ PUT /v1/bundles/acme%2Fnotes/api/notes/todo   {"text":"ship it"}
 
 ## Terminal (PTY)
 
-`POST /v1/pty` creates a session; `POST /v1/pty/{id}/connect-token` mints a
+`POST /v1/pty` creates a session. The shell starts in the request's `cwd`
+(absolute), else in the directory scope; with neither the call is
+`invalid_argument`. `POST /v1/pty/{id}/connect-token` mints a
 one-time ticket. `GET /v1/pty/{id}/connect?ticket=...` upgrades to a
 WebSocket speaking the same frames as the gRPC `StreamPty` rpc:
 
@@ -984,7 +1002,7 @@ consolidation plan.
 
 ```
 1. GET  /v1/health                                  → verify liveness
-2. GET  /v1/bootstrap                               → config + catalogs
+2. GET  /v1/bootstrap  (x-hya-directory: <abs dir>) → config + catalogs of that directory
 3. POST /v1/sessions        {agent, model, workdir} → {session: {id, projectId}}
 4. GET  /v1/sessions/{id}/events/stream             → SSE subscribe
 5. POST /v1/sessions/{id}/turns {prompt: {text, attachments?}} → {turn: {id, state}}

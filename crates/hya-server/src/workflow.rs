@@ -37,19 +37,16 @@ pub(crate) async fn intercept_slash(
     }
     let _reservation = reserve_workflow_command(st, session, &command)?;
     let arguments = request.arguments.clone();
+    let workdir = crate::support::reference::session_workdir(st, session).await?;
     let text = request.text.clone().unwrap_or_else(|| {
-        crate::support::command_catalog::expand_prompt(
-            std::path::Path::new("."),
-            &request.command,
-            &arguments,
-        )
-        .unwrap_or_else(|| {
-            if arguments.trim().is_empty() {
-                format!("/{}", request.command)
-            } else {
-                format!("/{} {}", request.command, arguments)
-            }
-        })
+        crate::support::command_catalog::expand_prompt(&workdir, &request.command, &arguments)
+            .unwrap_or_else(|| {
+                if arguments.trim().is_empty() {
+                    format!("/{}", request.command)
+                } else {
+                    format!("/{} {}", request.command, arguments)
+                }
+            })
     });
     st.engine
         .admit_command_prompt(session, request.command.clone(), arguments, text)

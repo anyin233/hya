@@ -101,8 +101,9 @@ pub use project_scope::ProjectScope;
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{
     ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, core_skills_preset_bytes,
-    discover_skills, discover_skills_from_dirs, discover_skills_with_builtins, is_embedded_skill,
-    merge_skill_catalog, parse_skill, skill_dirs_for_workdir, skills_section,
+    discover_skills, discover_skills_from_dirs, discover_skills_with_builtins,
+    discover_user_skills_with_builtins, is_embedded_skill, merge_skill_catalog, parse_skill,
+    skill_dirs_for_workdir, skills_section, user_skill_dirs,
 };
 pub use spawn::{
     HANDLE_PREFIX_MAX_LEN, InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest,

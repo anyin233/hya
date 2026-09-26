@@ -62,7 +62,8 @@ message GetLocationRequest {}
 
 // Where this backend runs and which directory it serves.
 message LocationInfo {
-  // Absolute working directory this backend instance serves.
+  // The request's directory scope, empty when it named none: the backend
+  // has no working directory of its own.
   string directory = 1;
   // Hostname of the machine running the backend.
   string hostname = 2;
@@ -73,8 +74,7 @@ message LocationInfo {
 }
 
 message GetConfigRequest {
-  // Directory whose effective config should be read; empty means the
-  // process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
 }
 
@@ -84,10 +84,9 @@ message GetConfigResponse {
 }
 
 message UpdateConfigRequest {
-  // Directory whose config should be patched; empty means the process
-  // default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
-  // JSON object deep-merged into the stored config for that directory.
+  // JSON object deep-merged into the stored config.
   google.protobuf.Struct patch = 2;
 }
 
@@ -103,7 +102,8 @@ message UpgradeProcessResponse {
 }
 
 message GetBootstrapRequest {
-  // Directory to bootstrap against; empty means the process default.
+  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // empty lists the global view (no project sources).
   string directory = 1;
 }
 

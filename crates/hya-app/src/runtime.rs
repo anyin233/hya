@@ -918,26 +918,38 @@ pub const BUILTIN_DEFAULT_AGENT_ID: &str = "build";
 /// Bundle `prompt=None` keeps this base; per-turn server discovery appends
 /// Environment + current workdir AGENTS + references. Baking those at startup
 /// would duplicate AGENTS when guidance is also layered.
+///
+/// The workdir is empty: `hya serve` has no working directory (ADR-0024).
+/// Every turn's AgentSpec takes its workdir from its session.
 pub fn agent_base_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
     AgentSpec {
         name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
         model: ModelRef::new(model),
         system_prompt: HARNESS_AGENT_BASE.to_string(),
-        workdir: PathBuf::from("."),
+        workdir: PathBuf::new(),
         reasoning,
     }
 }
 
-/// Direct-mode agent (exec/RPC/goal): base + Environment + process-cwd AGENTS.
+/// The caller's working directory, absolute, for the client-side commands
+/// (`hya exec`/`run`/`-p`/`loop`/`goal`) that work where the user runs them.
+/// They name it explicitly as their session's workdir; the server never
+/// falls back to its own cwd (ADR-0024).
+fn caller_workdir() -> PathBuf {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| std::path::absolute(cwd).ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Direct-mode agent (exec/RPC/goal): base + Environment + caller-cwd AGENTS.
 ///
 /// These paths call `run_turn` without a separate guidance layer, so context
 /// must remain composed into `system_prompt` here.
 pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
-    let workdir = PathBuf::from(".");
+    let workdir = caller_workdir();
     let env = PromptEnv {
-        cwd: std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| ".".to_string()),
+        cwd: workdir.to_string_lossy().into_owned(),
         platform: std::env::consts::OS.to_string(),
         date: today(),
     };
@@ -955,11 +967,9 @@ pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> Agen
 /// `--pure` variant of [`agent_with_model`]: same Environment block, but no
 /// external AGENTS/context files are discovered or baked into the prompt.
 pub fn agent_with_model_pure(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
-    let workdir = PathBuf::from(".");
+    let workdir = caller_workdir();
     let env = PromptEnv {
-        cwd: std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| ".".to_string()),
+        cwd: workdir.to_string_lossy().into_owned(),
         platform: std::env::consts::OS.to_string(),
         date: today(),
     };
@@ -2650,7 +2660,7 @@ async fn build_session_engine_with_mcp_defer(
             .session
             .workdir
             .map(PathBuf::from)
-            .unwrap_or_else(|| agent.workdir.clone());
+            .context("recovered resident session has no workdir")?;
         // Resume is not a new spawn: exact catalog lookup only (no can_spawn,
         // no legacy general/base synthesis). Missing or inline-only identity fails.
         let recorded = actor_projection
@@ -2658,12 +2668,17 @@ async fn build_session_engine_with_mcp_defer(
             .agent
             .as_ref()
             .unwrap_or(&entry.agent_type);
+        // The resident works in its session's workdir, not the process's.
+        let base = AgentSpec {
+            workdir: workdir.clone(),
+            ..agent.clone()
+        };
         let recovered_binding = engine
             .bind_session_runtime(actor_id, &workdir)
             .await
             .context("bind recovered resident Session model configuration")?;
         let (recovered_binding, recovered_agent) =
-            resolve_recovered_resident_agent(&engine, recovered_binding, agent, recorded)
+            resolve_recovered_resident_agent(&engine, recovered_binding, &base, recorded)
                 .with_context(|| {
                     format!(
                         "resolve recovered resident agent `{}` from current catalog",
@@ -5069,6 +5084,28 @@ You are the installed resident agent.
             "server base must not bake AGENTS (layered per turn)"
         );
         assert!(!agent.system_prompt.contains("## Project context:"));
+    }
+
+    /// `hya serve` has no working directory (ADR-0024): the server agent base
+    /// names none, while the client-side direct agents (exec/run/loop/goal)
+    /// name the caller's cwd as an absolute session workdir.
+    #[test]
+    fn server_base_has_no_workdir_and_direct_agents_name_the_caller_cwd() {
+        let home = tempdir();
+        let workdir = tempdir();
+        let _env = EnvGuard::set(&home, &workdir);
+
+        assert_eq!(agent_base_with_model("fake", None).workdir, PathBuf::new());
+        for agent in [
+            agent_with_model("fake", None),
+            agent_with_model_pure("fake", None),
+        ] {
+            assert!(agent.workdir.is_absolute(), "{}", agent.workdir.display());
+            assert_eq!(
+                std::fs::canonicalize(&agent.workdir).unwrap(),
+                std::fs::canonicalize(&workdir).unwrap()
+            );
+        }
     }
 
     /// Minimal engine whose catalog deliberately omits a recorded historical id.

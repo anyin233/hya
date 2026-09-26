@@ -66,6 +66,36 @@ Note: `AgentSpec.workdir` is a **`PathBuf`**. Event payloads that record the
 session workdir (`SessionCreated`, `SessionMoved`) use **`String`** on the wire
 — same concept, different type at the two seams.
 
+The server's process-level `AgentSpec` (`hya_app::agent_base_with_model`) has
+an **empty** workdir: `hya serve` has no working directory (ADR-0024). Each
+turn's `AgentSpec` takes its workdir from the session's recorded workdir, and
+so do workflow members and recovered residents. The client-side direct
+commands (`hya exec`/`run`/`-p`/`loop`, `agent_with_model`) name the caller's
+cwd as an absolute workdir instead.
+
+### No process working directory
+
+Nothing in `hya-server`, `hya-app`, or `hya-core` resolves a request against
+the server process's cwd:
+
+- Every session records its workdir in `SessionCreated`, so turn admission,
+  resident revival, fork, command expansion, and workflow runs read it from
+  the projection; a projection without one is a missing session
+  (`CoreError::Invalid` / `session_not_found`), never a fallback to `.`.
+- An rpc that works on a directory takes it from the request (`x-hya-directory`
+  or `directory`, absolute) or from the session it names; without either it
+  fails with `invalid_argument` (per-rpc table in
+  [the protocol guide](../protocol/README.md#base-url-and-scoping)).
+- Catalog listings that only prefer a directory (agents, commands, skills,
+  bootstrap, agent models) bind the project-less **global** view without one:
+  `SessionEngine::bind_global_runtime` (`RuntimeRegistry::bind_global`)
+  discovers user skills and builtins only, keyed under the empty path, and
+  commands skip `.hya/commands` and leave `${path}` unexpanded.
+- Remaining process-level reads, by design: installed project bundles
+  (`./.hya/bundles`) and project plugins (`./.hya/plugins`) are still loaded
+  once at startup from the directory the process started in (see
+  [`docs/cli.md`](../cli.md)); they are a catalog tier, not a request scope.
+
 ### `RuntimeCatalogRefresh`
 
 Optional app-owned hook that `SessionEngine::bind_root_runtime` calls **before**

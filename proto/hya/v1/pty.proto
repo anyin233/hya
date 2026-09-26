@@ -71,7 +71,8 @@ message ListShellsResponse {
 }
 
 message CreatePtyRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required
+  // when `cwd` is empty: without either the rpc fails with invalid_argument.
   string directory = 1;
   // Shell binary name or path; empty picks the default shell.
   string shell = 2;
@@ -79,7 +80,8 @@ message CreatePtyRequest {
   uint32 cols = 3;
   // Initial terminal height in rows.
   uint32 rows = 4;
-  // Working directory for the shell; defaults to the scope directory.
+  // Absolute working directory for the shell; defaults to the scope
+  // directory.
   string cwd = 5;
   // Extra environment variables for the shell process.
   map<string, string> env = 6;

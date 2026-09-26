@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use hya_tool::{SkillCatalogOrigin, discover_skills_with_builtins};
+use hya_tool::{
+    SkillCatalogOrigin, discover_skills_with_builtins, discover_user_skills_with_builtins,
+};
 use serde::Serialize;
 
 #[derive(Clone, Serialize)]
@@ -11,8 +13,13 @@ pub(crate) struct SkillInfo {
     pub(crate) content: String,
 }
 
-pub(crate) fn list(workdir: &Path) -> Vec<SkillInfo> {
-    discover_skills_with_builtins(workdir)
+/// Skills visible in `workdir`; with no workdir, user skills and builtins.
+pub(crate) fn list(workdir: Option<&Path>) -> Vec<SkillInfo> {
+    workdir
+        .map_or_else(
+            discover_user_skills_with_builtins,
+            discover_skills_with_builtins,
+        )
         .into_iter()
         .map(|skill| {
             let location = match skill.origin {
