@@ -12,6 +12,13 @@
  * When the TUI knows its database it also replaces a lost server
  * (app/reconnect.ts). A fixed `--server` without `--db` is never replaced.
  *
+ * `/connect-remote` runs `hya bridge` (the same binary lookup as the daemon
+ * start: `--hya`, `HYA_BIN`, PATH; src/bridge.ts) and moves to its loopback
+ * URL; `/disconnect-remote` comes back to the database's daemon (found or
+ * started) or to a fixed local `--server`. A TUI started remote (bare
+ * `hya --connect`: `--remote --server-label`, no `--db`) has no local
+ * backend to come back to.
+ *
  * Lifecycle: every way out runs `shutdown()` once: restore the terminal,
  * settle the open session (app/sessionKeeper.ts, at most 2 s), then exit.
  * The backend daemon keeps running. The way out decides the session's fate:
@@ -27,6 +34,7 @@ import { render } from "@opentui/solid"
 import type { Options } from "../cli"
 import { HyaClient } from "../client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
+import { startBridge } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
 import { setTheme } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
@@ -112,7 +120,30 @@ export async function run(options: Options): Promise<void> {
     client, store, directory: options.directory, remote: options.remote === true,
     quit: (mode) => void shutdown(0, mode),
     startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}), ...(options.resume ? { resume: options.resume } : {}) },
-    connectionHint: db ? `the hya server daemon of ${db} did not answer · hya serve status` : "start hya serve or drop --server",
+    connectionHint: db
+      ? `the hya server daemon of ${db} did not answer · hya serve status`
+      : options.serverLabel
+        ? "the remote backend did not answer · check the link and that its hya serve --relay runs"
+        : "start hya serve or drop --server",
+    bridge: (link, flags, onLine) => startBridge({ bin: resolveHyaBinary({ flag: options.hya, env: process.env }).path, link, flags, onLine }),
+    ...(db
+      ? {
+          home: async () => {
+            const connection = await connect()
+            store.setBackend(daemonInfo(connection))
+            return { url: connection.url, pid: connection.pid, started: connection.started, version: connection.version, startedAt: connection.startedAt }
+          },
+        }
+      : options.server && !options.remote
+        ? {
+            home: async () => {
+              const fixed = options.server!
+              if (!(await probeHealth(fixed))) throw new Error(`${fixed} does not answer`)
+              store.setBackend({ explicit: true })
+              return { url: fixed, pid: 0, started: false }
+            },
+          }
+        : {}),
     ...(db
       ? {
           reconnect: async () => {

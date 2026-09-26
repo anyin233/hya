@@ -210,6 +210,11 @@ export function createReconnector({
       running = runNow().finally(() => { running = undefined })
       return running
     },
+    /** Forget a stop reason and leave the stopped state (the TUI moved to another server by itself: `/disconnect-remote`). */
+    reset(): void {
+      told = undefined
+      setStopped(false)
+    },
     /** A check or switch is in progress. */
     busy: (): boolean => running !== undefined,
     /** Stopped on purpose (`hya serve stop`): prompts are refused and nothing is started until `/reconnect`. */

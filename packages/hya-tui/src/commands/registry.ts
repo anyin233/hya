@@ -70,6 +70,14 @@ export interface AppActions {
   /** `/reconnect`: find or start the database's backend now (app/reconnect.ts). */
   reconnect(): Promise<void>
   /**
+   * `/connect-remote [<link>] [--transport auto|grpc|ws] [--relay-ca <pem>]`:
+   * start a relay bridge child and move to the remote backend behind it
+   * (src/bridge.ts); without a link a concealed entry asks for it.
+   */
+  connectRemote(args: readonly string[]): Promise<void>
+  /** `/disconnect-remote`: stop the bridge child and go back to the local backend. */
+  disconnectRemote(): Promise<void>
+  /**
    * Delete a session (`/sessions` Ctrl+D). Goes through this, not
    * `client.deleteSession` directly: it marks the id so the global stream's
    * echo of this same delete (`docs/protocol/README.md` "Session list push")
