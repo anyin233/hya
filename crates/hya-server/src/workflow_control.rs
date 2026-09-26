@@ -5,10 +5,12 @@
 //! port here avoids a dependency cycle while all HTTP surfaces share one
 //! command/result contract.
 
+use std::path::PathBuf;
+
 use futures::future::BoxFuture;
 use hya_proto::{
     SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowProjection,
-    WorkflowRunId,
+    WorkflowRunId, WorkflowSummary,
 };
 
 /// Structured failure returned by the Workflow control port.
@@ -76,6 +78,21 @@ pub trait WorkflowControl: Send + Sync {
         state: WorkflowProjection,
     ) -> WorkflowDecorationFuture<'_> {
         Box::pin(async move { Ok(state) })
+    }
+
+    /// List the Workflow catalog for an optional directory scope.
+    ///
+    /// `scope` is the exact directory the caller named (the `x-hya-directory`
+    /// header first, then the request's `directory` field). `None` means the
+    /// caller named no directory: the project-less global
+    /// catalog (user and bundle rows only, `hya serve` has no working
+    /// directory of its own, ADR-0024). The default answers empty so tests
+    /// and callers without an installed control still see a valid response.
+    fn list(
+        &self,
+        _scope: Option<PathBuf>,
+    ) -> BoxFuture<'_, Result<Vec<WorkflowSummary>, WorkflowControlError>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 
     /// Return the active local Workflow run for Session exclusion.

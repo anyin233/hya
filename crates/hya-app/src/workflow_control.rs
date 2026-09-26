@@ -70,6 +70,23 @@ impl WorkflowCatalogRoots {
             user: roots.next(),
         }
     }
+
+    /// Roots for a listing that names no directory: user tier only.
+    ///
+    /// `hya serve` has no working directory of its own (ADR-0024), so an
+    /// unscoped `ListWorkflows` must not read any project-relative path.
+    /// The project root is empty (discovery finds nothing there); only the
+    /// user-level Workflow directory is scanned, alongside the bound
+    /// runtime's installed/first-party bundles.
+    #[must_use]
+    pub fn user_only() -> Self {
+        let mut roots = workflow_dirs_for_workdir(Path::new("")).into_iter();
+        let _project = roots.next();
+        Self {
+            project: PathBuf::new(),
+            user: roots.next(),
+        }
+    }
 }
 
 /// One immutable Workflow plus its exact identity and source owner.
@@ -641,6 +658,34 @@ impl WorkflowControl {
                     .await?,
             }),
         }
+    }
+
+    /// List the effective Workflow catalog for an optional directory scope.
+    ///
+    /// A named directory binds the root runtime and lists project, user, and
+    /// bundle rows for that workdir (catalog precedence: project shadows
+    /// user shadows bundle). No scope binds the project-less global runtime
+    /// (`hya serve` has no working directory of its own, ADR-0024) and lists
+    /// only user and bundle rows.
+    ///
+    /// # Errors
+    /// Returns a control error when runtime binding or catalog build fails.
+    pub async fn list(
+        &self,
+        scope: Option<&Path>,
+    ) -> Result<Vec<WorkflowSummary>, WorkflowControlError> {
+        let (roots, binding) = match scope {
+            Some(dir) => (
+                WorkflowCatalogRoots::for_workdir(dir),
+                self.engine.bind_root_runtime(dir).await?,
+            ),
+            None => (
+                WorkflowCatalogRoots::user_only(),
+                self.engine.bind_global_runtime().await?,
+            ),
+        };
+        let catalog = WorkflowCatalog::build(roots, &binding)?;
+        Ok(catalog.list())
     }
 
     /// Decorate persisted Workflow state with current catalog availability.

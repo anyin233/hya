@@ -4,7 +4,7 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
@@ -719,4 +719,87 @@ async fn v1_session_busy_reflects_engine_turns() {
 
     let (_, body) = get().await;
     assert_ne!(body["busy"], json!(true), "{body}");
+}
+
+/// Fake Workflow control that records the exact scope each `list` call named,
+/// without touching a real catalog or runtime.
+#[derive(Default)]
+struct RecordingWorkflowControl {
+    seen: Mutex<Vec<Option<std::path::PathBuf>>>,
+}
+
+impl hya_server::WorkflowControl for RecordingWorkflowControl {
+    fn execute(
+        &self,
+        _session: hya_proto::SessionId,
+        _command: hya_proto::WorkflowCommand,
+        _delivery: hya_proto::WorkflowDelivery,
+    ) -> hya_server::WorkflowControlFuture<'_> {
+        Box::pin(async {
+            Err(hya_server::WorkflowControlError::new(
+                "UNIMPLEMENTED",
+                "execute is not exercised by this fake",
+            ))
+        })
+    }
+
+    fn list(
+        &self,
+        scope: Option<std::path::PathBuf>,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<Vec<hya_proto::WorkflowSummary>, hya_server::WorkflowControlError>,
+    > {
+        self.seen.lock().unwrap().push(scope);
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// `ListWorkflows` forwards the exact directory scope named by the header
+/// (which wins), the request field, or neither (the project-less global
+/// view) — it must not silently substitute some other session's catalog.
+#[tokio::test]
+async fn v1_list_workflows_forwards_the_named_directory_scope() {
+    let control = Arc::new(RecordingWorkflowControl::default());
+    let app = router(state().await.with_workflow_control(control.clone()));
+
+    // No directory named anywhere: the global (project-less) view.
+    let (status, body) = send(app.clone(), Method::GET, "/v1/workflows", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The request's `directory` field names a scope.
+    let field_dir = std::env::temp_dir().join("hya-v1-list-workflows-field");
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/workflows?directory={}",
+            enc(&field_dir.to_string_lossy())
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The `x-hya-directory` header wins over a field naming a different scope.
+    let header_dir = std::env::temp_dir().join("hya-v1-list-workflows-header");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/v1/workflows?directory={}",
+                    enc(&field_dir.to_string_lossy())
+                ))
+                .header("x-hya-directory", header_dir.to_string_lossy().to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let seen = control.seen.lock().unwrap().clone();
+    assert_eq!(seen, vec![None, Some(field_dir), Some(header_dir)]);
 }
