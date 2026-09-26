@@ -39,6 +39,8 @@ for line in sys.stdin:
         }
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
     elif method == "tool/call":
+        if (msg.get("params") or {}).get("input", {}).get("exit"):
+            sys.exit(0)
         result = {
             "ok": True,
             "output": {"cwd": os.getcwd(), "home": os.environ.get("HOME")},
@@ -135,6 +137,61 @@ async fn connect_all_observed_in_spawns_relative_command_in_given_cwd_with_inher
         out["home"].as_str().map(str::to_string),
         expected_home,
         "the standard environment (HOME) must be inherited, not cleared"
+    );
+
+    let _ = std::fs::remove_dir_all(plugin_dir);
+}
+
+/// A crashed plugin respawns in the same directory it was first spawned in,
+/// so a relative command keeps resolving after a restart.
+#[tokio::test]
+async fn a_respawned_plugin_keeps_its_given_cwd() {
+    let plugin_dir = std::env::temp_dir().join(format!(
+        "hya-plugin-respawn-in-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let script_dir = plugin_dir.join(".hya/plugins/x");
+    std::fs::create_dir_all(&script_dir).unwrap();
+    std::fs::write(script_dir.join("script.py"), FIXTURE).unwrap();
+    let spec = PluginSpec {
+        id: "cwd-fixture".to_string(),
+        kind: PluginKindWire::Rust,
+        command: vec!["python3".to_string(), "script.py".to_string()],
+        timeout_ms: Some(3000),
+        env: BTreeMap::new(),
+        posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
+    };
+    let (host, failures) = PluginHost::connect_all_observed_in(
+        vec![spec],
+        script_dir.clone(),
+        HostInfo {
+            name: "hya".to_string(),
+            version: "0.0.0".to_string(),
+        },
+    )
+    .await;
+    assert!(failures.is_empty(), "connect failures: {failures:?}");
+    let tool = host.tools().remove(0);
+    let ctx = ctx_with(SessionId::new());
+
+    assert!(
+        tool.execute(&ctx, json!({"exit": true})).await.is_err(),
+        "the child exits without replying"
+    );
+    let out = tool
+        .execute(&ctx, json!({}))
+        .await
+        .expect("the next call respawns the plugin");
+    let expected_cwd = std::fs::canonicalize(&script_dir).unwrap();
+    assert_eq!(
+        out["cwd"].as_str(),
+        Some(expected_cwd.to_string_lossy().as_ref()),
+        "the respawned child runs in the given directory"
     );
 
     let _ = std::fs::remove_dir_all(plugin_dir);

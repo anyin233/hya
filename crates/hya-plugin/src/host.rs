@@ -100,6 +100,9 @@ pub(crate) struct PluginConn {
     pub(crate) timeout: Duration,
     command: Vec<String>,
     bundle_root: Option<std::path::PathBuf>,
+    /// Working directory of a plugin spawned with an explicit cwd; restarts
+    /// spawn there again.
+    cwd: Option<std::path::PathBuf>,
     env: BTreeMap<String, String>,
     host_info: HostInfo,
     live: Mutex<Option<LiveClient>>,
@@ -244,9 +247,10 @@ impl PluginConn {
             return Err(PluginError::Disabled);
         }
         let env = (!self.env.is_empty()).then_some(&self.env);
-        let (client, guard) = match self.bundle_root.as_deref() {
-            Some(root) => PluginClient::spawn_bundle(&self.command, root, env)?,
-            None => PluginClient::spawn(&self.command, env)?,
+        let (client, guard) = match (self.bundle_root.as_deref(), self.cwd.as_deref()) {
+            (Some(root), _) => PluginClient::spawn_bundle(&self.command, root, env)?,
+            (None, Some(dir)) => PluginClient::spawn_in(&self.command, dir, env)?,
+            (None, None) => PluginClient::spawn(&self.command, env)?,
         };
         let init = client.initialize(self.host_info.clone()).await?;
         validate_initialize(&self.id, &init)?;

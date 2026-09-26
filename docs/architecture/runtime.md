@@ -91,10 +91,13 @@ the server process's cwd:
   `SessionEngine::bind_global_runtime` (`RuntimeRegistry::bind_global`)
   discovers user skills and builtins only, keyed under the empty path, and
   commands skip `.hya/commands` and leave `${path}` unexpanded.
-- Remaining process-level reads, by design: installed project bundles
-  (`./.hya/bundles`) and project plugins (`./.hya/plugins`) are still loaded
-  once at startup from the directory the process started in (see
-  [`docs/cli.md`](../cli.md)); they are a catalog tier, not a request scope.
+- Project bundles (`<root>/.hya/bundles`) and project plugins
+  (`<root>/.hya/plugins`) are not process-level: they are the per-Project
+  catalog tier, loaded lazily at a registered Project's first bind from every
+  root (first root wins by id) and published only in that Project's scope
+  overlay (`hya-app` `ProjectScopeRefresh`). Nothing is read from the
+  directory the process started in. Plugins declared in `config.yaml` stay
+  process-wide and win over a project manifest with the same id.
 
 ### `RuntimeCatalogRefresh`
 

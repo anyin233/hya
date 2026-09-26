@@ -146,11 +146,15 @@ tail -f ~/.local/state/hya/sessions.db.server.log
   daemon that launch starts; a running daemon keeps its own. `hya serve
   restart --model …` (or `stop`, then start `hya` with the flags) applies
   them.
-- **A project's `.hya/bundles` or `.hya/plugins` are not loaded** — the
-  daemon starts in your home directory, not in the directory of the client
-  that started it, so its project tier is `~/.hya/`. Run `hya serve --db
-  <db>` in the project yourself (and point the TUI at it) to serve that
-  project's bundles and plugins.
+- **A project's `.hya/bundles` or `.hya/plugins` are not loaded** — they
+  load only for sessions of a registered Project whose roots hold them
+  (every root, first root wins by id), never for temporary sessions or for a
+  directory outside every Project, and never from the directory the daemon
+  started in. Check that the session's workdir is inside one of the Project's
+  roots (a session created for a directory joins the Project containing it,
+  and one is registered for the directory when none does). A
+  `plugin.toml` edit applies at the Project's next turn; a plugin with the
+  same id in `config.yaml` always wins over the manifest.
 - **A TUI with `--server <url>` does not reconnect** — without `--db` the URL
   is fixed; add `--db <database>` to let it fall back to that database's
   daemon.

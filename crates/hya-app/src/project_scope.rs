@@ -15,7 +15,10 @@
 //!   the Project that loads it and stops once that scope is dropped and no
 //!   binding retains it;
 //! * the project bundles' model leaves and source directories, read from
-//!   each project bundle's own `config.yml`.
+//!   each project bundle's own `config.yml`;
+//! * the Project's plugins from `<root>/.hya/plugins/*/plugin.toml` of every
+//!   root (see [`crate::project_plugins`]) as Plugin-kind sources carrying
+//!   their hooks.
 //!
 //! Directory, Global, and temporary scopes load no project tier: executable
 //! project code only runs for registered Projects.
@@ -23,8 +26,11 @@
 //! Each bind scans the Project roots without preparing anything and compares
 //! the digest with the published overlay's fingerprint; only a change (or an
 //! evicted overlay, or a new base publication) rebuilds and republishes that
-//! one Project. A per-scope lock keeps concurrent binds of one Project from
-//! starting its processes twice.
+//! one Project. The Project's plugin processes are kept across a rebuild
+//! unless its plugin inputs (the plugin directory listing and every
+//! `plugin.toml`) changed: then the new overlay starts fresh processes and
+//! the old ones stop with the old overlay. A per-scope lock keeps concurrent
+//! binds of one Project from starting its processes twice.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -43,6 +49,7 @@ use crate::agent_model_config::AgentModelConfigFiles;
 use crate::bundle_config::BundleConfigResolver;
 use crate::installed_bundle_refresh::{BaseCatalogs, InstalledBundleRefresh, compose};
 use crate::project_bundles::{load_project_bundle_dirs_for_roots, project_roots_digest};
+use crate::project_plugins::{ProjectPluginSettings, load_project_plugins};
 
 /// Refreshes the base catalog and the per-Project bundle tier.
 ///
@@ -51,7 +58,10 @@ use crate::project_bundles::{load_project_bundle_dirs_for_roots, project_roots_d
 /// `refresh_scope` the Project overlay.
 pub struct ProjectScopeRefresh {
     installed: Arc<InstalledBundleRefresh>,
+    plugins: ProjectPluginSettings,
     locks: std::sync::Mutex<HashMap<ScopeKey, Arc<tokio::sync::Mutex<()>>>>,
+    /// Plugin input digest of each published overlay's `plugin_sources`.
+    plugin_digests: std::sync::Mutex<HashMap<ScopeKey, [u8; 32]>>,
 }
 
 impl ProjectScopeRefresh {
@@ -60,8 +70,24 @@ impl ProjectScopeRefresh {
     pub fn new(installed: Arc<InstalledBundleRefresh>) -> Self {
         Self {
             installed,
+            plugins: ProjectPluginSettings::default(),
             locks: std::sync::Mutex::new(HashMap::new()),
+            plugin_digests: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Load project plugins with `settings` (default: enabled, no configured
+    /// ids).
+    #[must_use]
+    pub fn with_project_plugins(mut self, settings: ProjectPluginSettings) -> Self {
+        self.plugins = settings;
+        self
+    }
+
+    fn plugin_digests(&self) -> std::sync::MutexGuard<'_, HashMap<ScopeKey, [u8; 32]>> {
+        self.plugin_digests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The wrapped base refresh.
@@ -89,6 +115,7 @@ impl ProjectScopeRefresh {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|key, lock| live.contains(key) || Arc::strong_count(lock) > 1);
+        self.plugin_digests().retain(|key, _| live.contains(key));
     }
 
     /// Bring one Project's overlay up to date.
@@ -104,7 +131,7 @@ impl ProjectScopeRefresh {
             self.installed.refresh_if_changed(runtime).await?;
         }
         let base = self.installed.base_catalogs();
-        let inputs = ScopeInputs::scan(&base, roots.to_vec()).await?;
+        let inputs = ScopeInputs::scan(&base, roots.to_vec(), self.plugins.enabled()).await?;
         let current = runtime.scope_overlay(&key);
         if !inputs.has_tiers() {
             // Nothing project-specific: the scope binds the base snapshot.
@@ -112,12 +139,27 @@ impl ProjectScopeRefresh {
                 return Ok(false);
             }
             runtime.drop_scope(&key);
+            self.plugin_digests().remove(&key);
             self.installed.source_cache().collect(&runtime.scope_keys());
             return Ok(true);
         }
-        if current.is_some_and(|overlay| overlay.fingerprint == inputs.fingerprint) {
+        if current
+            .as_ref()
+            .is_some_and(|overlay| overlay.fingerprint == inputs.fingerprint)
+        {
             return Ok(false);
         }
+        // Keep the running plugin processes unless their inputs changed.
+        let kept_plugins = current
+            .as_ref()
+            .filter(|_| self.plugin_digests().get(&key) == Some(&inputs.plugin_digest))
+            .map(|overlay| overlay.plugin_sources.clone());
+        drop(current);
+        let plugin_sources = match kept_plugins {
+            Some(sources) => sources,
+            None if inputs.plugins => load_project_plugins(roots, &self.plugins).await,
+            None => Vec::new(),
+        };
 
         let tier = ProjectTier::load(roots.to_vec()).await?;
         let resolver = BundleConfigResolver::new(
@@ -144,13 +186,14 @@ impl ProjectScopeRefresh {
         let overlay = ScopeOverlay {
             catalog,
             bundle_sources: composition.runtime_sources(),
-            // S4: the Project's plugin sources (with hooks) go here.
-            plugin_sources: Vec::new(),
+            plugin_sources,
             bundle_models: tier.bundle_models,
             project_bundle_dirs: tier.project_bundle_dirs,
             fingerprint: inputs.fingerprint,
         };
         runtime.publish_scope(key.clone(), overlay)?;
+        self.plugin_digests()
+            .insert(key.clone(), inputs.plugin_digest);
         self.installed
             .source_cache()
             .commit_scope(key, composition.sources, &runtime.scope_keys());
@@ -171,19 +214,43 @@ struct ScopeInputs {
     fingerprint: [u8; 32],
     /// Whether any root has a project bundle directory.
     bundles: bool,
+    /// Digest of the plugin tier's inputs alone (every root's plugin
+    /// directory listing and `plugin.toml` bytes); a change respawns the
+    /// Project's plugins.
+    plugin_digest: [u8; 32],
+    /// Whether any root has a `plugin.toml` (and project plugins are on).
+    plugins: bool,
 }
 
 impl ScopeInputs {
-    async fn scan(base: &BaseCatalogs, roots: Vec<PathBuf>) -> Result<Self, CoreError> {
+    async fn scan(
+        base: &BaseCatalogs,
+        roots: Vec<PathBuf>,
+        plugins_enabled: bool,
+    ) -> Result<Self, CoreError> {
         let revision = base.revision;
         tokio::task::spawn_blocking(move || {
+            let mut plugin_hasher = sha2::Sha256::new();
+            plugin_hasher.update(b"hya-project-plugins-v1\0");
+            let mut plugins = false;
+            if plugins_enabled {
+                for root in &roots {
+                    plugin_hasher.update(b"root\0");
+                    plugin_hasher.update(root.as_os_str().as_encoded_bytes());
+                    plugins |= crate::plugins::project_plugins_digest(root, &mut plugin_hasher);
+                }
+            }
+            let plugin_digest: [u8; 32] = plugin_hasher.finalize().into();
             let mut hasher = sha2::Sha256::new();
             hasher.update(b"hya-project-scope-v1\0");
             hasher.update(revision.to_le_bytes());
             let bundles = project_roots_digest(&roots, &mut hasher);
+            hasher.update(plugin_digest);
             Self {
                 fingerprint: hasher.finalize().into(),
                 bundles,
+                plugin_digest,
+                plugins,
             }
         })
         .await
@@ -192,7 +259,7 @@ impl ScopeInputs {
 
     /// Whether the Project has anything to overlay on the base.
     fn has_tiers(&self) -> bool {
-        self.bundles
+        self.bundles || self.plugins
     }
 }
 
