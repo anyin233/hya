@@ -2009,8 +2009,14 @@ impl serde::Serialize for CatalogUpdated {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let len = 0;
-        let struct_ser = serializer.serialize_struct("hya.v1.CatalogUpdated", len)?;
+        let mut len = 0;
+        if !self.project_id.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.CatalogUpdated", len)?;
+        if !self.project_id.is_empty() {
+            struct_ser.serialize_field("projectId", &self.project_id)?;
+        }
         struct_ser.end()
     }
 }
@@ -2021,10 +2027,13 @@ impl<'de> serde::Deserialize<'de> for CatalogUpdated {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "project_id",
+            "projectId",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            ProjectId,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2045,7 +2054,10 @@ impl<'de> serde::Deserialize<'de> for CatalogUpdated {
                     where
                         E: serde::de::Error,
                     {
-                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                        match value {
+                            "projectId" | "project_id" => Ok(GeneratedField::ProjectId),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
                     }
                 }
                 deserializer.deserialize_identifier(GeneratedVisitor)
@@ -2063,10 +2075,19 @@ impl<'de> serde::Deserialize<'de> for CatalogUpdated {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                while map_.next_key::<GeneratedField>()?.is_some() {
-                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                let mut project_id__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProjectId => {
+                            if project_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projectId"));
+                            }
+                            project_id__ = Some(map_.next_value()?);
+                        }
+                    }
                 }
                 Ok(CatalogUpdated {
+                    project_id: project_id__.unwrap_or_default(),
                 })
             }
         }
@@ -11316,8 +11337,20 @@ impl serde::Serialize for ListBundleApisRequest {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let len = 0;
-        let struct_ser = serializer.serialize_struct("hya.v1.ListBundleApisRequest", len)?;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListBundleApisRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
         struct_ser.end()
     }
 }
@@ -11328,10 +11361,14 @@ impl<'de> serde::Deserialize<'de> for ListBundleApisRequest {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "directory",
+            "session",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Directory,
+            Session,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11352,7 +11389,11 @@ impl<'de> serde::Deserialize<'de> for ListBundleApisRequest {
                     where
                         E: serde::de::Error,
                     {
-                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "session" => Ok(GeneratedField::Session),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
                     }
                 }
                 deserializer.deserialize_identifier(GeneratedVisitor)
@@ -11370,10 +11411,27 @@ impl<'de> serde::Deserialize<'de> for ListBundleApisRequest {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                while map_.next_key::<GeneratedField>()?.is_some() {
-                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                let mut directory__ = None;
+                let mut session__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                    }
                 }
                 Ok(ListBundleApisRequest {
+                    directory: directory__.unwrap_or_default(),
+                    session: session__.unwrap_or_default(),
                 })
             }
         }
@@ -12893,8 +12951,20 @@ impl serde::Serialize for ListPermissionModesRequest {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let len = 0;
-        let struct_ser = serializer.serialize_struct("hya.v1.ListPermissionModesRequest", len)?;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListPermissionModesRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
         struct_ser.end()
     }
 }
@@ -12905,10 +12975,14 @@ impl<'de> serde::Deserialize<'de> for ListPermissionModesRequest {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "directory",
+            "session",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Directory,
+            Session,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12929,7 +13003,11 @@ impl<'de> serde::Deserialize<'de> for ListPermissionModesRequest {
                     where
                         E: serde::de::Error,
                     {
-                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "session" => Ok(GeneratedField::Session),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
                     }
                 }
                 deserializer.deserialize_identifier(GeneratedVisitor)
@@ -12947,10 +13025,27 @@ impl<'de> serde::Deserialize<'de> for ListPermissionModesRequest {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                while map_.next_key::<GeneratedField>()?.is_some() {
-                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                let mut directory__ = None;
+                let mut session__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                    }
                 }
                 Ok(ListPermissionModesRequest {
+                    directory: directory__.unwrap_or_default(),
+                    session: session__.unwrap_or_default(),
                 })
             }
         }

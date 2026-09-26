@@ -212,7 +212,9 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
     // Permission modes: the catalog and the session mode match on both.
     let grpc_modes: Value = serde_json::to_value(
         catalog
-            .list_permission_modes(tonic::Request::new(pb::ListPermissionModesRequest {}))
+            .list_permission_modes(tonic::Request::new(
+                pb::ListPermissionModesRequest::default(),
+            ))
             .await
             .unwrap()
             .into_inner(),

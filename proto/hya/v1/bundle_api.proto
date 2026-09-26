@@ -12,8 +12,9 @@ import "google/protobuf/struct.proto";
 // request-scoped read-only capability; a global endpoint is not tied to any
 // session. Write methods only change state the bundle process owns itself.
 service BundleApi {
-  // List every endpoint the published bundles register, sorted by bundle id
-  // then endpoint id.
+  // List every endpoint the bundles of the request's catalog scope register
+  // (a session's scope, else the directory's, else the global view), sorted
+  // by bundle id then endpoint id.
   //
   // hya.http: GET /v1/bundle-apis
   rpc ListBundleApis(ListBundleApisRequest) returns (ListBundleApisResponse);
@@ -37,7 +38,15 @@ service BundleApi {
   rpc InvokeGlobalBundleApi(InvokeGlobalBundleApiRequest) returns (BundleApiResponse);
 }
 
-message ListBundleApisRequest {}
+message ListBundleApisRequest {
+  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // with neither it nor `session`, the global view (installed and
+  // first-party bundles; no Project bundle) is listed.
+  string directory = 1;
+  // List the endpoints visible to this session (its own catalog scope,
+  // Project bundles included). Wins over `directory`.
+  string session = 2;
+}
 
 // One endpoint a published bundle registers.
 message BundleApiInfo {

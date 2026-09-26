@@ -36,10 +36,23 @@ ignores it:
 | Scope | Rpcs | Without a scope |
 |---|---|---|
 | Required | `ReadFile`, `ListDirectory`, `FindFiles`, `SearchText`, `SearchSymbols`; `GetVcsStatus`, `GetVcsDiff`, `ApplyPatch`; `ListWorktrees`, `CreateWorktree`, `DeleteWorktree`, `ResetWorktree`; `GetCurrentProject`; `CreatePty` (its `cwd`, else the scope) | `invalid_argument` ("this rpc needs a directory scope") |
-| Optional | `ListAgents`, `ListCommands`, `ListSkills`, `GetBootstrap`, `ListAgentModels`, `SetAgentModel` (without `session`), `ListWorkflows` | The global view: builtins, installed bundles, and user skills (`~/.config/hya/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`); no `.hya/commands`, `.hya/skills`, or `.agents/skills` of any project; builtin command templates keep `${path}` unexpanded. For `ListWorkflows`: the user and bundle Workflow tiers, with no project tier. |
-| From the session | turns (`CreateTurn` prompt, command, and shell), `ForkSession`, `ListAgentModels`/`SetAgentModel` with `session`, workflow commands (`SubmitWorkflowCommand`, `GetWorkflowState`) | Always the session's recorded workdir (and its Project roots for tools); the request scope is not consulted |
+| Optional | `ListAgents`, `ListCommands`, `ListSkills`, `GetBootstrap`, `ListAgentModels`, `SetAgentModel`, `ListPermissionModes`, `ListBundleApis` (each without `session`), `ListWorkflows` | The global view: builtins, installed bundles, and user skills (`~/.config/hya/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`); no `.hya/commands`, `.hya/skills`, or `.agents/skills` of any project and no Project bundle (permission modes and bundle APIs of the base catalog only); builtin command templates keep `${path}` unexpanded. For `ListWorkflows`: the user and bundle Workflow tiers, with no project tier. |
+| From the session | turns (`CreateTurn` prompt, command, and shell), `ForkSession`, `ListAgentModels`/`SetAgentModel`/`ListPermissionModes`/`ListBundleApis` with `session` (wins over `directory`), workflow commands (`SubmitWorkflowCommand`, `GetWorkflowState`) | Always the session's recorded workdir and its catalog scope (its Project's roots for tools, commands, skills, and bundles); the request scope is not consulted |
 | From the request body | `CreateSession` (`workdir`, `projectId`, or `kind: temporary`; see [Projects and session placement](#projects-and-session-placement)), `ResolveProject`/`EnsureProjectForPath` (`path`) | As documented for each rpc |
 | Ignored | `GetLocation` (echoes the scope in `directory`, empty without one), `GetConfig`, `UpdateConfig`, `ListModels`, `ListProviders`, `GetProvider` and the provider/auth writes, `ListTools`, `ListSavedRules`, MCP rpcs, `ListInteractions`, `StreamGlobalEvents` | Works the same with or without a scope |
+
+**Catalog scope of a directory.** An Optional catalog rpc resolves its
+directory through the Projects (the registered, unarchived Project whose
+root contains it, longest root wins) and answers from one catalog scope:
+
+| Directory | Catalog |
+|---|---|
+| Inside a Project | The Project's catalog: its bundle tier (agents, permission modes, bundle APIs of the Project's bundles over the installed ones) and the disk tiers (`.hya/commands`, `.hya/skills`, `.agents/skills`) of the requested directory first, then of every Project root in order; the first definition of a name wins. |
+| In no Project | That directory's disk tiers only; no Project bundle. |
+| None | The global view (above). |
+
+A catalog rpc never creates a Project; `EnsureProjectForPath` or
+`CreateSession` with a `workdir` does.
 
 ## Allowed Host names
 
@@ -652,11 +665,23 @@ Stream events come in two kinds:
 **`catalogUpdated`.** When the provider/model catalog changes — a provider
 is added, edited, or refreshed, a key is set or removed, or startup model
 discovery finishes — every live stream (global and each session stream)
-receives one live-only `catalogUpdated` frame with an empty payload and an
-empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
+receives one live-only `catalogUpdated` frame with an empty `projectId` and
+an empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
 
 ```json
 { "event": { "timeRecorded": "2026-09-26T10:00:00Z", "catalogUpdated": {} } }
+```
+
+When one Project's catalog changes — `UpdateProject` changes its roots, or
+`DeleteProject` removes it — every live stream receives one
+`catalogUpdated` whose `projectId` names it. Re-read the agent, command,
+skill, permission-mode, and bundle-API catalogs of directories in that
+Project (a deleted Project's directories now list their plain-directory
+catalog). A renamed Project or an unchanged root list emits none. An empty
+`projectId` means any scope may have changed.
+
+```json
+{ "event": { "timeRecorded": "2026-09-26T10:00:00Z", "catalogUpdated": { "projectId": "hyprj_..." } } }
 ```
 
 **Interactions-only global stream.** `GET /v1/events/stream?interactionsOnly=true`
@@ -880,8 +905,12 @@ way. Frames sent before you subscribe are not replayed: list
 A session tree's permission mode decides whether asks reach the user at all.
 `GET /v1/permission-modes` (`Catalog.ListPermissionModes`) lists the
 selectable modes as `{modes: [{id, title, description, source}]}`: the
-built-in `manual` and `yolo` (`source: "builtin"`), then each installed
-bundle's modes as `<bundle-id>/<mode-id>` (`source`: the bundle id). Set one
+built-in `manual` and `yolo` (`source: "builtin"`), then each bundle's modes
+as `<bundle-id>/<mode-id>` (`source`: the bundle id). Pass `session` for the
+modes that session accepts (its own catalog scope, its Project's bundles
+included), or `directory` (or `x-hya-directory`) for that directory's
+[catalog scope](#base-url-and-scoping); with neither, the global view lists only
+installed and first-party bundles' modes. Set one
 with `PATCH /v1/sessions/{session}` and `{"permissionMode": "yolo"}`
 (`Session.UpdateSession`); an unknown or unavailable mode fails with
 `invalid_argument`. The mode is recorded on the root session and shared by
@@ -1103,7 +1132,11 @@ the bundle id percent-encoded as one path segment
   "path", "description"?, "requestSchema"?, "responseSchema"? }] }` (rpc
   `BundleApi.ListBundleApis`), sorted by bundle then endpoint id. `path` is
   the declared template (`/items/{id}`); the schemas are the declared JSON
-  Schema documents.
+  Schema documents. Optional `session` lists the endpoints of that
+  session's catalog scope (its Project's bundles included); optional
+  `directory` (or `x-hya-directory`) those of the directory's catalog scope;
+  with neither, only installed and first-party bundles' endpoints (a
+  Project bundle's endpoints are never listed globally).
 - Session scope — `GET|POST|PUT|PATCH|DELETE
   /v1/sessions/{session}/bundles/{bundle}/{path…}` (rpc
   `BundleApi.InvokeSessionBundleApi`). The session must exist; the bundle

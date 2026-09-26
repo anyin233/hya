@@ -439,13 +439,15 @@ export interface StreamEvent {
   /** A revert (`messageId` set) or its undo (`undone`, `messageId` empty) of the session (durable); re-read the session and its messages. */
   sessionReverted?: { messageId?: string; undone?: boolean; files?: RevertedFile[] }
   /**
-   * Live-only, empty `session`: the provider/model catalog changed (a
-   * provider added/edited/refreshed, a key set/removed, or startup discovery
-   * finished). Arrives on the global stream and every session stream;
-   * re-read `GET /v1/models` / `GET /v1/providers` (`docs/protocol/README.md`
-   * "Live and durable frames").
+   * Live-only, empty `session`: a catalog changed — the provider/model
+   * catalog (a provider added/edited/refreshed, a key set/removed, or
+   * startup discovery finished; `projectId` empty or absent), or one
+   * Project's catalog tier (its roots changed or it was deleted; `projectId`
+   * names it). Arrives on the global stream and every session stream;
+   * re-read `GET /v1/models` / `GET /v1/providers` and the affected scope's
+   * catalogs (`docs/protocol/README.md` "Live and durable frames").
    */
-  catalogUpdated?: Record<string, never>
+  catalogUpdated?: { projectId?: string }
   /**
    * Live-only, empty `session`, global stream only: the Project list changed
    * (a Project created/updated/deleted, a session added or removed, or a

@@ -827,7 +827,7 @@ impl pb::bundle_api_server::BundleApi for V1Grpc {
         &self,
         request: GrpcRequest<pb::ListBundleApisRequest>,
     ) -> Result<GrpcResponse<pb::ListBundleApisResponse>, Status> {
-        unary!(self, "GET", "/v1/bundle-apis", request)
+        get_rpc!(self, "/v1/bundle-apis", request)
     }
 
     async fn invoke_session_bundle_api(

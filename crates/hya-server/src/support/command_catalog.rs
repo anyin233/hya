@@ -1,6 +1,6 @@
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
+
+use crate::support::catalog_place::CatalogPlace;
 
 /// Identity of the trusted bundle that owns the prompt-template commands.
 const CORE_COMMANDS_BUNDLE: &str = "hya/core-commands";
@@ -88,10 +88,12 @@ pub(crate) struct CommandInfo {
     pub(crate) subtask: Option<bool>,
 }
 
-/// Commands visible in `workdir`. With no workdir (a listing that names no
-/// directory), only global commands: builtins and user skills, with
+/// Commands visible at `place`: builtins, then disk commands from its
+/// directory and each Project root in order (first wins), then skills. The
+/// global view (no directory) has only builtins and user skills, with
 /// `${path}` left unexpanded since there is no directory to name.
-pub(crate) fn list(workdir: Option<&Path>) -> Vec<CommandInfo> {
+pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
+    let workdir = place.workdir();
     let mut commands = core_commands()
         .iter()
         .map(|(command, template)| CommandInfo {
@@ -152,19 +154,27 @@ pub(crate) fn list(workdir: Option<&Path>) -> Vec<CommandInfo> {
             None,
         ),
     ]);
-    if let Some(workdir) = workdir {
-        upsert_commands(
-            &mut commands,
-            crate::support::command_sources::disk_commands(workdir),
-        );
+    let mut disk: Vec<CommandInfo> = Vec::new();
+    for dir in place.dirs() {
+        for command in crate::support::command_sources::disk_commands(dir) {
+            if !disk.iter().any(|known| known.name == command.name) {
+                disk.push(command);
+            }
+        }
     }
-    add_skill_commands(&mut commands, workdir);
+    upsert_commands(&mut commands, disk);
+    add_skill_commands(&mut commands, place);
     commands
 }
 
-/// Expand `command` against the catalog of a session's `workdir`.
-pub(crate) fn expand_prompt(workdir: &Path, command: &str, arguments: &str) -> Option<String> {
-    list(Some(workdir))
+/// Expand `command` against the catalog a session's turns see
+/// ([`CatalogPlace::for_session`]).
+pub(crate) fn expand_prompt(
+    place: &CatalogPlace,
+    command: &str,
+    arguments: &str,
+) -> Option<String> {
+    list(place)
         .into_iter()
         .find(|item| item.name == command && item.expandable)
         .map(|item| expand_template(&item.template, arguments))
@@ -339,8 +349,8 @@ fn command_hints(template: &str) -> Vec<String> {
     numbered
 }
 
-fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: Option<&Path>) {
-    for skill in crate::support::skill_catalog::list(workdir) {
+fn add_skill_commands(commands: &mut Vec<CommandInfo>, place: &CatalogPlace) {
+    for skill in crate::support::skill_catalog::list(place) {
         if commands.iter().any(|command| command.name == skill.name) {
             continue;
         }
@@ -368,7 +378,7 @@ mod tests {
                 .map(|asset| asset.content.replace("${path}", "/work"))
                 .unwrap_or_else(|| panic!("missing {id} asset"))
         };
-        let commands = super::list(Some(std::path::Path::new("/work")));
+        let commands = super::list(&super::CatalogPlace::directory_for_tests("/work"));
         for (name, id, subtask) in [("init", "init", None), ("review", "review", Some(true))] {
             let command = commands
                 .iter()

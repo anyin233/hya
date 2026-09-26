@@ -100,13 +100,36 @@ pub fn router(state: AppState) -> Router {
 
 /// Start the process-wide background drivers of a server state: the
 /// backgrounded-MCP reclaim driver, the Project busy watcher, the
-/// session-list busy tracker, and the ephemeral-session reaper. Called
-/// exactly once per server state ([`AppState::server_state`]).
+/// session-list busy tracker, the ephemeral-session reaper, and the
+/// catalog-scope notice relay. Called exactly once per server state
+/// ([`AppState::server_state`]), so HTTP and gRPC share one of each.
 pub(crate) fn spawn_background_drivers(state: &ServerState) {
+    spawn_catalog_scope_notices(state);
     spawn_background_reclaim_driver(state.clone());
     spawn_project_busy_watcher(state.clone());
     session_list::spawn_busy_tracker(state.clone());
     ephemeral::spawn_reaper(state.clone());
+}
+
+/// Relay every dropped catalog scope
+/// ([`hya_core::SessionEngine::invalidate_catalog_scope`]) as one live
+/// `catalogUpdated {projectId}`; a lagged receiver may have missed any
+/// Project, so it publishes one global (empty `projectId`) notice. Holds
+/// only the receiver and the notice sender, so it ends with the engine.
+fn spawn_catalog_scope_notices(state: &ServerState) {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut invalidations = state.engine.subscribe_catalog_scope_invalidations();
+    let notices = state.catalog_updates.clone();
+    tokio::spawn(async move {
+        loop {
+            let project = match invalidations.recv().await {
+                Ok(hya_core::ScopeKey::Project(project)) => Some(project),
+                Ok(_) | Err(RecvError::Lagged(_)) => None,
+                Err(RecvError::Closed) => break,
+            };
+            let _ = notices.send(crate::state::catalog_notice(project));
+        }
+    });
 }
 
 /// Drive the reclaim turn for backgrounded MCP calls.

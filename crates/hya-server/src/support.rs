@@ -5,6 +5,7 @@
 
 #[allow(dead_code)]
 pub(crate) mod bound_agent_metadata;
+pub(crate) mod catalog_place;
 #[allow(dead_code)]
 pub(crate) mod command_catalog;
 #[allow(dead_code)]

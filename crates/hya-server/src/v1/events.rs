@@ -253,8 +253,9 @@ pub(crate) fn frame_stream(
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(question);
     #[allow(clippy::result_large_err)]
-    let catalog = BroadcastStream::new(st.catalog_updates.subscribe())
-        .filter_map(|result| async { result.ok().map(|_notice| Ok(catalog_updated_frame())) });
+    let catalog = BroadcastStream::new(st.catalog_updates.subscribe()).filter_map(|result| async {
+        result.ok().map(|notice| Ok(catalog_updated_frame(&notice)))
+    });
     let catalog: std::pin::Pin<
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(catalog);
@@ -416,10 +417,16 @@ fn server_stopping_frame(reason: crate::streams::ShutdownReason) -> pb::StreamFr
     }
 }
 
-/// The live-only, process-wide `catalogUpdated` frame.
-fn catalog_updated_frame() -> pb::StreamFrame {
+/// The live-only, process-wide `catalogUpdated` frame of one
+/// `catalog.updated` notice (`crate::state::catalog_notice`): `projectId`
+/// names the Project whose catalog changed, empty for a global change.
+fn catalog_updated_frame(notice: &serde_json::Value) -> pb::StreamFrame {
+    let project_id = notice["properties"]["projectId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     process_notice_frame(pb::stream_event::Payload::CatalogUpdated(
-        pb::CatalogUpdated {},
+        pb::CatalogUpdated { project_id },
     ))
 }
 

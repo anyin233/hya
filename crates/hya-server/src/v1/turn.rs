@@ -217,14 +217,17 @@ async fn create_turn(
             if let Some(model) = &explicit_model {
                 st.engine.switch_model(session, model.clone()).await?;
             }
-            // Custom slash commands from the directory catalog expand
-            // server-side; unknown commands keep the literal slash.
+            // Custom slash commands from the session's catalog (its workdir,
+            // then its Project's roots) expand server-side; unknown commands
+            // keep the literal slash.
             let text = match native_request.text.clone() {
                 Some(text) => text,
                 None => {
-                    let workdir = crate::support::reference::session_workdir(&st, session).await?;
+                    let place =
+                        crate::support::catalog_place::CatalogPlace::for_session(&st, session)
+                            .await?;
                     crate::support::command_catalog::expand_prompt(
-                        &workdir,
+                        &place,
                         &command.command,
                         &command.arguments,
                     )

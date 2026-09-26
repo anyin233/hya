@@ -106,7 +106,7 @@
     "/v1/bundle-apis": {
       "get": {
         "operationId": "BundleApi.ListBundleApis",
-        "summary": "List every endpoint the published bundles register, sorted by bundle id",
+        "summary": "List every endpoint the bundles of the request's catalog scope register",
         "tags": [
           "BundleApi"
         ],
@@ -1377,6 +1377,18 @@
           }
         }
       },
+      "ListBundleApisRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        }
+      },
       "BundleApiInfo": {
         "type": "object",
         "description": "One endpoint a published bundle registers.",
@@ -2012,6 +2024,18 @@
           }
         }
       },
+      "ListPermissionModesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        }
+      },
       "PermissionModeSummary": {
         "type": "object",
         "description": "One selectable session permission mode.",
@@ -2267,9 +2291,18 @@
           }
         }
       },
+      "CatalogUpdated": {
+        "type": "object",
+        "description": "A catalog changed.",
+        "properties": {
+          "project_id": {
+            "type": "string"
+          }
+        }
+      },
       "ServerStopping": {
         "type": "object",
-        "description": "The provider/model catalog changed; carries no fields. The Project list changed; carries no fields. Why the server is going away.",
+        "description": "The Project list changed; carries no fields. Why the server is going away.",
         "properties": {
           "reason": {
             "type": "string"

@@ -15,7 +15,7 @@ use hya_proto::SessionId;
 use crate::ServerState;
 use crate::agent_model_control::{AgentModelControlError, AgentModelIdentity};
 
-use super::{V1Error, request_scope};
+use super::{V1Error, catalog_scope};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -93,8 +93,9 @@ async fn parse_scope_session(session: &str) -> Result<Option<SessionId>, V1Error
 }
 
 /// Bind against the session runtime (at the session's workdir) when a
-/// session is supplied, otherwise the request's directory scope, otherwise
-/// the global (project-less) binding.
+/// session is supplied, otherwise the request's directory scope (its Project
+/// when it lies inside one, [`catalog_scope`]), otherwise the global
+/// (project-less) binding.
 async fn model_binding(
     st: &ServerState,
     headers: &HeaderMap,
@@ -109,10 +110,10 @@ async fn model_binding(
             let workdir = crate::support::reference::session_workdir(st, session).await?;
             Ok(st.engine.bind_session_runtime(session, &workdir).await?)
         }
-        None => match request_scope(headers, directory)? {
-            Some(scope) => Ok(st.engine.bind_root_runtime(&scope).await?),
-            None => Ok(st.engine.bind_global_runtime().await?),
-        },
+        None => Ok(catalog_scope(st, headers, directory)
+            .await?
+            .bind(st)
+            .await?),
     }
 }
 

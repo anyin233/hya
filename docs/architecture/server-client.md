@@ -103,8 +103,17 @@ Semantics highlights:
 - **Guidance parity**: prompt and command turns compose the session
   agent with AGENTS/reference guidance (`support::reference`), the same
   seam the best legacy path provided.
-- **Command expansion**: `/v1` command turns expand through the directory
-  command/skill catalog (`support::command_catalog::expand_prompt`),
+- **Catalog scope**: catalog reads resolve their directory through
+  `v1::catalog_scope` into one `support::catalog_place::CatalogPlace` (the
+  engine's `CatalogScope` of the directory — its Project, a plain
+  directory, or global — plus the directory); the runtime binding and the
+  disk tiers (requested directory, then each Project root, first wins)
+  both come from it. The server relays each dropped Project scope
+  (`SessionEngine::subscribe_catalog_scope_invalidations`) as one live
+  `catalogUpdated {projectId}`.
+- **Command expansion**: `/v1` command turns expand through the session's
+  command/skill catalog (`CatalogPlace::for_session`: its workdir, then its
+  Project's roots; `support::command_catalog::expand_prompt`),
   falling back to the literal slash for unknown commands. The bootstrap
   catalog snapshot stays stale until the next bootstrap, but command-time
   expansion picks up newly written sources.
