@@ -482,13 +482,24 @@ async fn v1_project_vcs_mcp_and_workflow_catalog_answer() {
     std::fs::create_dir_all(&root).unwrap();
     let scope = root.to_string_lossy().into_owned();
 
+    // No Project exists until a client names a workspace (ADR-0024).
     let (status, body) = send(app.clone(), Method::GET, "/v1/projects", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(
-        body["projects"]
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty())
+        body["projects"].as_array().is_none_or(Vec::is_empty),
+        "{body}"
     );
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/projects/ensure",
+        json!({ "path": scope }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = send(app.clone(), Method::GET, "/v1/projects", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["projects"][0]["roots"], json!([scope]), "{body}");
 
     let (status, body) = send(
         app.clone(),

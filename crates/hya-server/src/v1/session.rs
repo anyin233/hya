@@ -54,35 +54,185 @@ async fn create_session(
     if request.model.trim().is_empty() {
         return Err(V1Error::invalid_argument("model is required"));
     }
-    if request.workdir.trim().is_empty() {
-        return Err(V1Error::invalid_argument("workdir is required"));
-    }
+    let placement = session_placement(&st, &request).await?;
     let agent = crate::support::bound_agent_metadata::resolve_session_agent(
         &st,
-        std::path::Path::new(&request.workdir),
+        std::path::Path::new(&placement.workdir),
         Some(request.agent.as_str()),
     )
     .await
     .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
     let session = st
         .engine
-        .create(CreateSession {
-            parent: request.parent.parse().ok(),
-            agent,
-            model: hya_proto::ModelRef::new(request.model.clone()),
-            workdir: request.workdir.clone(),
-            // set by 1.4: the v1 request names its Project and kind.
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
+        .create_with_id(
+            Some(placement.session),
+            CreateSession {
+                parent: placement.parent,
+                agent,
+                model: hya_proto::ModelRef::new(request.model.clone()),
+                workdir: placement.workdir,
+                project: placement.project,
+                kind: placement.kind,
+            },
+        )
         .await?;
     if !request.title.is_empty() {
         st.engine.set_title(session, request.title.clone()).await?;
+    }
+    if placement.parent.is_none() && placement.project.is_some() {
+        st.notify_projects_updated();
     }
     let info = projection_info(&st, session).await?;
     Ok(Json(pb::CreateSessionResponse {
         session: Some(info),
     }))
+}
+
+/// Where a new session works: its id (chosen up front so a temporary
+/// session's scratch directory can be named after it), parent, workdir,
+/// Project, and kind.
+struct Placement {
+    session: SessionId,
+    parent: Option<SessionId>,
+    workdir: String,
+    project: Option<hya_proto::ProjectId>,
+    kind: hya_proto::SessionKind,
+}
+
+/// Apply the `CreateSessionRequest` placement rules (ADR-0024; see the
+/// message comment in `session.proto`).
+async fn session_placement(
+    st: &ServerState,
+    request: &pb::CreateSessionRequest,
+) -> Result<Placement, V1Error> {
+    let session = SessionId::new();
+    let kind = pb::SessionKind::try_from(request.kind).map_err(|_| {
+        V1Error::invalid_argument(format!("unknown session kind: {}", request.kind))
+    })?;
+    let workdir = request
+        .workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|workdir| !workdir.is_empty());
+    let project_id = request.project_id.trim();
+    if !request.parent.trim().is_empty() {
+        let parent = parse_session(request.parent.trim())?;
+        if !project_id.is_empty() || kind != pb::SessionKind::Unspecified {
+            return Err(V1Error::invalid_argument(
+                "a child session joins its parent's project: leave projectId and kind unset",
+            ));
+        }
+        let workdir = match workdir {
+            Some(workdir) => hya_store::normalize_project_path(workdir)?,
+            None => st
+                .engine
+                .read_projection_shared(parent)
+                .await?
+                .session
+                .workdir
+                .clone()
+                .ok_or_else(|| V1Error::session_not_found(&parent.to_string()))?,
+        };
+        // The engine records the parent's Project and kind on the child.
+        return Ok(Placement {
+            session,
+            parent: Some(parent),
+            workdir,
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        });
+    }
+    if kind == pb::SessionKind::Temporary {
+        if !project_id.is_empty() || workdir.is_some() {
+            return Err(V1Error::invalid_argument(
+                "a temporary session has no project and no workdir: the server creates its scratch directory",
+            ));
+        }
+        let workdir = create_scratch_dir(st, session)?;
+        return Ok(Placement {
+            session,
+            parent: None,
+            workdir,
+            project: None,
+            kind: hya_proto::SessionKind::Temporary,
+        });
+    }
+    if !project_id.is_empty() {
+        let project =
+            super::project::load_project(st, super::project::parse_project(project_id)?).await?;
+        let workdir = match workdir {
+            Some(workdir) => {
+                let workdir = hya_store::normalize_project_path(workdir)?;
+                let inside = project
+                    .roots
+                    .iter()
+                    .any(|root| std::path::Path::new(&workdir).starts_with(root));
+                if !inside {
+                    return Err(V1Error::invalid_argument(format!(
+                        "workdir {workdir} is outside the roots of project {}",
+                        project.id
+                    )));
+                }
+                workdir
+            }
+            None => project
+                .roots
+                .first()
+                .cloned()
+                .ok_or_else(|| V1Error::internal("project has no roots"))?,
+        };
+        return Ok(Placement {
+            session,
+            parent: None,
+            workdir,
+            project: Some(project.id),
+            kind: hya_proto::SessionKind::Project,
+        });
+    }
+    let Some(workdir) = workdir else {
+        return Err(V1Error::invalid_argument(
+            "a session needs a projectId, a workdir, or kind SESSION_KIND_TEMPORARY",
+        ));
+    };
+    let workdir = hya_store::normalize_project_path(workdir)?;
+    let (project, _created) = super::project::ensure_project_for_path(st, &workdir).await?;
+    Ok(Placement {
+        session,
+        parent: None,
+        workdir,
+        project: Some(project.id),
+        kind: hya_proto::SessionKind::Project,
+    })
+}
+
+/// Create a temporary session's scratch directory `<scratch root>/<id>`,
+/// private to the user (0700 on Unix). hya never deletes it (ADR-0024).
+fn create_scratch_dir(st: &ServerState, session: SessionId) -> Result<String, V1Error> {
+    let Some(root) = &st.scratch_root else {
+        return Err(V1Error::unavailable(
+            "temporary sessions need XDG_CACHE_HOME or HOME for their scratch directory",
+        ));
+    };
+    let dir = root.join(session.to_string());
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(&dir).map_err(|error| {
+        V1Error::internal(format!(
+            "create scratch directory {}: {error}",
+            dir.display()
+        ))
+    })?;
+    dir.to_str().map(str::to_owned).ok_or_else(|| {
+        V1Error::internal(format!(
+            "scratch directory {} is not valid UTF-8",
+            dir.display()
+        ))
+    })
 }
 
 /// Read one session's projection summary with store timestamps.
@@ -125,7 +275,11 @@ async fn list_sessions(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListSessionsResponse>, V1Error> {
     let request: pb::ListSessionsRequest = super::query_request(&[], &query)?;
-    let rows = st.engine.store().list_sessions().await?;
+    let project = match request.project_id.trim() {
+        "" => None,
+        id => Some(super::project::parse_project(id)?),
+    };
+    let rows = st.engine.store().list_sessions_in(project).await?;
     let mut infos = Vec::with_capacity(rows.len());
     for row in rows {
         if !request.parent.is_empty()
@@ -238,6 +392,10 @@ async fn update_session(
         }
         None => {}
     }
+    if request.archived.is_some() {
+        // A Project's `busy` counts only non-archived sessions.
+        st.notify_projects_updated();
+    }
     Ok(Json(projection_info(&st, session).await?))
 }
 
@@ -263,9 +421,19 @@ async fn delete_session(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::DeleteSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
+    let in_project = st
+        .engine
+        .read_projection_shared(session)
+        .await?
+        .session
+        .project
+        .is_some();
     let deleted = st.engine.store().delete_session(session).await?;
     if !deleted {
         return Err(V1Error::session_not_found(&id));
+    }
+    if in_project {
+        st.notify_projects_updated();
     }
     Ok(Json(pb::DeleteSessionResponse {}))
 }

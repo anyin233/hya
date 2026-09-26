@@ -1,5 +1,6 @@
 //! Shared HTTP application state for native and Compat routes.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_core::{AgentSpec, SessionEngine};
@@ -35,6 +36,9 @@ pub struct AppState {
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
+    projects_updates: broadcast::Sender<()>,
+    project_lock: Arc<tokio::sync::Mutex<()>>,
+    scratch_root: Option<PathBuf>,
     pure_guidance: bool,
     auto_title: bool,
 }
@@ -45,6 +49,7 @@ impl AppState {
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
         let permission_requests = pending::PermissionRequests::new(engine.store().clone());
         let (catalog_updates, _) = broadcast::channel(16);
+        let (projects_updates, _) = broadcast::channel(16);
         Self {
             engine,
             agent,
@@ -58,9 +63,28 @@ impl AppState {
             formatter_status: Vec::new(),
             default_agent: None,
             catalog_updates,
+            projects_updates,
+            project_lock: Arc::new(tokio::sync::Mutex::new(())),
+            scratch_root: hya_store::user_cache_dir().map(|dir| dir.join("scratch")),
             pure_guidance: false,
             auto_title: false,
         }
+    }
+
+    /// Directory under which temporary sessions get their scratch
+    /// directory (`<root>/<session id>`, ADR-0024). Defaults to
+    /// `$XDG_CACHE_HOME/hya/scratch` (fallback `$HOME/.cache/hya/scratch`);
+    /// without either variable temporary sessions are `unavailable`.
+    #[must_use]
+    pub fn with_scratch_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.scratch_root = Some(root.into());
+        self
+    }
+
+    /// Publish a Project-list change: the v1 global event stream (SSE and
+    /// gRPC) delivers it as a live `projectsUpdated` frame.
+    pub fn notify_projects_updated(&self) {
+        let _ = self.projects_updates.send(());
     }
 
     /// Title root sessions automatically: the first prompt turn of a root
@@ -213,6 +237,11 @@ pub(crate) struct ServerState {
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
     pub(crate) catalog_updates: broadcast::Sender<Value>,
+    pub(crate) projects_updates: broadcast::Sender<()>,
+    /// Serializes find-or-create of a Project (`EnsureProjectForPath`), so
+    /// two local clients starting in the same directory share one Project.
+    pub(crate) project_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) scratch_root: Option<PathBuf>,
     pub(crate) pure_guidance: bool,
     pub(crate) auto_title: bool,
 }
@@ -236,9 +265,17 @@ impl ServerState {
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
             catalog_updates: app.catalog_updates,
+            projects_updates: app.projects_updates,
+            project_lock: app.project_lock,
+            scratch_root: app.scratch_root,
             pure_guidance: app.pure_guidance,
             auto_title: app.auto_title,
         }
+    }
+
+    /// Publish a Project-list change as a live `projectsUpdated` frame.
+    pub(crate) fn notify_projects_updated(&self) {
+        let _ = self.projects_updates.send(());
     }
 
     /// Start a parent-model run only when no Workflow owns the Session.

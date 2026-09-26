@@ -185,7 +185,7 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
     let create = pb::CreateSessionRequest {
         agent: "build".into(),
         model: "fake".into(),
-        workdir: std::env::temp_dir().to_string_lossy().into_owned(),
+        workdir: Some(std::env::temp_dir().to_string_lossy().into_owned()),
         ..Default::default()
     };
     let grpc_session: Value = serde_json::to_value(

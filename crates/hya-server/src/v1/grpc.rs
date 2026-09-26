@@ -62,7 +62,7 @@ impl V1Grpc {
             "not_found" | "session_not_found" | "bundle_api_not_found" => tonic::Code::NotFound,
             "bundle_api_method_not_allowed" => tonic::Code::Unimplemented,
             "permission_denied" => tonic::Code::PermissionDenied,
-            "session_busy" | "conflict" => tonic::Code::FailedPrecondition,
+            "session_busy" | "conflict" | "failed_precondition" => tonic::Code::FailedPrecondition,
             "unavailable" | "bundle_api_failed" => tonic::Code::Unavailable,
             _ => tonic::Code::Internal,
         };
@@ -1066,6 +1066,57 @@ impl pb::project_server::Project for V1Grpc {
         request: GrpcRequest<pb::GetCurrentProjectRequest>,
     ) -> Result<GrpcResponse<pb::ProjectInfo>, Status> {
         get_rpc!(self, "/v1/projects/current", request)
+    }
+
+    async fn resolve_project(
+        &self,
+        request: GrpcRequest<pb::ResolveProjectRequest>,
+    ) -> Result<GrpcResponse<pb::ResolveProjectResponse>, Status> {
+        get_rpc!(self, "/v1/projects/resolve", request)
+    }
+
+    async fn ensure_project_for_path(
+        &self,
+        request: GrpcRequest<pb::EnsureProjectForPathRequest>,
+    ) -> Result<GrpcResponse<pb::EnsureProjectForPathResponse>, Status> {
+        unary!(self, "POST", "/v1/projects/ensure", request)
+    }
+
+    async fn create_project(
+        &self,
+        request: GrpcRequest<pb::CreateProjectRequest>,
+    ) -> Result<GrpcResponse<pb::ProjectInfo>, Status> {
+        unary!(self, "POST", "/v1/projects", request)
+    }
+
+    async fn get_project(
+        &self,
+        request: GrpcRequest<pb::GetProjectRequest>,
+    ) -> Result<GrpcResponse<pb::ProjectInfo>, Status> {
+        let project = field(&request.into_inner(), "project");
+        into_response(
+            self.get(
+                &format!("/v1/projects/{}", encode(&project)),
+                &pb::GetProjectRequest::default(),
+            )
+            .await?,
+        )
+    }
+
+    async fn delete_project(
+        &self,
+        request: GrpcRequest<pb::DeleteProjectRequest>,
+    ) -> Result<GrpcResponse<pb::DeleteProjectResponse>, Status> {
+        let project = field(&request.into_inner(), "project");
+        into_response(
+            self.dispatch::<_, _>(
+                "DELETE",
+                &format!("/v1/projects/{}", encode(&project)),
+                BTreeMap::new(),
+                &pb::DeleteProjectRequest::default(),
+            )
+            .await?,
+        )
     }
 
     async fn update_project(

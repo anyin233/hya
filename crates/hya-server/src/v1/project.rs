@@ -1,4 +1,5 @@
-//! `/v1` project and VCS domain: project registry, git status/diff/apply.
+//! `/v1` project and VCS domain: the Project registry (ADR-0024) over the
+//! store's `project` tables, and git status/diff/apply.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -12,16 +13,22 @@ use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;
+use hya_proto::ProjectId;
+use hya_store::Project;
 
-use super::{V1Error, scope_directory};
+use super::{DIRECTORY_HEADER, V1Error, scope_directory};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
-        .route("/v1/projects", get(list_projects))
+        .route("/v1/projects", get(list_projects).post(create_project))
         .route("/v1/projects/current", get(current_project))
+        .route("/v1/projects/resolve", get(resolve_project))
+        .route("/v1/projects/ensure", post(ensure_project))
         .route(
             "/v1/projects/:project",
-            axum::routing::patch(update_project),
+            get(get_project)
+                .patch(update_project)
+                .delete(delete_project),
         )
         .route(
             "/v1/projects/:project/directories",
@@ -33,54 +40,227 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/vcs/apply", post(apply_patch))
 }
 
-fn project_info(st: &ServerState) -> pb::ProjectInfo {
-    let directory = st.agent.workdir.to_string_lossy().into_owned();
-    let name = directory.rsplit('/').next().unwrap_or_default().to_owned();
-    pb::ProjectInfo {
-        id: name.clone(),
-        directory,
-        name,
+/// Parse a wire Project id; a malformed one is `invalid_argument`.
+pub(crate) fn parse_project(id: &str) -> Result<ProjectId, V1Error> {
+    id.parse::<ProjectId>()
+        .map_err(|_| V1Error::invalid_argument(format!("invalid project id: {id}")))
+}
+
+/// Load one Project; `not_found` when it does not exist.
+pub(crate) async fn load_project(st: &ServerState, id: ProjectId) -> Result<Project, V1Error> {
+    st.engine
+        .store()
+        .get_project(id)
+        .await?
+        .ok_or_else(|| V1Error::not_found(format!("project not found: {id}")))
+}
+
+/// Whether a non-archived session of the Project is running a turn now
+/// (`ServerState::is_busy`, the source of `SessionInfo.busy`).
+pub(crate) async fn project_busy(st: &ServerState, id: ProjectId) -> Result<bool, V1Error> {
+    for row in st.engine.store().list_sessions_in(Some(id)).await? {
+        if st.is_busy(row.session)
+            && !st
+                .engine
+                .read_projection_shared(row.session)
+                .await?
+                .session
+                .is_archived()
+        {
+            return Ok(true);
+        }
     }
+    Ok(false)
+}
+
+/// Wire view of a Project; reads its session count unless given.
+async fn project_info(
+    st: &ServerState,
+    project: &Project,
+    session_count: Option<u64>,
+) -> Result<pb::ProjectInfo, V1Error> {
+    let session_count = match session_count {
+        Some(count) => count,
+        None => st.engine.store().project_session_count(project.id).await?,
+    };
+    Ok(pb::ProjectInfo {
+        id: project.id.to_string(),
+        name: project.name.clone(),
+        roots: project.roots.clone(),
+        created_at: super::convert::timestamp(project.created_at_ms),
+        updated_at: super::convert::timestamp(project.updated_at_ms),
+        session_count: u32::try_from(session_count).unwrap_or(u32::MAX),
+        busy: project_busy(st, project.id).await?,
+    })
+}
+
+/// `EnsureProjectForPath`: the Project whose root contains `path` (longest
+/// root wins), else a new one named after `path`'s last component with
+/// `path` as its only root. Returns the Project and whether it was created.
+/// Serialized so concurrent callers for one directory share a Project.
+pub(crate) async fn ensure_project_for_path(
+    st: &ServerState,
+    path: &str,
+) -> Result<(Project, bool), V1Error> {
+    let path = hya_store::normalize_project_path(path.trim())?;
+    let _guard = st.project_lock.lock().await;
+    if let Some(project) = st.engine.store().resolve_project_by_path(&path).await? {
+        return Ok((project, false));
+    }
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map_or_else(|| path.clone(), str::to_owned);
+    let project = st
+        .engine
+        .store()
+        .create_project(&name, std::slice::from_ref(&path))
+        .await?;
+    st.notify_projects_updated();
+    Ok((project, true))
 }
 
 async fn list_projects(
     State(st): State<ServerState>,
-    Query(_query): Query<BTreeMap<String, String>>,
+    Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Json<pb::ListProjectsResponse>, V1Error> {
+    let request: pb::ListProjectsRequest = super::query_request(&[], &query)?;
+    let summaries = st.engine.store().list_projects().await?;
+    let mut infos = Vec::with_capacity(summaries.len());
+    for summary in &summaries {
+        infos.push(project_info(&st, &summary.project, Some(summary.session_count)).await?);
+    }
+    let (projects, page) = super::catalog::paginate(infos, &request.page);
     Ok(Json(pb::ListProjectsResponse {
-        projects: vec![project_info(&st)],
-        page: Some(pb::PageInfo::default()),
+        projects,
+        page: Some(page),
     }))
 }
 
-async fn current_project(State(st): State<ServerState>) -> Result<Json<pb::ProjectInfo>, V1Error> {
-    Ok(Json(project_info(&st)))
+async fn current_project(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Result<Json<pb::ProjectInfo>, V1Error> {
+    let request: pb::GetCurrentProjectRequest = super::query_request(&[], &query)?;
+    let scope = headers
+        .get(DIRECTORY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .unwrap_or_else(|| request.directory.trim());
+    if scope.is_empty() {
+        return Err(V1Error::invalid_argument(
+            "a directory scope (x-hya-directory or directory) is required",
+        ));
+    }
+    let project = st
+        .engine
+        .store()
+        .resolve_project_by_path(scope)
+        .await?
+        .ok_or_else(|| V1Error::not_found(format!("no project contains {scope}")))?;
+    Ok(Json(project_info(&st, &project, None).await?))
+}
+
+async fn resolve_project(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ResolveProjectResponse>, V1Error> {
+    let request: pb::ResolveProjectRequest = super::query_request(&[], &query)?;
+    let project = match st
+        .engine
+        .store()
+        .resolve_project_by_path(request.path.trim())
+        .await?
+    {
+        Some(project) => Some(project_info(&st, &project, None).await?),
+        None => None,
+    };
+    Ok(Json(pb::ResolveProjectResponse { project }))
+}
+
+async fn ensure_project(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::EnsureProjectForPathRequest>,
+) -> Result<Json<pb::EnsureProjectForPathResponse>, V1Error> {
+    let (project, created) = ensure_project_for_path(&st, &request.path).await?;
+    Ok(Json(pb::EnsureProjectForPathResponse {
+        project: Some(project_info(&st, &project, None).await?),
+        created,
+    }))
+}
+
+async fn create_project(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::CreateProjectRequest>,
+) -> Result<Json<pb::ProjectInfo>, V1Error> {
+    let project = st
+        .engine
+        .store()
+        .create_project(&request.name, &request.roots)
+        .await?;
+    st.notify_projects_updated();
+    Ok(Json(project_info(&st, &project, Some(0)).await?))
+}
+
+async fn get_project(
+    State(st): State<ServerState>,
+    AxumPath(project): AxumPath<String>,
+) -> Result<Json<pb::ProjectInfo>, V1Error> {
+    let project = load_project(&st, parse_project(&project)?).await?;
+    Ok(Json(project_info(&st, &project, None).await?))
 }
 
 async fn update_project(
     State(st): State<ServerState>,
-    AxumPath(_project): AxumPath<String>,
-    Json(_request): Json<pb::UpdateProjectRequest>,
+    AxumPath(project): AxumPath<String>,
+    Json(request): Json<pb::UpdateProjectRequest>,
 ) -> Result<Json<pb::ProjectInfo>, V1Error> {
-    // Project metadata persistence is launcher-owned for now; the v1
-    // surface reflects the served project as-is.
-    Ok(Json(project_info(&st)))
+    let id = parse_project(&project)?;
+    // Empty `roots` keeps the current roots (a Project always has one).
+    let roots = (!request.roots.is_empty()).then_some(request.roots.as_slice());
+    let project = st
+        .engine
+        .store()
+        .update_project(id, request.name.as_deref(), roots)
+        .await?;
+    if request.name.is_some() || roots.is_some() {
+        st.notify_projects_updated();
+    }
+    Ok(Json(project_info(&st, &project, None).await?))
+}
+
+async fn delete_project(
+    State(st): State<ServerState>,
+    AxumPath(project): AxumPath<String>,
+) -> Result<Json<pb::DeleteProjectResponse>, V1Error> {
+    let id = parse_project(&project)?;
+    if !st.engine.store().delete_project(id).await? {
+        return Err(V1Error::not_found(format!("project not found: {id}")));
+    }
+    st.notify_projects_updated();
+    Ok(Json(pb::DeleteProjectResponse {}))
 }
 
 async fn list_project_directories(
     State(st): State<ServerState>,
-    AxumPath(_project): AxumPath<String>,
+    AxumPath(project): AxumPath<String>,
 ) -> Result<Json<pb::ListProjectDirectoriesResponse>, V1Error> {
+    let project = load_project(&st, parse_project(&project)?).await?;
     Ok(Json(pb::ListProjectDirectoriesResponse {
-        directories: vec![st.agent.workdir.to_string_lossy().into_owned()],
+        directories: project.roots,
     }))
 }
 
 async fn init_project_git(
     State(st): State<ServerState>,
-    AxumPath(_project): AxumPath<String>,
+    AxumPath(project): AxumPath<String>,
 ) -> Result<Json<pb::InitProjectGitResponse>, V1Error> {
-    let workdir = PathBuf::from(&st.agent.workdir);
+    let project = load_project(&st, parse_project(&project)?).await?;
+    let Some(workdir) = project.roots.first().map(PathBuf::from) else {
+        return Err(V1Error::internal("project has no roots"));
+    };
     if crate::support::git::is_repo(&workdir) {
         return Ok(Json(pb::InitProjectGitResponse { initialized: false }));
     }

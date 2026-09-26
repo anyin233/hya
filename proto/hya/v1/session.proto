@@ -127,6 +127,26 @@ message SessionInfo {
   bool archived = 17;
   // When the session was archived; unset when it is not archived.
   google.protobuf.Timestamp archived_at = 18;
+  // Project the session belongs to (a subagent session carries its root's);
+  // empty for a temporary session or one created before Projects existed.
+  // The id may name a Project that was deleted since.
+  string project_id = 19;
+  // Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
+  SessionKind kind = 20;
+}
+
+// Kind of a session (ADR-0024).
+enum SessionKind {
+  // Unset. On `CreateSessionRequest` it means `SESSION_KIND_PROJECT`; the
+  // server never reports it.
+  SESSION_KIND_UNSPECIFIED = 0;
+  // A session of a Project: its workdir lies inside the Project's roots
+  // (sessions created before Projects existed have no Project).
+  SESSION_KIND_PROJECT = 1;
+  // A session of no Project, working in its own fresh scratch directory
+  // `$XDG_CACHE_HOME/hya/scratch/<session id>` (fallback
+  // `$HOME/.cache/hya/scratch/<session id>`), which hya never deletes.
+  SESSION_KIND_TEMPORARY = 2;
 }
 
 // Where a forked session came from.
@@ -150,19 +170,41 @@ message SessionRevert {
   repeated RevertedFile files = 4;
 }
 
+// Where a new root session works is chosen by the client (ADR-0024):
+//
+// - `kind = SESSION_KIND_TEMPORARY`: no Project; the server creates the
+//   session's scratch directory and uses it as the workdir. `project_id` and
+//   `workdir` must be unset (`invalid_argument`).
+// - `project_id` set (kind `SESSION_KIND_PROJECT` or unset): the Project must
+//   exist (`not_found`). `workdir`, when set, must lie inside one of its roots
+//   (`invalid_argument` otherwise); unset means the primary root.
+// - no `project_id`, `workdir` set (kind `SESSION_KIND_PROJECT` or unset): the
+//   Project is found or created as by `EnsureProjectForPath(workdir)` and the
+//   session works in `workdir` (a local client passes its cwd).
+// - neither: `invalid_argument`.
+//
+// A child session (`parent` set) always joins its parent's Project and kind:
+// `project_id` and `kind` must be unset (`invalid_argument`); `workdir`
+// defaults to the parent's. `workdir` must be absolute without `..`
+// components.
 message CreateSessionRequest {
   // Agent name or catalog id to bind as the session's default agent.
   string agent = 1;
   // Model reference the session starts on (`provider/model[#variant]`).
   string model = 2;
-  // Absolute workdir for tools and relative paths in this session.
-  string workdir = 3;
+  // Absolute workdir for tools and relative paths in this session; see the
+  // rules above.
+  optional string workdir = 3;
   // When set, marks the new session as a child of this parent id.
   string parent = 4;
   // When true, run the directory initialization turn after creation.
   bool initialize = 5;
   // Initial title; empty lets the backend derive one.
   string title = 6;
+  // Project of the new root session.
+  string project_id = 7;
+  // Kind of the new root session; unset means `SESSION_KIND_PROJECT`.
+  SessionKind kind = 8;
 }
 
 message CreateSessionResponse {
@@ -176,8 +218,8 @@ message GetSessionRequest {
 }
 
 message ListSessionsRequest {
-  // Directory whose sessions should be listed.
-  string directory = 1;
+  reserved 1;
+  reserved "directory";
   // Restrict to direct children of this session id when non-empty.
   string parent = 2;
   // Standard pagination controls.
@@ -186,6 +228,9 @@ message ListSessionsRequest {
   bool include_archived = 4;
   // List only archived root sessions (implies `include_archived`).
   bool archived_only = 5;
+  // Restrict to the sessions (root and subagent) of this Project when
+  // non-empty; an id that names no Project lists nothing.
+  string project_id = 6;
 }
 
 message ListSessionsResponse {

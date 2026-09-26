@@ -135,6 +135,11 @@ impl V1Error {
         Self::new(Code::Unavailable, message)
     }
 
+    /// The requested resource does not exist.
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
+        Self::new(Code::NotFound, message)
+    }
+
     /// Unhandled internal failure.
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new(Code::Internal, message)
@@ -172,7 +177,17 @@ impl From<hya_core::CoreError> for V1Error {
 
 impl From<hya_store::StoreError> for V1Error {
     fn from(error: hya_store::StoreError) -> Self {
-        Self::new(Code::Internal, error.to_string())
+        use hya_store::StoreError as E;
+        let code = match &error {
+            E::ProjectNameEmpty
+            | E::ProjectRootsEmpty
+            | E::ProjectRootNotAbsolute { .. }
+            | E::ProjectRootInvalid { .. } => Code::InvalidArgument,
+            E::ProjectNotFound { .. } => Code::NotFound,
+            E::ProjectInUse { .. } => Code::FailedPrecondition,
+            _ => Code::Internal,
+        };
+        Self::new(code, error.to_string())
     }
 }
 

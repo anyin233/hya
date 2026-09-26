@@ -460,18 +460,27 @@
     "/v1/projects": {
       "get": {
         "operationId": "Project.ListProjects",
-        "summary": "List known projects.",
+        "summary": "List the Projects (archived ones are left out), most recently updated",
         "tags": [
           "Project"
         ],
         "x-grpc-method": "hya.v1.Project.ListProjects",
+        "x-server-streaming": false
+      },
+      "post": {
+        "operationId": "Project.CreateProject",
+        "summary": "Create a Project. `invalid_argument` for an empty name, no roots, or a",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.CreateProject",
         "x-server-streaming": false
       }
     },
     "/v1/projects/current": {
       "get": {
         "operationId": "Project.GetCurrentProject",
-        "summary": "The project served by this backend process.",
+        "summary": "The Project whose root contains the request's directory scope (the",
         "tags": [
           "Project"
         ],
@@ -479,21 +488,61 @@
         "x-server-streaming": false
       }
     },
+    "/v1/projects/ensure": {
+      "post": {
+        "operationId": "Project.EnsureProjectForPath",
+        "summary": "The Project for a local working directory: the Project that contains",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.EnsureProjectForPath",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/projects/resolve": {
+      "get": {
+        "operationId": "Project.ResolveProject",
+        "summary": "The Project that contains `path`, without creating one: `project` is",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.ResolveProject",
+        "x-server-streaming": false
+      }
+    },
     "/v1/projects/{project}": {
+      "get": {
+        "operationId": "Project.GetProject",
+        "summary": "Read one Project. `not_found` when it does not exist.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.GetProject",
+        "x-server-streaming": false
+      },
       "patch": {
         "operationId": "Project.UpdateProject",
-        "summary": "Update project metadata (display name).",
+        "summary": "Rename a Project and/or replace its roots, in one step. Running",
         "tags": [
           "Project"
         ],
         "x-grpc-method": "hya.v1.Project.UpdateProject",
+        "x-server-streaming": false
+      },
+      "delete": {
+        "operationId": "Project.DeleteProject",
+        "summary": "Delete a Project. `failed_precondition` while a non-archived root",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.DeleteProject",
         "x-server-streaming": false
       }
     },
     "/v1/projects/{project}/directories": {
       "get": {
         "operationId": "Project.ListProjectDirectories",
-        "summary": "List the work directories registered under a project.",
+        "summary": "The roots of a Project, primary root first. `not_found` when it does",
         "tags": [
           "Project"
         ],
@@ -504,7 +553,7 @@
     "/v1/projects/{project}/init-git": {
       "post": {
         "operationId": "Project.InitProjectGit",
-        "summary": "Initialize git in a project that has no repository yet.",
+        "summary": "Initialize git in the primary root of a Project that has no repository",
         "tags": [
           "Project"
         ],
@@ -2154,12 +2203,15 @@
           },
           "catalog_updated": {
             "$ref": "#/components/schemas/CatalogUpdated"
+          },
+          "projects_updated": {
+            "$ref": "#/components/schemas/ProjectsUpdated"
           }
         }
       },
       "PartsAdded": {
         "type": "object",
-        "description": "The provider/model catalog changed; carries no fields. Complete parts added to a message in one step.",
+        "description": "The provider/model catalog changed; carries no fields. The Project list changed; carries no fields. Complete parts added to a message in one step.",
         "properties": {
           "message": {
             "type": "string"
@@ -3523,16 +3575,34 @@
       },
       "ProjectInfo": {
         "type": "object",
-        "description": "One registered project.",
+        "description": "One Project.",
         "properties": {
           "id": {
             "type": "string"
           },
-          "directory": {
-            "type": "string"
-          },
           "name": {
             "type": "string"
+          },
+          "roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "session_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "busy": {
+            "type": "boolean"
           }
         }
       },
@@ -3560,6 +3630,78 @@
           }
         }
       },
+      "GetCurrentProjectRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveProjectRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveProjectResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/ProjectInfo"
+          }
+        }
+      },
+      "EnsureProjectForPathRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "EnsureProjectForPathResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/ProjectInfo"
+          },
+          "created": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GetProjectRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateProjectRequest": {
         "type": "object",
         "description": "",
@@ -3568,6 +3710,21 @@
             "type": "string"
           },
           "name": {
+            "type": "string"
+          },
+          "roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DeleteProjectRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
             "type": "string"
           }
         }
@@ -3965,6 +4122,12 @@
           "archived_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SessionKind"
           }
         }
       },
@@ -4004,7 +4167,7 @@
       },
       "CreateSessionRequest": {
         "type": "object",
-        "description": "",
+        "description": "Where a new root session works is chosen by the client (ADR-0024):  - `kind = SESSION_KIND_TEMPORARY`: no Project; the server creates the session's scratch directory and uses it as the workdir. `project_id` and `workdir` must be unset (`invalid_argument`). - `project_id` set (kind `SESSION_KIND_PROJECT` or unset): the Project must exist (`not_found`). `workdir`, when set, must lie inside one of its roots (`invalid_argument` otherwise); unset means the primary root. - no `project_id`, `workdir` set (kind `SESSION_KIND_PROJECT` or unset): the Project is found or created as by `EnsureProjectForPath(workdir)` and the session works in `workdir` (a local client passes its cwd). - neither: `invalid_argument`.  A child session (`parent` set) always joins its parent's Project and kind: `project_id` and `kind` must be unset (`invalid_argument`); `workdir` defaults to the parent's. `workdir` must be absolute without `..` components.",
         "properties": {
           "agent": {
             "type": "string"
@@ -4023,6 +4186,12 @@
           },
           "title": {
             "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SessionKind"
           }
         }
       },
@@ -4048,9 +4217,6 @@
         "type": "object",
         "description": "",
         "properties": {
-          "directory": {
-            "type": "string"
-          },
           "parent": {
             "type": "string"
           },
@@ -4062,6 +4228,9 @@
           },
           "archived_only": {
             "type": "boolean"
+          },
+          "project_id": {
+            "type": "string"
           }
         }
       },
@@ -4873,6 +5042,15 @@
           "VCS_FILE_STATUS_DELETED",
           "VCS_FILE_STATUS_RENAMED",
           "VCS_FILE_STATUS_UNTRACKED"
+        ]
+      },
+      "SessionKind": {
+        "type": "string",
+        "description": "Kind of a session (ADR-0024).",
+        "enum": [
+          "SESSION_KIND_UNSPECIFIED",
+          "SESSION_KIND_PROJECT",
+          "SESSION_KIND_TEMPORARY"
         ]
       },
       "TurnState": {

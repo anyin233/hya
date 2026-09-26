@@ -66,6 +66,7 @@ pub use workflow_control::{
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     spawn_background_reclaim_driver(state.clone());
+    spawn_project_busy_watcher(state.clone());
     v1::router().with_state(state).layer(cors())
 }
 
@@ -116,6 +117,86 @@ fn spawn_background_reclaim_driver(state: ServerState) {
             });
         }
     });
+}
+
+/// Publish `projectsUpdated` whenever the set of busy Projects changes.
+///
+/// A session becomes busy only by starting a turn or a Workflow run, which
+/// appends an event on the bus; its run registry entry and turn lease are
+/// released shortly after the closing event. So the watcher tracks every
+/// session a turn-boundary event named, re-checks the tracked ones on each
+/// such event and every 100 ms while any is tracked, and drops a session
+/// once it is idle. A tracked session counts toward its Project only while
+/// it is not archived (`UpdateSession.archived` publishes directly).
+fn spawn_project_busy_watcher(state: ServerState) {
+    use std::collections::{BTreeSet, HashMap};
+
+    let mut rx = state.engine.bus().subscribe();
+    tokio::spawn(async move {
+        let mut tracked: HashMap<hya_proto::SessionId, Option<hya_proto::ProjectId>> =
+            HashMap::new();
+        let mut busy_projects: BTreeSet<hya_proto::ProjectId> = BTreeSet::new();
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                received = rx.recv() => match received {
+                    Ok(envelope) => {
+                        let Some(session) = turn_boundary_session(&envelope.event) else {
+                            continue;
+                        };
+                        if let std::collections::hash_map::Entry::Vacant(slot) =
+                            tracked.entry(session)
+                        {
+                            slot.insert(
+                                state
+                                    .engine
+                                    .read_projection_shared(session)
+                                    .await
+                                    .ok()
+                                    .and_then(|projection| projection.session.project),
+                            );
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                },
+                _ = tick.tick(), if !tracked.is_empty() => {}
+            }
+            tracked.retain(|session, _| state.is_busy(*session));
+            let mut now = BTreeSet::new();
+            for (session, project) in &tracked {
+                let Some(project) = project else { continue };
+                if now.contains(project) {
+                    continue;
+                }
+                let archived = state
+                    .engine
+                    .read_projection_shared(*session)
+                    .await
+                    .is_ok_and(|projection| projection.session.is_archived());
+                if !archived {
+                    now.insert(*project);
+                }
+            }
+            if now != busy_projects {
+                busy_projects = now;
+                state.notify_projects_updated();
+            }
+        }
+    });
+}
+
+/// The session whose busy state an event may flip: turn and Workflow run
+/// boundaries.
+fn turn_boundary_session(event: &hya_proto::Event) -> Option<hya_proto::SessionId> {
+    match event {
+        hya_proto::Event::MessageStarted { session, .. }
+        | hya_proto::Event::MessageFinished { session, .. }
+        | hya_proto::Event::WorkflowRunStarted { session, .. }
+        | hya_proto::Event::WorkflowRunFinished { session, .. } => Some(*session),
+        _ => None,
+    }
 }
 
 /// The session of a backgrounded-MCP completion marker, if the event is one.

@@ -121,6 +121,25 @@ That makes resume, fork, and recovery paths safe to call unconditionally.
 Parent sessions are used by goal, loop, and team-related helpers to keep child
 runs connected to a lead session.
 
+### Placement over v1 (`CreateSession`)
+
+The v1 `CreateSession` handler ([`v1/session.rs`](../../crates/hya-server/src/v1/session.rs))
+decides the workdir, Project, and kind before calling
+`create_with_id(Some(id), spec)` with a pre-minted id:
+
+| Request | Workdir | Project / kind |
+| --- | --- | --- |
+| `kind: temporary` (no `projectId`, no `workdir`) | a fresh `0700` directory `<scratch root>/<session id>`, created before `SessionCreated` | none / `temporary` |
+| `projectId` | `workdir` if it lies inside a root (component-wise), else `invalid_argument`; unset → primary root | that Project / `project` |
+| `workdir` only | `workdir` | `EnsureProjectForPath(workdir)`: the Project containing it (longest root wins), else a new one rooted at it / `project` |
+| `parent` | `workdir`, else the parent's | inherited by the engine (`projectId`/`kind` must be unset) |
+
+The scratch root is `$XDG_CACHE_HOME/hya/scratch` (fallback
+`$HOME/.cache/hya/scratch`, `hya_store::user_cache_dir`), overridable with
+`AppState::with_scratch_root`. Deleting a session never removes its scratch
+directory. `EnsureProjectForPath` runs under a server-wide lock so two local
+clients starting in one directory share a Project.
+
 ### Workspace roots
 
 Every turn resolves the session's workspace roots once, at turn start, and

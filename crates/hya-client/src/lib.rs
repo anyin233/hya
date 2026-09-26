@@ -29,6 +29,19 @@ pub enum ClientError {
     Decode(#[from] serde_json::Error),
 }
 
+/// Percent-encode one path segment or query value (RFC 3986 unreserved
+/// characters pass through).
+fn encode_component(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 /// Thin HTTP client bound to a server base URL (no directory header).
 pub struct Client {
     base: String,
@@ -95,6 +108,132 @@ impl Client {
     ) -> Result<pb::CreateSessionResponse, ClientError> {
         self.call(reqwest::Method::POST, "/v1/sessions", None, Some(req))
             .await
+    }
+
+    /// `GET /v1/projects` — list the Projects.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn list_projects(&self) -> Result<pb::ListProjectsResponse, ClientError> {
+        self.call(reqwest::Method::GET, "/v1/projects", None, None::<&Value>)
+            .await
+    }
+
+    /// `GET /v1/projects/{id}` — read one Project.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn get_project(&self, project: &str) -> Result<pb::ProjectInfo, ClientError> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("/v1/projects/{}", encode_component(project)),
+            None,
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `POST /v1/projects` — create a Project.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn create_project(
+        &self,
+        req: &pb::CreateProjectRequest,
+    ) -> Result<pb::ProjectInfo, ClientError> {
+        self.call(reqwest::Method::POST, "/v1/projects", None, Some(req))
+            .await
+    }
+
+    /// `PATCH /v1/projects/{id}` — rename and/or replace the roots.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn update_project(
+        &self,
+        req: &pb::UpdateProjectRequest,
+    ) -> Result<pb::ProjectInfo, ClientError> {
+        self.call(
+            reqwest::Method::PATCH,
+            &format!("/v1/projects/{}", encode_component(&req.project)),
+            None,
+            Some(req),
+        )
+        .await
+    }
+
+    /// `DELETE /v1/projects/{id}` — delete a Project.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn delete_project(
+        &self,
+        project: &str,
+    ) -> Result<pb::DeleteProjectResponse, ClientError> {
+        self.call(
+            reqwest::Method::DELETE,
+            &format!("/v1/projects/{}", encode_component(project)),
+            None,
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `GET /v1/projects/resolve?path=…` — the Project containing `path`.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn resolve_project(
+        &self,
+        path: &str,
+    ) -> Result<pb::ResolveProjectResponse, ClientError> {
+        let query = format!("path={}", encode_component(path));
+        self.call(
+            reqwest::Method::GET,
+            "/v1/projects/resolve",
+            Some(&query),
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `POST /v1/projects/ensure` — the Project containing `path`, or a new
+    /// one rooted at it.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn ensure_project_for_path(
+        &self,
+        path: &str,
+    ) -> Result<pb::EnsureProjectForPathResponse, ClientError> {
+        let req = pb::EnsureProjectForPathRequest {
+            path: path.to_owned(),
+        };
+        self.call(
+            reqwest::Method::POST,
+            "/v1/projects/ensure",
+            None,
+            Some(&req),
+        )
+        .await
+    }
+
+    /// `GET /v1/sessions?projectId=…` — the sessions of one Project.
+    ///
+    /// # Errors
+    /// Returns [`ClientError::Http`] or [`ClientError::Api`] on failure.
+    pub async fn list_project_sessions(
+        &self,
+        project: &str,
+    ) -> Result<pb::ListSessionsResponse, ClientError> {
+        let query = format!("projectId={}", encode_component(project));
+        self.call(
+            reqwest::Method::GET,
+            "/v1/sessions",
+            Some(&query),
+            None::<&Value>,
+        )
+        .await
     }
 
     /// `POST /v1/sessions/{id}/turns` — admit one prompt turn, returning

@@ -78,7 +78,7 @@ async fn sdk_creates_prompts_and_streams_the_transcript() {
         .create_session(pb::CreateSessionRequest {
             agent: "build".into(),
             model: "fake".into(),
-            workdir: std::env::temp_dir().to_string_lossy().into_owned(),
+            workdir: Some(std::env::temp_dir().to_string_lossy().into_owned()),
             ..Default::default()
         })
         .await
@@ -131,5 +131,79 @@ async fn sdk_creates_prompts_and_streams_the_transcript() {
     assert!(
         texts.iter().any(|text| text.contains("sdk v1 hello")),
         "mirror must fold the streamed assistant text, got {texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn sdk_manages_projects_and_project_sessions() {
+    let base = serve().await;
+    let sdk = V1Sdk::new(base, "/unused");
+
+    let created = sdk
+        .create_project("app", vec!["/sdk/app".into(), "/sdk/docs".into()])
+        .await
+        .expect("create project");
+    assert_eq!(created.roots, vec!["/sdk/app", "/sdk/docs"]);
+    assert_eq!(sdk.get_project(&created.id).await.expect("get").name, "app");
+    assert_eq!(sdk.list_projects().await.expect("list").len(), 1);
+
+    let resolved = sdk.resolve_project("/sdk/docs/x y").await.expect("resolve");
+    assert_eq!(resolved.map(|project| project.id), Some(created.id.clone()));
+    assert!(
+        sdk.resolve_project("/elsewhere")
+            .await
+            .expect("resolve")
+            .is_none()
+    );
+    let ensured = sdk
+        .ensure_project_for_path("/sdk/app/src")
+        .await
+        .expect("ensure");
+    assert!(!ensured.created);
+    assert_eq!(
+        ensured.project.map(|project| project.id),
+        Some(created.id.clone())
+    );
+
+    let session = sdk
+        .create_session(pb::CreateSessionRequest {
+            agent: "build".into(),
+            model: "fake".into(),
+            project_id: created.id.clone(),
+            kind: pb::SessionKind::Project as i32,
+            ..Default::default()
+        })
+        .await
+        .expect("create session");
+    assert_eq!(session.workdir, "/sdk/app");
+    assert_eq!(session.project_id, created.id);
+    assert_eq!(session.kind, pb::SessionKind::Project as i32);
+    let listed = sdk
+        .list_project_sessions(&created.id, None)
+        .await
+        .expect("list sessions");
+    assert_eq!(listed.sessions.len(), 1);
+
+    let updated = sdk
+        .update_project(pb::UpdateProjectRequest {
+            project: created.id.clone(),
+            name: Some("renamed".into()),
+            roots: Vec::new(),
+        })
+        .await
+        .expect("update");
+    assert_eq!(updated.name, "renamed");
+    assert_eq!(updated.roots, created.roots);
+    assert_eq!(updated.session_count, 1);
+
+    let error = sdk.delete_project(&created.id).await.unwrap_err();
+    assert!(
+        matches!(&error, hya_sdk_v1::SdkError::Api { code, .. } if code == "failed_precondition"),
+        "{error:?}"
+    );
+    let error = sdk.get_project("prj_missing").await.unwrap_err();
+    assert!(
+        matches!(&error, hya_sdk_v1::SdkError::Api { code, .. } if code == "invalid_argument"),
+        "{error:?}"
     );
 }

@@ -53,6 +53,7 @@ Stable codes and their HTTP status / gRPC code:
 | `session_not_found` | 404 | `NotFound` | Unknown or deleted session. |
 | `permission_denied` | 403 | `PermissionDenied` | Caller not authorized. |
 | `session_busy` | 409 | `FailedPrecondition` | Another run owns the session. |
+| `failed_precondition` | 409 | `FailedPrecondition` | Refused in the resource's current state (e.g. deleting a Project that still has live sessions). |
 | `conflict` | 409 | `FailedPrecondition` | State conflict (stale revision, patch rejection). |
 | `unavailable` | 503 | `Unavailable` | Required capability not configured (e.g. no summarizer, OAuth not wired). |
 | `internal` | 500 | `Internal` | Unhandled failure. |
@@ -76,7 +77,9 @@ parameters. Events use the monotonic `sinceSeq` watermark instead.
 
 ## The event-driven model
 
-1. `POST /v1/sessions` creates a session (`agent`, `model`, `workdir`).
+1. `POST /v1/sessions` creates a session (`agent`, `model`, and where it
+   works: a `workdir`, a `projectId`, or `kind: SESSION_KIND_TEMPORARY`; see
+   [Projects and session placement](#projects-and-session-placement)).
 2. `GET /v1/bootstrap` fetches config + catalogs + pending interactions in
    one round trip at startup.
 3. `POST /v1/sessions/{id}/turns` admits work — body is a `oneof` of
@@ -151,6 +154,74 @@ after the turn starts, never blocking it. Subagent (child) sessions, sessions
 created or renamed with a title (`CreateSession.title`, `UpdateSession`), and
 later turns are never titled; a manual rename always wins. The title call is
 billed to the session (`tokensRecorded` with an empty `message`).
+
+## Projects and session placement
+
+A **Project** (ADR-0024) is a named, ordered, non-empty list of absolute
+**roots** on the backend machine; the first root is the primary root. The
+client chooses where a session works; the server has no default. Projects
+are CRUD records (not events); sessions record their Project and **kind**
+(`SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`) when they are created.
+
+**Project rpcs** (`hya.v1.Project`):
+
+| Rpc | HTTP | Notes |
+| --- | --- | --- |
+| `ListProjects` | `GET /v1/projects` | Most recently updated first; paginated. |
+| `GetProject` | `GET /v1/projects/{id}` | `not_found` when missing; a malformed id is `invalid_argument`. |
+| `CreateProject` | `POST /v1/projects` `{name, roots}` | Roots normalized (`.` and trailing `/` dropped) and de-duplicated; they need not exist. |
+| `UpdateProject` | `PATCH /v1/projects/{id}` `{name?, roots?}` | Rename and/or replace the whole root list in one step; empty `roots` keeps them. Running sessions see new roots from their next turn. |
+| `DeleteProject` | `DELETE /v1/projects/{id}` | `failed_precondition` while a non-archived root session belongs to it. |
+| `ResolveProject` | `GET /v1/projects/resolve?path=` | `{project?}`: the Project whose root contains `path` (component-wise; longest root wins). Never creates. |
+| `EnsureProjectForPath` | `POST /v1/projects/ensure` `{path}` | `{project, created}`: `ResolveProject`, else a new Project named after the last path component with `path` as its only root. |
+| `GetCurrentProject` | `GET /v1/projects/current` | `ResolveProject` of the `x-hya-directory` scope (or `directory`); `invalid_argument` without one, `not_found` when no Project contains it. |
+| `ListProjectDirectories` | `GET /v1/projects/{id}/directories` | The roots. |
+| `InitProjectGit` | `POST /v1/projects/{id}/init-git` | `git init` in the primary root. |
+
+An empty name, no roots, or a root (or `path`) that is relative or has a `..`
+component is `invalid_argument`.
+
+`ProjectInfo` = `{id, name, roots, createdAt, updatedAt, sessionCount, busy}`.
+`sessionCount` counts root sessions that still exist (archived included);
+`busy` is true while a non-archived session of the Project runs a turn (the
+same run state as `SessionInfo.busy`).
+
+**Creating a session** (`CreateSessionRequest`): exactly one placement rule
+applies to a root session.
+
+| Request | Result |
+| --- | --- |
+| `kind: SESSION_KIND_TEMPORARY` | No Project. The server creates a fresh scratch directory `$XDG_CACHE_HOME/hya/scratch/<session id>` (fallback `$HOME/.cache/hya/scratch/<session id>`, mode `0700`) and uses it as the workdir and only root. hya never deletes it, not even with the session. `projectId` or `workdir` set is `invalid_argument`. |
+| `projectId` (kind unset or `SESSION_KIND_PROJECT`) | The Project must exist (`not_found`). `workdir`, when set, must lie inside one of its roots (`invalid_argument` otherwise); unset means the primary root. |
+| `workdir` only (kind unset or `SESSION_KIND_PROJECT`) | Local start: the Project is found or created as by `EnsureProjectForPath(workdir)` and the session works in `workdir` (which may be a subdirectory of a root). |
+| none of these | `invalid_argument`. |
+
+A child session (`parent` set) joins its parent's Project and kind:
+`projectId` and `kind` must be unset (`invalid_argument`), and `workdir`
+defaults to the parent's. `workdir` is always absolute without `..`
+components; it is normalized like a root.
+
+`SessionInfo` reports `projectId` (empty for a temporary session or one
+created before Projects existed) and `kind`. `GET /v1/sessions?projectId=`
+lists the sessions (root and subagent) of one Project.
+
+**Live updates.** The global event stream (also with `interactionsOnly`)
+receives a live-only `projectsUpdated` frame whenever the Project list may
+have changed: a Project was created, updated, or deleted, a Project session
+was created, deleted, archived, or unarchived, or a Project's `busy` flag
+flipped. Re-read `GET /v1/projects`. Session streams do not carry it.
+
+```sh
+curl -X POST localhost:3250/v1/projects/ensure -d '{"path": "/home/me/repo"}'
+curl -X POST localhost:3250/v1/sessions \
+  -d '{"agent": "build", "model": "anthropic/claude-sonnet-5", "projectId": "prj_..."}'
+curl -X POST localhost:3250/v1/sessions \
+  -d '{"agent": "build", "model": "anthropic/claude-sonnet-5", "kind": "SESSION_KIND_TEMPORARY"}'
+```
+
+```json
+{ "event": { "timeRecorded": "2026-09-26T10:00:00Z", "projectsUpdated": {} } }
+```
 
 ## Archived sessions
 
@@ -425,7 +496,7 @@ Stream events come in two kinds:
   assistant text of an in-flight provider round, the pending
   interaction frames (`permissionRequested`, `questionRequested`,
   `interactionResolved`; `GET /v1/interactions` is their listing), and the
-  process-wide `catalogUpdated` notice.
+  process-wide `catalogUpdated` and `projectsUpdated` notices.
 
 **`catalogUpdated`.** When the provider/model catalog changes — a provider
 is added, edited, or refreshed, a key is set or removed, or startup model
@@ -439,7 +510,8 @@ empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
 
 **Interactions-only global stream.** `GET /v1/events/stream?interactionsOnly=true`
 (gRPC `StreamGlobalEventsRequest.interactions_only`) delivers only the live
-interaction frames of every session plus `catalogUpdated`; every session's
+interaction frames of every session plus `catalogUpdated` and
+`projectsUpdated`; every session's
 engine events (text, tools, messages, status) and their `resync` frames are
 left out. A client that follows its open session on the session stream uses
 it to see the other sessions' asks without receiving their live text.
@@ -904,7 +976,7 @@ consolidation plan.
 ```
 1. GET  /v1/health                                  → verify liveness
 2. GET  /v1/bootstrap                               → config + catalogs
-3. POST /v1/sessions        {agent, model, workdir} → {session: {id}}
+3. POST /v1/sessions        {agent, model, workdir} → {session: {id, projectId}}
 4. GET  /v1/sessions/{id}/events/stream             → SSE subscribe
 5. POST /v1/sessions/{id}/turns {prompt: {text, attachments?}} → {turn: {id, state}}
 6. ... consume messageStarted / partStarted / partAppended / partReplaced / messageFinished ...

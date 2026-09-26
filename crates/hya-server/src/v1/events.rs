@@ -154,9 +154,10 @@ fn session_stream(
 
 /// The shared live frame producer backing both SSE and gRPC streams.
 ///
-/// Merges four feeds: the engine event bus, the pending permission plane,
-/// the pending question plane, and provider-catalog notices (a live-only,
-/// process-wide `catalogUpdated` frame on every scope). With
+/// Merges five feeds: the engine event bus, the pending permission plane,
+/// the pending question plane, provider-catalog notices (a live-only,
+/// process-wide `catalogUpdated` frame on every scope), and Project-list
+/// notices (a live-only `projectsUpdated` frame on the global scope only). With
 /// `interactions_only` the engine bus (and so its `resync` frames) is left
 /// out. Permission and question frames are
 /// live-only (`seq == 0`): the pending queues are the authoritative
@@ -246,6 +247,12 @@ pub(crate) fn frame_stream(
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(catalog);
     let mut feeds = vec![permission, question, catalog];
+    if matches!(scope, StreamScope::Global) {
+        #[allow(clippy::result_large_err)]
+        let projects = BroadcastStream::new(st.projects_updates.subscribe())
+            .filter_map(|result| async { result.ok().map(|()| Ok(projects_updated_frame())) });
+        feeds.push(Box::pin(projects));
+    }
     if !interactions_only {
         feeds.push(engine);
     }
@@ -254,6 +261,20 @@ pub(crate) fn frame_stream(
 
 /// The live-only, process-wide `catalogUpdated` frame.
 fn catalog_updated_frame() -> pb::StreamFrame {
+    process_notice_frame(pb::stream_event::Payload::CatalogUpdated(
+        pb::CatalogUpdated {},
+    ))
+}
+
+/// The live-only, process-wide `projectsUpdated` frame (global stream only).
+fn projects_updated_frame() -> pb::StreamFrame {
+    process_notice_frame(pb::stream_event::Payload::ProjectsUpdated(
+        pb::ProjectsUpdated {},
+    ))
+}
+
+/// A live-only (`seq` 0), session-less notice frame stamped now.
+fn process_notice_frame(payload: pb::stream_event::Payload) -> pb::StreamFrame {
     pb::StreamFrame {
         frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
             seq: 0,
@@ -265,9 +286,7 @@ fn catalog_updated_frame() -> pb::StreamFrame {
                     .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
                     .unwrap_or_default(),
             ),
-            payload: Some(pb::stream_event::Payload::CatalogUpdated(
-                pb::CatalogUpdated {},
-            )),
+            payload: Some(payload),
         })),
     }
 }

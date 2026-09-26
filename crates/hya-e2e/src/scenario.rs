@@ -242,7 +242,7 @@ impl E2eEnv {
             .create_session(&pb::CreateSessionRequest {
                 agent: agent.to_string(),
                 model: self.model.clone(),
-                workdir: self.backend.workdir_str(),
+                workdir: Some(self.backend.workdir_str()),
                 ..Default::default()
             })
             .await?;
