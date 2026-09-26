@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_server::{AppState, router as server_router};
 
+use crate::db_lock;
+
 use super::{
     agent_base_with_model, build_session_engine, build_session_engine_pure, open_store,
     resolve_runtime,
@@ -15,7 +17,17 @@ pub(crate) async fn cmd_serve(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
-    let prepared = prepare_server(&bind, db, model_override, yolo, pure).await?;
+    // One writer per database: fail fast, before composing anything, when
+    // another server owns it (ADR-0022).
+    let lock = match db_lock::try_claim(&db).context("lock the database")? {
+        db_lock::Claim::Owned(lock) => Some(lock),
+        db_lock::Claim::Unlocked => None,
+        db_lock::Claim::Busy(busy) => {
+            eprintln!("{}", busy.serve_message());
+            std::process::exit(db_lock::EXIT_DB_IN_USE);
+        }
+    };
+    let prepared = prepare_server(&bind, db, lock, model_override, yolo, pure).await?;
     // Install the termination handlers BEFORE announcing readiness. Callers that parse the
     // listen line and then signal us (the e2e harness) would otherwise race handler setup,
     // and losing that race means the default disposition kills the process outright —
@@ -37,6 +49,9 @@ pub(crate) struct PreparedServer {
     listener: tokio::net::TcpListener,
     router: axum::Router,
     built: hya_app::BuiltSessionEngine,
+    /// The database lock; released (and the discovery file removed) only
+    /// after the server has drained and shut down.
+    lock: Option<db_lock::DbLock>,
 }
 
 /// Serve `prepared` until `stop` resolves, then drain and tear down.
@@ -54,6 +69,7 @@ pub(crate) async fn serve_until(
         listener,
         router,
         mut built,
+        lock,
         ..
     } = prepared;
     let supervisor = built.resident_supervisor();
@@ -67,13 +83,19 @@ pub(crate) async fn serve_until(
         .await
         .context("serve http");
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
+    // Last: remove the discovery file and release the lock.
+    drop(lock);
     serve_result.and(shutdown_result)
 }
 
 /// Compose the runtime and bind `bind` (shared by `hya serve` and bare `hya`).
+///
+/// `lock` is the caller's claim on `db` ([`db_lock::try_claim`]); once the
+/// listener is bound its discovery file is published.
 pub(crate) async fn prepare_server(
     bind: &str,
     db: String,
+    mut lock: Option<db_lock::DbLock>,
     model_override: Option<String>,
     yolo: bool,
     pure: bool,
@@ -199,11 +221,16 @@ pub(crate) async fn prepare_server(
         .await
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
+    if let Some(lock) = lock.as_mut() {
+        lock.publish(&db_lock::connect_url(addr))
+            .context("publish the server discovery file")?;
+    }
     Ok(PreparedServer {
         url: format!("http://{addr}"),
         listener,
         router: server_router(state),
         built,
+        lock,
     })
 }
 

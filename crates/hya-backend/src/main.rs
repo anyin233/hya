@@ -16,6 +16,7 @@ mod agent_cmd;
 mod auth_cmd;
 mod bundle_cmd;
 mod cli_args;
+mod db_lock;
 mod exec_stream;
 mod frontend;
 mod models_cmd;

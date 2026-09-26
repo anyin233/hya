@@ -9,6 +9,7 @@ import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
 import type { PickerAction } from "../state/picker"
+import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
@@ -17,6 +18,13 @@ export const sessionPickerActions: readonly PickerAction[] = [
   { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
 ]
+
+/** `/status`'s Backend row: started by this TUI, attached to another process's server, bare hya's in-process server, or `--server`. */
+function backendText(backend: BackendInfo | undefined, bareHya: boolean): string {
+  if (backend?.attached) return ["attached to a running server", `pid ${backend.pid}`, ...(backend.db ? [`db ${backend.db}`] : [])].join(" · ")
+  if (backend) return `started by this TUI · pid ${backend.pid} · ${backend.bin ?? "hya"} · db ${backend.db ?? ""}`
+  return bareHya ? "in the hya process (bare hya)" : "external (--server)"
+}
 
 /** Open the `/sessions` picker (C13): a `New session` row first, then the tree; Enter opens, F2 renames, Ctrl+D deletes with confirmation. */
 function openSessionsPicker(context: CommandContext): void {
@@ -316,7 +324,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
-        `Backend     ${store.state.backend ? `started by this TUI · pid ${store.state.backend.pid} · ${store.state.backend.bin} · db ${store.state.backend.db}` : store.state.web ? "in the hya process (bare hya)" : "external (--server)"}`,
+        `Backend     ${backendText(store.state.backend, store.state.web !== undefined)}`,
       ]
       const web = store.state.web
       if (web) lines.push(`WebUI       ${web.url ? web.url.replace(/\/$/, "") : `unavailable: ${web.error ?? ""} · hya --port <N>`}`)

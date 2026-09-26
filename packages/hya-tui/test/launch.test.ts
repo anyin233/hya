@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BackendError, defaultDatabase, initialSessionId, parseReadyLine, resolveHyaBinary, startBackend } from "../src/launch"
+import { mkdir, realpath } from "node:fs/promises"
+import { BackendError, connectOrStart, databasePaths, defaultDatabase, exitDatabaseInUse, findRunningServer, initialSessionId, parseDiscovery, parseReadyLine, probeHealth, resolveHyaBinary, startBackend, type Backend } from "../src/launch"
 
 const exists = (paths: string[]) => (path: string) => paths.includes(path)
 
@@ -130,4 +131,134 @@ test("keeps draining the child's output after it is ready (a full pipe would blo
   expect(await Bun.file(join(dir, "drained")).exists()).toBe(true)
   expect(backend.outputTail()).toContain("log line 1999")
   await backend.stop()
+})
+
+// --- One writer per database (ADR-0022): attach to a running server or start one.
+
+test("the lock and discovery files sit next to the database, resolved from --dir with a canonical directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hya-tui-paths-"))
+  scratch.push(dir)
+  await mkdir(join(dir, "state"))
+  const real = await realpath(dir)
+  expect(databasePaths(join(dir, "state/s.db"), "/elsewhere")).toEqual({ lock: join(real, "state/s.db.lock"), discovery: join(real, "state/s.db.server.json") })
+  // A relative --db is relative to --dir (the started server's working directory).
+  expect(databasePaths("state/s.db", dir)?.discovery).toBe(join(real, "state/s.db.server.json"))
+  for (const db of ["", ":memory:", "file:x.db?mode=memory"]) expect(databasePaths(db, dir)).toBeUndefined()
+})
+
+test("parses the discovery file and rejects anything malformed", () => {
+  expect(parseDiscovery('{"url":"http://127.0.0.1:5","pid":42,"version":"0.41.0","startedAt":1700}')).toEqual({ url: "http://127.0.0.1:5", pid: 42, version: "0.41.0", startedAt: 1700 })
+  for (const text of ["", "not json", "{}", '{"url":"http://x","pid":"42"}', '{"url":"ftp://x","pid":1}', '{"url":"http://x","pid":0}', "[]", "null"]) {
+    expect(parseDiscovery(text)).toBeUndefined()
+  }
+})
+
+test("the health probe accepts only GET /v1/health answering ok: true", async () => {
+  const seen: string[] = []
+  const fetcher = (async (input: string | URL | Request) => {
+    const url = String(input)
+    seen.push(url)
+    if (url.startsWith("http://good")) return Response.json({ ok: true, version: "1" })
+    if (url.startsWith("http://sick")) return Response.json({ ok: false })
+    if (url.startsWith("http://err")) return new Response("no", { status: 500 })
+    throw new TypeError("connection refused")
+  }) as typeof fetch
+  expect(await probeHealth("http://good:1", fetcher)).toBe(true)
+  expect(seen).toEqual(["http://good:1/v1/health"])
+  expect(await probeHealth("http://good:1/", fetcher)).toBe(true)
+  expect(await probeHealth("http://sick:1", fetcher)).toBe(false)
+  expect(await probeHealth("http://err:1", fetcher)).toBe(false)
+  expect(await probeHealth("http://down:1", fetcher)).toBe(false)
+})
+
+const discovery = (pid: number, url = "http://127.0.0.1:5") => JSON.stringify({ url, pid, version: "0.41.0", startedAt: 1 })
+const healthy = (async () => Response.json({ ok: true })) as unknown as typeof fetch
+const refused = (async () => { throw new TypeError("refused") }) as unknown as typeof fetch
+
+test("a running server is found only with a readable discovery file, a live pid, and a healthy URL", async () => {
+  const files = new Map<string, string>()
+  const deps = (alive: boolean, fetcher: typeof fetch) => ({ readText: (path: string) => files.get(path), alive: () => alive, fetcher })
+  const db = "/s/sessions.db"
+  expect(await findRunningServer(db, "/w", deps(true, healthy))).toBeUndefined()
+  files.set(databasePaths(db, "/w")!.discovery, discovery(42))
+  expect(await findRunningServer(db, "/w", deps(true, healthy))).toMatchObject({ pid: 42, url: "http://127.0.0.1:5" })
+  // Stale: the process is gone, or the URL does not answer.
+  expect(await findRunningServer(db, "/w", deps(false, healthy))).toBeUndefined()
+  expect(await findRunningServer(db, "/w", deps(true, refused))).toBeUndefined()
+})
+
+function fakeBackend(url: string): Backend & { stopped: boolean } {
+  const backend = { url, pid: 77, bin: "/b/hya", db: "/s/sessions.db", stopped: false, outputTail: () => "", exited: new Promise<number | null>(() => {}), stop: async () => { backend.stopped = true } }
+  return backend
+}
+
+test("attaches to the live server of the database instead of starting one", async () => {
+  const db = "/s/sessions.db"
+  let starts = 0
+  const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, {
+    readText: (path) => (path === databasePaths(db, "/w")!.discovery ? discovery(42, "http://127.0.0.1:9") : undefined),
+    alive: () => true,
+    fetcher: healthy,
+    start: async () => { starts++; return fakeBackend("http://x") },
+  })
+  expect(connection).toEqual({ kind: "attached", url: "http://127.0.0.1:9", pid: 42, db, version: "0.41.0" })
+  expect(starts).toBe(0)
+})
+
+test("with no live server (none published, or stale) it starts hya serve", async () => {
+  const db = "/s/sessions.db"
+  for (const readText of [() => undefined, () => discovery(42)]) {
+    const started = fakeBackend("http://127.0.0.1:7")
+    const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, { readText, alive: () => false, fetcher: refused, start: async () => started })
+    expect(connection).toEqual({ kind: "started", backend: started })
+  }
+})
+
+test("losing the start race (hya serve exits 75) attaches to the winner once it publishes", async () => {
+  const db = "/s/sessions.db"
+  let published = false
+  let starts = 0
+  const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, {
+    readText: () => (published ? discovery(43, "http://127.0.0.1:8") : undefined),
+    alive: () => true,
+    fetcher: healthy,
+    sleep: async () => { published = true },
+    start: async () => { starts++; throw new BackendError("hya serve exited with code 75 before it was ready", "hya serve: database is already in use", exitDatabaseInUse) },
+  })
+  expect(starts).toBe(1)
+  expect(connection).toMatchObject({ kind: "attached", pid: 43, url: "http://127.0.0.1:8" })
+})
+
+test("a database held by a process that never answers is a clear error", async () => {
+  const db = "/s/sessions.db"
+  let now = 0
+  const error = await connectOrStart({ bin: "/b/hya", directory: "/w", db, attachWaitMs: 1_000 }, {
+    readText: () => undefined,
+    alive: () => true,
+    fetcher: refused,
+    now: () => now,
+    sleep: async (ms) => { now += ms },
+    start: async () => { throw new BackendError("hya serve exited with code 75 before it was ready", "hya serve: database /s/sessions.db is already in use by pid 9", exitDatabaseInUse) },
+  }).catch((caught: unknown) => caught)
+  expect(error).toBeInstanceOf(BackendError)
+  expect((error as BackendError).message).toContain("database /s/sessions.db is in use by another hya process")
+  expect((error as BackendError).message).toContain("--db")
+  expect((error as BackendError).detail).toContain("already in use by pid 9")
+})
+
+test("other start failures are not retried", async () => {
+  let starts = 0
+  const error = await connectOrStart({ bin: "/b/hya", directory: "/w", db: "/s/sessions.db" }, {
+    readText: () => undefined, alive: () => false, fetcher: refused,
+    start: async () => { starts++; throw new BackendError("hya serve exited with code 2 before it was ready", "", 2) },
+  }).catch((caught: unknown) => caught)
+  expect(starts).toBe(1)
+  expect((error as Error).message).toContain("code 2")
+})
+
+test("a server that exits before it is ready reports its exit code on the error", async () => {
+  const { bin, dir } = await fakeHya(`echo "hya serve: database x is already in use" >&2\nexit 75`)
+  const error = await startBackend({ bin, directory: dir, db: join(dir, "s.db") }).catch((caught: unknown) => caught)
+  expect(error).toBeInstanceOf(BackendError)
+  expect((error as BackendError).exitCode).toBe(75)
 })

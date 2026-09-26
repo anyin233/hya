@@ -15,14 +15,23 @@
  * - Stop: SIGTERM, then SIGKILL after `graceMs`; resolves once the child has
  *   exited. The child stays in the TUI's process group, so a hangup of the
  *   terminal reaches it too.
+ *
+ * One writer per database (ADR-0022, `connectOrStart`): a server holds an
+ * exclusive lock on `<db>.lock` and publishes `<db>.server.json`
+ * (`{url, pid, version, startedAt}`) once listening. Before starting one the
+ * TUI reads that file; a live pid whose `GET /v1/health` answers `ok` is
+ * attached to (and never stopped by this TUI). Otherwise it starts
+ * `hya serve`; if that exits 75 (the database is held: another launcher won
+ * the race, or its server is still starting) the TUI waits for the holder's
+ * discovery file and attaches, or fails with a clear error.
  */
-import { existsSync, mkdirSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs"
+import { basename, dirname, join, resolve } from "node:path"
 import type { SessionInfo } from "./client"
 
-/** A backend start failure; `detail` is the child's output tail (may be empty). */
+/** A backend start failure; `detail` is the child's output tail (may be empty), `exitCode` the child's status when it exited. */
 export class BackendError extends Error {
-  constructor(message: string, readonly detail = "") {
+  constructor(message: string, readonly detail = "", readonly exitCode?: number) {
     super(message)
     this.name = "BackendError"
   }
@@ -184,8 +193,145 @@ export async function startBackend(options: BackendOptions): Promise<Backend> {
       clearTimeout(timer)
       // Let the drains take the last output before reporting it.
       await Bun.sleep(20)
-      reject(new BackendError(`hya serve exited with code ${code ?? "(signal)"} before it was ready`, outputTail()))
+      reject(new BackendError(`hya serve exited with code ${code ?? "(signal)"} before it was ready`, outputTail(), code ?? undefined))
     })
   })
   return { url, pid: child.pid, bin, db, outputTail, stop, exited }
+}
+
+/** `hya serve`'s exit status when another process holds the database (docs/cli.md "`hya serve`"). */
+export const exitDatabaseInUse = 75
+
+/** The discovery file a running server publishes next to its database (`<db>.server.json`). */
+export interface DiscoveryInfo {
+  url: string
+  pid: number
+  version: string
+  /** Unix time in ms when the server started listening. */
+  startedAt: number
+}
+
+/**
+ * `<db>.lock` and `<db>.server.json` for `db` as the started server sees it:
+ * relative to `directory` (its working directory), with the directory
+ * canonicalized the way `hya` does. `undefined` for stores that are not
+ * locked (in-memory, SQLite URIs).
+ */
+export function databasePaths(db: string, directory: string): { lock: string; discovery: string } | undefined {
+  if (!db || db === ":memory:" || db.startsWith("file:") || db.startsWith("sqlite:")) return undefined
+  const path = resolve(directory, db)
+  let dir = dirname(path)
+  try {
+    dir = realpathSync(dir)
+  } catch {
+    // Not created yet: no server can be running on it.
+  }
+  const name = basename(path)
+  return { lock: join(dir, `${name}.lock`), discovery: join(dir, `${name}.server.json`) }
+}
+
+/** A well-formed discovery file, else `undefined`. */
+export function parseDiscovery(text: string): DiscoveryInfo | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const { url, pid, version, startedAt } = value as Record<string, unknown>
+  if (typeof url !== "string" || !/^https?:\/\//.test(url)) return undefined
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined
+  return { url, pid, version: typeof version === "string" ? version : "", startedAt: typeof startedAt === "number" ? startedAt : 0 }
+}
+
+/** Whether `GET <url>/v1/health` answers `{ ok: true }` within `timeoutMs`. */
+export async function probeHealth(url: string, fetcher: typeof fetch = fetch, timeoutMs = 2_000): Promise<boolean> {
+  try {
+    const response = await fetcher(`${url.replace(/\/+$/, "")}/v1/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!response.ok) return false
+    const body = (await response.json()) as { ok?: unknown }
+    return body?.ok === true
+  } catch {
+    return false
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: it exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM"
+  }
+}
+
+function readTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8")
+  } catch {
+    return undefined
+  }
+}
+
+/** Injectable effects of the attach-or-start decision (tests replace them). */
+export interface LaunchDeps {
+  readText?: (path: string) => string | undefined
+  alive?: (pid: number) => boolean
+  fetcher?: typeof fetch
+  start?: (options: BackendOptions) => Promise<Backend>
+  sleep?: (ms: number) => Promise<void>
+  now?: () => number
+}
+
+/**
+ * The live server of `db`: its discovery file parses, the pid is alive, and
+ * the URL's health probe answers. A stale file (crashed server) is ignored;
+ * the next server to take the lock overwrites it.
+ */
+export async function findRunningServer(db: string, directory: string, deps: LaunchDeps = {}): Promise<DiscoveryInfo | undefined> {
+  const paths = databasePaths(db, directory)
+  if (!paths) return undefined
+  const text = (deps.readText ?? readTextFile)(paths.discovery)
+  const found = text === undefined ? undefined : parseDiscovery(text)
+  if (!found || !(deps.alive ?? processAlive)(found.pid)) return undefined
+  return (await probeHealth(found.url, deps.fetcher)) ? found : undefined
+}
+
+/** How the TUI reached its server without `--server`. */
+export type Connection =
+  | { kind: "attached"; url: string; pid: number; db: string; version: string }
+  | { kind: "started"; backend: Backend }
+
+/**
+ * Attach to the running server of `options.db`, else start `hya serve`. A
+ * start that exits 75 (the database is held) waits up to `attachWaitMs`
+ * (default 20 s) for the holder's server, then fails.
+ */
+export async function connectOrStart(options: BackendOptions & { attachWaitMs?: number }, deps: LaunchDeps = {}): Promise<Connection> {
+  const { db, directory, attachWaitMs = 20_000 } = options
+  const attached = (found: DiscoveryInfo): Connection => ({ kind: "attached", url: found.url, pid: found.pid, db, version: found.version })
+  const running = await findRunningServer(db, directory, deps)
+  if (running) return attached(running)
+  try {
+    return { kind: "started", backend: await (deps.start ?? startBackend)(options) }
+  } catch (error) {
+    if (!(error instanceof BackendError) || error.exitCode !== exitDatabaseInUse) throw error
+    const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms))
+    const now = deps.now ?? Date.now
+    const deadline = now() + attachWaitMs
+    for (;;) {
+      const found = await findRunningServer(db, directory, deps)
+      if (found) return attached(found)
+      if (now() >= deadline) {
+        throw new BackendError(
+          `database ${db} is in use by another hya process that serves no reachable server (waited ${Math.round(attachWaitMs / 1000)} s); stop that process, or pass another --db`,
+          error.detail,
+          error.exitCode,
+        )
+      }
+      await sleep(250)
+    }
+  }
 }

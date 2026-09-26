@@ -1,5 +1,11 @@
 # 0.41.0
 
+## One server per database: later TUIs and bare `hya` attach
+
+- `hya serve --db <file>` and bare `hya` now lock the database (`<db>.lock`) and, once listening, write `<db>.server.json` (`{url, pid, version, startedAt}`). A second `hya serve` on the same database exits with status 75 and names the running server's URL and pid.
+- A TUI started without `--server`, and bare `hya`, first look for a running server on their database. If they find a healthy one, they attach to it and start nothing. So two TUIs on the default database now share one server and see each other's sessions and live events. `/status` shows `attached to a running server · pid N`. Quitting an attached TUI leaves the server running; if the server's owner quits, attached TUIs lose their connection.
+- `hya exec --db` and `hya workflow` do not take the lock yet. See [CLI](docs/cli.md#bare-hya), [ADR-0022](docs/adr/0022-one-writer-per-database.md), and [Troubleshooting](docs/troubleshooting.md).
+
 ## Server fixes: saved rules, compaction names, stream filters, bad request bodies, MCP add
 
 - Saved permission rules now report `allow` and when they were saved. `tool` and `pattern` name the tool or command they allow. Saved grants now survive a server restart, and deleting a rule revokes it at once. Rules stay global; `directory` is ignored.

@@ -395,6 +395,25 @@ The terminal TUI's status bar, its sidebar `Context` box, and `/status` show
 its own TUI process against the same server. Quit the terminal TUI (`/exit`,
 Ctrl+D, or Ctrl+C twice) to stop everything.
 
+**Attaching to a running server.** One database has one server
+([ADR-0022](adr/0022-one-writer-per-database.md)). If another process already
+serves the database (a `hya serve --db`, a TUI that started its own backend,
+or another bare `hya`), `hya` starts no server. Before it touches the
+terminal it reads `<db>.server.json` next to the database, checks that
+`GET <url>/v1/health` answers, and runs the WebUI host (still on `--port`) and
+the terminal TUI against that server. The TUI gets `--attached-pid <pid>`, and
+`/status` shows `Backend     attached to a running server · pid <pid>`.
+Quitting stops only what this `hya` started (the TUI and the web host). The
+other process's server keeps running. Its flags apply, not this launch's
+`--model`, `--yolo`, or `--pure`; the log notes this. If the holder is still
+starting, `hya` prints `hya: database <db> is in use by pid <pid>; waiting for
+its server…` and waits up to 20 s. If no healthy server appears, it exits
+**1** with, for example:
+
+```text
+Error: database /home/me/.local/state/hya/sessions.db is in use by pid 4242, which has published no server (waited 20 s); stop that process or pass another --db
+```
+
 **Requirements.** Bare `hya` starts the frontends only when both stdin and
 stdout are terminals. It needs [Bun](https://bun.sh) (`$BUN`, else `bun` on
 `PATH`) and the two Bun packages, which a release archive or `install.sh`
@@ -488,6 +507,7 @@ so Ctrl+C in the terminal reaches only the TUI and `hya`.
 | TUI flags | `--server <url> --dir <cwd>` and exactly one of `--web-url <url>` / `--web-error <reason>` ([tui.md](tui.md#start-it)). |
 | Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
 | Log file | `<state dir>/hya/hya.log`, append-only; rotated once to `hya.log.1` above 4 MiB. |
+| Attach | `<db>.lock` held and `<db>.server.json` healthy → no in-process server; TUI flags `--server <url> --dir <cwd> --attached-pid <pid>` ([`hya serve`](#hya-serve) "One server per database"). Wait for a starting holder: 20 s. |
 | Exit status | The TUI's status; `128 + signal` for a signal to `hya` or a TUI killed by one; **1** for an error before start. |
 
 To run the frontends by hand instead (development, a remote server), see
@@ -614,7 +634,7 @@ Starts the HTTP/SSE API from [`../crates/hya-server`](../crates/hya-server).
 | `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |
 | `--mdns-domain <NAME>` | Accepted for Compat CLI compatibility. |
 | `--cors <ORIGIN>` | Accepted for Compat CLI compatibility; hya mirrors CORS origins globally. |
-| `--db <PATH>` | SQLite path. Empty string uses an in-memory store. |
+| `--db <PATH>` | SQLite path. Empty string uses an in-memory store. A file database is locked for this process (see "One server per database" below); a second `serve` on it exits **75**. |
 
 **Readiness contract.** After the listener is bound, the process prints exactly:
 
@@ -625,6 +645,31 @@ hya server listening on <url>
 That string is a stability contract: harnesses, supervisors, and client SDKs
 parse this exact line from merged stdout/stderr to discover the base URL. Do not
 change its wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs).
+
+**One server per database.** With a file `--db`, `serve` takes an exclusive
+lock on the database before it opens it, and publishes a discovery file once
+it listens, so a TUI or bare `hya` can attach to it instead of opening the
+same file a second time ([ADR-0022](adr/0022-one-writer-per-database.md)).
+
+| File | Contract |
+| --- | --- |
+| `<db>.lock` | Exclusive advisory lock (`flock`), taken without waiting before the store opens and held until the process exits; the OS releases it on a crash or SIGKILL. Contents: the owner's pid. Never deleted. |
+| `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
+
+`<db>` is the `--db` path with its directory resolved (symlinks and `..`), so
+different spellings of one file share one lock. An in-memory store (`--db ""`,
+the default for `serve`) takes no lock. A second `serve` on a database that
+another process holds fails before it starts, with exit status **75**
+(`EX_TEMPFAIL`) and one line on stderr:
+
+```text
+hya serve: database /home/me/.local/state/hya/sessions.db is already in use by hya server pid 4242 at http://127.0.0.1:53211 (hya 0.41.0); connect to it (`hya-tui --server http://127.0.0.1:53211`, or run bare `hya`, which attaches), stop it, or pass another --db
+```
+
+If the holder has not published its URL yet (it is still starting, or it is
+not a server), the message names the pid from `<db>.lock` instead. Clients
+that attach check the discovery file with `GET <url>/v1/health`
+(`{"ok": true, "version": …}`).
 
 **Signal handling.** SIGTERM, SIGINT, and SIGHUP handlers are installed
 **before** the listen line is printed (an e2e-harness ordering requirement: a

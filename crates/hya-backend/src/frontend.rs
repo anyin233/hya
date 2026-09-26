@@ -11,6 +11,13 @@
 //! 3. the terminal TUI (`packages/hya-tui`) runs on this terminal with
 //!    `--web-url <url>` or `--web-error <reason>`.
 //!
+//! One writer per database (ADR-0022): when another process already serves
+//! the database (`<db>.lock` held, `<db>.server.json` published, and its
+//! `/v1/health` answers), step 1 is skipped and both frontends attach to that
+//! server; quitting then stops only what this `hya` started. A holder that is
+//! still starting is waited for up to [`ATTACH_WAIT`]; one that never
+//! answers is an error before the terminal is touched.
+//!
 //! When the terminal TUI exits (or `hya` gets SIGINT/SIGTERM/SIGHUP) the web
 //! host is stopped (SIGTERM, SIGKILL after a grace period; it stops its tabs'
 //! TUIs itself), the server drains and shuts down, and `hya` exits with the
@@ -31,6 +38,7 @@ use anyhow::Context as _;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child, Command};
 
+use crate::db_lock;
 use crate::serve;
 
 /// How long the web host may take to print its readiness line.
@@ -42,6 +50,11 @@ const STOP_GRACE: Duration = Duration::from_secs(8);
 const LOG_ROTATE_BYTES: u64 = 4 * 1024 * 1024;
 /// Most bytes of the web host's stderr kept to explain a failed start.
 const STDERR_KEEP: usize = 4096;
+/// How long bare `hya` waits for the server of a database another process
+/// holds (it may still be starting) before it gives up.
+pub(crate) const ATTACH_WAIT: Duration = Duration::from_secs(20);
+/// One `/v1/health` probe of a discovered server.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A Bun package `hya` runs: where to find it and how to name it in errors.
 pub(crate) struct Asset {
@@ -234,20 +247,89 @@ pub(crate) enum WebStatus {
     Failed(String),
 }
 
-/// argv of the terminal TUI.
+/// argv of the terminal TUI; `attached` is the pid of the server bare `hya`
+/// attached to instead of starting one (`--attached-pid`, shown in `/status`).
 pub(crate) fn tui_argv(
     bun: &Path,
     tui_dir: &Path,
     backend: &str,
     cwd: &Path,
     web: &WebStatus,
+    attached: Option<u32>,
 ) -> Vec<OsString> {
     let mut argv = tui_base_argv(bun, tui_dir, backend, cwd);
     match web {
         WebStatus::Ready(url) => argv.extend(["--web-url".into(), url.into()]),
         WebStatus::Failed(reason) => argv.extend(["--web-error".into(), reason.into()]),
     }
+    if let Some(pid) = attached {
+        argv.extend(["--attached-pid".into(), pid.to_string().into()]);
+    }
     argv
+}
+
+/// Where bare `hya`'s frontends get their server.
+#[derive(Debug)]
+pub(crate) enum ServerPlan {
+    /// Start the in-process server, holding this claim on the database.
+    Start(Option<db_lock::DbLock>),
+    /// Another process serves the database: use its server.
+    Attach(db_lock::Discovery),
+}
+
+/// Claim `db` or find the live server that holds it. A holder without a
+/// published, healthy server is re-checked every 250 ms until `wait` ends
+/// (it may still be starting, or be shutting down and about to release the
+/// lock); then it is an error.
+pub(crate) async fn plan_server(db: &str, wait: Duration) -> anyhow::Result<ServerPlan> {
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut announced = false;
+    loop {
+        let busy =
+            match db_lock::try_claim(db).with_context(|| format!("lock the database {db}"))? {
+                db_lock::Claim::Unlocked => return Ok(ServerPlan::Start(None)),
+                db_lock::Claim::Owned(lock) => return Ok(ServerPlan::Start(Some(lock))),
+                db_lock::Claim::Busy(busy) => busy,
+            };
+        if let Some(found) = &busy.discovery
+            && db_lock::probe(&found.url, PROBE_TIMEOUT).await
+        {
+            return Ok(ServerPlan::Attach(found.clone()));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(attach_failure(&busy, wait));
+        }
+        if !announced {
+            announced = true;
+            eprintln!(
+                "hya: database {db} is in use by pid {}; waiting for its server…",
+                holder(&busy)
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+fn holder(busy: &db_lock::Busy) -> String {
+    busy.discovery
+        .as_ref()
+        .map(|found| found.pid)
+        .or(busy.holder_pid)
+        .map_or_else(|| "unknown".to_string(), |pid| pid.to_string())
+}
+
+/// Why bare `hya` could not attach to the process that holds the database.
+pub(crate) fn attach_failure(busy: &db_lock::Busy, wait: Duration) -> String {
+    let server = busy.discovery.as_ref().map_or_else(
+        || "has published no server".to_string(),
+        |found| format!("published {} but it does not answer", found.url),
+    );
+    format!(
+        "database {} is in use by pid {}, which {server} (waited {} s); stop that process or pass another --db",
+        busy.db,
+        holder(busy),
+        wait.as_secs()
+    )
 }
 
 /// `hya`'s exit status for the TUI's: its code, or `128 + signal`.
@@ -317,12 +399,13 @@ fn resolve() -> anyhow::Result<Resolved> {
 pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
     // Everything that can fail cheaply fails here, before the terminal is touched.
     let resolved = resolve()?;
+    let plan = plan_server(&request.db, ATTACH_WAIT).await?;
     let log_file = log_path(&request.state_dir);
     let log =
         open_log(&log_file).with_context(|| format!("open the log file {}", log_file.display()))?;
     let mut signals = StopSignals::install().context("install signal handlers")?;
     let terminal = Terminal::detach(&log).context("hand the terminal to the TUI")?;
-    let outcome = orchestrate(&request, &resolved, &terminal, &mut signals).await;
+    let outcome = orchestrate(&request, plan, &resolved, &terminal, &mut signals).await;
     terminal.restore();
     match outcome {
         Ok(code) => {
@@ -341,6 +424,7 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
 
 async fn orchestrate(
     request: &LaunchRequest,
+    plan: ServerPlan,
     resolved: &Resolved,
     terminal: &Terminal,
     signals: &mut StopSignals,
@@ -352,10 +436,30 @@ async fn orchestrate(
         resolved.cwd.display(),
         request.db
     );
+    let lock = match plan {
+        ServerPlan::Start(lock) => lock,
+        ServerPlan::Attach(found) => {
+            // Not ours: the frontends use it, and nothing here stops it.
+            eprintln!(
+                "hya: attached to the running server pid {} at {} (hya {}); --model/--yolo/--pure of this launch do not apply",
+                found.pid, found.url, found.version
+            );
+            return run_frontends(
+                request.port,
+                resolved,
+                &found.url,
+                Some(found.pid),
+                terminal,
+                signals,
+            )
+            .await;
+        }
+    };
     let prepared = tokio::select! {
         prepared = serve::prepare_server(
             "127.0.0.1:0",
             request.db.clone(),
+            lock,
             request.model.clone(),
             request.yolo,
             request.pure,
@@ -369,7 +473,7 @@ async fn orchestrate(
         let _ = stop_rx.await;
     });
     let frontends = async move {
-        let code = run_frontends(request.port, resolved, &backend, terminal, signals).await;
+        let code = run_frontends(request.port, resolved, &backend, None, terminal, signals).await;
         let _ = stop_tx.send(());
         code
     };
@@ -384,6 +488,7 @@ async fn run_frontends(
     port: u16,
     resolved: &Resolved,
     backend: &str,
+    attached: Option<u32>,
     terminal: &Terminal,
     signals: &mut StopSignals,
 ) -> anyhow::Result<i32> {
@@ -398,7 +503,7 @@ async fn run_frontends(
         Err(reason) => (None, WebStatus::Failed(reason)),
     };
     eprintln!("hya: WebUI {web_status:?}");
-    let argv = tui_argv(bun, tui, backend, cwd, &web_status);
+    let argv = tui_argv(bun, tui, backend, cwd, &web_status, attached);
     let code = match spawn_tui(&argv, cwd, terminal) {
         Ok(mut child) => {
             tokio::select! {
@@ -638,7 +743,7 @@ fn redirect(target: RawFd, source: RawFd) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -841,6 +946,7 @@ mod tests {
             "http://127.0.0.1:5555",
             Path::new("/work"),
             &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            None,
         );
         let mut expected = os(&base);
         expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
@@ -851,10 +957,94 @@ mod tests {
             "http://127.0.0.1:5555",
             Path::new("/work"),
             &WebStatus::Failed("port 3250 is in use".into()),
+            None,
         );
         let mut expected = os(&base);
         expected.extend(os(&["--web-error", "port 3250 is in use"]));
         assert_eq!(failed, expected);
+        let attached = tui_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui"),
+            "http://127.0.0.1:5555",
+            Path::new("/work"),
+            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            Some(4242),
+        );
+        let mut expected = os(&base);
+        expected.extend(os(&[
+            "--web-url",
+            "http://127.0.0.1:3250/",
+            "--attached-pid",
+            "4242",
+        ]));
+        assert_eq!(attached, expected);
+    }
+
+    /// A one-request `/v1/health` responder (`ok` true or false).
+    async fn health_server(ok: bool) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buffer = [0u8; 1024];
+                let _ = socket.read(&mut buffer).await;
+                let body = format!(r#"{{"ok":{ok},"version":"x"}}"#);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn plan_starts_a_server_on_a_free_database() {
+        let scratch = Scratch::new("plan-free");
+        let db = scratch.0.join("s.db").to_string_lossy().into_owned();
+        match plan_server(&db, Duration::from_millis(10)).await.unwrap() {
+            ServerPlan::Start(Some(_lock)) => {}
+            other => panic!("expected to start with the lock, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_attaches_to_the_live_server_holding_the_database() {
+        let scratch = Scratch::new("plan-attach");
+        let db = scratch.0.join("s.db").to_string_lossy().into_owned();
+        let db_lock::Claim::Owned(mut holder) = db_lock::try_claim(&db).unwrap() else {
+            panic!("could not take the lock");
+        };
+        let url = health_server(true).await;
+        holder.publish(&url).unwrap();
+        match plan_server(&db, Duration::from_secs(5)).await.unwrap() {
+            ServerPlan::Attach(found) => {
+                assert_eq!(found.url, url);
+                assert_eq!(found.pid, std::process::id());
+            }
+            other => panic!("expected to attach, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_fails_when_the_holder_never_answers() {
+        let scratch = Scratch::new("plan-dead");
+        let db = scratch.0.join("s.db").to_string_lossy().into_owned();
+        let db_lock::Claim::Owned(mut holder) = db_lock::try_claim(&db).unwrap() else {
+            panic!("could not take the lock");
+        };
+        let url = health_server(false).await;
+        holder.publish(&url).unwrap();
+        let error = plan_server(&db, Duration::from_millis(300))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is in use by pid"), "{error}");
+        assert!(error.contains(&url), "{error}");
+        assert!(error.contains("does not answer"), "{error}");
+        assert!(error.contains("--db"), "{error}");
     }
 
     #[test]

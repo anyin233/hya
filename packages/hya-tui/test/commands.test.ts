@@ -227,6 +227,22 @@ test("/status shows the WebUI that bare hya serves, or why it is unavailable", a
   expect(store.state.statusText).toContain("WebUI       unavailable: port 3250 is in use · hya --port <N>")
 })
 
+test("/status says whether the backend was started by this TUI or attached to a running server", async () => {
+  const { store, run } = harness()
+  store.setBackend({ pid: 11, bin: "/b/hya", db: "/s/sessions.db" })
+  await run("/status")
+  expect(store.state.statusText).toContain("Backend     started by this TUI · pid 11 · /b/hya · db /s/sessions.db")
+  store.setBackend({ pid: 22, db: "/s/sessions.db", attached: true })
+  await run("/status")
+  expect(store.state.statusText).toContain("Backend     attached to a running server · pid 22 · db /s/sessions.db")
+  // Bare hya that attached passes only the pid.
+  store.setWeb({ url: "http://127.0.0.1:3250/" })
+  store.setBackend({ pid: 33, attached: true })
+  await run("/status")
+  expect(store.state.statusText).toContain("Backend     attached to a running server · pid 33")
+  expect(store.state.statusText).not.toContain("in the hya process")
+})
+
 test("argument completion comes from the command's own completer", () => {
   const { registry, store } = harness()
   store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [{ name: "release" }], providers: [{ id: "openai" }], commands: [] })
