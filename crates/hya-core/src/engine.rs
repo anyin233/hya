@@ -72,6 +72,7 @@ mod roots;
 mod scope_binding;
 pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
 mod session_cleanup;
+mod session_hooks;
 mod session_state;
 mod session_title;
 mod shell;
@@ -423,7 +424,8 @@ pub struct SessionEngine {
     /// Family tokenizers backing the usage-ledger fallback estimate.
     usage_tokenizers: Arc<crate::model_tokenizers::ModelTokenizerSource>,
     hooks: Option<Arc<dyn HookDispatcher>>,
-    session_bundle_hooks: Arc<RwLock<HashMap<SessionId, Arc<dyn HookDispatcher>>>>,
+    /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
+    session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
@@ -1060,7 +1062,9 @@ impl SessionEngine {
         let scope = self
             .scope_for_projection(session, &projection, workdir)
             .await;
-        let binding = self.bind_scope_runtime(&scope, workdir).await?;
+        let binding = self
+            .bind_scope_runtime_for(&scope, workdir, Some(session))
+            .await?;
         let overrides = root_projection
             .session
             .agent_model_overrides
@@ -1676,13 +1680,7 @@ impl SessionEngine {
         }
         let session = envelope.event.session();
         let active = session.and_then(activation_hook_for);
-        let captured = session.and_then(|session| {
-            self.session_bundle_hooks
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(&session)
-                .cloned()
-        });
+        let captured = session.and_then(|session| self.captured_session_hooks(session));
         if let Some(hooks) = active.or(captured) {
             hooks.dispatch_event(&envelope);
         }
@@ -1816,20 +1814,13 @@ impl SessionEngine {
             }
         }
         let bundle_hooks = if start {
-            self.session_bundle_hooks
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(&session)
-                .cloned()
+            self.captured_session_hooks(session)
         } else {
             self.session_channel_policies
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&session);
-            self.session_bundle_hooks
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&session)
+            self.remove_captured_session_hooks(session)
         };
         if let Some(hooks) = bundle_hooks {
             let input = SessionLifecycleInput { session };
@@ -1848,17 +1839,14 @@ impl SessionEngine {
         if let Some(hooks) = &self.hooks {
             hooks.session_end(SessionLifecycleInput { session }).await;
         }
-        let bundle_hooks = self
-            .session_bundle_hooks
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&session)
-            .cloned();
-        if let Some(hooks) = bundle_hooks {
+        if let Some(hooks) = self.captured_session_hooks(session) {
             hooks.session_end(SessionLifecycleInput { session }).await;
         }
     }
 
+    /// Record `session`'s channel policy and make its captured lifecycle/event
+    /// hooks `binding`'s chain for `stable_agent_id` (creating the record on a
+    /// first capture; see [`session_hooks`] for the swap contract).
     pub(crate) async fn capture_session_bundle_hooks(
         &self,
         session: SessionId,
@@ -1872,28 +1860,8 @@ impl SessionEngine {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(session, channel_policy);
-        let hooks = binding.bundle_hooks_for_agent(stable_agent_id);
-        if hooks.is_empty() {
-            return;
-        }
-        let dispatcher = Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>;
-        let inserted = {
-            let mut captured = self
-                .session_bundle_hooks
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let std::collections::hash_map::Entry::Vacant(entry) = captured.entry(session) {
-                entry.insert(Arc::clone(&dispatcher));
-                true
-            } else {
-                false
-            }
-        };
-        if inserted {
-            dispatcher
-                .session_start(SessionLifecycleInput { session })
-                .await;
-        }
+        self.swap_session_hooks(session, binding, stable_agent_id)
+            .await;
     }
 
     pub(crate) fn session_channel_policy(
@@ -1926,13 +1894,7 @@ impl SessionEngine {
         if let Some(hooks) = &self.hooks {
             dispatchers.push(Arc::clone(hooks));
         }
-        if let Some(hooks) = self
-            .session_bundle_hooks
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&session)
-            .cloned()
-        {
+        if let Some(hooks) = self.captured_session_hooks(session) {
             dispatchers.push(hooks);
         }
         match dispatchers.len() {

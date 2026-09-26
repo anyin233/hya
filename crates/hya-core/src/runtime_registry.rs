@@ -246,6 +246,18 @@ pub struct TurnBinding {
     place: Arc<BindingPlace>,
 }
 
+/// One hook dispatcher bound to an agent (see
+/// [`TurnBinding::bound_hooks_for_agent`]).
+#[derive(Clone)]
+pub(crate) struct BoundAgentHook {
+    /// What to dispatch to (possibly a per-agent filter over `source`).
+    pub(crate) dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
+    /// The retained source dispatcher: its pointer identifies the process.
+    pub(crate) source: Arc<dyn crate::hooks::HookDispatcher>,
+    /// Hook ids the filter admits; `None` for an unfiltered entry.
+    pub(crate) hook_ids: Option<Arc<[String]>>,
+}
+
 /// Where a [`TurnBinding`] was bound: one `Arc` keeps the binding small.
 struct BindingPlace {
     workdir: PathBuf,
@@ -2017,20 +2029,43 @@ impl TurnBinding {
         &self,
         stable_agent_id: &str,
     ) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+        self.bound_hooks_for_agent(stable_agent_id)
+            .into_iter()
+            .map(|hook| hook.dispatcher)
+            .collect()
+    }
+
+    /// [`Self::bundle_hooks_for_agent`] with each entry's process identity:
+    /// the retained source dispatcher plus, for the owner bundle's filtered
+    /// entry, the hook ids it admits. Two bindings' entries with equal
+    /// identities dispatch to the same process in the same way.
+    pub(crate) fn bound_hooks_for_agent(&self, stable_agent_id: &str) -> Vec<BoundAgentHook> {
         let Some(agent) = self.resolve_agent(stable_agent_id) else {
             return Vec::new();
         };
         let owner = agent.origin.bundle_id();
-        let mut hooks = self.plugin_bundle_hooks(owner);
+        let mut hooks = self
+            .plugin_bundle_hooks(owner)
+            .into_iter()
+            .map(|dispatcher| BoundAgentHook {
+                source: Arc::clone(&dispatcher),
+                dispatcher,
+                hook_ids: None,
+            })
+            .collect::<Vec<_>>();
         if let Some(bundle_id) = owner
             && let Some(owner_hooks) = self.bundle_hooks(bundle_id)
             && let Ok(policy) = self.agent_resource_policy(stable_agent_id)
             && !policy.canonical_hook_ids.is_empty()
         {
-            hooks.push(Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
-                owner_hooks,
-                &policy.canonical_hook_ids,
-            )));
+            hooks.push(BoundAgentHook {
+                dispatcher: Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
+                    Arc::clone(&owner_hooks),
+                    &policy.canonical_hook_ids,
+                )),
+                source: owner_hooks,
+                hook_ids: Some(Arc::clone(&policy.canonical_hook_ids)),
+            });
         }
         hooks
     }
