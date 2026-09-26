@@ -81,6 +81,7 @@ import {
   attachmentName,
   exceedsTurnBudget,
   imageMentionPaths,
+  maxAttachmentBytes,
   mimeForPath,
   validateAttachmentBytes,
   type AttachmentPreview,
@@ -204,6 +205,9 @@ export interface ComposerAccess {
 
 /** Rows the help overlay shows at once (bounded by the terminal height, components/Picker.tsx). */
 const helpMaxRows = 40
+
+/** One attachment file read: its size and (within the per-file cap) its base64 bytes, or why it could not be read. */
+type FileRead = { size: number; data?: string } | { error: string }
 
 /** Paths requested per `@file` lookup; the best `fileSuggestionLimit` are shown. */
 const fileLookupLimit = 50
@@ -975,16 +979,66 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   /**
-   * Resolve every `@path` image mention in `text` to a `PromptAttachment`
-   * candidate: read the file (relative to the open session's workdir, else
-   * `--dir`), and check the per-file and per-turn size caps
-   * (composer/attachments.ts, docs/protocol/README.md "Prompt attachments
-   * (images)"). Never throws: a file that cannot be read or fails validation
-   * gets `error` set instead of `data`, so the caller can show it without
-   * sending. Also used by the composer to preview pending attachments as the
-   * user types (components/Composer.tsx).
+   * Remote mode: pasted (dragged) absolute image paths that exist on this
+   * machine. They are the user's local files: read here and sent inline,
+   * never looked up on the backend.
    */
-  async function loadAttachments(text: string): Promise<AttachmentPreview[]> {
+  const localPastes = new Set<string>()
+  /** Remote-mode previews per server + scope + path: typing re-runs the preview, the file is fetched once (cleared on submit). */
+  const remotePreviews = new Map<string, Promise<FileRead>>()
+  const remotePreviewLimit = 16
+
+  /** Where the backend resolves `path` in remote mode: the active Project's root holding an absolute path, else the open session's workdir, else the client's scope; `undefined` before a Project is chosen. */
+  function backendScope(path: string): string | undefined {
+    if (path.startsWith("/")) {
+      const root = activeProject(store.state)?.roots.find((row) => {
+        const base = row.replace(/\/+$/, "")
+        return path === base || path.startsWith(`${base}/`)
+      })
+      if (root) return root
+    }
+    return store.state.selected?.workdir || client.directory || undefined
+  }
+
+  /** One file on this machine (`absolute`); no bytes when over the per-file cap. */
+  async function readLocalFile(absolute: string): Promise<FileRead> {
+    const file = Bun.file(absolute)
+    if (!(await file.exists())) return { error: "file not found" }
+    if (file.size > maxAttachmentBytes) return { size: file.size }
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    return { size: bytes.byteLength, data: Buffer.from(bytes).toString("base64") }
+  }
+
+  /** One file on the backend (`ReadFile` under `backendScope`), at most the per-file cap + 1 byte. */
+  async function readBackendFile(path: string): Promise<FileRead> {
+    const directory = backendScope(path)
+    if (!directory) return { error: "choose a project first (in remote mode @path names a file on the backend)" }
+    try {
+      const result = await client.readFile(path, { directory, maxBytes: maxAttachmentBytes + 1 })
+      return result.size > maxAttachmentBytes ? { size: result.size } : { size: result.size, data: result.data }
+    } catch (error) {
+      const text = String(error)
+      if (text.includes("path not found")) return { error: "file not found" }
+      if (text.includes("escapes the directory scope")) return { error: "outside the project on the backend" }
+      return { error: text }
+    }
+  }
+
+  /**
+   * Resolve every `@path` image mention in `text` to a `PromptAttachment`
+   * candidate and check the per-file and per-turn size caps
+   * (composer/attachments.ts, docs/protocol/README.md "Prompt attachments
+   * (images)"). Local mode reads the file here (relative to the open
+   * session's workdir, else `--dir`). Remote mode reads it from the backend
+   * (`ReadFile`: relative to the open session's workdir, an absolute path
+   * inside the active Project's roots), except a pasted image that exists on
+   * this machine (`localPastes`), which is read here. Never throws: a file
+   * that cannot be read or fails validation gets `error` set instead of
+   * `data`, so the caller can show it without sending. Also used by the
+   * composer to preview pending attachments as the user types
+   * (components/Composer.tsx; `preview` reuses earlier remote reads).
+   */
+  async function loadAttachments(text: string, preview = false): Promise<AttachmentPreview[]> {
     const paths = imageMentionPaths(text)
     if (!paths.length) return []
     const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
@@ -992,30 +1046,42 @@ export function createController({ client, store, directory, remote: startedRemo
     const previews: AttachmentPreview[] = []
     for (const path of paths) {
       const name = attachmentName(path)
-      const absolute = path.startsWith("/") ? path : `${workdir}/${path}`
       try {
-        const file = Bun.file(absolute)
-        if (!(await file.exists())) {
-          previews.push({ path, name, error: "file not found" })
+        const read = remote && !localPastes.has(path)
+          ? await (preview ? previewBackendFile(path) : readBackendFile(path))
+          : await readLocalFile(path.startsWith("/") ? path : `${workdir}/${path}`)
+        if ("error" in read) {
+          previews.push({ path, name, error: read.error })
           continue
         }
-        const bytes = new Uint8Array(await file.arrayBuffer())
-        const sizeError = validateAttachmentBytes(path, bytes.byteLength)
-        if (sizeError) {
-          previews.push({ path, name, size: bytes.byteLength, error: sizeError })
+        const sizeError = validateAttachmentBytes(path, read.size)
+        if (sizeError || read.data === undefined) {
+          previews.push({ path, name, size: read.size, error: sizeError ?? `${name}: could not be read` })
           continue
         }
-        if (exceedsTurnBudget(sizes, bytes.byteLength)) {
-          previews.push({ path, name, size: bytes.byteLength, error: "attachments over 20 MiB for this turn" })
+        if (exceedsTurnBudget(sizes, read.size)) {
+          previews.push({ path, name, size: read.size, error: "attachments over 20 MiB for this turn" })
           continue
         }
-        sizes.push(bytes.byteLength)
-        previews.push({ path, name, mime: mimeForPath(path), size: bytes.byteLength, data: Buffer.from(bytes).toString("base64") })
+        sizes.push(read.size)
+        previews.push({ path, name, mime: mimeForPath(path), size: read.size, data: read.data })
       } catch (error) {
         previews.push({ path, name, error: String(error) })
       }
     }
     return previews
+  }
+
+  /** `readBackendFile` for the composer's preview: one fetch per server, scope, and path until the next submit. */
+  function previewBackendFile(path: string): Promise<FileRead> {
+    const key = `${client.baseUrl}\n${backendScope(path) ?? ""}\n${path}`
+    let read = remotePreviews.get(key)
+    if (!read) {
+      if (remotePreviews.size >= remotePreviewLimit) remotePreviews.clear()
+      read = readBackendFile(path)
+      remotePreviews.set(key, read)
+    }
+    return read
   }
 
   /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */
@@ -1054,6 +1120,7 @@ export function createController({ client, store, directory, remote: startedRemo
         await turns.submit(command, { shell: true })
         return
       }
+      remotePreviews.clear()
       const previews = await loadAttachments(text)
       const failed = previews.filter((item) => item.error)
       if (failed.length) {
@@ -1092,8 +1159,24 @@ export function createController({ client, store, directory, remote: startedRemo
     return rankPaths(await client.findFiles(findPattern(query), fileLookupLimit), query, fileSuggestionLimit)
   }
 
-  /** Whether `path` (relative to the open session's workdir, else `--dir`) exists — a pasted path becomes an `@path ` mention only when it does (components/Composer.tsx). */
+  /**
+   * Whether a pasted image path exists — it becomes an `@path ` mention only
+   * when it does (components/Composer.tsx). Local mode: on this machine
+   * (relative to the open session's workdir, else `--dir`). Remote mode: an
+   * absolute path that exists on this machine is the user's local file
+   * (remembered in `localPastes`, read here and sent inline); anything else
+   * is checked on the backend (`ReadFile` of one byte under `backendScope`).
+   */
   async function fileExists(path: string): Promise<boolean> {
+    if (remote) {
+      if (path.startsWith("/") && await Bun.file(path).exists().catch(() => false)) {
+        localPastes.add(path)
+        return true
+      }
+      const scope = backendScope(path)
+      if (!scope) return false
+      return client.readFile(path, { directory: scope, maxBytes: 1 }).then(() => true, () => false)
+    }
     const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
     const absolute = path.startsWith("/") ? path : `${workdir}/${path}`
     try {
@@ -1118,6 +1201,8 @@ export function createController({ client, store, directory, remote: startedRemo
   async function start(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
     try {
+      // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
+      if (remote) client.setDirectory("")
       const bootstrap = await client.bootstrap()
       store.applyBootstrap(bootstrap)
       store.setRemote(remote)
@@ -1208,7 +1293,8 @@ export function createController({ client, store, directory, remote: startedRemo
   async function enterServer(url: string): Promise<{ ok: boolean; detail: string }> {
     client.setBaseUrl(url)
     store.setServerUrl(url)
-    client.setDirectory(directory)
+    // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
+    client.setDirectory(remote ? "" : directory)
     store.setActiveProject(undefined)
     let detail = ""
     let ok = true
@@ -1489,7 +1575,7 @@ export function createController({ client, store, directory, remote: startedRemo
     findFiles,
     fileExists,
     /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
-    previewAttachments: loadAttachments,
+    previewAttachments: (text: string) => loadAttachments(text, true),
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
     commandEntries,
     modes,

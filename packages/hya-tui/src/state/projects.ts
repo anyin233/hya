@@ -39,11 +39,12 @@ export function projectBusy(state: { projects: readonly ProjectInfo[] }, id: str
 
 /**
  * The client's directory scope in `project`: `--dir` on a local start when
- * it lies inside the Project, else the primary root.
+ * it lies inside the Project, else the primary root (a remote start never
+ * falls back to this machine's `--dir`).
  */
 export function projectScope(project: ProjectInfo, directory: string, remote: boolean): string {
   if (!remote && projectContains(project, directory)) return directory
-  return project.roots[0] ?? directory
+  return project.roots[0] ?? (remote ? "" : directory)
 }
 
 /**
