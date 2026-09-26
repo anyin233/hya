@@ -19,12 +19,16 @@
 //! - [`server`] — [`server::RelayServer`], the gRPC and WebSocket bindings
 //!   on one listener (path prefix, optional TLS, forwarded client IPs,
 //!   graceful shutdown).
+//! - [`client`] — [`client::RelayClient`], both bindings toward a relay
+//!   (TLS, path prefix, `t=auto` negotiation), heartbeats with dead-peer
+//!   detection, and the host reconnect policy.
 //! - [`keys`] — the Noise static X25519 keypair and the PSK.
 //! - [`tunnel`] — [`tunnel::NoiseStream`], the Noise `NKpsk0` tunnel over a
 //!   data stream, exposed as a tokio byte stream.
 //!
 //! This crate deliberately depends on no hya runtime crate.
 
+pub mod client;
 pub mod keys;
 pub mod link;
 pub mod proto;
