@@ -457,6 +457,40 @@ impl PluginHost {
         (Self { plugins }, failures)
     }
 
+    /// Like [`PluginHost::connect_all_observed`], but spawns each plugin in
+    /// `cwd` (standard inherited environment) rather than the host process's
+    /// own working directory.
+    pub async fn connect_all_observed_in(
+        specs: Vec<PluginSpec>,
+        cwd: std::path::PathBuf,
+        host: HostInfo,
+    ) -> (Self, BTreeMap<String, PluginError>) {
+        let mut set = tokio::task::JoinSet::new();
+        for (index, spec) in specs.into_iter().enumerate() {
+            let host = host.clone();
+            let id = spec.id.clone();
+            let cwd = cwd.clone();
+            set.spawn(
+                async move { (index, id, connection::connect_one_in(spec, host, cwd).await) },
+            );
+        }
+        let mut collected: Vec<(usize, Arc<PluginConn>)> = Vec::new();
+        let mut failures = BTreeMap::new();
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok((index, _, Ok(conn))) => collected.push((index, conn)),
+                Ok((index, id, Err(error))) => {
+                    tracing::warn!(%error, index, "plugin unavailable");
+                    failures.insert(id, error);
+                }
+                Err(error) => tracing::warn!(%error, "plugin connect task failed"),
+            }
+        }
+        collected.sort_by_key(|(index, _)| *index);
+        let plugins = collected.into_iter().map(|(_, conn)| conn).collect();
+        (Self { plugins }, failures)
+    }
+
     /// Whether no plugins connected successfully.
     #[must_use]
     pub fn is_empty(&self) -> bool {

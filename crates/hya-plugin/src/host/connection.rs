@@ -25,14 +25,36 @@ pub(super) async fn connect_one_at(
     bundle_root: Option<std::path::PathBuf>,
     host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
 ) -> Result<Arc<PluginConn>, PluginError> {
+    connect_one_impl(spec, host, bundle_root, None, host_reads).await
+}
+
+/// Like [`connect_one`], but spawns the plugin in `cwd` (standard inherited
+/// environment, same handling as [`PluginClient::spawn_in`]) rather than the
+/// host process's own working directory.
+pub(super) async fn connect_one_in(
+    spec: PluginSpec,
+    host: HostInfo,
+    cwd: std::path::PathBuf,
+) -> Result<Arc<PluginConn>, PluginError> {
+    connect_one_impl(spec, host, None, Some(cwd), None).await
+}
+
+async fn connect_one_impl(
+    spec: PluginSpec,
+    host: HostInfo,
+    bundle_root: Option<std::path::PathBuf>,
+    cwd: Option<std::path::PathBuf>,
+    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+) -> Result<Arc<PluginConn>, PluginError> {
     let timeout = spec
         .timeout_ms
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_CALL_TIMEOUT);
     let spawn_env = (!spec.env.is_empty()).then_some(&spec.env);
-    let (client, guard) = match bundle_root.as_deref() {
-        Some(root) => PluginClient::spawn_bundle(&spec.command, root, spawn_env)?,
-        None => PluginClient::spawn(&spec.command, spawn_env)?,
+    let (client, guard) = match (bundle_root.as_deref(), cwd.as_deref()) {
+        (Some(root), _) => PluginClient::spawn_bundle(&spec.command, root, spawn_env)?,
+        (None, Some(dir)) => PluginClient::spawn_in(&spec.command, dir, spawn_env)?,
+        (None, None) => PluginClient::spawn(&spec.command, spawn_env)?,
     };
     let init = client.initialize(host.clone()).await?;
     validate_initialize(&spec.id, &init)?;

@@ -402,6 +402,21 @@ impl PluginClient {
         Self::spawn_with_options(command, env, None, false, false, SpawnMode::Standard)
     }
 
+    /// Spawns a plugin with `cwd` as its current directory, otherwise using
+    /// the same environment handling as [`PluginClient::spawn`] (the standard
+    /// inherited environment plus any explicitly supplied `env`).
+    ///
+    /// # Errors
+    /// `EmptyCommand` if `command` is empty, `Io` on spawn failure, or
+    /// `MissingPipe` if the child's stdio could not be captured.
+    pub fn spawn_in(
+        command: &[String],
+        cwd: &Path,
+        env: Option<&BTreeMap<String, String>>,
+    ) -> Result<(Self, ChildGuard), PluginError> {
+        Self::spawn_with_options(command, env, Some(cwd), false, false, SpawnMode::Standard)
+    }
+
     /// Spawns a bundle plugin in its activation directory while retaining a
     /// bounded stderr tail and only the explicitly supplied host environment.
     ///
