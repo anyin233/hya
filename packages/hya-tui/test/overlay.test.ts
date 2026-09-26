@@ -232,3 +232,18 @@ test("the more advanced tool state wins the merge; the projection wins a tie", (
     tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\":\"ls\"}", outputJson: "\"done\"", durationMs: "5",
   })
 })
+
+test("partsAdded appends attachment parts once, de-duplicated by part id", () => {
+  const overlay = new TranscriptOverlay("0")
+  overlay.apply(ev(1, started("m_a", "ROLE_USER")))
+  overlay.apply(ev(2, { partsAdded: { message: "m_a", parts: [{ id: "p_att", attachment: { name: "shot.png", mime: "image/png", size: "12345" } }] } }))
+  const parts = overlay.messages().find((message) => message.id === "m_a")?.parts ?? []
+  expect(parts).toHaveLength(1)
+  expect(parts[0]?.attachment).toEqual({ name: "shot.png", mime: "image/png", size: "12345" })
+  // A duplicate frame (reconnect/gap-fill overlap) does not add a second part.
+  overlay.apply(ev(3, { partsAdded: { message: "m_a", parts: [{ id: "p_att", attachment: { name: "shot.png", mime: "image/png", size: "12345" } }] } }))
+  expect(overlay.messages().find((message) => message.id === "m_a")?.parts).toHaveLength(1)
+  // A second, distinct attachment on the same message is appended.
+  overlay.apply(ev(4, { partsAdded: { message: "m_a", parts: [{ id: "p_att2", attachment: { name: "b.png" } }] } }))
+  expect(overlay.messages().find((message) => message.id === "m_a")?.parts).toHaveLength(2)
+})

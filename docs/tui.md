@@ -899,9 +899,43 @@ the best matches come first: file name starts with the text, then file name
 contains it, then only the path does; shorter paths first. Slash-command lines
 (`/…`) have no file references.
 
-The reference is plain text: the prompt carries `@src/main.rs` as typed, and
-nothing is attached (`PromptTurn` is text only). The agent reads the file
-with its tools if it needs it.
+The reference is plain text: the prompt carries `@src/main.rs` as typed. For
+most files nothing else happens — the agent reads the file with its tools if
+it needs it. A reference to an image file (`.png`, `.jpg`/`.jpeg`, `.gif`,
+`.webp`) is different: see [Attachments](#attachments) below.
+
+### Attachments
+
+An `@path` reference to an image file — typed, completed from the `@file`
+list, or turned from a pasted path (see below) — is read from disk (relative
+to the session's workdir, else `--dir`) and sent as an image attachment
+alongside the prompt text (`PromptTurn.attachments`,
+[Prompt attachments](protocol/README.md#prompt-attachments-images)); the
+`@path` text itself stays in the prompt unchanged, since it is useful context
+for the model and the server never reads it back from disk. Referencing the
+same image twice sends it once.
+
+Pasting a path to an image file — a terminal pastes a file dragged into the
+window as its path, quoted or with escaped spaces when it has spaces — inserts
+an `@path ` mention instead of the raw text, so it is treated exactly like a
+typed reference; an ordinary text paste (prose, a path to a non-image file, a
+path that does not exist) is inserted as-is.
+
+Before you press Enter, every pending image reference in the input shows as
+its own row above the composer: `[image] shot.png · 240 KB`, or `[image]
+shot.png · <reason>` in the warning color when it fails validation — not a
+supported type, larger than 10 MiB, the turn's attachments together over
+20 MiB, the file cannot be read, or the current model's `imageInput` is
+`false` ([Providers and keys](protocol/README.md#providers-and-keys),
+`ModelSummary.imageInput`; absent means unknown and is allowed). Enter refuses
+to send while any row has an error — the status line names the file and the
+reason, and nothing is sent — so a bad reference never reaches the server.
+
+Once sent, the user message's transcript row shows each attachment under the
+text: `↳ attachment · shot.png · image/png · 240 KB` (an `AttachmentPart`
+listing never carries the bytes; size is shown once the server records it,
+either in the initial response or right after, via a live `partsAdded` stream
+frame appended to the message).
 
 ### Command menu
 
@@ -1203,9 +1237,10 @@ without typing its id. The agent's turn waits until you answer.
 | `2` | Always allow: this call runs, and the backend stops asking for what the muted text names (`payload.always`, shown as `<action>: <patterns>`; the resource when the backend sends no patterns). | `{permission: {allowed: true, persist: true}}` |
 | `3` | Deny: the call fails with a permission error (its card shows `✗`), and the model continues with that result. | `{permission: {allowed: false, persist: false}}` |
 
-  An Always allow grant lives in the running backend process: it applies to
-  every session of that backend (and survives a permission mode switch) until
-  the backend restarts. For native tools it covers the exact subject (the
+  An Always allow grant applies to every session of that backend (and
+  survives a permission mode switch). The backend saves it and reloads it
+  when it restarts; `/rules` lists and deletes saved grants, and a deleted
+  grant stops applying at once. For native tools it covers the exact subject (the
   same command, the same path); see
   [Tools and permissions](architecture/tools-and-permissions.md).
 
@@ -1520,8 +1555,8 @@ copies the session into a new one, at its end or before a picked prompt.
   message; on a prompt, the new session holds the messages strictly before
   it and the prompt goes into the (empty) input. The TUI switches to the new
   session (`Forked before “<prompt>” · the prompt is in the input`, or
-  `Forked at the latest message`); the backend titles it `forked from
-  <source>`. The sidebar's `Context` box and `/status` show where it came
+  `Forked at the latest message`); the backend titles it `<source title>
+  (fork)` (the source id when the source is untitled). The sidebar's `Context` box and `/status` show where it came
   from: `Forked   from <source title>`. Messages hidden by a pending revert
   are never copied.
 
@@ -1821,7 +1856,7 @@ diff route itself does not distinguish the two.
 
 | Action | Call | Reads |
 | --- | --- | --- |
-| Open, `r` reload | `GET /v1/vcs/diff?directory=<dir>` | `GetVcsDiffResponse.diff`: one unified-diff text, split client-side on `diff --git` headers into per-file rows (`raw`/`paths` are not sent; the backend does not yet honor them, so the whole tree's diff is always read) |
+| Open, `r` reload | `GET /v1/vcs/diff?directory=<dir>` | `GetVcsDiffResponse.diff`: one unified-diff text, split client-side on `diff --git` headers into per-file rows (`raw`/`paths` are not sent, so the whole tree's diff is always read; the backend also accepts `paths` to restrict it) |
 
 ## MCP servers
 
@@ -1853,7 +1888,7 @@ closes it too and keeps its quit meaning. The help overlay (`?`, group
 ## Saved Rules
 
 `/rules` opens a full-screen list of saved permission decisions (the rules a
-persisted "always allow" / "always deny" answer writes). Each row shows the
+persisted "always allow" answer writes). Each row shows the
 effect, the tool it matches (`*` for every tool), the pattern, and when it
 was saved.
 
@@ -1865,9 +1900,11 @@ filters. Esc cancels a running call, then the pending delete, then the
 filter, then closes the view; Ctrl+C closes it too and keeps its quit
 meaning. The help overlay (`?`, group `rules`) lists the same keys.
 
-The backend currently reports every saved rule as `ask` with no saved time
-(a known gap tracked for a later backend step); the view renders whatever
-the server returns and shows the time once the backend fills it in.
+Every saved rule is an "always allow" grant, so the backend reports it as
+`allow` with the time it was saved (no time for rules saved before times
+were recorded). Saved rules are process-wide: the same list shows in every
+directory. Deleting one takes effect at once — the next matching call asks
+again.
 
 ### Saved Rules interfaces
 
@@ -1917,14 +1954,14 @@ string encoded 64-bit values, and the error envelope documented in the
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
 | `GET /v1/permission-modes` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
-| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
+| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
 | `POST /v1/sessions/{id}/revert` | `{}` (`/undo`) or `{undo: true}` (`/redo`) (`RevertSession`) | `RevertSessionResponse {session, files}`; `SessionInfo.revert` drives the pending-revert line (see [Undo, redo, and fork](#undo-redo-and-fork)) |
 | `POST /v1/sessions/{id}/fork` | `{}` or `{messageId}` (`ForkSession`, `/fork`) | `ForkSessionResponse {session, promptText}`; `SessionInfo.forkedFrom` is shown in the sidebar and `/status` |
 | `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and to seed the sidebar's `Todos` box when a session opens; `todoUpdated` frames keep it current. |
 | `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the status bar's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
-| `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
+| `POST /v1/sessions/{id}/turns` | `{prompt: {text: string, attachments?: PromptAttachment[]}}`; `PromptAttachment {name, mime?, data, path?}`, `data` standard base64 of the file bytes — see [Attachments](#attachments) | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `TurnInfo`. Esc and `/cancel` send the admitted turn id (the user message id). The server cancels whatever runs in the session, so a shell turn whose id is not known yet is sent as `current`. |
@@ -1935,7 +1972,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `source`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`. |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
@@ -1980,6 +2017,7 @@ rules follow the protocol guide's
 | `memberUpdated {member, child, agent, description, status, summary, callId, depth}` | durable (parent session) | Folded into the open session's member rows by `member` (partial frames keep known fields); triggers a child-session round. |
 | `partReplaced {message, part, text}` | live (plugin rewrite) or durable (end of round) | Sets the part's whole text, replacing the live deltas. |
 | `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
+| `partsAdded {message, parts}` | durable | Appends each `parts[].attachment` to the message as an `attachment` part, skipping any part id already there (a reconnect/gap-fill duplicate); triggers a projection re-read. Sent for a prompt's image attachments (see [Attachments](#attachments)), right after the user message. |
 | `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the status line. |
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id. With `includeDescendants=true` a subagent's asks arrive here too (`event.session` = the child): they change only the pending list, never the open session's transcript. Other frames of another session are ignored. |

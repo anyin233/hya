@@ -30,7 +30,7 @@ export type Block =
    * starts expanded).
    */
   | { kind: "tool"; id: string; callId?: string; card: ToolCardView; shell?: boolean }
-  | { kind: "attachment"; id: string; name: string }
+  | { kind: "attachment"; id: string; name: string; mime?: string; size?: string }
 
 export interface Notice {
   kind: "error" | "cancelled" | "length"
@@ -90,7 +90,15 @@ function block(part: MessagePart, active: boolean, shell: string | undefined, sh
     const card = toolCard({ tool: "result", state: part.toolResult.errorMessage ? "TOOL_EXECUTION_STATE_ERROR" : "TOOL_EXECUTION_STATE_OK", outputJson: JSON.stringify(part.toolResult.output), ...(part.toolResult.errorMessage ? { errorMessage: part.toolResult.errorMessage } : {}) })
     return { kind: "tool", id: part.id, card }
   }
-  if (part.attachment) return { kind: "attachment", id: part.id, name: part.attachment.name }
+  if (part.attachment) {
+    return {
+      kind: "attachment",
+      id: part.id,
+      name: part.attachment.name,
+      ...(part.attachment.mime ? { mime: part.attachment.mime } : {}),
+      ...(part.attachment.size ? { size: part.attachment.size } : {}),
+    }
+  }
   return undefined
 }
 

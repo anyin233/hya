@@ -26,15 +26,17 @@
  *
  * Pure TypeScript (no Solid): the store wraps it and publishes snapshots.
  */
-import type { MessageError, MessageInfo, MessagePart, StreamEvent, ToolCallPart } from "../client"
+import type { AttachmentPart, MessageError, MessageInfo, MessagePart, StreamEvent, ToolCallPart } from "../client"
 
 interface OverlayPart {
   id: string
-  kind: "text" | "reasoning" | "tool_call"
+  kind: "text" | "reasoning" | "tool_call" | "attachment"
   /** Text, reasoning, or (tool calls) the argument fragments so far. */
   text: string
   /** Tool calls: the folded state (`inputJson` once the arguments are complete). */
   tool?: ToolCallPart
+  /** `attachment` parts only (`partsAdded`). */
+  attachment?: AttachmentPart
   /** Text was set by a durable frame; later live deltas are late duplicates. */
   durable: boolean
   /** Live deltas were lost (resync) before the durable text arrived. */
@@ -172,6 +174,20 @@ export class TranscriptOverlay {
       found.message.view = undefined
       return { ...base, changed: true }
     }
+    if (event.partsAdded) {
+      const { message: id, parts } = event.partsAdded
+      const message = this.message(id, durable ? undefined : assistantRole)
+      const existing = new Set(message.parts.map((part) => part.id))
+      let changed = false
+      for (const part of parts ?? []) {
+        if (!part.attachment || existing.has(part.id)) continue
+        existing.add(part.id)
+        message.parts.push({ id: part.id, kind: "attachment", text: "", attachment: part.attachment, durable: true, liveLost: false })
+        changed = true
+      }
+      if (changed) message.view = undefined
+      return { ...base, changed }
+    }
     if (event.errorReported?.message) {
       const { message: id, code, errorMessage } = event.errorReported
       const message = this.message(id, assistantRole)
@@ -242,6 +258,7 @@ function toPart(part: OverlayPart): MessagePart {
     // Until `toolStateChanged` carries the parsed input, the fragments are the input.
     return { id: part.id, toolCall: { ...tool, inputJson: tool.inputJson ?? part.text } }
   }
+  if (part.kind === "attachment") return { id: part.id, attachment: part.attachment }
   return part.kind === "text" ? { id: part.id, text: { text: part.text } } : { id: part.id, reasoning: { text: part.text } }
 }
 

@@ -114,13 +114,30 @@ export interface PageInfo {
   hasMore?: boolean
 }
 
+/** `AttachmentPart` (docs/protocol/README.md "Prompt attachments (images)"); listings never carry `data`. */
+export interface AttachmentPart {
+  name: string
+  mime?: string
+  path?: string
+  /** Bytes, a decimal string (uint64 on the wire). */
+  size?: string
+}
+
 export interface MessagePart {
   id: string
   text?: { text: string }
   reasoning?: { text: string }
   toolCall?: ToolCallPart
   toolResult?: { output: string; errorMessage?: string }
-  attachment?: { name: string; path?: string }
+  attachment?: AttachmentPart
+}
+
+/** `PromptAttachment` sent on `CreateTurn`; `data` is standard base64 of the file bytes (no `data:` prefix). */
+export interface PromptAttachment {
+  name: string
+  mime?: string
+  data: string
+  path?: string
 }
 
 export interface MessageError {
@@ -171,6 +188,8 @@ export interface ModelSummary {
   outputLimit?: string
   /** The route takes reasoning effort variants (omitted = false). */
   reasoning?: boolean
+  /** `false`: the model refuses image attachments (`ModelSummary.imageInput`); absent/unset means unknown, which is allowed. */
+  imageInput?: boolean
   /** Where the row comes from: `remote` (model cache), `config` (config.yaml only), `override` (both; config wins per field), `offline`. */
   source?: string
 }
@@ -348,6 +367,8 @@ export interface StreamEvent {
   partAppended?: { message: string; part: string; textDelta?: string }
   partReplaced?: { message: string; part: string; text?: string }
   partCompleted?: { message: string; part: string }
+  /** Attachment parts appended after the user's text (`docs/protocol/README.md` "Prompt attachments (images)"); fold by appending parts whose id is not already on the message. */
+  partsAdded?: { message: string; parts: MessagePart[] }
   errorReported?: { message?: string; code?: string; errorMessage?: string }
   /** A tool part's state; fields it does not carry are empty (fold without clearing). An empty `callId` marks a direct part overwrite. */
   toolStateChanged?: { message: string; part: string } & Partial<ToolCallPart>
@@ -496,11 +517,11 @@ export class HyaClient {
     return result.session
   }
 
-  async createTurn(session: string, text: string): Promise<TurnInfo> {
+  async createTurn(session: string, text: string, attachments?: PromptAttachment[]): Promise<TurnInfo> {
     const result = await this.request<{ turn: TurnInfo }>(
       "POST",
       `/v1/sessions/${encodeURIComponent(session)}/turns`,
-      { prompt: { text } },
+      { prompt: { text, ...(attachments?.length ? { attachments } : {}) } },
     )
     return result.turn
   }

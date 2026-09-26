@@ -48,15 +48,23 @@
  * fold in the store; a `tokensRecorded` also re-reads the open session
  * (debounced) for its authoritative `SessionInfo.usage` total.
  */
-import type { HyaClient, Interaction, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
+import type { HyaClient, Interaction, MessageInfo, PromptAttachment, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
+import {
+  attachmentName,
+  exceedsTurnBudget,
+  imageMentionPaths,
+  mimeForPath,
+  validateAttachmentBytes,
+  type AttachmentPreview,
+} from "../composer/attachments"
 import { findPattern, rankPaths } from "../composer/mention"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
 import { initialSessionId } from "../launch"
-import { askSessionLabel, otherAskNotice, webNotice } from "../state/format"
+import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { editText } from "../composer/editor"
 import { savePreferences } from "../prefs"
@@ -622,6 +630,50 @@ export function createController({ client, store, directory, registry = createCo
     savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
   }
 
+  /**
+   * Resolve every `@path` image mention in `text` to a `PromptAttachment`
+   * candidate: read the file (relative to the open session's workdir, else
+   * `--dir`), and check the per-file and per-turn size caps
+   * (composer/attachments.ts, docs/protocol/README.md "Prompt attachments
+   * (images)"). Never throws: a file that cannot be read or fails validation
+   * gets `error` set instead of `data`, so the caller can show it without
+   * sending. Also used by the composer to preview pending attachments as the
+   * user types (components/Composer.tsx).
+   */
+  async function loadAttachments(text: string): Promise<AttachmentPreview[]> {
+    const paths = imageMentionPaths(text)
+    if (!paths.length) return []
+    const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
+    const sizes: number[] = []
+    const previews: AttachmentPreview[] = []
+    for (const path of paths) {
+      const name = attachmentName(path)
+      const absolute = path.startsWith("/") ? path : `${workdir}/${path}`
+      try {
+        const file = Bun.file(absolute)
+        if (!(await file.exists())) {
+          previews.push({ path, name, error: "file not found" })
+          continue
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const sizeError = validateAttachmentBytes(path, bytes.byteLength)
+        if (sizeError) {
+          previews.push({ path, name, size: bytes.byteLength, error: sizeError })
+          continue
+        }
+        if (exceedsTurnBudget(sizes, bytes.byteLength)) {
+          previews.push({ path, name, size: bytes.byteLength, error: "attachments over 20 MiB for this turn" })
+          continue
+        }
+        sizes.push(bytes.byteLength)
+        previews.push({ path, name, mime: mimeForPath(path), size: bytes.byteLength, data: Buffer.from(bytes).toString("base64") })
+      } catch (error) {
+        previews.push({ path, name, error: String(error) })
+      }
+    }
+    return previews
+  }
+
   /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */
   async function submit(value: string): Promise<void> {
     const text = value.trim()
@@ -638,11 +690,27 @@ export function createController({ client, store, directory, registry = createCo
       const command = shellCommand(text)
       if (command === "") throw new Error("Usage: !<shell command>")
       if (!store.state.selected) await newSession()
+      if (command !== undefined) {
+        store.followTranscript()
+        await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
+        await turns.submit(command, { shell: true })
+        return
+      }
+      const previews = await loadAttachments(text)
+      const failed = previews.filter((item) => item.error)
+      if (failed.length) {
+        status(`Not sent · ${failed.map((item) => `${item.name}: ${item.error}`).join(" · ")}`)
+        return
+      }
+      if (previews.length && currentModel(store.state)?.imageInput === false) {
+        status(`Not sent · ${modelReference(store.state.selected!)} does not accept image attachments`)
+        return
+      }
+      const attachments: PromptAttachment[] = previews.map((item) => ({ name: item.name, mime: item.mime, data: item.data ?? "", path: item.path }))
       store.followTranscript()
       // Subscribe before CreateTurn, so no frame of the new turn is missed.
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
-      if (command !== undefined) await turns.submit(command, { shell: true })
-      else await turns.submit(text)
+      await turns.submit(text, attachments.length ? { attachments } : {})
     } catch (error) {
       status(`Error: ${String(error)}`)
     }
@@ -663,6 +731,17 @@ export function createController({ client, store, directory, registry = createCo
   /** `@file` suggestions: paths under `--dir` containing `query`, best first. */
   async function findFiles(query: string): Promise<string[]> {
     return rankPaths(await client.findFiles(findPattern(query), fileLookupLimit), query, fileSuggestionLimit)
+  }
+
+  /** Whether `path` (relative to the open session's workdir, else `--dir`) exists — a pasted path becomes an `@path ` mention only when it does (components/Composer.tsx). */
+  async function fileExists(path: string): Promise<boolean> {
+    const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
+    const absolute = path.startsWith("/") ? path : `${workdir}/${path}`
+    try {
+      return await Bun.file(absolute).exists()
+    } catch {
+      return false
+    }
   }
 
   function refreshAll(): void {
@@ -731,6 +810,9 @@ export function createController({ client, store, directory, registry = createCo
     cancelTurn,
     answer,
     findFiles,
+    fileExists,
+    /** Pending `@path` image attachments of the composer's current text, for the pending-attachment row (components/Composer.tsx). */
+    previewAttachments: loadAttachments,
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
     commandEntries,
     modes,

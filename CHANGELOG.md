@@ -1,5 +1,11 @@
 # 0.41.0
 
+## TUI image attachments
+
+- Mention an image file with `@path` (png, jpg, jpeg, gif, webp) and it is sent with the prompt. The `@path` text stays in the prompt. Pasting an image file's path, even quoted or with escaped spaces, inserts the mention.
+- Above the input, the TUI lists pending images as `[image] name · size`. It checks the type, the 10 MiB per-image and 20 MiB per-turn limits, and whether the current model accepts images, and it doesn't send the prompt while an attachment has a problem. Queued prompts keep their images.
+- The transcript shows each image under its prompt as `↳ attachment · name · type · size`. Fix: attachments on user messages were not shown at all. See [TUI](docs/tui.md).
+
 ## TUI `/undo`, `/redo`, and `/fork`
 
 - `/undo` (or Ctrl+X U) takes back the last prompt and its replies and restores the files those turns changed. If the input is empty, it gets the reverted prompt; text you typed is kept. The status line lists restored, deleted, skipped, and failed files. Run it again to go further back.

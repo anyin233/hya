@@ -93,6 +93,8 @@ type BackendSetup = {
   bundles: Record<string, BundleFiles> | undefined
   modelIds?: string[]
   contextLimit?: number
+  /** `modalities.input` per model id (docs/configuration.md), e.g. `{ model: ["text"] }` to make a model refuse image attachments. */
+  modelModalities?: Record<string, string[]>
 }
 
 /**
@@ -101,7 +103,7 @@ type BackendSetup = {
  * the environment a `hya` process needs to use them.
  */
 async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir: string; env: Record<string, string> }> {
-  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit } = setup
+  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit, modelModalities } = setup
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -114,7 +116,11 @@ async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir:
     const hyaCfgDir = join(env.config!, "hya")
     await mkdir(join(hyaCfgDir, "auth"), { recursive: true })
     const limit = contextLimit ? `        limit: { context: ${contextLimit} }\n` : ""
-    const modelsYaml = modelIds.map((id) => `      - id: ${id}\n${limit}`).join("")
+    const modelsYaml = modelIds.map((id) => {
+      const modalities = modelModalities?.[id]
+      const modalitiesYaml = modalities ? `        modalities: { input: [${modalities.join(", ")}] }\n` : ""
+      return `      - id: ${id}\n${limit}${modalitiesYaml}`
+    }).join("")
     await writeFile(
       join(hyaCfgDir, "config.yaml"),
       `default_model: ${fakeModelRef}\n` +
@@ -199,6 +205,8 @@ export type FakeModelOption = {
    * entries, backward compatible.
    */
   contextLimit?: number
+  /** `modalities.input` per model id (docs/configuration.md), e.g. `{ model: ["text"] }` to make a model refuse image attachments. */
+  modelModalities?: Record<string, string[]>
 }
 
 /**
@@ -241,6 +249,7 @@ const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | unde
   bundles: projectBundles,
   ...(model?.models ? { modelIds: model.models } : {}),
   ...(model?.contextLimit ? { contextLimit: model.contextLimit } : {}),
+  ...(model?.modelModalities ? { modelModalities: model.modelModalities } : {}),
 })
 
 function requireHya(): void {
