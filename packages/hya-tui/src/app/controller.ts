@@ -114,6 +114,7 @@ import { answerPrompt } from "./prompts"
 import { createRevertController } from "./revert"
 import { createRulesController } from "./rules"
 import { createProjectViewController } from "./projectView"
+import { errorLine } from "../state/projectView"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 import { createReconnector, type ServerSwitch } from "./reconnect"
@@ -764,7 +765,10 @@ export function createController({ client, store, directory, remote: startedRemo
     const highlighted = store.state.projectSidebarHighlight ?? store.state.activeProjectId
     const outcome = projectsSidebarKeyOutcome(pressed, rows, highlighted)
     if (outcome.type === "move") store.setProjectSidebarHighlight(outcome.id)
-    else if (outcome.type === "switch") { store.setProjectsSidebarFocus(false); void switchProject(outcome.id) }
+    else if (outcome.type === "switch") {
+      store.setProjectsSidebarFocus(false)
+      void switchProject(outcome.id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`))
+    }
     else if (outcome.type === "blur") store.setProjectsSidebarFocus(false)
   }
 

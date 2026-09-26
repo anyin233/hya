@@ -5,9 +5,8 @@
 import type { HyaClient } from "../client"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
-import { errorText } from "../state/providers"
 import {
-  initialProjectView, projectViewKey, settleProjectView,
+  errorLine, initialProjectView, projectViewKey, settleProjectView,
   type ProjectViewNotice, type ProjectViewState,
 } from "../state/projectView"
 
@@ -34,16 +33,33 @@ export function createProjectViewController({ store, client, switchProject, newT
 
   function open(): void {
     store.setProjectView(initialProjectView(store.state.projects, store.state.activeProjectId))
-    void reload()
+    // Every failure here ends as the view's one-line notice, never an unhandled rejection
+    // (OpenTUI would print its stack over the view).
+    void reload().catch((error: unknown) => notify({ tone: "error", text: `Refresh failed: ${errorLine(error)}` }))
   }
 
   function close(): void {
     store.setProjectView(undefined)
   }
 
-  async function doSwitch(id: string): Promise<void> {
+  /**
+   * Close the view and run `action` (a switch, a temporary session); when it
+   * fails, reopen the view with the error as its one-line notice.
+   */
+  async function closeThen(failed: string, action: () => Promise<void>): Promise<void> {
     close()
-    await switchProject(id)
+    try {
+      await action()
+    } catch (error) {
+      store.setProjectView({
+        ...initialProjectView(store.state.projects, store.state.activeProjectId),
+        notice: { tone: "error", text: `${failed}: ${errorLine(error)}` },
+      })
+    }
+  }
+
+  function doSwitch(id: string): Promise<void> {
+    return closeThen("Switch failed", () => switchProject(id))
   }
 
   async function doCreate(name: string, roots: string[]): Promise<void> {
@@ -54,7 +70,7 @@ export function createProjectViewController({ store, client, switchProject, newT
       patch((current) => ({ ...settleProjectView(current, store.state.projects), busy: undefined, highlighted: project.id, notice: { tone: "ok", text: `Created ${project.name}` } }))
     } catch (error) {
       patch((current) => ({ ...current, busy: undefined }))
-      notify({ tone: "error", text: `Create failed: ${errorText(error)}` })
+      notify({ tone: "error", text: `Create failed: ${errorLine(error)}` })
     }
   }
 
@@ -66,7 +82,7 @@ export function createProjectViewController({ store, client, switchProject, newT
       patch((current) => ({ ...settleProjectView(current, store.state.projects), busy: undefined, notice: { tone: "ok", text: `Renamed to ${title}` } }))
     } catch (error) {
       patch((current) => ({ ...current, busy: undefined }))
-      notify({ tone: "error", text: `Rename failed: ${errorText(error)}` })
+      notify({ tone: "error", text: `Rename failed: ${errorLine(error)}` })
     }
   }
 
@@ -78,7 +94,7 @@ export function createProjectViewController({ store, client, switchProject, newT
       patch((current) => ({ ...settleProjectView(current, store.state.projects), busy: undefined, notice: { tone: "ok", text: "Roots updated" } }))
     } catch (error) {
       patch((current) => ({ ...current, busy: undefined }))
-      notify({ tone: "error", text: `Update failed: ${errorText(error)}` })
+      notify({ tone: "error", text: `Update failed: ${errorLine(error)}` })
     }
   }
 
@@ -91,7 +107,7 @@ export function createProjectViewController({ store, client, switchProject, newT
     } catch (error) {
       patch((current) => ({ ...current, busy: undefined }))
       // The server refuses with `failed_precondition` while a live root session belongs to the Project; show it verbatim.
-      notify({ tone: "error", text: errorText(error) })
+      notify({ tone: "error", text: errorLine(error) })
     }
   }
 
@@ -130,7 +146,7 @@ export function createProjectViewController({ store, client, switchProject, newT
       case "rename": void doRename(outcome.id, outcome.title); return
       case "editRootsCommit": void doEditRoots(outcome.id, outcome.roots); return
       case "delete": void doDelete(outcome.id); return
-      case "temporary": close(); void newTemporarySession(); return
+      case "temporary": void closeThen("Temporary session failed", newTemporarySession); return
     }
   }
 

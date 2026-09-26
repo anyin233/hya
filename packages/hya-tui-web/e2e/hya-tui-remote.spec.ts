@@ -11,7 +11,7 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hyaBin, launchTest, selfLaunch } from "./hya"
 
-type Remote = { link: string; relay: string; root: string }
+type Remote = { link: string; relay: string; root: string; stopServe: () => Promise<void> }
 
 /** Spawn `hya <args>` and resolve with the first match of `pattern` in its output. */
 function spawnUntil(args: string[], pattern: RegExp, env: Record<string, string>, children: ChildProcess[]): Promise<RegExpExecArray> {
@@ -48,7 +48,14 @@ const test = launchTest.extend<{ remote: Remote }>({
         isolated,
         children,
       )
-      await use({ link: served[1]!, relay: relay.replace(/^http:\/\//, ""), root: env.work! })
+      const serve = children[children.length - 1]!
+      const stopServe = async (): Promise<void> => {
+        if (serve.exitCode !== null) return
+        const exited = new Promise((resolve) => serve.once("exit", resolve))
+        serve.kill("SIGTERM")
+        await exited
+      }
+      await use({ link: served[1]!, relay: relay.replace(/^http:\/\//, ""), root: env.work!, stopServe })
     } finally {
       for (const child of children.reverse()) {
         if (child.exitCode !== null) continue
@@ -215,5 +222,38 @@ test.describe("/connect-remote", () => {
     await term.waitForText("Remote connection failed: the remote backend rejected the relay link", 30_000)
     expect(await term.find(secretOf(wrong).slice(0, 12))).toBeNull()
     await term.waitForText(/hya · hysec_\w+ · .* · http:\/\/127\.0\.0\.1:\d+/)
+  })
+
+  test("with the remote backend offline, Project view requests fail as one status line, never a stack trace", async ({ tui, workspace, remote }, testInfo) => {
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText(/hya · hysec_\w+/)
+    await term.type(`/connect-remote ${remote.link}`)
+    await term.press("Enter")
+    await term.waitForText("No projects yet · n creates one", 30_000)
+
+    // The remote backend goes away while the Project view is open: the bridge answers 503.
+    await remote.stopServe()
+    // `t` (a temporary session) needs the remote.
+    await term.press("t")
+    await term.waitForText("Temporary session failed: unavailable: remote backend is offline", 20_000)
+    // Reopening the view re-reads the Project list.
+    await term.press("Escape")
+    await expect.poll(() => term.find("No projects yet")).toBeNull()
+    await term.type("/project")
+    await term.press("Enter")
+    await term.waitForText("Refresh failed: unavailable: remote backend is offline", 20_000)
+    await term.attach(testInfo, "remote-offline")
+
+    const all = await term.page.evaluate(() => {
+      const buffer = window.hyaTerm.term.buffer.active
+      const rows: string[] = []
+      for (let y = 0; y < buffer.length; y++) rows.push(buffer.getLine(y)?.translateToString(true) ?? "")
+      return rows
+    })
+    const stack = all.filter((line) => /^\s*at\s/.test(line) || /\.tsx?:\d+:\d+/.test(line) || /HttpError|error: /.test(line))
+    expect(stack, "no stack trace or raw error dump in the terminal").toEqual([])
+    const offline = all.filter((line) => /unavailable: remote backend is offline/.test(line))
+    expect(offline.length, "the error shows as one status line").toBeGreaterThan(0)
   })
 })

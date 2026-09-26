@@ -504,6 +504,17 @@ opens it too, instead of only setting the status line.
 | `t` | Start a temporary session (`newTemporarySession`) and close the view; `/new --temp` does the same from the composer without opening it. |
 | Esc | Close the view (cancels a sub-flow first, if one is open). |
 
+**Errors.** A failed call shows as one line on the view's notice line,
+`<what failed>: <code>: <message>` — the server's error code and message
+(`HttpError.detail`), or `unavailable: <reason>` when the request got no
+answer — never as a stack trace. A failed Enter or `t` reopens the view with
+that line; opening the view while the backend cannot answer shows
+`Refresh failed: …` over the last known list. A remote backend that went
+offline behind the relay reads, for example, `Temporary session failed:
+unavailable: remote backend is offline, or the relay link was rotated or is
+wrong (…)`. A failed switch from the left Projects sidebar puts the same line
+on the status line (`Switch failed: …`).
+
 ### Left Projects sidebar
 
 A second, narrower sidebar on the left lists every Project live
