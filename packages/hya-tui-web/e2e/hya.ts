@@ -74,7 +74,7 @@ export function approverBundle(options: { id: string; modes: { id: string; title
   }
 }
 
-/** Write project bundles into `<dir>/.hya/bundles/<name>/` (the backend runs in `dir`, so it loads them at startup). */
+/** Write project bundles into `<dir>/.hya/bundles/<name>/`; they load once a session's workdir (`dir`) ensures a Project rooted there. */
 async function writeProjectBundles(dir: string, bundles: Record<string, BundleFiles>): Promise<void> {
   for (const [name, files] of Object.entries(bundles)) {
     for (const [path, content] of Object.entries(files)) {
