@@ -4,6 +4,7 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import { decodeServerFrame, encodeClientFrame } from "../src/frames"
+import { createNotificationDeduper, notificationTag, osc777Notification, osc9Notification, shouldShowNotification, type NotificationRequest } from "../src/notify"
 
 export type HyaTermHook = {
   term: Terminal
@@ -68,3 +69,39 @@ term.onBinary((data) => send(encodeClientFrame({ input: Uint8Array.from(data, (c
 term.onResize(({ cols, rows }) => send(encodeClientFrame({ resize: { cols, rows } })))
 new ResizeObserver(() => fit.fit()).observe(document.getElementById("terminal")!)
 term.focus()
+
+// Desktop notifications (docs/tui-web.md "Desktop notifications", ADR-0021):
+// generic mapping of OSC 9 / OSC 777 to a browser Notification, regardless
+// of what runs on the PTY. A program may send more than one notify sequence
+// for the same event (OSC 9 and OSC 777 together, for terminals that honor
+// only one); the deduper drops a same-body repeat within a short window,
+// and `tag` also asks the browser itself to coalesce duplicates it lets
+// through (a second tab, or one past the window).
+const notificationDeduper = createNotificationDeduper()
+function showNotification(request: NotificationRequest): void {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return
+  if (!shouldShowNotification({ hidden: document.hidden, focused: document.hasFocus() })) return
+  if (!notificationDeduper.shouldShow(request.body, Date.now())) return
+  new Notification(request.title || document.title || "Notification", { body: request.body, tag: notificationTag(request) })
+}
+
+// The Notification permission prompt only opens on a user gesture; ask once,
+// the first time the user interacts with the page. A denial or an
+// unsupported browser is silent — no retry, no error.
+function requestNotificationPermissionOnce(): void {
+  if (typeof Notification === "undefined" || Notification.permission !== "default") return
+  void Notification.requestPermission().catch(() => undefined)
+}
+const terminalElement = document.getElementById("terminal")!
+terminalElement.addEventListener("pointerdown", requestNotificationPermissionOnce, { once: true })
+terminalElement.addEventListener("keydown", requestNotificationPermissionOnce, { once: true })
+
+term.parser.registerOscHandler(9, (payload) => {
+  showNotification(osc9Notification(payload))
+  return true
+})
+term.parser.registerOscHandler(777, (payload) => {
+  const request = osc777Notification(payload)
+  if (request) showNotification(request)
+  return true
+})

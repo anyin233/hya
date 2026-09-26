@@ -203,6 +203,7 @@ backend is running.
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
 | `/editor`, Ctrl+X Ctrl+E | Edit the input in `$VISUAL` / `$EDITOR` (fallback `vi`); the edited text comes back into the input, unsent (see [External editor](#external-editor)). |
 | `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the status bar (see [Vim mode](#vim-mode)). |
+| `/notifications [on\|off]` | Turn desktop notifications on or off, saved in the preferences file (see [Desktop notifications](#desktop-notifications)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
@@ -420,8 +421,9 @@ JSON object:
 
 ```ts
 interface TuiPreferences {
-  theme?: string   // a built-in theme name: "hya" (default), "light", "contrast", "ember"
-  vim?: boolean    // vim mode in the input (/vim); default false
+  theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
+  vim?: boolean           // vim mode in the input (/vim); default false
+  notifications?: boolean // desktop notifications (/notifications); default true
 }
 ```
 
@@ -1095,6 +1097,56 @@ file](#preferences-file)); `AppState.vim`, `vimMode` (`"insert" |
 `undo`, `redo`, `submit`). `components/Composer.tsx` applies an `edit`
 with the textarea's `replaceText` (keeping its undo history) and runs
 `undo()` / `redo()` on it.
+
+### Desktop notifications
+
+The TUI can ask the terminal for a desktop notification when it needs your
+attention and you are not looking: a turn of the open session finishing
+(success or error), or a permission/question ask arriving for it. On by
+default.
+
+**Usage.** `/notifications` toggles it (`/notifications on`,
+`/notifications off` set it); the choice is saved as `notifications` in the
+[preferences file](#preferences-file). A notification is sent only while
+**both** are true: the preference is on, and the terminal is unfocused
+(tracked through the terminal's own focus reporting — most terminals
+support it; one that does not simply never reports a blur, so nothing is
+ever sent). Focusing the terminal again does not resend anything already
+missed. A subagent's turn ending or ask never notifies — only the open
+(root-viewed) session's own; keeps the rule simple, since a subagent's work
+already shows in its parent's task card.
+
+The message: `hya` as the title, and one of:
+
+| Event | Body |
+| --- | --- |
+| Turn finished | `Turn finished · <session title>` (no ` · …` before the session has one) |
+| Turn failed | `Turn failed: <error>` |
+| Permission ask | `Permission needed: <what it asks about>` |
+| Question ask | `Question: <the question's title>` |
+
+**Interfaces.** Two escape sequences, both sent for the same event (some
+terminals understand one, some the other): OSC 9 (`ESC ] 9 ; <body> BEL`)
+and OSC 777 (`ESC ] 777 ; notify ; <title> ; <body> BEL`). `src/notify.ts`:
+`shouldNotify({ notifications, focused })`, `sanitizeNotificationText(text,
+maxLength?)` (strips control characters, truncates with `…`),
+`notificationBody(kind, detail)`, and `notificationSequence(body, title?)`
+build the sequence; `app/controller.ts`'s `sendNotification` calls them and
+writes through `TerminalAccess.notify(sequence)` (`app/run.tsx`: straight to
+`process.stdout`, since OSC sequences have no visible effect and OpenTUI has
+no other "write this sequence" entry point). Focus tracking is OpenTUI's
+(`CliRenderer` "focus"/"blur" events, driven by the terminal's CSI `?1004`
+reporting), read through `TerminalAccess.onFocusChange` into
+`AppState.focused`; `AppState.notifications` mirrors the preference.
+`app/turns.ts`'s `TurnRunnerOptions.onEnd` is the turn-finished hook
+(skipped for a user-cancelled turn); the ask hook is in `applyEvent`'s
+handling of a fresh `permissionRequested`/`questionRequested` of the open
+session's own stream (a descendant's ask never reaches it — see
+`state/prompts.ts` `askFrameRoute`).
+
+The WebUI (ADR-0021, [tui-web.md](tui-web.md#desktop-notifications)) maps
+both sequences to a browser `Notification`, generically — the host does not
+know they are hya's.
 
 ## Permission and question prompts
 

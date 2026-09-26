@@ -50,6 +50,7 @@ import { webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { editText } from "../composer/editor"
 import { savePreferences } from "../prefs"
+import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, type PromptChoice } from "../state/prompts"
 import type { AppStore } from "../state/store"
@@ -97,6 +98,10 @@ export interface TerminalAccess {
   suspend(): void
   /** Take it back and repaint (CliRenderer.resume). */
   resume(): void
+  /** Write a pre-built escape sequence (src/notify.ts `notificationSequence`) straight to the terminal. */
+  notify?(sequence: string): void
+  /** Subscribe to the terminal's focus reporting (CliRenderer "focus"/"blur"); returns the unsubscribe function. Absent when the renderer has none (tests). */
+  onFocusChange?(handler: (focused: boolean) => void): () => void
 }
 
 /** The composer's input, registered by components/Composer.tsx for the external editor. */
@@ -127,9 +132,22 @@ export function createController({ client, store, directory, registry = createCo
   let childReading = false
   let childAgain = false
   let lastChildRead = 0
+  let unsubscribeFocus: (() => void) | undefined
   const secret = new SecretEntry()
   const status = (text: string): void => store.setStatus(text)
-  const turns = createTurnRunner({ store, client })
+
+  /** Desktop notifications (src/notify.ts): only while unfocused and the preference is on. */
+  function sendNotification(kind: NotifyKind, detail: string): void {
+    if (!terminal?.notify) return
+    if (!shouldNotify({ notifications: store.state.notifications, focused: store.state.focused })) return
+    terminal.notify(notificationSequence(notificationBody(kind, detail)))
+  }
+
+  const turns = createTurnRunner({
+    store,
+    client,
+    onEnd: (outcome) => sendNotification(outcome.ok ? "turnFinished" : "turnFailed", outcome.ok ? (store.state.selected?.title ?? "") : outcome.detail),
+  })
   const modes = createModeSwitcher({ store, client })
 
   async function refresh(): Promise<void> {
@@ -269,6 +287,9 @@ export function createController({ client, store, directory, registry = createCo
     const delta = event.partAppended || event.partReplaced || (!effect.durable && (event.partStarted || event.partCompleted))
     // Ask frames change only the pending list, which the store already updated.
     const ask = event.permissionRequested || event.questionRequested || event.interactionResolved
+    // A fresh ask of the open session's own turn (not a descendant's, which never reaches applyEvent).
+    const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
+    if (asked) sendNotification(event.permissionRequested ? "permission" : "question", asked.title ?? "")
     if (event.tokensRecorded && effect.durable) sessionDue = true
     if (!delta && !ask && (effect.durable || !event.seq)) scheduleRefresh()
     // A turn ended: the working directory's git status may have changed (E22).
@@ -590,6 +611,7 @@ export function createController({ client, store, directory, registry = createCo
    * `/new` creates one.
    */
   async function start(): Promise<void> {
+    unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
     try {
       const bootstrap = await client.bootstrap()
       store.applyBootstrap(bootstrap)
@@ -619,6 +641,7 @@ export function createController({ client, store, directory, registry = createCo
     refreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)
     secret.clear()
+    unsubscribeFocus?.()
   }
 
   /** Merged, deduplicated command list for the `/` command menu (commands/menu.ts). */

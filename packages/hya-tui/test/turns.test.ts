@@ -7,7 +7,7 @@ const S = "hysec_1"
 
 type Reply = TurnInfo | HttpError | Error
 
-function harness(replies: Reply[] = [], shell: (command: string) => Promise<TurnInfo> = async () => ({ id: "msg_shell", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" })) {
+function harness(replies: Reply[] = [], shell: (command: string) => Promise<TurnInfo> = async () => ({ id: "msg_shell", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" }), onEnd?: (outcome: { ok: boolean; detail: string }) => void) {
   const store = createAppStore()
   store.openSession({ id: S, agent: "build", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
   const sent: string[] = []
@@ -19,6 +19,7 @@ function harness(replies: Reply[] = [], shell: (command: string) => Promise<Turn
   const queue = [...replies]
   const runner = createTurnRunner({
     store,
+    onEnd,
     client: {
       createTurn: async (_session: string, text: string) => {
         sent.push(text)
@@ -172,6 +173,43 @@ test("a failed turn without a recorded error falls back to a generic error state
   turn("msg_u1", ["FINISH_REASON_ERROR"])
   await runner.idle()
   expect(store.state.status).toBe("Error · turn failed")
+})
+
+test("onEnd fires for a successful turn, not for a cancelled one", async () => {
+  const outcomes: Array<{ ok: boolean; detail: string }> = []
+  const { runner, turn } = harness([], undefined, (outcome) => outcomes.push(outcome))
+  await runner.submit("hi")
+  turn("msg_u1", ["FINISH_REASON_STOP"])
+  await runner.idle()
+  expect(outcomes).toEqual([{ ok: true, detail: "" }])
+
+  await runner.submit("stop me")
+  turn("msg_u2", ["FINISH_REASON_CANCELLED"])
+  await runner.idle()
+  expect(outcomes).toEqual([{ ok: true, detail: "" }])
+})
+
+test("onEnd fires with the error detail for a failed turn", async () => {
+  const outcomes: Array<{ ok: boolean; detail: string }> = []
+  const { runner, turn } = harness([], undefined, (outcome) => outcomes.push(outcome))
+  await runner.submit("fail")
+  turn("msg_u1", ["FINISH_REASON_ERROR"], { code: "provider_error", errorMessage: "http status 400: scripted" })
+  await runner.idle()
+  expect(outcomes).toEqual([{ ok: false, detail: "provider_error: http status 400: scripted" }])
+})
+
+test("onEnd fires for an admission error and a shell turn error, not for a user-cancelled admission", async () => {
+  const outcomes: Array<{ ok: boolean; detail: string }> = []
+  const { runner } = harness([new Error("boom")], undefined, (outcome) => outcomes.push(outcome))
+  await runner.submit("bad")
+  expect(outcomes).toEqual([{ ok: false, detail: "Error: boom" }])
+})
+
+test("onEnd fires for a failed shell turn", async () => {
+  const outcomes: Array<{ ok: boolean; detail: string }> = []
+  const { runner } = harness([], async () => { throw new Error("shell boom") }, (outcome) => outcomes.push(outcome))
+  await runner.submit("!oops", { shell: true })
+  expect(outcomes).toEqual([{ ok: false, detail: "Error: shell boom" }])
 })
 
 test("opening another session clears the queue and the turn state", async () => {

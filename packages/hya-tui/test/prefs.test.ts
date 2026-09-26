@@ -55,6 +55,16 @@ test("saving merges into the file atomically, creating its directory and keeping
   expect(readdirSync(join(dir, "nested", "hya"))).toEqual(["tui.json"])
 })
 
+test("notifications is a boolean preference; another type is ignored", () => {
+  const path = join(temp(), "tui.json")
+  writeFileSync(path, JSON.stringify({ notifications: false, theme: "light" }))
+  expect(loadPreferences(path).preferences).toEqual({ notifications: false, theme: "light" })
+  writeFileSync(path, JSON.stringify({ notifications: "yes" }))
+  expect(loadPreferences(path).preferences).toEqual({})
+  savePreferences(path, { notifications: false })
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ notifications: false })
+})
+
 test("saving over a corrupt file replaces it", () => {
   const path = join(temp(), "tui.json")
   writeFileSync(path, "garbage")

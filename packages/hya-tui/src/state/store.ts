@@ -102,6 +102,10 @@ export interface AppState {
   readonly vimMode: VimMode
   /** A half-typed normal-mode command (`2d`, `g`), shown in the status bar. */
   readonly vimPending: string
+  /** Desktop notifications on turn end / permission or question asks while unfocused (`/notifications`, the `notifications` preference; src/notify.ts); default on. */
+  readonly notifications: boolean
+  /** Whether the terminal (or browser tab) is focused, tracked through the terminal's focus reporting (app/run.tsx, app/controller.ts); default true (assume focused until told otherwise). */
+  readonly focused: boolean
   /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
   readonly reasoningToggles: ReadonlyMap<string, boolean>
   /** Global tool-card switch (`/tools`, Ctrl+G); `undefined` = the defaults (collapsed, shell turns expanded). */
@@ -240,6 +244,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     vim: false,
     vimMode: "insert",
     vimPending: "",
+    notifications: true,
+    focused: true,
     reasoningToggles: new Map(),
     tools: undefined,
     toolToggles: new Map(),
@@ -562,6 +568,11 @@ export function createAppStore() {
         set("vimPending", pending)
       })
     },
+
+    /** Turn desktop notifications on or off (`/notifications`). */
+    setNotifications(on: boolean): void { set("notifications", on) },
+    /** The terminal's (or browser tab's) focus state, from the renderer's focus reporting. */
+    setFocused(focused: boolean): void { set("focused", focused) },
 
     /** Expand or collapse every reasoning block; forgets per-part toggles. */
     setThinking(expanded: boolean): void {

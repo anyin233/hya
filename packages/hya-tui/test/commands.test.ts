@@ -398,3 +398,18 @@ test("/vim toggles vim mode (or sets it with on/off) and saves it", async () => 
   expect(calls).toEqual(['prefs {"vim":true}', 'prefs {"vim":true}', 'prefs {"vim":false}'])
   await expect(run("/vim maybe")).rejects.toThrow("Usage: /vim [on|off]")
 })
+
+test("/notifications toggles desktop notifications (or sets it with on/off) and saves it", async () => {
+  const { store, calls, run } = harness()
+  expect(store.state.notifications).toBe(true)
+  await run("/notifications off")
+  expect(store.state.notifications).toBe(false)
+  expect(store.state.status).toBe("Desktop notifications off")
+  await run("/notifications on")
+  expect(store.state.notifications).toBe(true)
+  expect(store.state.status).toBe("Desktop notifications on")
+  await run("/notifications")
+  expect(store.state.notifications).toBe(false)
+  expect(calls).toEqual(['prefs {"notifications":false}', 'prefs {"notifications":true}', 'prefs {"notifications":false}'])
+  await expect(run("/notifications maybe")).rejects.toThrow("Usage: /notifications [on|off]")
+})

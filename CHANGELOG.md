@@ -1,5 +1,10 @@
 # 0.41.0
 
+## Desktop notifications
+
+- While the terminal is in the background, the TUI sends a desktop notification when a turn finishes or fails, or when a permission or question prompt appears. It uses OSC 9 and OSC 777 and detects focus through terminal focus reporting. Turn it off with `/notifications off` (saved in `tui.json`). See [TUI](docs/tui.md#desktop-notifications).
+- The WebUI shows these as browser notifications while its tab is hidden or unfocused. It asks for permission on your first click or key press. A notification that arrives as both OSC 9 and OSC 777 appears once. See [ADR-0021](docs/adr/0021-webui-desktop-notifications.md).
+
 ## TUI copy, external editor, and vim mode
 
 - Copy: drag with the mouse to select text; it is copied to the clipboard when you release (OSC 52), and the status line shows `Copied N chars`. `/copy` copies the last assistant reply. On a terminal without OSC 52 the TUI reports `Copy failed`.
