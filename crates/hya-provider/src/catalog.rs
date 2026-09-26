@@ -7,24 +7,29 @@ use hya_proto::ModelRef;
 
 use crate::{ProviderKind, ProviderModel};
 
-/// Origin of a model row in the startup catalog.
+/// Origin of a model row in the catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelCatalogSource {
-    /// Authored in Hya's provider configuration.
+    /// Authored only in Hya's provider configuration (`models:` entry).
     Configured,
-    /// Returned by a declared provider's startup catalog endpoint.
+    /// Returned by the provider's remote model list (the model cache).
     Discovered,
+    /// Returned by the remote model list **and** overridden by a `models:`
+    /// entry with the same id (config fields win, field by field).
+    Overridden,
     /// The Hya-owned local echo row used when no live row exists.
     Offline,
 }
 
 impl ModelCatalogSource {
-    /// Stable lowercase wire/CLI label for this source.
+    /// Stable lowercase wire/CLI label: `config`, `remote`, `override`, or
+    /// `offline` (the `source` of a v1 `ModelSummary`).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Configured => "configured",
-            Self::Discovered => "discovered",
+            Self::Configured => "config",
+            Self::Discovered => "remote",
+            Self::Overridden => "override",
             Self::Offline => "offline",
         }
     }
@@ -164,6 +169,7 @@ impl ProviderCatalogSnapshot {
                 capabilities: crate::Capabilities::default(),
                 reasoning_variants: Vec::new(),
                 reasoning_default: None,
+                display_name: None,
                 source: ModelCatalogSource::Offline,
             });
             notice = Some(CatalogNotice::configure_provider());
@@ -197,7 +203,9 @@ impl ProviderCatalogSnapshot {
                         kind: ProviderKind::OpenAiCompatible,
                         source: match model.source {
                             ModelCatalogSource::Configured => ProviderCatalogSource::Configured,
-                            ModelCatalogSource::Discovered => ProviderCatalogSource::Discovered,
+                            ModelCatalogSource::Discovered | ModelCatalogSource::Overridden => {
+                                ProviderCatalogSource::Discovered
+                            }
                             ModelCatalogSource::Offline => ProviderCatalogSource::Offline,
                         },
                         auth: ProviderAuthState::Unauthenticated,

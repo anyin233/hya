@@ -950,10 +950,36 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Workflow { command }) => {
             workflow_cmd::run(command, model, &db, yolo, pure).await
         }
-        Some(Command::Models { provider, verbose }) => {
+        Some(Command::Models {
+            provider,
+            verbose,
+            refresh,
+        }) => {
             first_run_config_bootstrap(false)?;
             let mut runtime = resolve_runtime(model).await;
-            if !runtime.pending_discovery.is_empty() {
+            if refresh {
+                let ids = provider
+                    .clone()
+                    .map(|id| std::collections::BTreeSet::from([id]));
+                let rebuilt = config::rebuild_providers(
+                    ids.as_ref(),
+                    config::DiscoverMode::Always,
+                    runtime.catalog.as_ref(),
+                    &runtime.router,
+                )
+                .await
+                .context("refresh provider catalog")?;
+                for (provider_id, discovery) in &rebuilt.discovery {
+                    if let Some(error) = discovery.error_message() {
+                        eprintln!(
+                            "hya: {provider_id}: model list {}: {error}",
+                            discovery.label()
+                        );
+                    }
+                }
+                runtime.router = rebuilt.router;
+                runtime.catalog = rebuilt.catalog;
+            } else if !runtime.pending_discovery.is_empty() {
                 let pending = std::mem::take(&mut runtime.pending_discovery);
                 let (router, catalog) = config::refresh_pending_catalogs(
                     pending,

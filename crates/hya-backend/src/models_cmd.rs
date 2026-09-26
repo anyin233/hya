@@ -13,23 +13,35 @@ pub(crate) fn cmd_models(
         println!("{line}");
         if verbose {
             let (provider, id) = line.split_once('/').unwrap_or(("hya", line.as_str()));
-            let source = catalog
+            let row = catalog
                 .models()
                 .iter()
-                .find(|model| model.provider_id == provider && model.model_id == id)
-                .map(|model| model.source.as_str())
-                .unwrap_or("unknown");
-            println!(
-                "{}",
-                serde_json::json!({
-                    "id": id,
-                    "provider": provider,
-                    "source": source,
-                })
-            );
+                .find(|model| model.provider_id == provider && model.model_id == id);
+            println!("{}", verbose_line(provider, id, row));
         }
     }
     Ok(())
+}
+
+/// One `--verbose` JSON line: id, provider, source (`remote`, `config`,
+/// `override`, or `offline`), and the known metadata.
+fn verbose_line(provider: &str, id: &str, row: Option<&ProviderModel>) -> serde_json::Value {
+    let mut line = serde_json::json!({
+        "id": id,
+        "provider": provider,
+        "source": row.map_or("unknown", |model| model.source.as_str()),
+    });
+    if let Some(model) = row {
+        if let Some(name) = model.display_name.as_deref() {
+            line["name"] = serde_json::json!(name);
+        }
+        line["context"] = serde_json::json!(model.capabilities.max_context);
+        if model.capabilities.max_output > 0 {
+            line["output"] = serde_json::json!(model.capabilities.max_output);
+        }
+        line["reasoning"] = serde_json::json!(!model.reasoning_variants.is_empty());
+    }
+    line
 }
 
 fn model_lines(models: &[ProviderModel], provider: Option<&str>) -> Result<Vec<String>, String> {
@@ -60,6 +72,7 @@ mod tests {
             capabilities: Default::default(),
             reasoning_variants: Vec::new(),
             reasoning_default: None,
+            display_name: None,
             source,
         }
     }
@@ -85,6 +98,36 @@ mod tests {
         assert_eq!(
             super::model_lines(&models, Some("openai")),
             Ok(vec!["openai/gpt-5.5".to_string()])
+        );
+    }
+
+    #[test]
+    fn verbose_line_names_the_source_and_metadata() {
+        let mut row = model("gw", "vendor/m", ModelCatalogSource::Overridden);
+        row.display_name = Some("Vendor M".to_string());
+        row.capabilities.max_context = 64_000;
+        row.capabilities.max_output = 4_096;
+        assert_eq!(
+            super::verbose_line("gw", "vendor/m", Some(&row)),
+            serde_json::json!({
+                "id": "vendor/m",
+                "provider": "gw",
+                "source": "override",
+                "name": "Vendor M",
+                "context": 64000,
+                "output": 4096,
+                "reasoning": false,
+            })
+        );
+        let remote = model("gw", "r", ModelCatalogSource::Discovered);
+        assert_eq!(
+            super::verbose_line("gw", "r", Some(&remote))["source"],
+            "remote"
+        );
+        let config = model("gw", "c", ModelCatalogSource::Configured);
+        assert_eq!(
+            super::verbose_line("gw", "c", Some(&config))["source"],
+            "config"
         );
     }
 

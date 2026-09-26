@@ -59,7 +59,10 @@ message CommandTurn {
 }
 
 // A synthetic shell turn: the command runs via the builtin shell tool with
-// no model round.
+// no model round. The user's own shell command never asks for permission in
+// any mode (approved once); an explicit Deny rule still blocks it, a
+// `tool.execute.before` hook can still veto it, and a directory outside the
+// working directory still asks.
 message ShellTurn {
   // Shell command line to execute.
   string command = 1;

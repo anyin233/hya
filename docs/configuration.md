@@ -407,16 +407,91 @@ Supported `kind` values:
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
 
-`models` has two authoritative modes:
+A provider's **effective model list** is its remote model list (from the
+[model cache](#model-cache-and-config-overrides)) merged per model id with
+its `models:` entries:
 
-- A non-empty list is trimmed and exactly deduplicated. It is trusted without a
-  model-list request and remains routable when no credential exists.
-- An absent, empty, or blank-only list prefers `models.yml.cache` beside
-  `config.yaml` and refreshes in the background. A cache miss still makes
-  one bounded request during startup. Discovered rows persist in
-  `models.yml.cache` and are preferred on the next load; they are never
-  rewritten into `config.yaml`. Explicit `providers.*.models` still wins.
+- Every provider is discoverable and refreshable. A non-empty `models:` list
+  no longer disables the remote list; it pins entries and overrides metadata.
+- `models:` entries are trimmed and exactly deduplicated. They are routable
+  without a model-list request and remain routable when no credential
+  exists.
+- A provider with neither cached remote rows nor `models:` entries makes one
+  bounded request during startup. Providers with no cached rows, and
+  discovery-only providers (absent, empty, or blank-only `models:`), also
+  refresh in the background after startup (`catalog.updated` follows).
+  Fetched rows are written to the model cache, never into `config.yaml`.
   Authentication headers are sent only when Hya has a credential.
+
+### Model cache and config overrides
+
+The model cache is a SQLite database at
+`$XDG_CACHE_HOME/hya/model_cache.db` (fallback `~/.cache/hya/model_cache.db`).
+It stores, per provider, each model the remote `/models` list returned: model
+id, display name, context limit, output limit, reasoning default and
+variants, tool support, and the fetch time. It replaces the old YAML
+`models.yml.cache` beside `config.yaml`: the first open of an empty cache
+imports that file once, and Hya no longer writes it (you may delete it).
+Deleting `model_cache.db` is safe; it only costs one model-list request per
+provider on the next start.
+
+The cache is refreshed by startup discovery (see above), `hya models
+--refresh`, and the v1 `RefreshProvider` / `UpsertProvider` routes (the TUI
+Provider View's refresh and add-provider actions). A refresh replaces the
+provider's rows; a 401/403 clears them; a transport, status, or decode failure
+keeps the old rows.
+
+**Merge rule (per model id, field by field).**
+
+| Model is in | Source shown | Metadata |
+| --- | --- | --- |
+| the cache only | `remote` | the cached values |
+| `models:` only | `config` | the entry's values; kind defaults for unset fields |
+| both | `override` | each field set in the entry wins; each unset field falls back to the cached value |
+
+For a model in both, the entry's `name`, `limit.context`, `limit.output`,
+and `reasoning` override the cached display name, limits, and effort menu
+individually. When a configured limit and a cached one contradict each other
+(`output` above `context`), the cached value is dropped. The source appears in
+the v1 `ModelSummary.source` field (`remote`, `config`, `override`, or
+`offline`) and in `hya models --verbose`.
+
+**Model entry fields.** A `models:` entry is a string id or a mapping:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | string (required) | Provider-local model id; may contain `/` and `:`. |
+| `name` | string | Display name shown by pickers and the Provider View. |
+| `limit.context` | positive `u32` | Context window (see [Model limits](#model-limits)). |
+| `limit.output` | positive `u32` | Max output tokens (see [Model limits](#model-limits)). |
+| `reasoning` | `true`, `false`, or `{default?, variants?}` | `false` advertises no effort menu (same as `variants: []`); `true` keeps the remote or provider-kind menu; the mapping is described in [Reasoning metadata](#reasoning-metadata). |
+
+```yaml
+providers:
+  openrouter:
+    kind: openai
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - id: vendor/model-a:free      # override: remote row + these fields
+        name: Model A (free)
+        limit:
+          output: 8192               # context still comes from the remote list
+      - id: my-finetune              # config-only row
+        reasoning: false
+```
+
+The TUI Provider View (`/key`) writes these entries for you: adding a model or
+editing a model's metadata calls `PUT /v1/providers/{id}/models`, which
+rewrites that entry in `config.yaml` (a string entry becomes a mapping when
+fields are added and turns back into a string when none remain); removing the
+override calls `DELETE /v1/providers/{id}/models?modelId=…`. Adding a
+provider calls `PUT /v1/providers/{id}`, which writes `kind` and `base_url`
+(a new provider gets `models: []`) and saves the key to `auth/<id>.yaml`.
+These writers keep every other key but re-render the file, so YAML comments
+are not preserved; an edit that would make the config invalid is rejected and
+leaves the file unchanged. Every change applies to the running server
+immediately. Routes and schemas: [Protocol guide — Providers and
+keys](protocol/README.md#providers-and-keys).
 
 ### Provider retry
 
@@ -576,14 +651,15 @@ Both fields are optional; an omitted field stays unspecified. Validation fails
 the config load when a value is zero, negative, fractional, non-numeric, or
 larger than `4294967295`, when `output` exceeds `context` (both set), when
 `limit` is not a mapping, or when it contains any key other than `context` and
-`output`. Plain string entries remain valid and carry no limit. The names match
-the `limit` rows of `models.yml.cache`, so discovered models whose cache row
-has a non-zero `limit.output` follow the same rules.
+`output`. Plain string entries remain valid and carry no limit. Remote
+models whose cached row has a non-zero output limit (from the provider's model
+list) follow the same rules, and an entry's `limit` fields override the cached
+ones field by field.
 
 **Request max tokens.** The rule is the same for every provider kind:
 
 1. When the model's output limit is known (a configured `limit.output`, or a
-   non-zero cached `limit.output` for a discovered model), a request without an
+   non-zero cached output limit for a remote model), a request without an
    explicit max-tokens value sends the limit, and an explicit value (compaction
    summaries, titles, plugin or model policy) larger than the limit is clamped
    to it. Anthropic sends it as `max_tokens`, OpenAI-compatible Chat as
@@ -822,8 +898,8 @@ account_id: optional
 id_token: optional
 ```
 
-Writes are atomic: a temp `.<provider>.yaml.tmp` is created, chmodded to `0600`
-on Unix, then renamed into place. If YAML deserialization yields no credential,
+Writes are atomic: a temp `.<provider>.yaml.tmp` is created with mode `0600` on
+Unix (never readable by others), written, then renamed into place. If YAML deserialization yields no credential,
 hya scrapes a bare `token: "..."` line and unquotes it as an API credential, so
 a hand-written one-line file still works.
 
@@ -831,13 +907,16 @@ HTTP auth headers are marked sensitive and redirects are disabled so a secret is
 not forwarded to another host.
 
 Over the v1 API, `PUT /v1/auth/{providerId}` (`{"apiKey": "..."}`) writes a
-static key file with mode `0600` on Unix. `DELETE /v1/auth/{providerId}`
-removes it. `GET /v1/auth` (`ListProviderAuth`) answers
+static key file (`type: api`, mode `0600`) and `DELETE /v1/auth/{providerId}`
+removes it; either change applies to the running server at once — the server
+rebuilds that provider's route and catalog and emits `catalog.updated`, so no
+restart is needed. Saving a key for a provider with no cached remote models
+also fetches its model list. `GET /v1/auth` (`ListProviderAuth`) answers
 `{"providerIds": ["anthropic", ...]}`: the sorted ids that have an
-`auth/<id>.yaml` file. It never returns secret values. A running backend
-resolves provider routes at startup, so restart it after adding or removing a
-key. The OpenTUI frontend's `/keys` and `/key set|remove` commands use these
-routes (see [TUI](tui.md)).
+`auth/<id>.yaml` file. It never returns secret values; `GET /v1/providers`
+shows each provider's `keySource` (`saved`, `oauth`, `config`, or `none`).
+The OpenTUI frontend's Provider View uses these routes (see [TUI](tui.md) and
+[Protocol guide — Providers and keys](protocol/README.md#providers-and-keys)).
 
 ## Model Selection
 

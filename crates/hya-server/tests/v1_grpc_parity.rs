@@ -325,6 +325,38 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"]["code"], json!("unavailable"));
 
+    // Provider parity: the provider list matches, and provider writes report
+    // the missing provider control identically.
+    let grpc_providers: Value = serde_json::to_value(
+        catalog
+            .list_providers(tonic::Request::new(pb::ListProvidersRequest::default()))
+            .await
+            .unwrap()
+            .into_inner(),
+    )
+    .unwrap();
+    let (status, http_providers) = http_json(&app, Method::GET, "/v1/providers", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(normalize(&grpc_providers), normalize(&http_providers));
+    let grpc_upsert = catalog
+        .upsert_provider(tonic::Request::new(pb::UpsertProviderRequest {
+            provider_id: "acme".into(),
+            kind: "openai".into(),
+            base_url: "https://acme.example/v1".into(),
+            ..Default::default()
+        }))
+        .await;
+    assert_eq!(grpc_upsert.unwrap_err().code(), tonic::Code::Unavailable);
+    let (status, body) = http_json(
+        &app,
+        Method::PUT,
+        "/v1/providers/acme",
+        json!({"kind": "openai", "baseUrl": "https://acme.example/v1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], json!("unavailable"));
+
     // Error parity: unknown session maps to the same code on both.
     let missing = "00000000-0000-0000-0000-000000000000".to_owned();
     let grpc_error = session

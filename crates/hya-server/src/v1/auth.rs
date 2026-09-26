@@ -1,11 +1,10 @@
 //! `/v1` auth domain: provider credential storage.
 //!
-//! API keys are stored per provider in the user auth directory, mirroring
-//! the legacy `PUT /auth/:provider_id` surface. Provider OAuth flows over
-//! HTTP are not wired for v1 yet and answer `unavailable` honestly rather
-//! than faking a flow.
-
-use std::path::PathBuf;
+//! Keys are written by the app-owned [`crate::ProviderControl`] through
+//! `hya_app::auth` (atomic, mode 0600, `type: api`), which then rebuilds the
+//! provider's route and the catalog live — no restart. Provider OAuth flows
+//! over HTTP are not wired for v1 yet and answer `unavailable` honestly
+//! rather than faking a flow.
 
 use axum::extract::{Path as AxumPath, State};
 use axum::routing::{get, put};
@@ -15,6 +14,7 @@ use crate::ServerState;
 use hya_api::v1 as pb;
 
 use super::V1Error;
+use super::providers::{check_provider_id, discovery_outcome, map_control_error};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -33,74 +33,79 @@ pub(crate) fn router() -> Router<ServerState> {
         )
 }
 
-async fn list_provider_auth() -> Result<Json<pb::ListProviderAuthResponse>, V1Error> {
-    let dir = auth_dir().ok_or_else(|| V1Error::internal("no config directory"))?;
-    let mut provider_ids = Vec::new();
-    match std::fs::read_dir(dir) {
-        Ok(entries) => {
-            for entry in entries {
-                let path = entry
-                    .map_err(|error| V1Error::internal(error.to_string()))?
-                    .path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
-                    continue;
-                }
-                if let Some(id) = path.file_stem().and_then(|stem| stem.to_str())
-                    && !id.starts_with('.')
-                {
-                    provider_ids.push(id.to_owned());
-                }
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(V1Error::internal(error.to_string())),
-    }
-    provider_ids.sort();
+async fn list_provider_auth(
+    State(st): State<ServerState>,
+) -> Result<Json<pb::ListProviderAuthResponse>, V1Error> {
+    let provider_ids = st
+        .provider_control
+        .list_saved_keys()
+        .await
+        .map_err(map_control_error)?;
     Ok(Json(pb::ListProviderAuthResponse { provider_ids }))
 }
 
 async fn set_provider_auth(
-    State(_st): State<ServerState>,
+    State(st): State<ServerState>,
     AxumPath(provider_id): AxumPath<String>,
     Json(request): Json<pb::SetProviderAuthRequest>,
 ) -> Result<Json<pb::SetProviderAuthResponse>, V1Error> {
-    validate_provider_id(&provider_id)?;
+    check_provider_id(&provider_id)?;
     let token = match &request.secret {
         Some(pb::set_provider_auth_request::Secret::ApiKey(key)) => key.clone(),
         Some(pb::set_provider_auth_request::Secret::Oauth(oauth)) => oauth.access_token.clone(),
         None => return Err(V1Error::invalid_argument("missing credential payload")),
     };
-    if token.trim().is_empty() {
+    let token = token.trim().to_owned();
+    if token.is_empty() {
         return Err(V1Error::invalid_argument("credential payload is empty"));
     }
-    let dir = auth_dir().ok_or_else(|| V1Error::internal("no config directory"))?;
-    save_token_in(&dir, &provider_id, &token)
-        .map_err(|error| V1Error::internal(error.to_string()))?;
+    if token.chars().any(char::is_control) {
+        return Err(V1Error::invalid_argument(
+            "credential payload contains control characters",
+        ));
+    }
+    let change = st
+        .provider_control
+        .set_key(provider_id.clone(), token)
+        .await
+        .map_err(map_control_error)?;
+    super::providers::notify_catalog_updated(&st);
     Ok(Json(pb::SetProviderAuthResponse {
         status: pb::AuthStatus::Credentialed as i32,
+        provider: if change.configured {
+            super::catalog::provider_info(&st, &provider_id).await
+        } else {
+            None
+        },
+        discovery: change.discovery.as_ref().map(discovery_outcome),
     }))
 }
 
 async fn remove_provider_auth(
-    State(_st): State<ServerState>,
+    State(st): State<ServerState>,
     AxumPath(provider_id): AxumPath<String>,
 ) -> Result<Json<pb::RemoveProviderAuthResponse>, V1Error> {
-    validate_provider_id(&provider_id)?;
-    let dir = auth_dir().ok_or_else(|| V1Error::internal("no config directory"))?;
-    let path = dir.join(format!("{provider_id}.yaml"));
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(V1Error::internal(error.to_string())),
-    }
-    Ok(Json(pb::RemoveProviderAuthResponse {}))
+    check_provider_id(&provider_id)?;
+    let (_removed, change) = st
+        .provider_control
+        .remove_key(provider_id.clone())
+        .await
+        .map_err(map_control_error)?;
+    super::providers::notify_catalog_updated(&st);
+    Ok(Json(pb::RemoveProviderAuthResponse {
+        provider: if change.configured {
+            super::catalog::provider_info(&st, &provider_id).await
+        } else {
+            None
+        },
+    }))
 }
 
 async fn start_oauth(
     AxumPath(provider_id): AxumPath<String>,
     Json(_request): Json<pb::StartOauthRequest>,
 ) -> Result<Json<pb::StartOauthResponse>, V1Error> {
-    validate_provider_id(&provider_id)?;
+    check_provider_id(&provider_id)?;
     Err(V1Error::unavailable(format!(
         "provider oauth start is not wired for {provider_id}; use the launcher auth command"
     )))
@@ -110,65 +115,8 @@ async fn complete_oauth(
     AxumPath(provider_id): AxumPath<String>,
     Json(_request): Json<pb::CompleteOauthRequest>,
 ) -> Result<Json<pb::CompleteOauthResponse>, V1Error> {
-    validate_provider_id(&provider_id)?;
+    check_provider_id(&provider_id)?;
     Err(V1Error::unavailable(format!(
         "provider oauth completion is not wired for {provider_id}; use the launcher auth command"
     )))
-}
-
-fn validate_provider_id(provider_id: &str) -> Result<(), V1Error> {
-    let valid = provider_id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && !provider_id.is_empty()
-        && !provider_id.contains("..");
-    if valid {
-        Ok(())
-    } else {
-        Err(V1Error::invalid_argument("invalid provider id"))
-    }
-}
-
-fn auth_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("hya/auth"))
-}
-
-fn save_token_in(dir: &std::path::Path, provider: &str, token: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let body = format!("token: \"{}\"\n", yaml_escape(token.trim()));
-    let path = dir.join(format!("{provider}.yaml"));
-    #[cfg(unix)]
-    {
-        use std::io::Write as _;
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(body.as_bytes())
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, body)
-    }
-}
-
-fn yaml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            _ => out.push(c),
-        }
-    }
-    out
 }

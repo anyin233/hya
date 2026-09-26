@@ -6,7 +6,7 @@ use std::path::Path;
 
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 
 use crate::ServerState;
@@ -20,7 +20,23 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/agents", get(list_agents))
         .route("/v1/models", get(list_models))
         .route("/v1/providers", get(list_providers))
-        .route("/v1/providers/:provider_id", get(get_provider))
+        .route(
+            "/v1/providers/:provider_id",
+            get(get_provider).put(super::providers::upsert_provider),
+        )
+        .route(
+            "/v1/providers/:provider_id/refresh",
+            post(super::providers::refresh_provider),
+        )
+        .route(
+            "/v1/providers/:provider_id/models",
+            put(super::providers::set_provider_model)
+                .delete(super::providers::remove_provider_model),
+        )
+        .route(
+            "/v1/providers/:provider_id/test",
+            post(super::providers::test_provider_model),
+        )
         .route("/v1/commands", get(list_commands))
         .route("/v1/skills", get(list_skills))
         .route("/v1/tools", get(list_tools))
@@ -151,13 +167,14 @@ pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
             id: format!("{}/{}", row.provider_id, row.model_id),
             provider_id: row.provider_id.clone(),
             model_id: row.model_id.clone(),
-            display_name: String::new(),
+            display_name: row.display_name.clone().unwrap_or_default(),
             reasoning: !row.reasoning_variants.is_empty(),
             auth: *auth_by_provider
                 .get(&row.provider_id)
                 .unwrap_or(&(pb::AuthStatus::NotApplicable as i32)),
             context_limit: u64::from(row.capabilities.max_context),
             output_limit: u64::from(row.capabilities.max_output),
+            source: row.source.as_str().to_owned(),
         })
         .collect()
 }
@@ -187,6 +204,20 @@ fn catalog_result(result: hya_provider::ProviderCatalogResult) -> String {
     .to_owned()
 }
 
+/// Config `kind` label for a live route kind (used when the provider is not
+/// in the settings list, e.g. an embedder without a provider control).
+fn kind_label(kind: hya_provider::ProviderKind) -> &'static str {
+    use hya_provider::ProviderKind as K;
+    match kind {
+        K::OpenAiCompatible => "openai",
+        K::OpenAiResponse => "openai-response",
+        K::OpenAiCodex => "openai-codex",
+        K::GrokBuild => "grok-build",
+        K::Anthropic => "anthropic",
+        K::Google => "google",
+    }
+}
+
 async fn list_providers(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
@@ -194,7 +225,7 @@ async fn list_providers(
 ) -> Result<Json<pb::ListProvidersResponse>, V1Error> {
     let request: pb::ListProvidersRequest = super::query_request(&[], &query)?;
     let _scope = scope_directory(&headers, &request.directory);
-    let providers = provider_rows(&st, &model_rows(&st));
+    let providers = provider_rows(&st, &model_rows(&st)).await;
     let (providers, page) = paginate(providers, &request.page);
     Ok(Json(pb::ListProvidersResponse {
         providers,
@@ -202,23 +233,114 @@ async fn list_providers(
     }))
 }
 
-/// Provider rows shared with the bootstrap snapshot.
-pub(crate) fn provider_rows(
+/// Provider rows shared with the bootstrap snapshot: every provider in the
+/// live catalog plus any configured provider the catalog does not hold yet,
+/// sorted by id. `auth` reflects the current credential (saved key, config
+/// key, or none) unless the last model-list fetch was refused.
+pub(crate) async fn provider_rows(
     st: &ServerState,
-    _models: &[pb::ModelSummary],
+    models: &[pb::ModelSummary],
 ) -> Vec<pb::ProviderSummary> {
+    let settings = st
+        .provider_control
+        .list_settings()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|settings| (settings.id.clone(), settings))
+        .collect::<BTreeMap<_, _>>();
     let snapshot = st.engine.provider_catalog_snapshot();
-    snapshot
-        .providers()
-        .iter()
-        .map(|state| pb::ProviderSummary {
-            name: state.provider_id.clone(),
-            auth: auth_status(state.auth),
-            website: String::new(),
-            result: catalog_result(state.result),
-            id: state.provider_id.clone(),
-        })
-        .collect()
+    let mut rows = BTreeMap::new();
+    for state in snapshot.providers() {
+        let settings = settings.get(&state.provider_id);
+        let offline = state.source == hya_provider::ProviderCatalogSource::Offline;
+        let auth = match (state.auth, settings.map(|settings| settings.key_source)) {
+            (
+                hya_provider::ProviderAuthState::AuthRejected
+                | hya_provider::ProviderAuthState::AuthRequired
+                | hya_provider::ProviderAuthState::NotApplicable,
+                _,
+            )
+            | (_, None) => auth_status(state.auth),
+            (_, Some(crate::ProviderKeySource::None)) => pb::AuthStatus::Unauthenticated as i32,
+            (_, Some(_)) => pb::AuthStatus::Credentialed as i32,
+        };
+        rows.insert(
+            state.provider_id.clone(),
+            pb::ProviderSummary {
+                id: state.provider_id.clone(),
+                name: state.provider_id.clone(),
+                auth,
+                website: String::new(),
+                result: catalog_result(state.result),
+                kind: settings.map_or_else(
+                    || {
+                        if offline {
+                            String::new()
+                        } else {
+                            kind_label(state.kind).to_owned()
+                        }
+                    },
+                    |settings| settings.kind.clone(),
+                ),
+                base_url: settings
+                    .map(|settings| settings.base_url.clone())
+                    .unwrap_or_default(),
+                key_source: settings
+                    .map_or(crate::ProviderKeySource::None, |settings| {
+                        settings.key_source
+                    })
+                    .as_str()
+                    .to_owned(),
+                model_count: 0,
+            },
+        );
+    }
+    for (id, settings) in &settings {
+        rows.entry(id.clone())
+            .or_insert_with(|| pb::ProviderSummary {
+                id: id.clone(),
+                name: id.clone(),
+                auth: if settings.key_source == crate::ProviderKeySource::None {
+                    pb::AuthStatus::Unauthenticated as i32
+                } else {
+                    pb::AuthStatus::Credentialed as i32
+                },
+                website: String::new(),
+                result: "unavailable".to_owned(),
+                kind: settings.kind.clone(),
+                base_url: settings.base_url.clone(),
+                key_source: settings.key_source.as_str().to_owned(),
+                model_count: 0,
+            });
+    }
+    for model in models {
+        if let Some(row) = rows.get_mut(&model.provider_id) {
+            row.model_count = row.model_count.saturating_add(1);
+        }
+    }
+    rows.into_values().collect()
+}
+
+/// One provider's detail row with its model rows; `None` when the id is
+/// neither live nor configured.
+pub(crate) async fn provider_info(st: &ServerState, provider_id: &str) -> Option<pb::ProviderInfo> {
+    let all_models = model_rows(st);
+    let summary = provider_rows(st, &all_models)
+        .await
+        .into_iter()
+        .find(|row| row.id == provider_id)?;
+    let models = all_models
+        .into_iter()
+        .filter(|model| model.provider_id == provider_id)
+        .collect();
+    let supports_oauth = matches!(summary.kind.as_str(), "openai-codex" | "grok-build");
+    Some(pb::ProviderInfo {
+        summary: Some(summary),
+        models,
+        supports_api_key: true,
+        supports_oauth,
+    })
 }
 
 async fn get_provider(
@@ -230,31 +352,15 @@ async fn get_provider(
     let request: pb::GetProviderRequest =
         super::query_request(&[("provider_id", provider_id.as_str())], &query)?;
     let _scope = scope_directory(&headers, &request.directory);
-    let models: Vec<pb::ModelSummary> = model_rows(&st)
-        .into_iter()
-        .filter(|model| model.provider_id == request.provider_id)
-        .collect();
-    if models.is_empty() {
-        return Err(V1Error::new(
-            hya_api::error::Code::NotFound,
-            format!("provider not found: {}", request.provider_id),
-        ));
-    }
-    Ok(Json(pb::ProviderInfo {
-        summary: Some(pb::ProviderSummary {
-            id: request.provider_id.clone(),
-            name: request.provider_id.clone(),
-            auth: pb::AuthStatus::NotApplicable as i32,
-            website: String::new(),
-            result: provider_rows(&st, &[])
-                .into_iter()
-                .find(|row| row.id == request.provider_id)
-                .map_or_else(String::new, |row| row.result),
-        }),
-        models,
-        supports_api_key: true,
-        supports_oauth: false,
-    }))
+    provider_info(&st, &request.provider_id)
+        .await
+        .map(Json)
+        .ok_or_else(|| {
+            V1Error::new(
+                hya_api::error::Code::NotFound,
+                format!("provider not found: {}", request.provider_id),
+            )
+        })
 }
 
 async fn list_commands(

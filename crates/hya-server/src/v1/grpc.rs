@@ -292,13 +292,89 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetProviderRequest>,
     ) -> Result<GrpcResponse<pb::ProviderInfo>, Status> {
-        let provider_id = field(&request.into_inner(), "providerId");
+        let provider_id = encode(&field(&request.into_inner(), "providerId"));
         into_response(
             self.get(
                 &format!("/v1/providers/{provider_id}"),
                 &pb::GetProviderRequest::default(),
             )
             .await?,
+        )
+    }
+
+    async fn upsert_provider(
+        &self,
+        request: GrpcRequest<pb::UpsertProviderRequest>,
+    ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
+        let inner = request.into_inner();
+        let provider_id = encode(&field(&inner, "providerId"));
+        into_response(
+            self.dispatch::<_, _>(
+                "PUT",
+                &format!("/v1/providers/{provider_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+
+    async fn refresh_provider(
+        &self,
+        request: GrpcRequest<pb::RefreshProviderRequest>,
+    ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
+        let inner = request.into_inner();
+        let provider_id = encode(&field(&inner, "providerId"));
+        into_response(
+            self.post(&format!("/v1/providers/{provider_id}/refresh"), &inner)
+                .await?,
+        )
+    }
+
+    async fn set_provider_model(
+        &self,
+        request: GrpcRequest<pb::SetProviderModelRequest>,
+    ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
+        let inner = request.into_inner();
+        let provider_id = encode(&field(&inner, "providerId"));
+        into_response(
+            self.dispatch::<_, _>(
+                "PUT",
+                &format!("/v1/providers/{provider_id}/models"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+
+    async fn remove_provider_model(
+        &self,
+        request: GrpcRequest<pb::RemoveProviderModelRequest>,
+    ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
+        let inner = request.into_inner();
+        let provider_id = encode(&field(&inner, "providerId"));
+        let query = BTreeMap::from([("modelId".to_owned(), field(&inner, "modelId"))]);
+        into_response(
+            self.dispatch::<_, _>(
+                "DELETE",
+                &format!("/v1/providers/{provider_id}/models"),
+                query,
+                &pb::RemoveProviderModelRequest::default(),
+            )
+            .await?,
+        )
+    }
+
+    async fn test_provider_model(
+        &self,
+        request: GrpcRequest<pb::TestProviderModelRequest>,
+    ) -> Result<GrpcResponse<pb::TestProviderModelResponse>, Status> {
+        let inner = request.into_inner();
+        let provider_id = encode(&field(&inner, "providerId"));
+        into_response(
+            self.post(&format!("/v1/providers/{provider_id}/test"), &inner)
+                .await?,
         )
     }
 
@@ -349,7 +425,7 @@ impl pb::auth_server::Auth for V1Grpc {
         request: GrpcRequest<pb::SetProviderAuthRequest>,
     ) -> Result<GrpcResponse<pb::SetProviderAuthResponse>, Status> {
         let inner = request.into_inner();
-        let provider_id = field(&inner, "providerId");
+        let provider_id = encode(&field(&inner, "providerId"));
         into_response(
             self.dispatch::<_, _>(
                 "PUT",
@@ -365,7 +441,7 @@ impl pb::auth_server::Auth for V1Grpc {
         &self,
         request: GrpcRequest<pb::RemoveProviderAuthRequest>,
     ) -> Result<GrpcResponse<pb::RemoveProviderAuthResponse>, Status> {
-        let provider_id = field(&request.into_inner(), "providerId");
+        let provider_id = encode(&field(&request.into_inner(), "providerId"));
         let empty = pb::RemoveProviderAuthRequest::default();
         into_response(
             self.dispatch::<_, _>(

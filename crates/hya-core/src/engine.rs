@@ -65,6 +65,8 @@ mod mailbox;
 pub(crate) use mailbox::dm_channel_between;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
+mod model_probe;
+pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
 mod session_cleanup;
 mod session_state;
 mod session_title;

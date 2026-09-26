@@ -14,12 +14,15 @@ service Auth {
   // hya.http: GET /v1/auth
   rpc ListProviderAuth(ListProviderAuthRequest) returns (ListProviderAuthResponse);
 
-  // Store an API key or refresh tokens for a provider.
+  // Store an API key (written atomically with mode 0600 as `type: api`) and
+  // rebuild that provider's route live; a provider with no cached remote
+  // models also fetches its model list.
   //
   // hya.http: PUT /v1/auth/{provider_id}
   rpc SetProviderAuth(SetProviderAuthRequest) returns (SetProviderAuthResponse);
 
-  // Delete the stored credentials for a provider.
+  // Delete the stored credentials for a provider and rebuild its route live
+  // (an inline config `api_key`, if any, applies again).
   //
   // hya.http: DELETE /v1/auth/{provider_id}
   rpc RemoveProviderAuth(RemoveProviderAuthRequest) returns (RemoveProviderAuthResponse);
@@ -69,6 +72,11 @@ message SetProviderAuthRequest {
 message SetProviderAuthResponse {
   // Resulting auth status for the provider.
   AuthStatus status = 1;
+  // The provider after the live rebuild; unset when the id is not a
+  // configured provider.
+  ProviderInfo provider = 2;
+  // Remote model-list fetch outcome when the save triggered one.
+  DiscoveryOutcome discovery = 3;
 }
 
 message RemoveProviderAuthRequest {
@@ -78,7 +86,11 @@ message RemoveProviderAuthRequest {
   string provider_id = 2;
 }
 
-message RemoveProviderAuthResponse {}
+message RemoveProviderAuthResponse {
+  // The provider after the live rebuild; unset when the id is not a
+  // configured provider.
+  ProviderInfo provider = 1;
+}
 
 message StartOauthRequest {
   // Directory context for auth resolution.

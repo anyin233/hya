@@ -1,4 +1,5 @@
-//! Provider model catalog cache beside `config.yaml`.
+//! Remote model cache (`$XDG_CACHE_HOME/hya/model_cache.db`) and its merge
+//! with config `models:` entries at startup.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -55,94 +56,79 @@ fn write_hya_config(root: &Path, config_yaml: &str) -> PathBuf {
     config_home
 }
 
-/// Warm cache restores effort variants, context window, and max output — not
-/// just bare model ids.
-#[tokio::test]
-async fn load_restores_effort_context_and_max_output_from_models_yml_cache() {
-    let _env = env_lock().await;
-    let root = unique_root("provider-cache-rich");
-    let config_home = write_hya_config(
-        &root,
-        "default_model: gateway/rich-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
-    );
-    let _xdg = EnvGuard::set("XDG_CONFIG_HOME", config_home.to_str().unwrap());
-    let home = root.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let _home = EnvGuard::set("HOME", home.to_str().unwrap());
-
-    let mut file = hya_app::config::ModelsCacheFile::default();
-    file.providers.insert(
-        "gateway".into(),
-        vec![hya_app::config::CachedModelEntry {
-            id: "rich-model".into(),
-            limit: hya_app::config::CachedModelLimit {
-                context: 128_000,
-                output: 16_384,
-            },
-            reasoning_default: Some("medium".into()),
-            reasoning_variants: vec!["none".into(), "low".into(), "medium".into(), "high".into()],
-            tools: true,
-        }],
-    );
-    hya_app::config::write_models_cache_file(&file).expect("seed rich cache");
-
-    let loaded = hya_app::config::load()
-        .await
-        .expect("load succeeds")
-        .expect("config present");
-    let model = loaded
-        .catalog
-        .models()
-        .iter()
-        .find(|model| model.model_id == "rich-model")
-        .expect("rich-model row");
-    assert_eq!(model.capabilities.max_context, 128_000);
-    assert_eq!(model.capabilities.max_output, 16_384);
-    assert_eq!(
-        model.reasoning_variants,
-        vec!["none", "low", "medium", "high"]
-    );
-    assert_eq!(
-        model.reasoning_default,
-        Some(hya_provider::ReasoningEffort::Medium)
-    );
-    let written = std::fs::read_to_string(config_home.join("hya/models.yml.cache")).unwrap();
-    assert!(
-        written.contains("context"),
-        "cache must persist limit metadata, got:\n{written}"
-    );
-    let _ = std::fs::remove_dir_all(root);
+/// Isolated XDG config + cache + HOME for one test.
+struct Isolated {
+    root: PathBuf,
+    config_home: PathBuf,
+    cache_home: PathBuf,
+    _guards: Vec<EnvGuard>,
 }
 
-/// Warm `models.yml.cache` must populate the startup catalog without waiting on
-/// unreachable discovery endpoints.
-#[tokio::test]
-async fn load_uses_models_yml_cache_without_waiting_on_unreachable_discovery() {
-    let _env = env_lock().await;
-    let root = unique_root("provider-cache-warm");
-    let config_home = write_hya_config(
-        &root,
-        "default_model: gateway/cached-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
-    );
-    let _xdg = EnvGuard::set("XDG_CONFIG_HOME", config_home.to_str().unwrap());
+fn isolated(label: &str, config_yaml: &str) -> Isolated {
+    let root = unique_root(label);
+    let config_home = write_hya_config(&root, config_yaml);
+    let cache_home = root.join("cache");
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let _home = EnvGuard::set("HOME", home.to_str().unwrap());
-    let mut file = hya_app::config::ModelsCacheFile::default();
-    file.providers.insert(
-        "gateway".into(),
-        vec![
-            hya_app::config::CachedModelEntry {
-                id: "cached-model".into(),
-                ..hya_app::config::CachedModelEntry::default()
-            },
-            hya_app::config::CachedModelEntry {
-                id: "other-model".into(),
-                ..hya_app::config::CachedModelEntry::default()
-            },
-        ],
+    let guards = vec![
+        EnvGuard::set("XDG_CONFIG_HOME", config_home.to_str().unwrap()),
+        EnvGuard::set("XDG_CACHE_HOME", cache_home.to_str().unwrap()),
+        EnvGuard::set("HOME", home.to_str().unwrap()),
+    ];
+    Isolated {
+        root,
+        config_home,
+        cache_home,
+        _guards: guards,
+    }
+}
+
+async fn seed(provider: &str, rows: Vec<hya_app::model_cache::CachedModel>) {
+    let cache = hya_app::model_cache::ModelCache::open_default()
+        .await
+        .expect("open cache");
+    cache.replace_provider(provider, &rows).await.expect("seed");
+    cache.close().await;
+}
+
+fn row(id: &str) -> hya_app::model_cache::CachedModel {
+    hya_app::model_cache::CachedModel {
+        id: id.to_string(),
+        tools: true,
+        fetched_at_ms: 1,
+        ..hya_app::model_cache::CachedModel::default()
+    }
+}
+
+/// Warm cache restores effort variants, context window, max output, and the
+/// display name — not just bare model ids — without waiting on discovery.
+#[tokio::test]
+async fn load_restores_cached_metadata_without_waiting_on_unreachable_discovery() {
+    let _env = env_lock().await;
+    let env = isolated(
+        "cache-rich",
+        "default_model: gateway/rich-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
     );
-    hya_app::config::write_models_cache_file(&file).expect("seed cache");
+    seed(
+        "gateway",
+        vec![
+            hya_app::model_cache::CachedModel {
+                display_name: Some("Rich Model".into()),
+                context_limit: 128_000,
+                output_limit: 16_384,
+                reasoning_default: Some("medium".into()),
+                reasoning_variants: vec![
+                    "none".into(),
+                    "low".into(),
+                    "medium".into(),
+                    "high".into(),
+                ],
+                ..row("rich-model")
+            },
+            row("other-model"),
+        ],
+    )
+    .await;
 
     let started = Instant::now();
     let loaded = hya_app::config::load()
@@ -151,71 +137,140 @@ async fn load_uses_models_yml_cache_without_waiting_on_unreachable_discovery() {
         .expect("config present");
     assert!(
         started.elapsed() < Duration::from_secs(2),
-        "cache hit must not wait on discovery timeout; elapsed={:?}",
+        "cache hit must not wait on discovery; elapsed={:?}",
         started.elapsed()
     );
-    let ids: Vec<String> = loaded
+    let model = loaded
         .catalog
         .models()
         .iter()
-        .map(|model| model.model_ref().to_string())
-        .collect();
-    assert!(
-        ids.iter().any(|id| id == "gateway/cached-model"),
-        "missing cached-model in {ids:?}"
+        .find(|model| model.model_id == "rich-model")
+        .expect("rich-model row");
+    assert_eq!(model.capabilities.max_context, 128_000);
+    assert_eq!(model.capabilities.max_output, 16_384);
+    assert_eq!(model.display_name.as_deref(), Some("Rich Model"));
+    assert_eq!(model.source, hya_provider::ModelCatalogSource::Discovered);
+    assert_eq!(
+        model.reasoning_variants,
+        vec!["none", "low", "medium", "high"]
+    );
+    assert_eq!(
+        model.reasoning_default,
+        Some(hya_provider::ReasoningEffort::Medium)
     );
     assert!(
-        ids.iter().any(|id| id == "gateway/other-model"),
-        "missing other-model in {ids:?}"
+        loaded
+            .catalog
+            .models()
+            .iter()
+            .any(|model| model.model_id == "other-model")
     );
-    let _ = std::fs::remove_dir_all(root);
+    // A discovery-only provider still refreshes in the background.
+    assert_eq!(loaded.pending_discovery.len(), 1);
+    assert!(env.cache_home.join("hya/model_cache.db").is_file());
+    let _ = std::fs::remove_dir_all(&env.root);
 }
 
-/// Successful discovery must rewrite `models.yml.cache` and leave `config.yaml` untouched.
+/// A non-empty `models:` no longer disables the remote list: cached remote
+/// rows and config entries merge per id, config fields winning.
 #[tokio::test]
-async fn discovery_refresh_writes_models_yml_cache_without_mutating_config() {
+async fn pinned_provider_merges_cached_remote_rows_with_config_entries() {
     let _env = env_lock().await;
-    let root = unique_root("provider-cache-write");
-    let config_home = write_hya_config(
-        &root,
-        "default_model: gateway/live\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
+    let env = isolated(
+        "cache-merge",
+        "default_model: gateway/shared\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models:\n      - id: shared\n        name: Shared (config)\n        limit:\n          output: 2048\n      - pinned\n",
     );
-    let cache_path = config_home.join("hya/models.yml.cache");
-    let config_path = config_home.join("hya/config.yaml");
-    let config_bytes = std::fs::read(&config_path).unwrap();
-    let _xdg = EnvGuard::set("XDG_CONFIG_HOME", config_home.to_str().unwrap());
-    let home = root.join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let _home = EnvGuard::set("HOME", home.to_str().unwrap());
-
-    let mut file = hya_app::config::ModelsCacheFile::default();
-    file.providers.insert(
-        "gateway".into(),
+    seed(
+        "gateway",
         vec![
-            hya_app::config::CachedModelEntry {
-                id: "live-a".into(),
-                limit: hya_app::config::CachedModelLimit {
-                    context: 64_000,
-                    output: 4_096,
-                },
-                ..hya_app::config::CachedModelEntry::default()
+            hya_app::model_cache::CachedModel {
+                display_name: Some("Shared (remote)".into()),
+                context_limit: 64_000,
+                output_limit: 8_192,
+                ..row("shared")
             },
-            hya_app::config::CachedModelEntry {
-                id: "live-b".into(),
-                ..hya_app::config::CachedModelEntry::default()
-            },
+            row("remote"),
         ],
-    );
-    hya_app::config::write_models_cache_file(&file).expect("write cache");
+    )
+    .await;
+    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    let find = |id: &str| {
+        loaded
+            .catalog
+            .models()
+            .iter()
+            .find(|model| model.model_id == id)
+            .unwrap_or_else(|| panic!("missing {id}"))
+            .clone()
+    };
+    use hya_provider::ModelCatalogSource as S;
+    let shared = find("shared");
+    assert_eq!(shared.source, S::Overridden);
+    assert_eq!(shared.display_name.as_deref(), Some("Shared (config)"));
+    assert_eq!(shared.capabilities.max_context, 64_000);
+    assert_eq!(shared.capabilities.max_output, 2_048);
+    assert_eq!(find("remote").source, S::Discovered);
+    assert_eq!(find("pinned").source, S::Configured);
     assert!(
-        cache_path.is_file(),
-        "cache file missing at {}",
-        cache_path.display()
+        loaded.pending_discovery.is_empty(),
+        "a pinned provider with cached rows does not refresh at startup"
     );
-    let cache = std::fs::read_to_string(&cache_path).unwrap();
-    assert!(cache.contains("live-a"), "{cache}");
-    assert!(cache.contains("live-b"), "{cache}");
-    assert!(cache.contains("context"), "{cache}");
-    assert_eq!(std::fs::read(&config_path).unwrap(), config_bytes);
-    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(&env.root);
+}
+
+/// A pinned provider with no cached rows starts from config at once and is
+/// queued for background discovery.
+#[tokio::test]
+async fn pinned_provider_without_cache_rows_is_queued_for_discovery() {
+    let _env = env_lock().await;
+    let env = isolated(
+        "cache-pinned-miss",
+        "default_model: gateway/pinned\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: [pinned]\n",
+    );
+    let started = Instant::now();
+    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(loaded.pending_discovery.len(), 1);
+    assert_eq!(loaded.catalog.default_model().as_str(), "gateway/pinned");
+    let _ = std::fs::remove_dir_all(&env.root);
+}
+
+/// The legacy `models.yml.cache` is imported once into the database and is
+/// never rewritten.
+#[tokio::test]
+async fn legacy_models_yml_cache_is_imported_once_and_left_untouched() {
+    let _env = env_lock().await;
+    let env = isolated(
+        "cache-legacy",
+        "default_model: gateway/legacy-model\nproviders:\n  gateway:\n    kind: openai\n    base_url: http://127.0.0.1:9/v1\n    models: []\n",
+    );
+    let legacy = env.config_home.join("hya/models.yml.cache");
+    let yaml = "version: 1\nproviders:\n  gateway:\n    - id: legacy-model\n      limit:\n        context: 64000\n        output: 4096\n";
+    std::fs::write(&legacy, yaml).unwrap();
+    let config_bytes = std::fs::read(env.config_home.join("hya/config.yaml")).unwrap();
+
+    let loaded = hya_app::config::load().await.unwrap().unwrap();
+    let model = loaded
+        .catalog
+        .models()
+        .iter()
+        .find(|model| model.model_id == "legacy-model")
+        .expect("imported row");
+    assert_eq!(model.capabilities.max_context, 64_000);
+    assert_eq!(model.capabilities.max_output, 4_096);
+    assert_eq!(std::fs::read_to_string(&legacy).unwrap(), yaml);
+    assert_eq!(
+        std::fs::read(env.config_home.join("hya/config.yaml")).unwrap(),
+        config_bytes
+    );
+
+    let cache = hya_app::model_cache::ModelCache::open_default()
+        .await
+        .unwrap();
+    assert_eq!(
+        cache.provider_models("gateway").await.unwrap()[0].id,
+        "legacy-model"
+    );
+    cache.close().await;
+    let _ = std::fs::remove_dir_all(&env.root);
 }

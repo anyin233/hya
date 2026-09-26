@@ -53,7 +53,7 @@
     "/v1/auth/{provider_id}": {
       "put": {
         "operationId": "Auth.SetProviderAuth",
-        "summary": "Store an API key or refresh tokens for a provider.",
+        "summary": "Store an API key (written atomically with mode 0600 as `type: api`) and",
         "tags": [
           "Auth"
         ],
@@ -62,7 +62,7 @@
       },
       "delete": {
         "operationId": "Auth.RemoveProviderAuth",
-        "summary": "Delete the stored credentials for a provider.",
+        "summary": "Delete the stored credentials for a provider and rebuild its route live",
         "tags": [
           "Auth"
         ],
@@ -531,6 +531,57 @@
           "Catalog"
         ],
         "x-grpc-method": "hya.v1.Catalog.GetProvider",
+        "x-server-streaming": false
+      },
+      "put": {
+        "operationId": "Catalog.UpsertProvider",
+        "summary": "Add or update a provider in `config.yaml` (and save its API key when",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.UpsertProvider",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/providers/{provider_id}/models": {
+      "put": {
+        "operationId": "Catalog.SetProviderModel",
+        "summary": "Write one model's entry (with its metadata overrides) into the",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.SetProviderModel",
+        "x-server-streaming": false
+      },
+      "delete": {
+        "operationId": "Catalog.RemoveProviderModel",
+        "summary": "Remove one model's entry from the provider's `models:` in",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.RemoveProviderModel",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/providers/{provider_id}/refresh": {
+      "post": {
+        "operationId": "Catalog.RefreshProvider",
+        "summary": "Re-read the provider's config entry and key, fetch its remote model",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.RefreshProvider",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/providers/{provider_id}/test": {
+      "post": {
+        "operationId": "Catalog.TestProviderModel",
+        "summary": "Send one `hi` user message to a provider's model with max output tokens",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.TestProviderModel",
         "x-server-streaming": false
       }
     },
@@ -1141,6 +1192,12 @@
         "properties": {
           "status": {
             "$ref": "#/components/schemas/AuthStatus"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderInfo"
+          },
+          "discovery": {
+            "$ref": "#/components/schemas/DiscoveryOutcome"
           }
         }
       },
@@ -1153,6 +1210,15 @@
           },
           "provider_id": {
             "type": "string"
+          }
+        }
+      },
+      "RemoveProviderAuthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderInfo"
           }
         }
       },
@@ -1420,6 +1486,9 @@
           "output_limit": {
             "type": "integer",
             "format": "int64"
+          },
+          "source": {
+            "type": "string"
           }
         }
       },
@@ -1468,6 +1537,19 @@
           },
           "result": {
             "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "key_source": {
+            "type": "string"
+          },
+          "model_count": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -1516,6 +1598,154 @@
           },
           "supports_oauth": {
             "type": "boolean"
+          }
+        }
+      },
+      "UpsertProviderRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "api_key": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshProviderRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SetProviderModelRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "context_limit": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output_limit": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reasoning": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RemoveProviderModelRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          }
+        }
+      },
+      "DiscoveryOutcome": {
+        "type": "object",
+        "description": "Outcome of one remote model-list fetch.",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "result": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "model_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ProviderUpdate": {
+        "type": "object",
+        "description": "A provider after a change, applied live.",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderInfo"
+          },
+          "discovery": {
+            "$ref": "#/components/schemas/DiscoveryOutcome"
+          }
+        }
+      },
+      "TestProviderModelRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TestProviderModelResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          },
+          "finish_reason": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -3880,7 +4110,7 @@
       },
       "ShellTurn": {
         "type": "object",
-        "description": "A synthetic shell turn: the command runs via the builtin shell tool with no model round.",
+        "description": "A synthetic shell turn: the command runs via the builtin shell tool with no model round. The user's own shell command never asks for permission in any mode (approved once); an explicit Deny rule still blocks it, a `tool.execute.before` hook can still veto it, and a directory outside the working directory still asks.",
         "properties": {
           "command": {
             "type": "string"

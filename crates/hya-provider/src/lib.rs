@@ -227,8 +227,11 @@ pub struct ProviderModel {
     pub reasoning_variants: Vec<String>,
     /// Configured per-model reasoning default, when one was authored.
     pub reasoning_default: Option<ReasoningEffort>,
-    /// Whether this row came from Hya configuration, startup discovery, or the
-    /// built-in local offline provider.
+    /// Human-readable model name from config (`name`) or the remote model
+    /// list, when either publishes one.
+    pub display_name: Option<String>,
+    /// Whether this row came from Hya configuration, the remote model list,
+    /// both (a config override), or the built-in local offline provider.
     pub source: ModelCatalogSource,
 }
 

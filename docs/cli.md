@@ -668,7 +668,7 @@ hya auth list
 hya auth logout <provider>
 hya providers list
 hya providers logout <provider>
-hya models [provider] [--verbose]
+hya models [provider] [--verbose] [--refresh]
 hya agent list [--all]
 ```
 
@@ -708,8 +708,7 @@ approval in that window, the command fails and must be rerun. Flags map to
 test-only overrides).
 
 Saved credentials take precedence over inline `api_key` values. `providers` is
-an alias for `auth`. Catalog discovery already runs once during each process
-startup, so there is no `models --refresh` command or second refresh path.
+an alias for `auth`.
 
 **`oauth status [provider]`.** Prints non-secret per-provider status only —
 credential kind (`api` vs oauth), OAuth type when present, `expires` /
@@ -717,12 +716,29 @@ credential kind (`api` vs oauth), OAuth type when present, `expires` /
 OAuth credentials it also prints a ready-to-copy re-login line
 (`hya oauth login --provider … --type …`). No token material is printed.
 
-**`models [provider]`.** Prints the sorted `provider/model` rows from the same
-immutable startup snapshot used by the server and its clients. With `--verbose`,
-each id is followed by a JSON line containing `id`, `provider`, and
-`source= configured|discovered|offline`. Unfiltered offline output is exactly
-`hya/offline`; a filter with no rows exits with `Provider not found: <id>`.
-Provider declarations that resolved no rows do not fabricate output.
+**`models [provider]`.** Prints the sorted `provider/model` rows of the
+effective catalog: each provider's remote models from the model cache
+(`$XDG_CACHE_HOME/hya/model_cache.db`) merged per model id with its
+`config.yaml` `models:` entries (see [Configuration — Model cache and config
+overrides](configuration.md#model-cache-and-config-overrides)). Providers with
+no cached rows, and discovery-only providers, fetch their remote list first.
+`--refresh` fetches the remote list of every provider (or only `provider`'s)
+into the cache before printing; a failed fetch is reported on stderr as
+`hya: <provider>: model list <result>: <error>` and keeps the old rows.
+
+With `--verbose`, each id is followed by a JSON line with `id`, `provider`,
+`source` (`remote`, `config`, `override`, or `offline`), `name` (when known),
+`context`, `output` (when known), and `reasoning`:
+
+```sh
+$ hya models openrouter --verbose
+openrouter/vendor/model-a:free
+{"context":131072,"id":"vendor/model-a:free","name":"Model A (free)","output":8192,"provider":"openrouter","reasoning":true,"source":"override"}
+```
+
+Unfiltered offline output is exactly `hya/offline`; a filter with no rows exits
+with `Provider not found: <id>`. Provider declarations that resolved no rows do
+not fabricate output.
 
 **`agent list`.** Default output is Compat-parity: only the built-in primary
 agent, printed as `build (primary)` followed by its permission rules as

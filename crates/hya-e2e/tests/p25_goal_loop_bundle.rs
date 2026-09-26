@@ -172,6 +172,11 @@ async fn patched_evaluator_pollutes_session_after_first_verification() {
         .env("MIAO_LOG", &log_path)
         .env("XDG_CONFIG_HOME", &env.backend.xdg_config_home)
         .env("XDG_DATA_HOME", &env.backend.xdg_data_home)
+        // Keep the remote-model cache (`model_cache.db`) inside the test root.
+        .env(
+            "XDG_CACHE_HOME",
+            env.backend.xdg_config_home.with_file_name("cache"),
+        )
         .current_dir(&project)
         .output()
         .await

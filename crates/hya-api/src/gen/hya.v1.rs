@@ -634,6 +634,12 @@ pub struct ModelSummary {
     /// Maximum output tokens (`limit.output`); 0 when unknown.
     #[prost(uint64, tag = "8")]
     pub output_limit: u64,
+    /// Where the row comes from: `remote` (the provider's remote model list,
+    /// via the model cache), `config` (only a `models:` entry in
+    /// `config.yaml`), `override` (both; config fields win field by field), or
+    /// `offline` (the built-in `hya/offline` row).
+    #[prost(string, tag = "9")]
+    pub source: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListModelsResponse {
@@ -671,6 +677,21 @@ pub struct ProviderSummary {
     /// Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`.
     #[prost(string, tag = "5")]
     pub result: ::prost::alloc::string::String,
+    /// Config `kind` (`openai`, `openai-response`, `anthropic`, `google`,
+    /// `openai-codex`, `grok-build`); empty for the offline provider.
+    #[prost(string, tag = "6")]
+    pub kind: ::prost::alloc::string::String,
+    /// Config `base_url`; empty for the offline provider.
+    #[prost(string, tag = "7")]
+    pub base_url: ::prost::alloc::string::String,
+    /// Where the provider's credential comes from: `saved` (an API key in
+    /// `auth/<id>.yaml`), `oauth` (a saved OAuth bundle), `config` (an inline
+    /// `api_key` in `config.yaml`), or `none`. Never the secret itself.
+    #[prost(string, tag = "8")]
+    pub key_source: ::prost::alloc::string::String,
+    /// Number of model rows the provider currently serves.
+    #[prost(uint32, tag = "9")]
+    pub model_count: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProvidersResponse {
@@ -705,6 +726,142 @@ pub struct ProviderInfo {
     /// Whether an OAuth flow is supported.
     #[prost(bool, tag = "4")]
     pub supports_oauth: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpsertProviderRequest {
+    /// Directory context (unused; providers are process-wide).
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Provider id: 1-64 ASCII letters, digits, `-`, or `_` (`hya` is
+    /// reserved for the offline provider).
+    #[prost(string, tag = "2")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// Protocol kind: `openai` (OpenAI-compatible Chat Completions),
+    /// `openai-response`, `anthropic`, or `google`; the config aliases
+    /// `openai-compatible`, `openai-completion`, `openai-codex`, and
+    /// `grok-build` are accepted too.
+    #[prost(string, tag = "3")]
+    pub kind: ::prost::alloc::string::String,
+    /// API root, `<http://`> or `<https://`> (for example
+    /// `<https://api.openai.com/v1`>).
+    #[prost(string, tag = "4")]
+    pub base_url: ::prost::alloc::string::String,
+    /// API key to save in `auth/<id>.yaml`; absent or empty keeps the current
+    /// credential.
+    #[prost(string, optional, tag = "5")]
+    pub api_key: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RefreshProviderRequest {
+    /// Directory context (unused; providers are process-wide).
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Configured provider id.
+    #[prost(string, tag = "2")]
+    pub provider_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetProviderModelRequest {
+    /// Directory context (unused; providers are process-wide).
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Configured provider id.
+    #[prost(string, tag = "2")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// Provider-local model id (may contain `/` and `:`).
+    #[prost(string, tag = "3")]
+    pub model_id: ::prost::alloc::string::String,
+    /// Display name written as the entry's `name`; absent removes it.
+    #[prost(string, optional, tag = "4")]
+    pub display_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// Context window written as `limit.context`; absent or 0 removes it.
+    #[prost(uint32, optional, tag = "5")]
+    pub context_limit: ::core::option::Option<u32>,
+    /// Max output tokens written as `limit.output`; absent or 0 removes it.
+    #[prost(uint32, optional, tag = "6")]
+    pub output_limit: ::core::option::Option<u32>,
+    /// Reasoning switch written as `reasoning: true|false`; absent removes a
+    /// boolean `reasoning` (a detailed `reasoning:` mapping is kept when this
+    /// is absent or true).
+    #[prost(bool, optional, tag = "7")]
+    pub reasoning: ::core::option::Option<bool>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RemoveProviderModelRequest {
+    /// Directory context (unused; providers are process-wide).
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Configured provider id.
+    #[prost(string, tag = "2")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// Provider-local model id whose config entry is removed.
+    #[prost(string, tag = "3")]
+    pub model_id: ::prost::alloc::string::String,
+}
+/// Outcome of one remote model-list fetch.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DiscoveryOutcome {
+    /// True when the remote model list was fetched and parsed (possibly
+    /// empty).
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    /// `models`, `empty`, `auth_required`, `auth_rejected`, `unavailable`,
+    /// `invalid`, or `unsupported`.
+    #[prost(string, tag = "2")]
+    pub result: ::prost::alloc::string::String,
+    /// Bounded, non-secret failure description when `ok` is false.
+    #[prost(string, tag = "3")]
+    pub error_message: ::prost::alloc::string::String,
+    /// Number of remote models fetched (and now in the model cache).
+    #[prost(uint32, tag = "4")]
+    pub model_count: u32,
+}
+/// A provider after a change, applied live.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderUpdate {
+    /// The provider with its effective model rows.
+    #[prost(message, optional, tag = "1")]
+    pub provider: ::core::option::Option<ProviderInfo>,
+    /// Remote model-list fetch outcome; unset when the call did not fetch.
+    #[prost(message, optional, tag = "2")]
+    pub discovery: ::core::option::Option<DiscoveryOutcome>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TestProviderModelRequest {
+    /// Directory context (unused; providers are process-wide).
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Configured provider id.
+    #[prost(string, tag = "2")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// Provider-local model id to probe.
+    #[prost(string, tag = "3")]
+    pub model_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TestProviderModelResponse {
+    /// True when the reply stream completed without an error (a `length`
+    /// finish is a normal reply: the probe caps output at one token).
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    /// Text the model returned (often one token or empty).
+    #[prost(string, tag = "2")]
+    pub text: ::prost::alloc::string::String,
+    /// Finish reason when the provider reported one: `stop`, `length`,
+    /// `tool_calls`, `cancelled`, or `error`.
+    #[prost(string, tag = "3")]
+    pub finish_reason: ::prost::alloc::string::String,
+    /// Stable failure class when `ok` is false: `http_<status>`, `transport`,
+    /// `timeout`, `unknown_model`, `incompatible`, `decode`, `auth_expired`,
+    /// or `provider_error`.
+    #[prost(string, tag = "4")]
+    pub error_code: ::prost::alloc::string::String,
+    /// Bounded provider failure message when `ok` is false.
+    #[prost(string, tag = "5")]
+    pub error_message: ::prost::alloc::string::String,
+    /// Wall-clock time of the probe in milliseconds.
+    #[prost(uint32, tag = "6")]
+    pub latency_ms: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsRequest {
@@ -907,8 +1064,12 @@ pub mod catalog_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-    /// Read-only catalog surface used by pickers, completion UIs, and setup
-    /// flows.
+    /// Catalog surface used by pickers, completion UIs, and setup flows, plus
+    /// the provider-management calls behind the TUI Provider View (add or update
+    /// a provider, refresh its remote model list, override model metadata in
+    /// `config.yaml`, and test a model). Provider changes apply live: the server
+    /// rebuilds that provider's route and the catalog, and emits
+    /// `catalog.updated`.
     #[derive(Debug, Clone)]
     pub struct CatalogClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -1092,6 +1253,138 @@ pub mod catalog_client {
                 .insert(GrpcMethod::new("hya.v1.Catalog", "GetProvider"));
             self.inner.unary(req, path, codec).await
         }
+        /// Add or update a provider in `config.yaml` (and save its API key when
+        /// one is given), fetch its remote model list into the model cache, and
+        /// apply it live. A failed fetch does not fail the call: `discovery`
+        /// reports it.
+        ///
+        /// hya.http: PUT /v1/providers/{provider_id}
+        pub async fn upsert_provider(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpsertProviderRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/UpsertProvider",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "UpsertProvider"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Re-read the provider's config entry and key, fetch its remote model
+        /// list into the model cache, and apply it live.
+        ///
+        /// hya.http: POST /v1/providers/{provider_id}/refresh
+        pub async fn refresh_provider(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RefreshProviderRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/RefreshProvider",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "RefreshProvider"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Write one model's entry (with its metadata overrides) into the
+        /// provider's `models:` in `config.yaml` and apply it live. The model id
+        /// travels in the body because ids may contain `/` or `:`.
+        ///
+        /// hya.http: PUT /v1/providers/{provider_id}/models
+        pub async fn set_provider_model(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetProviderModelRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/SetProviderModel",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "SetProviderModel"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Remove one model's entry from the provider's `models:` in
+        /// `config.yaml` and apply it live; a remote model stays listed from the
+        /// model cache. The model id travels as the `modelId` query parameter.
+        ///
+        /// hya.http: DELETE /v1/providers/{provider_id}/models
+        pub async fn remove_provider_model(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RemoveProviderModelRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/RemoveProviderModel",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "RemoveProviderModel"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Send one `hi` user message to a provider's model with max output tokens
+        /// 1 (no tools, no reasoning) and report whether a normal reply came back.
+        ///
+        /// hya.http: POST /v1/providers/{provider_id}/test
+        pub async fn test_provider_model(
+            &mut self,
+            request: impl tonic::IntoRequest<super::TestProviderModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TestProviderModelResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/TestProviderModel",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "TestProviderModel"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Slash-command catalog entries.
         ///
         /// hya.http: GET /v1/commands
@@ -1250,6 +1543,53 @@ pub mod catalog_server {
             &self,
             request: tonic::Request<super::GetProviderRequest>,
         ) -> std::result::Result<tonic::Response<super::ProviderInfo>, tonic::Status>;
+        /// Add or update a provider in `config.yaml` (and save its API key when
+        /// one is given), fetch its remote model list into the model cache, and
+        /// apply it live. A failed fetch does not fail the call: `discovery`
+        /// reports it.
+        ///
+        /// hya.http: PUT /v1/providers/{provider_id}
+        async fn upsert_provider(
+            &self,
+            request: tonic::Request<super::UpsertProviderRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status>;
+        /// Re-read the provider's config entry and key, fetch its remote model
+        /// list into the model cache, and apply it live.
+        ///
+        /// hya.http: POST /v1/providers/{provider_id}/refresh
+        async fn refresh_provider(
+            &self,
+            request: tonic::Request<super::RefreshProviderRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status>;
+        /// Write one model's entry (with its metadata overrides) into the
+        /// provider's `models:` in `config.yaml` and apply it live. The model id
+        /// travels in the body because ids may contain `/` or `:`.
+        ///
+        /// hya.http: PUT /v1/providers/{provider_id}/models
+        async fn set_provider_model(
+            &self,
+            request: tonic::Request<super::SetProviderModelRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status>;
+        /// Remove one model's entry from the provider's `models:` in
+        /// `config.yaml` and apply it live; a remote model stays listed from the
+        /// model cache. The model id travels as the `modelId` query parameter.
+        ///
+        /// hya.http: DELETE /v1/providers/{provider_id}/models
+        async fn remove_provider_model(
+            &self,
+            request: tonic::Request<super::RemoveProviderModelRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status>;
+        /// Send one `hi` user message to a provider's model with max output tokens
+        /// 1 (no tools, no reasoning) and report whether a normal reply came back.
+        ///
+        /// hya.http: POST /v1/providers/{provider_id}/test
+        async fn test_provider_model(
+            &self,
+            request: tonic::Request<super::TestProviderModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TestProviderModelResponse>,
+            tonic::Status,
+        >;
         /// Slash-command catalog entries.
         ///
         /// hya.http: GET /v1/commands
@@ -1293,8 +1633,12 @@ pub mod catalog_server {
             tonic::Status,
         >;
     }
-    /// Read-only catalog surface used by pickers, completion UIs, and setup
-    /// flows.
+    /// Catalog surface used by pickers, completion UIs, and setup flows, plus
+    /// the provider-management calls behind the TUI Provider View (add or update
+    /// a provider, refresh its remote model list, override model metadata in
+    /// `config.yaml`, and test a model). Provider changes apply live: the server
+    /// rebuilds that provider's route and the catalog, and emits
+    /// `catalog.updated`.
     #[derive(Debug)]
     pub struct CatalogServer<T> {
         inner: Arc<T>,
@@ -1536,6 +1880,231 @@ pub mod catalog_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetProviderSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/UpsertProvider" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpsertProviderSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::UpsertProviderRequest>
+                    for UpsertProviderSvc<T> {
+                        type Response = super::ProviderUpdate;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UpsertProviderRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::upsert_provider(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpsertProviderSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/RefreshProvider" => {
+                    #[allow(non_camel_case_types)]
+                    struct RefreshProviderSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::RefreshProviderRequest>
+                    for RefreshProviderSvc<T> {
+                        type Response = super::ProviderUpdate;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RefreshProviderRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::refresh_provider(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RefreshProviderSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/SetProviderModel" => {
+                    #[allow(non_camel_case_types)]
+                    struct SetProviderModelSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::SetProviderModelRequest>
+                    for SetProviderModelSvc<T> {
+                        type Response = super::ProviderUpdate;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SetProviderModelRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::set_provider_model(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SetProviderModelSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/RemoveProviderModel" => {
+                    #[allow(non_camel_case_types)]
+                    struct RemoveProviderModelSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::RemoveProviderModelRequest>
+                    for RemoveProviderModelSvc<T> {
+                        type Response = super::ProviderUpdate;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RemoveProviderModelRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::remove_provider_model(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RemoveProviderModelSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/TestProviderModel" => {
+                    #[allow(non_camel_case_types)]
+                    struct TestProviderModelSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::TestProviderModelRequest>
+                    for TestProviderModelSvc<T> {
+                        type Response = super::TestProviderModelResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::TestProviderModelRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::test_provider_model(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = TestProviderModelSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -1815,11 +2384,18 @@ pub mod set_provider_auth_request {
         Oauth(super::OauthTokens),
     }
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetProviderAuthResponse {
     /// Resulting auth status for the provider.
     #[prost(enumeration = "AuthStatus", tag = "1")]
     pub status: i32,
+    /// The provider after the live rebuild; unset when the id is not a
+    /// configured provider.
+    #[prost(message, optional, tag = "2")]
+    pub provider: ::core::option::Option<ProviderInfo>,
+    /// Remote model-list fetch outcome when the save triggered one.
+    #[prost(message, optional, tag = "3")]
+    pub discovery: ::core::option::Option<DiscoveryOutcome>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RemoveProviderAuthRequest {
@@ -1830,8 +2406,13 @@ pub struct RemoveProviderAuthRequest {
     #[prost(string, tag = "2")]
     pub provider_id: ::prost::alloc::string::String,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct RemoveProviderAuthResponse {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RemoveProviderAuthResponse {
+    /// The provider after the live rebuild; unset when the id is not a
+    /// configured provider.
+    #[prost(message, optional, tag = "1")]
+    pub provider: ::core::option::Option<ProviderInfo>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StartOauthRequest {
     /// Directory context for auth resolution.
@@ -1992,7 +2573,9 @@ pub mod auth_client {
                 .insert(GrpcMethod::new("hya.v1.Auth", "ListProviderAuth"));
             self.inner.unary(req, path, codec).await
         }
-        /// Store an API key or refresh tokens for a provider.
+        /// Store an API key (written atomically with mode 0600 as `type: api`) and
+        /// rebuild that provider's route live; a provider with no cached remote
+        /// models also fetches its model list.
         ///
         /// hya.http: PUT /v1/auth/{provider_id}
         pub async fn set_provider_auth(
@@ -2019,7 +2602,8 @@ pub mod auth_client {
                 .insert(GrpcMethod::new("hya.v1.Auth", "SetProviderAuth"));
             self.inner.unary(req, path, codec).await
         }
-        /// Delete the stored credentials for a provider.
+        /// Delete the stored credentials for a provider and rebuild its route live
+        /// (an inline config `api_key`, if any, applies again).
         ///
         /// hya.http: DELETE /v1/auth/{provider_id}
         pub async fn remove_provider_auth(
@@ -2121,7 +2705,9 @@ pub mod auth_server {
             tonic::Response<super::ListProviderAuthResponse>,
             tonic::Status,
         >;
-        /// Store an API key or refresh tokens for a provider.
+        /// Store an API key (written atomically with mode 0600 as `type: api`) and
+        /// rebuild that provider's route live; a provider with no cached remote
+        /// models also fetches its model list.
         ///
         /// hya.http: PUT /v1/auth/{provider_id}
         async fn set_provider_auth(
@@ -2131,7 +2717,8 @@ pub mod auth_server {
             tonic::Response<super::SetProviderAuthResponse>,
             tonic::Status,
         >;
-        /// Delete the stored credentials for a provider.
+        /// Delete the stored credentials for a provider and rebuild its route live
+        /// (an inline config `api_key`, if any, applies again).
         ///
         /// hya.http: DELETE /v1/auth/{provider_id}
         async fn remove_provider_auth(
@@ -12867,7 +13454,10 @@ pub struct CommandTurn {
     pub model: ::prost::alloc::string::String,
 }
 /// A synthetic shell turn: the command runs via the builtin shell tool with
-/// no model round.
+/// no model round. The user's own shell command never asks for permission in
+/// any mode (approved once); an explicit Deny rule still blocks it, a
+/// `tool.execute.before` hook can still veto it, and a directory outside the
+/// working directory still asks.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ShellTurn {
     /// Shell command line to execute.
