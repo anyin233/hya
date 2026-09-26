@@ -411,6 +411,45 @@ async fn v1_fs_reads_lists_finds_and_searches() {
     assert_eq!(body["text"], json!(true));
     assert!(String::from_utf8_lossy(&decode_b64(&body)).contains("hello v1 probe"));
 
+    // `maxBytes` caps what is read and returned (a frontend checking an
+    // attachment's size never pulls more than its limit + 1); binary
+    // content comes back as base64 bytes with `text` false.
+    std::fs::write(
+        root.join("shot.png"),
+        [0x89, b'P', b'N', b'G', 0xff, 0xfe, 0, 1, 2, 3],
+    )
+    .unwrap();
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/read?directory={}&path=shot.png&maxBytes=6",
+            enc(&scope)
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(decode_b64(&body), vec![0x89, b'P', b'N', b'G', 0xff, 0xfe]);
+    // protojson omits a false `text`.
+    assert_ne!(body["text"], json!(true));
+    assert_eq!(body["mime"], json!("image/png"));
+    // An absolute path inside the scope reads the same file.
+    let absolute = root.join("shot.png").to_string_lossy().into_owned();
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/read?directory={}&path={}",
+            enc(&scope),
+            enc(&absolute)
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(decode_b64(&body).len(), 10);
+
     let (status, body) = send(
         app.clone(),
         Method::GET,

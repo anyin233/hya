@@ -48,6 +48,18 @@ fn resolve_under(root: &Path, path: &str) -> Result<PathBuf, V1Error> {
     }
 }
 
+/// The file's bytes, at most `max_bytes` of them (0 = the whole file).
+async fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    if max_bytes == 0 {
+        return tokio::fs::read(path).await;
+    }
+    let file = tokio::fs::File::open(path).await?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes).read_to_end(&mut bytes).await?;
+    Ok(bytes)
+}
+
 async fn read_file(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
@@ -56,7 +68,7 @@ async fn read_file(
     let request: pb::ReadFileRequest = super::query_request(&[], &query)?;
     let root = scope_directory(&headers, &request.directory)?;
     let path = resolve_under(&root, &request.path)?;
-    let bytes = tokio::fs::read(&path)
+    let bytes = read_capped(&path, request.max_bytes)
         .await
         .map_err(|error| V1Error::invalid_argument(error.to_string()))?;
     let text = std::str::from_utf8(&bytes).is_ok();
