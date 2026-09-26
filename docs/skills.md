@@ -104,6 +104,24 @@ override an earlier skill of the same name (`HashSet` insert on name).
 Both the singular `skill` and plural `skills` spellings are scanned for the
 OpenCode-style roots.
 
+### Multi-root (Project) discovery order
+
+[`skill_dirs_for(workdir, roots)`](../crates/hya-tool/src/skill_catalog.rs) and
+[`discover_skills_for_roots_with_builtins`](../crates/hya-tool/src/skill_catalog.rs)
+extend the same first-name-wins rule across a Project's additional roots (not
+yet wired into the engine's scope binding — this documents the order for when
+it is):
+
+1. `<workdir>/.hya/skills`
+2. `<root>/.hya/skills` for each Project root, in root order
+3. the user directories (`$HOME/.config/hya/skills`, `$HOME/.claude/skills`, …)
+4. `<workdir>/.agents/skills`
+5. `<root>/.agents/skills` for each Project root, in root order
+6. `$HOME/.codex/skills`, `$HOME/.agents/skills` as today
+
+Directories are deduped (e.g. a root equal to `workdir` is only scanned once).
+As above, the first occurrence of a given skill `name` wins.
+
 ---
 
 ## Built-in fallback skills
