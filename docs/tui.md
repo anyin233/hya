@@ -52,7 +52,11 @@ sidebar's `Context` box shows `WebUI    127.0.0.1:3250`, and `/status` shows a
 taken), the TUI still works: the status line shows
 `WebUI unavailable: port 3250 is in use · hya --port <N>`, the status bar
 shows `WebUI unavailable` in the warning color, and `/status` repeats the
-reason. `/status` shows `Backend     in the hya process (bare hya)`.
+reason. `/status` shows `Backend     in the hya process (bare hya)`. If
+another process already serves the database, bare `hya` attaches to that
+server instead of starting its own, and `/status` shows
+`Backend     attached to a running server · pid <pid>` (see [Bare
+`hya`](cli.md#bare-hya), "Attaching to a running server").
 
 ### Run it with Bun (development)
 
@@ -72,7 +76,19 @@ cargo build -p hya-backend --bin hya        # once; or put a released hya on PAT
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
 ```
 
-Without `--server` the TUI starts its own backend: it finds the `hya`
+Without `--server` the TUI first looks for a server that already runs on its
+database ([ADR-0022](adr/0022-one-writer-per-database.md)). It reads
+`<db>.server.json` next to the database (`{url, pid, version, startedAt}`,
+written by that server) and attaches when the pid is alive and
+`GET <url>/v1/health` answers `ok`. It then starts nothing and stops
+nothing, and `/status` shows
+`Backend     attached to a running server · pid <pid> · db <db>`. So a second
+TUI on the same database shares the first one's sessions and live events
+(streamed turns, renames, asks) instead of writing the file as a second
+server. The attached TUI depends on that server: if its owner quits, the
+attached TUI loses the connection (restart it to start a new server).
+
+Otherwise the TUI starts its own backend: it finds the `hya`
 binary, runs `hya serve --bind 127.0.0.1:0 --db <db>` in `--dir` with the
 TUI's environment, reads the URL from the server's readiness line
 (`hya server listening on <url>`, see [`hya serve`](cli.md#hya-serve)),
@@ -82,7 +98,13 @@ host sends when its browser tab closes). Stopping sends SIGTERM (the server
 drains running turns for up to 5 s) and SIGKILL after 6 s, and the TUI
 waits for the process to exit, so no `hya serve` is left behind. The
 server's stdout and stderr never reach the screen; `/status` shows the
-started backend's pid, binary, and database.
+started backend's pid, binary, and database
+(`Backend     started by this TUI · pid <pid> · <bin> · db <db>`). If that
+`hya serve` exits with status 75 because another process holds the database
+(two TUIs started at the same moment, or the holder is still starting), the
+TUI waits up to 20 s for the holder's discovery file and attaches. If none
+appears it fails with
+`database <db> is in use by another hya process that serves no reachable server`.
 
 The binary is looked up in this order:
 
@@ -116,17 +138,18 @@ bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI starts its own backend. |
 | `--dir <path>` | Workspace directory: the `x-hya-directory` scope of every request and the started backend's working directory. Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary to start (first in the lookup order above). Only without `--server`. |
-| `--db <path>` | SQLite database of the started backend. Default: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. Only without `--server`. |
+| `--db <path>` | SQLite database of the backend, relative to `--dir`: the TUI attaches to the server already running on it, else starts one. Default: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. Only without `--server`. |
 | `-c`, `--continue` | Open the most recently updated top-level session of `--dir` (subagent sessions are opened from their parent). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
 | `--web-url <url>` | Show this WebUI address (status bar `WebUI <url>`, sidebar `Context` row, `/status`). Bare `hya` passes it; an HTTP(S) URL. |
 | `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in the status line and `/status`, and `WebUI unavailable` in the status bar. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
+| `--attached-pid <pid>` | With `--server` only: the server belongs to another process (pid) that bare `hya` attached to; `/status` shows `attached to a running server · pid <pid>`. Bare `hya` passes it. |
 | `-h`, `--help` | Print the flags and the binary lookup order. |
 
 Without `--continue` or `--session` no session is open at start; the first
 prompt (or `/new`) creates one, and `/sessions` (or the sidebar) reaches the
-earlier ones. Two TUIs that each start a backend on the same default
-database share its sessions; give one `--db` for a separate store. The
+earlier ones. Two TUIs on the same database share one server, so they see
+the same sessions live; give one `--db` for a separate store. The
 backend's offline echo model is sufficient for a first run; configure a
 provider in the backend for live model calls.
 

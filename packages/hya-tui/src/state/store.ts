@@ -200,8 +200,12 @@ export interface LiveRound {
 /** A backend started by this TUI (src/launch.ts). */
 export interface BackendInfo {
   pid: number
-  bin: string
-  db: string
+  /** The `hya` binary this TUI started (absent when attached). */
+  bin?: string
+  /** The database (absent when bare `hya` attached and did not say). */
+  db?: string
+  /** The server is another process's that this TUI (or bare `hya`) attached to; quitting does not stop it. */
+  attached?: boolean
 }
 
 /**

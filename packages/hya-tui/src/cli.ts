@@ -16,6 +16,8 @@ export interface Options {
   session?: string
   /** The WebUI bare `hya` serves next to this TUI (`--web-url`), or why it could not (`--web-error`). */
   web?: WebInfo
+  /** `--attached-pid`: bare `hya` attached to this running server instead of starting one (shown in `/status`). */
+  attachedPid?: number
 }
 
 /** The WebUI state bare `hya` passes to its terminal TUI: exactly one of the two is set. */
@@ -28,8 +30,9 @@ export interface WebInfo {
 
 export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
 
-Without --server the TUI starts its own backend (hya serve on a free local
-port, working directory --dir) and stops it when the TUI exits.
+Without --server the TUI attaches to the server already running on --db
+(its <db>.server.json answers), else starts its own backend (hya serve on a
+free local port, working directory --dir) and stops it when the TUI exits.
 
 Options:
   --server URL      Connect to a running hya serve instead of starting one
@@ -45,6 +48,8 @@ Options:
                     the WebUI next to this TUI)
   --web-error TEXT  Show "WebUI unavailable: TEXT" (set by bare hya when the
                     WebUI could not start)
+  --attached-pid N  With --server: the server is another process's (pid N)
+                    that bare hya attached to; shown in /status
   -h, --help        Show this help
 
 Environment:
@@ -61,6 +66,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let session: string | undefined
   let webUrl: string | undefined
   let webError: string | undefined
+  let attachedPid: string | undefined
   let resume = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
@@ -75,6 +81,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     else if (arg === "--session" || arg === "-s") session = argv[++index]!
     else if (arg === "--web-url") webUrl = argv[++index]!
     else if (arg === "--web-error") webError = argv[++index]!
+    else if (arg === "--attached-pid") attachedPid = argv[++index]!
     else throw new Error(`Unknown or incomplete option: ${arg}`)
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
@@ -95,5 +102,11 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     options.web = { url: url.toString() }
   }
   if (webError !== undefined) options.web = { error: webError }
+  if (attachedPid !== undefined) {
+    if (server === undefined) throw new Error("--attached-pid only applies with --server")
+    const pid = Number(attachedPid)
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error("--attached-pid needs a process id")
+    options.attachedPid = pid
+  }
   return options
 }

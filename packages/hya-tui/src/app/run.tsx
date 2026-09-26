@@ -1,5 +1,6 @@
 /**
- * Start the TUI: the backend (one-command launch, src/launch.ts) unless
+ * Start the TUI: the backend (one-command launch, src/launch.ts: attach to
+ * the server already running on the database, else start `hya serve`) unless
  * `--server` names one, the preferences file (src/prefs.ts: the saved
  * theme and vim mode), then the renderer, store, controller, Solid tree, and the
  * initial load.
@@ -8,7 +9,7 @@
  * (SIGINT, SIGTERM, SIGHUP; the WebUI host sends SIGHUP when its tab
  * closes) — runs `shutdown()` once: restore the terminal, stop the started
  * backend (SIGTERM, then SIGKILL after its grace period) and wait for it to
- * exit, then exit. A backend that fails to start is reported on stderr with
+ * exit, then exit. A server the TUI attached to is never stopped. A backend that fails to start is reported on stderr with
  * the tail of its output, and the TUI exits with status 1 before it takes
  * over the terminal.
  */
@@ -16,7 +17,7 @@ import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { render } from "@opentui/solid"
 import type { Options } from "../cli"
 import { HyaClient } from "../client"
-import { BackendError, defaultDatabase, resolveHyaBinary, startBackend, type Backend } from "../launch"
+import { BackendError, connectOrStart, defaultDatabase, resolveHyaBinary, type Backend, type Connection } from "../launch"
 import { loadPreferences, preferencesPath } from "../prefs"
 import { setTheme } from "../theme"
 import { createAppStore } from "../state/store"
@@ -47,12 +48,21 @@ export async function run(options: Options): Promise<void> {
   for (const [signal, code] of Object.entries(exitSignals)) process.on(signal, () => void shutdown(code))
 
   let server = options.server
+  let attached: Extract<Connection, { kind: "attached" }> | undefined
   if (!server) {
     try {
       const binary = resolveHyaBinary({ flag: options.hya, env: process.env })
-      process.stdout.write(`hya-tui: starting hya serve (${binary.path}, found by ${binary.source}) in ${options.directory}…\n`)
-      backend = await startBackend({ bin: binary.path, directory: options.directory, db: options.db ?? defaultDatabase(process.env) })
-      server = backend.url
+      const db = options.db ?? defaultDatabase(process.env)
+      process.stdout.write(`hya-tui: connecting to the hya server on ${db}, or starting hya serve (${binary.path}, found by ${binary.source}) in ${options.directory}…\n`)
+      const connection = await connectOrStart({ bin: binary.path, directory: options.directory, db })
+      if (connection.kind === "attached") {
+        attached = connection
+        server = connection.url
+        process.stdout.write(`hya-tui: attached to the running hya server pid ${connection.pid} at ${connection.url}\n`)
+      } else {
+        backend = connection.backend
+        server = backend.url
+      }
     } catch (error) {
       const detail = error instanceof BackendError && error.detail ? `\n--- hya serve output (last lines) ---\n${error.detail}\n` : ""
       process.stderr.write(`hya-tui: could not start the backend: ${error instanceof Error ? error.message : String(error)}${detail}\n`)
@@ -60,7 +70,7 @@ export async function run(options: Options): Promise<void> {
       process.exit(1)
     }
     // The backend died under the TUI: say so instead of retrying forever.
-    void backend.exited.then((code) => {
+    void backend?.exited.then((code) => {
       if (stopping) return
       renderer?.destroy()
       process.stderr.write(`hya-tui: the backend exited unexpectedly (code ${code ?? "signal"})\n${backend?.outputTail() ?? ""}\n`)
@@ -79,13 +89,19 @@ export async function run(options: Options): Promise<void> {
   const client = new HyaClient(server, options.directory)
   const store = createAppStore()
   if (backend) store.setBackend({ pid: backend.pid, bin: backend.bin, db: backend.db })
+  else if (attached) store.setBackend({ pid: attached.pid, db: attached.db, attached: true })
+  else if (options.attachedPid) store.setBackend({ pid: options.attachedPid, attached: true })
   if (options.web) store.setWeb(options.web)
   if (loaded.preferences.vim) store.setVim(true)
   controller = createController({
     client, store, directory: options.directory,
     quit: () => void shutdown(0),
     startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}) },
-    connectionHint: backend ? "the started backend did not answer" : "start hya serve or drop --server",
+    connectionHint: backend
+      ? "the started backend did not answer"
+      : attached || options.attachedPid
+        ? "the attached server stopped; restart to start a new one"
+        : "start hya serve or drop --server",
     preferencesPath: prefsPath,
     // The renderer exists once the first frame is due; these run on user actions after that.
     terminal: {

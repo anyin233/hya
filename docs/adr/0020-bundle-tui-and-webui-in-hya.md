@@ -15,6 +15,10 @@ The `hya` binary orchestrates processes; it does not render.
   `hya serve` (same `hya-app` composition, global `--db`/`--model`/`--yolo`/
   `--pure`) and binds it to `127.0.0.1:0`. An empty `--db` means the durable
   default database, as for `hya sessions`. It prints no readiness line.
+  *Amended by ADR-0022:* when another process already serves the database
+  (`<db>.lock` held and `<db>.server.json` healthy), `hya` starts no server and
+  attaches both frontends to that one. Quitting then stops only the
+  frontends.
 - **Bun children.** `hya` runs the web host (`bun <tui-web>/src/main.ts --host
   127.0.0.1 --port <port> --cwd <cwd> -- bun <tui>/src/main.ts --server <url>
   --dir <cwd>`) on `--port` (default 3250, `0` = a free port), in its own

@@ -54,3 +54,10 @@ test("usage names the preferences file and its HYA_TUI_CONFIG override", () => {
   expect(usage).toContain("HYA_TUI_CONFIG")
   expect(usage).toContain("hya/tui.json")
 })
+
+test("--attached-pid names the running server bare hya attached to", () => {
+  expect(parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "4242"], "/cwd")).toMatchObject({ attachedPid: 4242 })
+  expect(() => parseArguments(["--attached-pid", "4242"], "/cwd")).toThrow("--attached-pid only applies with --server")
+  expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "x"], "/cwd")).toThrow("--attached-pid needs a process id")
+  expect(usage).toContain("--attached-pid")
+})

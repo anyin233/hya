@@ -96,8 +96,11 @@ with status 1:
   directory to see the full output.
 - `hya serve did not print its readiness line within 60 s` — the server
   hung during startup; see [Diagnosing Slow Startup](#diagnosing-slow-startup).
+- `database <db> is in use by another hya process that serves no reachable
+  server` — see [Database Is Already in Use](#database-is-already-in-use).
 
-`/status` in the TUI shows the backend it started (pid, binary, database).
+`/status` in the TUI shows the backend it started (pid, binary, database),
+or the running server it attached to.
 
 See the [TUI guide](tui.md), [CLI Reference](cli.md), and
 [Protocol guide](protocol/README.md).
@@ -245,6 +248,29 @@ GET /v1/sessions/{session}/events?sinceSeq=<last_seen_seq>
 
 then resume reading the stream.
 
+## Database Is Already in Use
+
+One database has one server ([ADR-0022](adr/0022-one-writer-per-database.md)):
+the server holds `<db>.lock` and publishes `<db>.server.json` next to the
+database. TUIs and bare `hya` attach to it, but a second server is refused:
+
+- `hya serve: database <db> is already in use by hya server pid <pid> at <url>`
+  (exit status 75): connect to that server
+  (`bun packages/hya-tui/src/main.ts --server <url>`, or run bare `hya` or the
+  TUI without `--server`, which attach), stop it, or pass another `--db`.
+- `… is already in use by pid <pid> (lock <db>.lock); it is still starting or
+  does not serve HTTP` (exit status 75): the holder has not published a URL.
+  Wait for it to start, or find it with `ps -p <pid>`.
+- Bare `hya`: `database <db> is in use by pid <pid>, which has published no
+  server` / `… published <url> but it does not answer (waited 20 s)`: the
+  holder is hung or is not a server. Stop that process.
+- TUI: `database <db> is in use by another hya process that serves no
+  reachable server`: same cause.
+
+`<db>.lock` is released by the OS when its process exits, even on a crash or
+SIGKILL. Do not delete it. A `<db>.server.json` left by a crash is ignored
+and replaced by the next server.
+
 ## SQLite Database Is Locked
 
 File-backed stores use WAL mode and a five-second busy timeout. If lock errors
@@ -252,6 +278,8 @@ continue:
 
 - make sure another process is not holding a long write transaction
 - use a separate database path for separate local experiments
+- `hya exec --db` and `hya workflow` do not take the server lock: on a database
+  a server is using, they are a second writer
 - use an empty `--db ""` for in-memory one-off runs
 
 ## The Server Binds an Unexpected Port
