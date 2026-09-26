@@ -29,6 +29,7 @@ import type {
   MemberInfo,
   MessageInfo,
   ModelSummary,
+  ProjectInfo,
   PromptAttachment,
   StreamEvent,
   ProviderSummary,
@@ -187,6 +188,16 @@ export interface AppState {
   readonly backend: BackendInfo | undefined
   /** The WebUI bare `hya` serves next to this TUI (`--web-url` / `--web-error`); `undefined` otherwise. */
   readonly web: WebInfo | undefined
+  /** `ListProjects` (with `busy` per Project), re-read on `projectsUpdated` (app/controller.ts). */
+  readonly projects: ProjectInfo[]
+  /**
+   * The Project new sessions go to and the directory scope follows
+   * (state/projects.ts); `undefined` before one is chosen (`--remote`) or
+   * when `EnsureProjectForPath` failed.
+   */
+  readonly activeProjectId: string | undefined
+  /** `--remote`: started without a Project for `--dir`. */
+  readonly remote: boolean
 }
 
 /** One billed provider round (`tokensRecorded` with a non-empty `message`). */
@@ -235,6 +246,8 @@ export interface Catalog {
   commands: CommandSummary[]
   /** `GET /v1/permission-modes`; omitted keeps the rows read before. */
   permissionModes?: PermissionModeInfo[]
+  /** `GET /v1/projects`; omitted keeps the rows read before. */
+  projects?: ProjectInfo[]
 }
 
 export const startupStatus = "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit"
@@ -303,6 +316,9 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     liveRound: undefined,
     backend: undefined,
     web: undefined,
+    projects: [],
+    activeProjectId: undefined,
+    remote: false,
   }
 }
 
@@ -411,6 +427,7 @@ export function createAppStore() {
         set("providers", catalog.providers)
         set("backendCommands", catalog.commands)
         if (catalog.permissionModes) set("permissionModes", catalog.permissionModes)
+        if (catalog.projects) set("projects", catalog.projects)
         const selected = state.selected
         if (selected) set("selected", catalog.sessions.find((row) => row.id === selected.id) ?? selected)
         set("ready", true)
@@ -752,6 +769,14 @@ export function createAppStore() {
     /** Open, update, or (`undefined`) close the Agent Models view (`/agent-models`). */
     setAgentModelsView(view: AgentModelsViewState | undefined): void { set("agentModelsView", view) },
     setAgentModelRows(rows: AgentModelState[]): void { set("agentModelRows", rows) },
+
+    /** `ListProjects` rows (after a `projectsUpdated` frame or a Project write). */
+    setProjects(rows: ProjectInfo[]): void { set("projects", rows) },
+    /** The Project new sessions go to; `undefined` = none chosen. */
+    setActiveProject(id: string | undefined): void {
+      if (id !== state.activeProjectId) set("activeProjectId", id)
+    },
+    setRemote(value: boolean): void { set("remote", value) },
 
     completionContext(): CompletionContext {
       return {

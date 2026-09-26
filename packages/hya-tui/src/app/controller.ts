@@ -47,8 +47,17 @@
  * Usage and todos: `tokensRecorded`, `todoUpdated`, and `compactionApplied`
  * fold in the store; a `tokensRecorded` also re-reads the open session
  * (debounced) for its authoritative `SessionInfo.usage` total.
+ *
+ * Projects (ADR-0024, state/projects.ts): a local start ensures the Project
+ * containing `--dir` (`EnsureProjectForPath`) and makes it active; `--remote`
+ * starts with none. New sessions go to the active Project (working in
+ * `--dir` when it lies inside, else the primary root), or are temporary.
+ * `switchProject` moves the active Project, the client's directory scope,
+ * and the open session together; opening a root session of another Project
+ * makes that Project active. The Project list (with `busy`) is re-read on
+ * the global stream's `projectsUpdated` frames, debounced.
  */
-import type { HyaClient, Interaction, MessageInfo, PromptAttachment, SessionInfo, StreamEvent, StreamFrame } from "../client"
+import type { HyaClient, Interaction, MessageInfo, ProjectInfo, PromptAttachment, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -72,6 +81,7 @@ import { notificationBody, notificationSequence, shouldNotify, type NotifyKind }
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
 import { defaultModelRef } from "../state/providers"
+import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { sessionRow } from "../state/revert"
 import type { AppStore } from "../state/store"
 import { createAgentModelsController } from "./agentModels"
@@ -103,8 +113,10 @@ const globalRetryMaxMs = 15_000
 export interface ControllerOptions {
   client: HyaClient
   store: AppStore
-  /** Workspace directory for new sessions (`--dir`). */
+  /** Workspace directory (`--dir`): the Project ensured at a local start, and the workdir of new sessions inside it. */
   directory: string
+  /** `--remote`: no `EnsureProjectForPath` at start; new sessions need a chosen Project (or are temporary). */
+  remote?: boolean
   registry?: CommandRegistry
   /** Leave the TUI (destroys the renderer, which restores the terminal). */
   quit?: () => void
@@ -148,7 +160,7 @@ const helpMaxRows = 40
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env }: ControllerOptions) {
+export function createController({ client, store, directory, remote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let globalAbort: AbortController | undefined
   /** Asks a desktop notification was considered for: the open tree's asks arrive on both streams. */
@@ -190,14 +202,26 @@ export function createController({ client, store, directory, registry = createCo
   const modes = createModeSwitcher({ store, client })
 
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes] = await Promise.all([
+    const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
       client.listProviders(), client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
+      // Optional: a failed read keeps the rows read before.
+      client.listProjects().catch(() => undefined),
     ])
-    store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}) })
+    store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
   }
+
+  /** `ListProjects` into the store (the Project list and its `busy` flags). */
+  async function refreshProjects(): Promise<void> {
+    store.setProjects(await client.listProjects())
+  }
+
+  /** `projectsUpdated` (live, global stream only): one `ListProjects` per burst. */
+  const projectsRefreshLater = createDebounce(() => {
+    void refreshProjects().catch(() => undefined)
+  }, { wait: refreshWaitMs, maxWait: refreshMaxWaitMs })
 
   async function refreshMessages(): Promise<void> {
     const selected = store.state.selected
@@ -345,6 +369,10 @@ export function createController({ client, store, directory, registry = createCo
       scheduleCatalogRefresh()
       return
     }
+    if (event.projectsUpdated) {
+      projectsRefreshLater.schedule()
+      return
+    }
     const effect = store.applyEvent(event)
     if (event.memberUpdated && effect.durable) trackChildren()
     if (effect.changed) scheduleFlush()
@@ -450,6 +478,11 @@ export function createController({ client, store, directory, registry = createCo
       scheduleCatalogRefresh()
       return
     }
+    // Live, no seq, empty `session`: the Project list (or a Project's `busy`) changed.
+    if (event.projectsUpdated) {
+      projectsRefreshLater.schedule()
+      return
+    }
     const route = globalAskRoute(event, store.state)
     if (route === "ignore") return
     const raw = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
@@ -501,6 +534,7 @@ export function createController({ client, store, directory, registry = createCo
         if (listed) return listed
         throw error
       })
+    followSessionScope(session)
     childGeneration++
     if (childTimer) clearTimeout(childTimer)
     childTimer = undefined
@@ -514,6 +548,43 @@ export function createController({ client, store, directory, registry = createCo
     startStream(session.id)
   }
 
+  /** Make `project` active and scope the client to it (`--dir` when inside, else the primary root). */
+  function activateProject(project: ProjectInfo): void {
+    if (!store.state.projects.some((row) => row.id === project.id)) store.setProjects([project, ...store.state.projects])
+    store.setActiveProject(project.id)
+    client.setDirectory(projectScope(project, directory, remote))
+  }
+
+  /**
+   * An opened root session carries its Project: a Project session makes its
+   * (listed) Project active; a temporary session scopes the client to its
+   * scratch workdir and leaves the active Project for the next `/new`.
+   * Subagent sessions change nothing.
+   */
+  function followSessionScope(session: SessionInfo): void {
+    if (session.parent) return
+    if (session.kind === "SESSION_KIND_TEMPORARY") {
+      if (session.workdir) client.setDirectory(session.workdir)
+      return
+    }
+    const project = session.projectId ? store.state.projects.find((row) => row.id === session.projectId) : undefined
+    if (project) activateProject(project)
+  }
+
+  /**
+   * Make Project `id` active: scope the client to it, then open its most
+   * recently updated root session, or create one there when it has none
+   * (which restarts the session stream either way).
+   */
+  async function switchProject(id: string): Promise<void> {
+    const project = store.state.projects.find((row) => row.id === id) ?? await client.getProject(id)
+    activateProject(project)
+    const target = newestTopLevelSession(await client.listSessions({ projectId: project.id }), project.id)
+    if (target) await openSession(target.id)
+    else await newSession()
+    status(`Project ${project.name} · ${target ? "opened its latest session" : "new session"}`)
+  }
+
   /** Leave a subagent's read-only view: open its parent session. */
   async function returnToParent(): Promise<void> {
     const parent = store.state.selected?.parent
@@ -522,14 +593,24 @@ export function createController({ client, store, directory, registry = createCo
     status("Back to the parent session")
   }
 
-  async function newSession(agentArg?: string, modelArg?: string): Promise<void> {
+  /**
+   * `CreateSession` and open it: in the active Project (state/projects.ts
+   * `sessionPlacement`), or temporary. Without an active Project a
+   * `--remote` start refuses (status `noProjectStatus`, `NoProjectError`).
+   */
+  async function newSession(agentArg?: string, modelArg?: string, options: { temporary?: boolean } = {}): Promise<void> {
+    const placement = sessionPlacement({ project: activeProject(store.state), directory, remote, ...(options.temporary ? { temporary: true } : {}) })
+    if (!placement) {
+      status(noProjectStatus)
+      throw new NoProjectError()
+    }
     const { agents } = store.state
     // A `/model`/`/agent` choice made before any session existed (state/picker.ts, C11/C12) applies to
     // the next `CreateSession` the same way an explicit argument would.
     const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
     const model = modelArg ?? (defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined)
     if (!model) throw new Error("No model is available; configure a provider on the backend")
-    const session = await client.createSession(agent, model, directory)
+    const session = await client.createSession(agent, model, placement)
     store.setPendingAgent(undefined)
     store.setPendingModel(undefined)
     await refresh()
@@ -655,6 +736,9 @@ export function createController({ client, store, directory, registry = createCo
 
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
+    newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
+    switchProject,
+    refreshProjects,
     openProviders: () => providers.open(),
     openDiff: () => diffView.open(),
     openMcp: () => mcp.open(),
@@ -753,7 +837,8 @@ export function createController({ client, store, directory, registry = createCo
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
       await turns.submit(text, attachments.length ? { attachments } : {})
     } catch (error) {
-      status(`Error: ${String(error)}`)
+      // The refusal already says what to do.
+      if (!(error instanceof NoProjectError)) status(`Error: ${String(error)}`)
     }
   }
 
@@ -790,23 +875,36 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   /**
-   * Initial load: bootstrap, catalogs, then the session `startup` names
-   * (`--session <id>`, or `--continue`: the most recent top-level session of
-   * `--dir`); without either no session is open until the first prompt or
-   * `/new` creates one.
+   * Initial load: bootstrap, the Project of `--dir` (`EnsureProjectForPath`;
+   * skipped with `--remote`, which starts without an active Project),
+   * catalogs, then the session `startup` names (`--session <id>`, or
+   * `--continue`: the most recent top-level session of that Project);
+   * without either no session is open until the first prompt or `/new`
+   * creates one.
    */
   async function start(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
     try {
       const bootstrap = await client.bootstrap()
       store.applyBootstrap(bootstrap)
+      store.setRemote(remote)
+      let missing = ""
+      let ensured: ProjectInfo | undefined
+      if (!remote) {
+        // A failure (an older backend) leaves no active Project: new sessions then send `--dir` alone.
+        ensured = await client.ensureProjectForPath(directory).then((result) => result.project, (error: unknown) => {
+          missing += ` · no project for ${directory}: ${String(error)}`
+          return undefined
+        })
+      }
       await refresh()
+      if (ensured) activateProject(ensured)
       void refreshVcs()
       startGlobalStream()
-      const target = initialSessionId(store.state.sessions, startup, directory)
-      let missing = ""
-      if (target) await openSession(target).catch(() => { missing = ` · session ${target} not found` })
-      else if (startup.continue) missing = " · no earlier session in this directory"
+      const target = initialSessionId(store.state.sessions, startup, store.state.activeProjectId)
+      if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
+      else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
+      if (remote && !store.state.selected) missing += ` · ${noProjectStatus}`
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
@@ -824,6 +922,8 @@ export function createController({ client, store, directory, registry = createCo
     globalAbort?.abort()
     if (childTimer) clearTimeout(childTimer)
     refreshLater.cancel()
+    projectsRefreshLater.cancel()
+    catalogRefreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)
     providers.dispose()
     diffView.dispose()
@@ -882,6 +982,14 @@ export function createController({ client, store, directory, registry = createCo
 }
 
 export type Controller = ReturnType<typeof createController>
+
+/** `newSession` without an active Project on a `--remote` start; the status line already says `noProjectStatus`. */
+export class NoProjectError extends Error {
+  constructor() {
+    super(noProjectStatus)
+    this.name = "NoProjectError"
+  }
+}
 
 /** Status shown when a prompt is submitted in a subagent's read-only view. */
 export const readOnlyStatus = "Read-only: this is a subagent's session · Esc returns to the parent"

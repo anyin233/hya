@@ -18,7 +18,7 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
   }
 
   const client = new HyaClient("http://127.0.0.1:8080/", "/work", fetcher)
-  const session = await client.createSession("build", "offline/echo", "/work")
+  const session = await client.createSession("build", "offline/echo", { workdir: "/work" })
   const turn = await client.createTurn(session.id, "hello")
 
   expect(session.id).toBe("hysec_1")
@@ -224,5 +224,81 @@ test("revertSession and forkSession post RevertSession / ForkSession bodies", as
     { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: { undo: true } },
     { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/fork", method: "POST", body: { messageId: "msg_2" } },
     { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/fork", method: "POST", body: {} },
+  ])
+})
+
+function recordingFetcher(reply: (url: string, method: string) => unknown) {
+  const calls: Array<{ url: string; method: string; directory: string | null; body: unknown }> = []
+  const fetcher: FetchLike = async (input, init) => {
+    const url = String(input)
+    const method = init?.method ?? "GET"
+    calls.push({ url, method, directory: new Headers(init?.headers).get("x-hya-directory"), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    return Response.json(reply(url, method) ?? {})
+  }
+  return { calls, fetcher }
+}
+
+const project = { id: "prj_1", name: "work", roots: ["/work", "/docs"], sessionCount: 2, busy: true }
+
+test("createSession places a session in a Project, at a workdir, or as a temporary session", async () => {
+  const { calls, fetcher } = recordingFetcher(() => ({ session: { id: "s", agent: "build", workdir: "/work" } }))
+  const client = new HyaClient("http://h", "/work", fetcher)
+  await client.createSession("build", "m/x", { projectId: "prj_1", workdir: "/work/sub" })
+  await client.createSession("build", "m/x", { projectId: "prj_1" })
+  await client.createSession("build", "m/x", { temporary: true })
+  expect(calls.map((call) => call.body)).toEqual([
+    { agent: "build", model: "m/x", kind: "SESSION_KIND_PROJECT", projectId: "prj_1", workdir: "/work/sub" },
+    { agent: "build", model: "m/x", kind: "SESSION_KIND_PROJECT", projectId: "prj_1" },
+    { agent: "build", model: "m/x", kind: "SESSION_KIND_TEMPORARY" },
+  ])
+})
+
+test("setDirectory changes the x-hya-directory scope of later requests and streams", async () => {
+  const { calls, fetcher } = recordingFetcher(() => ({ branch: "main" }))
+  const client = new HyaClient("http://h", "/work", fetcher)
+  expect(client.directory).toBe("/work")
+  client.setDirectory("/docs")
+  expect(client.directory).toBe("/docs")
+  await client.getVcsStatus()
+  expect(calls).toEqual([{ url: "http://h/v1/vcs?directory=%2Fdocs", method: "GET", directory: "/docs", body: undefined }])
+})
+
+test("Project rpcs use the v1 routes and unwrap their responses", async () => {
+  const { calls, fetcher } = recordingFetcher((url, method) => {
+    if (url.includes("/v1/projects?")) return { projects: [project], page: { hasMore: false } }
+    if (url.includes("/v1/projects/resolve")) return url.includes("nowhere") ? {} : { project }
+    if (url.endsWith("/v1/projects/ensure")) return { project, created: true }
+    if (method === "DELETE") return {}
+    return project
+  })
+  const client = new HyaClient("http://h", "/work", fetcher)
+  expect(await client.listProjects()).toEqual([project])
+  expect(await client.getProject("prj_1")).toEqual(project)
+  expect(await client.createProject({ name: "work", roots: ["/work", "/docs"] })).toEqual(project)
+  expect(await client.updateProject("prj_1", { name: "renamed" })).toEqual(project)
+  await client.deleteProject("prj_1")
+  expect(await client.resolveProject("/work/sub")).toEqual(project)
+  expect(await client.resolveProject("/nowhere")).toBeUndefined()
+  expect(await client.ensureProjectForPath("/work")).toEqual({ project, created: true })
+  expect(calls.map((call) => [call.method, call.url.replace("http://h", ""), call.body])).toEqual([
+    ["GET", "/v1/projects?page.limit=500", undefined],
+    ["GET", "/v1/projects/prj_1", undefined],
+    ["POST", "/v1/projects", { name: "work", roots: ["/work", "/docs"] }],
+    ["PATCH", "/v1/projects/prj_1", { name: "renamed" }],
+    ["DELETE", "/v1/projects/prj_1", undefined],
+    ["GET", "/v1/projects/resolve?path=%2Fwork%2Fsub", undefined],
+    ["GET", "/v1/projects/resolve?path=%2Fnowhere", undefined],
+    ["POST", "/v1/projects/ensure", { path: "/work" }],
+  ])
+})
+
+test("listSessions filters by Project", async () => {
+  const { calls, fetcher } = recordingFetcher(() => ({ sessions: [{ id: "s", agent: "build", workdir: "/work", projectId: "prj_1" }] }))
+  const client = new HyaClient("http://h", "/work", fetcher)
+  expect((await client.listSessions({ projectId: "prj_1" })).map((row) => row.id)).toEqual(["s"])
+  await client.listSessions()
+  expect(calls.map((call) => call.url.replace("http://h", ""))).toEqual([
+    "/v1/sessions?page.limit=500&projectId=prj_1",
+    "/v1/sessions?page.limit=500",
   ])
 })

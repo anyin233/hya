@@ -16,6 +16,12 @@ export interface Options {
   session?: string
   /** The WebUI bare `hya` serves next to this TUI (`--web-url`), or why it could not (`--web-error`). */
   web?: WebInfo
+  /**
+   * `--remote`: the backend's filesystem is not this machine's, so `--dir`
+   * names no Project there — start without one (no `EnsureProjectForPath`)
+   * and let the user choose a Project or a temporary session.
+   */
+  remote?: boolean
   /** `--attached-pid`: bare `hya` attached to this running server instead of starting one (shown in `/status`). */
   attachedPid?: number
 }
@@ -42,7 +48,11 @@ Options:
   --db PATH         SQLite database of the started backend
                     (default: $XDG_STATE_HOME/hya/sessions.db, else
                     ~/.local/state/hya/sessions.db)
-  -c, --continue    Open the most recent top-level session in --dir
+  -c, --continue    Open the most recent top-level session of the Project
+                    that contains --dir
+  --remote          The backend runs on another machine: start without a
+                    Project for --dir; choose a Project (or a temporary
+                    session) before the first prompt
   -s, --session ID  Open the session with this id
   --web-url URL     Show this WebUI address (set by bare hya, which serves
                     the WebUI next to this TUI)
@@ -68,11 +78,13 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let webError: string | undefined
   let attachedPid: string | undefined
   let resume = false
+  let remote = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
     const value = argv[index + 1]
     if (arg === "--help" || arg === "-h") return null
     if (arg === "--continue" || arg === "-c") resume = true
+    else if (arg === "--remote") remote = true
     else if (value === undefined) throw new Error(`Unknown or incomplete option: ${arg}`)
     else if (arg === "--server") server = argv[++index]!
     else if (arg === "--dir") directory = argv[++index]!
@@ -92,6 +104,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("--server needs an HTTP URL")
     options.server = url.toString()
   }
+  if (remote) options.remote = true
   if (hya !== undefined) options.hya = hya
   if (db !== undefined) options.db = db
   if (session !== undefined) options.session = session

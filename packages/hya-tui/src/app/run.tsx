@@ -94,7 +94,7 @@ export async function run(options: Options): Promise<void> {
   if (options.web) store.setWeb(options.web)
   if (loaded.preferences.vim) store.setVim(true)
   controller = createController({
-    client, store, directory: options.directory,
+    client, store, directory: options.directory, remote: options.remote === true,
     quit: () => void shutdown(0),
     startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}) },
     connectionHint: backend

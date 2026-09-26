@@ -28,6 +28,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import type { SessionInfo } from "./client"
+import { newestTopLevelSession } from "./state/projects"
 
 /** A backend start failure; `detail` is the child's output tail (may be empty), `exitCode` the child's status when it exited. */
 export class BackendError extends Error {
@@ -80,15 +81,15 @@ export function defaultDatabase(env: Record<string, string | undefined>): string
 
 /**
  * The session to open at start: `--session <id>` as given, `--continue` the
- * most recently updated top-level session of `directory` (list order breaks
- * ties), else none (a new session is created by the first prompt).
+ * most recently updated top-level session of `projectId` — the Project
+ * ensured for `--dir` (state/projects.ts `newestTopLevelSession`; list
+ * order breaks ties) — else none (a new session is created by the first
+ * prompt). Without a Project (`--remote`) there is nothing to continue.
  */
-export function initialSessionId(sessions: readonly SessionInfo[], startup: { continue: boolean; session?: string }, directory: string): string | undefined {
+export function initialSessionId(sessions: readonly SessionInfo[], startup: { continue: boolean; session?: string }, projectId: string | undefined): string | undefined {
   if (startup.session) return startup.session
-  if (!startup.continue) return undefined
-  const time = (session: SessionInfo): number => Date.parse(session.timeUpdated ?? "") || 0
-  const candidates = sessions.filter((session) => !session.parent && (!session.workdir || session.workdir === directory))
-  return candidates.reduce<SessionInfo | undefined>((best, session) => (!best || time(session) > time(best) ? session : best), undefined)?.id
+  if (!startup.continue || !projectId) return undefined
+  return newestTopLevelSession(sessions, projectId)?.id
 }
 
 export interface BackendOptions {

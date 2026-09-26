@@ -32,6 +32,32 @@ export interface SessionInfo {
 /** `hya.v1.SessionKind`. */
 export type SessionKind = "SESSION_KIND_PROJECT" | "SESSION_KIND_TEMPORARY"
 
+/**
+ * `ProjectInfo` (ADR-0024, docs/protocol/README.md "Projects and session
+ * placement"): a named, ordered, non-empty list of absolute roots on the
+ * backend machine; `roots[0]` is the primary root.
+ */
+export interface ProjectInfo {
+  id: string
+  name: string
+  roots: string[]
+  createdAt?: string
+  updatedAt?: string
+  /** Root sessions of the Project that still exist (archived ones included). */
+  sessionCount?: number
+  /** A non-archived session of the Project runs a turn now; live changes arrive as `projectsUpdated`. */
+  busy?: boolean
+}
+
+/**
+ * Where `CreateSession` places a new root session: a temporary session (no
+ * Project; the server makes a scratch workdir), or a Project session —
+ * `projectId` with an optional `workdir` inside its roots (unset: the
+ * primary root), or only `workdir` (the server finds or creates the Project
+ * containing it, as `EnsureProjectForPath`).
+ */
+export type SessionPlacement = { temporary: true } | { temporary?: false; projectId?: string; workdir?: string }
+
 /** `ForkSource`: the source session and the user message the fork was cut before (empty for a head fork). */
 export interface ForkSource {
   session: string
@@ -477,14 +503,26 @@ export function parseApiCommand(input: string): ApiCommand {
 
 export class HyaClient {
   private readonly base: string
+  private scope: string
 
   constructor(
     baseUrl: string,
-    readonly directory: string,
+    directory: string,
     private readonly fetcher: FetchLike = fetch,
   ) {
     this.base = baseUrl.replace(/\/+$/, "")
+    this.scope = directory
   }
+
+  /**
+   * The directory scope: `x-hya-directory` of every request and the
+   * `directory` of scoped calls (VCS, MCP, rules, agent models). It follows
+   * the active Project (app/controller.ts `switchProject`).
+   */
+  get directory(): string { return this.scope }
+
+  /** Change the directory scope of every later request and stream. */
+  setDirectory(directory: string): void { this.scope = directory }
 
   /** The server's base URL (`/status`). */
   get baseUrl(): string { return this.base }
@@ -529,18 +567,16 @@ export class HyaClient {
     return payload as T
   }
 
-  /**
-   * `CreateSession` for a local start: a Project session working in `workdir`
-   * (the cwd). The server reuses the Project whose root contains it, or
-   * creates one rooted at it (`EnsureProjectForPath`).
-   */
-  async createSession(agent: string, model: string, workdir: string): Promise<SessionInfo> {
-    const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", {
-      agent,
-      model,
-      workdir,
-      kind: "SESSION_KIND_PROJECT",
-    })
+  /** `CreateSession` for a new root session placed as `placement` says (`SessionPlacement`). */
+  async createSession(agent: string, model: string, placement: SessionPlacement): Promise<SessionInfo> {
+    const where = placement.temporary
+      ? { kind: "SESSION_KIND_TEMPORARY" }
+      : {
+          kind: "SESSION_KIND_PROJECT",
+          ...(placement.projectId ? { projectId: placement.projectId } : {}),
+          ...(placement.workdir ? { workdir: placement.workdir } : {}),
+        }
+    const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", { agent, model, ...where })
     return result.session
   }
 
@@ -604,8 +640,46 @@ export class HyaClient {
     throw new Error("Too many result pages")
   }
 
-  async listSessions(): Promise<SessionInfo[]> {
-    return this.listAll("/v1/sessions", "sessions")
+  /** `ListSessions`; `projectId` restricts it to that Project's sessions (root and subagent). */
+  async listSessions(filter: { projectId?: string } = {}): Promise<SessionInfo[]> {
+    return this.listAll("/v1/sessions", "sessions", filter.projectId ? `&projectId=${encodeURIComponent(filter.projectId)}` : "")
+  }
+
+  /** `ListProjects` (`GET /v1/projects`): every non-archived Project, most recently updated first. */
+  async listProjects(): Promise<ProjectInfo[]> {
+    return this.listAll("/v1/projects", "projects")
+  }
+
+  /** `GetProject` (`GET /v1/projects/{id}`). */
+  async getProject(id: string): Promise<ProjectInfo> {
+    return this.request("GET", `/v1/projects/${encodeURIComponent(id)}`)
+  }
+
+  /** `CreateProject` (`POST /v1/projects`): absolute roots, primary first. */
+  async createProject(body: { name: string; roots: string[] }): Promise<ProjectInfo> {
+    return this.request("POST", "/v1/projects", body)
+  }
+
+  /** `UpdateProject` (`PATCH /v1/projects/{id}`): rename and/or replace the whole root list. */
+  async updateProject(id: string, patch: { name?: string; roots?: string[] }): Promise<ProjectInfo> {
+    return this.request("PATCH", `/v1/projects/${encodeURIComponent(id)}`, patch)
+  }
+
+  /** `DeleteProject` (`DELETE /v1/projects/{id}`); `failed_precondition` while a live root session belongs to it. */
+  async deleteProject(id: string): Promise<void> {
+    await this.request("DELETE", `/v1/projects/${encodeURIComponent(id)}`)
+  }
+
+  /** `ResolveProject` (`GET /v1/projects/resolve?path=`): the Project containing `path` (longest root wins), else `undefined`. */
+  async resolveProject(path: string): Promise<ProjectInfo | undefined> {
+    const result = await this.request<{ project?: ProjectInfo }>("GET", `/v1/projects/resolve?path=${encodeURIComponent(path)}`)
+    return result?.project ?? undefined
+  }
+
+  /** `EnsureProjectForPath` (`POST /v1/projects/ensure`): the Project containing `path`, else a new one rooted at it. */
+  async ensureProjectForPath(path: string): Promise<{ project: ProjectInfo; created: boolean }> {
+    const result = await this.request<{ project: ProjectInfo; created?: boolean }>("POST", "/v1/projects/ensure", { path })
+    return { project: result.project, created: result.created === true }
   }
 
   async listMessages(session: string): Promise<MessageInfo[]> {
