@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya-extra/jev-model-router
-  version: 0.41.0
+  version: 0.42.0
   publisher: hya-extra
 # An explicit `extensions.process` is spawned with its argv as-is (no Bun
 # adapter is injected), so router.ts speaks the hya plugin protocol v1
