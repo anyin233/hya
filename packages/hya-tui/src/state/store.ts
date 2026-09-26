@@ -143,7 +143,7 @@ export interface AppState {
   readonly gitBranch: string
   /** The session event stream is connected (status bar "connection state"). */
   readonly connected: boolean
-  /** `CompactionApplied` events and permission mode switches rendered as transcript notices, oldest first. */
+  /** Live `CompactionApplied` events and permission mode switches rendered as transcript notices, oldest first (compactions from before the session was opened are derived from their summary messages at render: state/messages.ts `withDividers`). */
   readonly dividers: readonly Divider[]
   /** Selectable permission modes (`GET /v1/permission-modes`); empty until read or on an older backend. */
   readonly permissionModes: PermissionModeInfo[]

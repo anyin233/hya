@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { compactionText, contextText, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { askSessionLabel, compactionText, contextText, otherAskNotice, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -145,7 +145,7 @@ test("asks of the open session tree are prompts, not pending lines; the sidebar 
     models: [], workflows: [], providers: [], savedKeys: [], commands: [],
   })
   store.openSession(parent)
-  expect(pendingLines(store.state)).toEqual(["? Why? · que_o"])
+  expect(pendingLines(store.state)).toEqual(["? Why? · 1. Other · que_o"])
   expect(sessionListText(store.state)).toBe([
     "  1. Other", "   plan · ◌ waiting", "",
     "▸ 2. Parent", "   build",
@@ -177,4 +177,24 @@ test("with vim mode on, the status bar starts with the composer's mode (and a pe
   expect(statusBarSegments({ ...fields, vim: { mode: "insert", pending: "" } }, 80)[0]).toEqual({ text: "-- INSERT --", tone: "muted" })
   // Narrow: the vim mode and the permission mode stay longest.
   expect(statusBarText({ ...fields, vim: { mode: "normal", pending: "" } }, 30)).toBe("-- NORMAL -- · mode manual")
+})
+
+test("pending asks of other sessions name the session they belong to (its /open number and title)", () => {
+  const store = createAppStore()
+  const selected = { id: "hysec_1", agent: "build", workdir: "/w" }
+  store.applyCatalog({
+    sessions: [selected, { id: "hysec_2", agent: "build", workdir: "/w", title: "Other work" }],
+    interactions: [
+      { id: "perm_x", session: "hysec_2", type: "INTERACTION_TYPE_PERMISSION", title: "bash echo x" },
+      { id: "que_y", session: "hysec_9", type: "INTERACTION_TYPE_QUESTION", title: "Which one?" },
+    ],
+    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
+  store.openSession(selected)
+  expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work · perm_x", "? Which one? · hysec_9 · que_y"])
+  expect(askSessionLabel("hysec_2", store.state.sessions)).toBe("2. Other work")
+  expect(askSessionLabel("hysec_1", store.state.sessions)).toBe("1. hysec_1")
+  expect(askSessionLabel("hysec_9", store.state.sessions)).toBe("hysec_9")
+  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions)).toBe("Permission needed in 2. Other work · /open 2 to answer there")
+  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions)).toBe("Question in hysec_9 · /open hysec_9 to answer there")
 })

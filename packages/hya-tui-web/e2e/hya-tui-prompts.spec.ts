@@ -3,13 +3,14 @@
 // permission model (bash, edit, and write ask), its option keys (1/2/3,
 // arrows + Enter, Esc denies), Always allow, queued asks (`1 of 2`), question
 // options / free text / reject from `ask_user`, a subagent's ask shown in the
-// parent — all driven by the fake model — and a `!command` shell turn that
-// never asks.
+// parent — all driven by the fake model — a `!command` shell turn that
+// never asks, and an ask of a session this TUI does not have open (a
+// headless run over the HTTP API) arriving live on the global stream.
 
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, test, textStep, toolStep } from "./hya"
+import { expect, hangStep, headlessTurn, hyaTui, test, textStep, toolStep } from "./hya"
 import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
@@ -338,4 +339,45 @@ test.describe("narrow terminal", () => {
     await term.press("1")
     await term.waitForText("Narrow done.", 20_000)
   })
+})
+
+test.describe("asks of other sessions", () => {
+  test.use({ model: { steps: [toolStep("bash", { command: "echo from-elsewhere" }), textStep("Elsewhere done.")] } })
+
+  for (const [name, viewport] of [["default", undefined], ["about 80 columns", { width: 690, height: 480 }]] as const) {
+    test(`an ask raised in another session shows live with its session; /open jumps there to answer (${name})`, async ({ tui, backend }, testInfo) => {
+      const proxy = await startProxy(backend.url)
+      const term = await tui(hyaTui({ ...backend, url: proxy.url }), viewport ? { viewport } : {})
+      await term.waitForText("Connected to hya")
+      await prompt(term, "/new")
+      await term.waitForText(/Created hysec_/, 20_000)
+      // The global stream is open (only live frames: subscribed past every durable seq).
+      await expect.poll(() => proxy.log.some((entry) => entry.path.startsWith("/v1/events/stream?sinceSeq=18446744073709551615"))).toBe(true)
+
+      // Another client runs a turn in a session of its own; its model asks to run bash.
+      const started = Date.now()
+      const other = await headlessTurn(backend, "run it elsewhere")
+      await term.waitForText(/Pending \(1\)/, 20_000)
+      const shown = Date.now()
+      await term.waitForText(new RegExp(`! bash echo from-elsewhere · \\d+\\. ${other.slice(0, 12)}`))
+      await term.waitForText(/Permission needed in \d+\. hysec_\w+ · \/open \d+ to answer there/)
+      await term.waitForText("/open <n> answers there")
+      // Pushed, not polled: no interactions listing between the other turn and the ask showing up.
+      expect(proxy.log.filter((entry) => entry.at >= started && entry.at <= shown && entry.path.startsWith("/v1/interactions"))).toEqual([])
+      // The open session's own prompt dock does not take another session's ask.
+      expect(await term.find("asked by build")).toBeNull()
+      await term.attach(testInfo, "other-session-ask")
+
+      // Jump there: its prompt shows, and answering it finishes that turn.
+      const target = /\/open (\d+) to answer there/.exec(await term.text())![1]!
+      await prompt(term, `/open ${target}`)
+      await term.waitForText("asked by build", 20_000)
+      await term.waitForText("│ $ echo from-elsewhere")
+      await term.waitForText(`hya · ${other}`)
+      await term.press("1")
+      await term.waitForText("Elsewhere done.", 20_000)
+      await promptGone(term)
+      expect(await term.find("Pending (")).toBeNull()
+    })
+  }
 })

@@ -120,7 +120,10 @@ test("descendant ask frames on the open session's stream are routed to the promp
 test("a compaction summary message hides the HYA_COMPACTED_CONTEXT marker line", () => {
   const store = open()
   store.setMessages("hysec_1", [{ id: "sum", role: "ROLE_SYSTEM", finish: "FINISH_REASON_STOP", parts: [{ id: "p", text: { text: "HYA_COMPACTED_CONTEXT\nSummary: greeted" } }] }])
-  expect(transcriptViews(store.state)[0]!.blocks).toEqual([{ kind: "text", id: "p", text: "Summary: greeted" }])
+  // Its divider (derived from the summary) comes first; the summary shows without the marker.
+  const views = transcriptViews(store.state)
+  expect(views.map((view) => view.role)).toEqual(["divider", "system"])
+  expect(views[1]!.blocks).toEqual([{ kind: "text", id: "p", text: "Summary: greeted" }])
 })
 
 test("the status bar shows the WebUI address, or a warning when it is unavailable", () => {

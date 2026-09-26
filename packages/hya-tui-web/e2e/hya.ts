@@ -317,6 +317,32 @@ export const test = withOptions.extend<Fixtures>({
 export { expect } from "./harness"
 export { hangStep, httpErrorStep, reasoningStep, textStep, toolStep, toolsStep, type FakeModel, type Protocol, type Step } from "./fake-model"
 
+/** One v1 HTTP/JSON call against `backend`, scoped to its workspace directory (a second client next to the TUI). */
+export async function api<T>(backend: Backend, method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${backend.url}${path}`, {
+    method,
+    headers: {
+      "x-hya-directory": backend.dir,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+  const text = await response.text()
+  if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status} ${text}`)
+  return text ? (JSON.parse(text) as T) : (undefined as T)
+}
+
+/**
+ * A headless run next to the TUI: create a session on the fake model over
+ * the HTTP API and admit one prompt turn in it (not awaited to its end).
+ * Returns the new session's id.
+ */
+export async function headlessTurn(backend: Backend, text: string): Promise<string> {
+  const { session } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "build", model: fakeModelRef, workdir: backend.dir })
+  await api(backend, "POST", `/v1/sessions/${session.id}/turns`, { prompt: { text } })
+  return session.id
+}
+
 /** argv that runs packages/hya-tui against `backend`. */
 export function hyaTui(backend: Backend): string[] {
   return ["bun", tuiMain, "--server", backend.url, "--dir", backend.dir]

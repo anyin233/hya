@@ -12,7 +12,7 @@
 // realistic order: the user sends a prompt, then looks away.
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, test, textStep, toolStep } from "./hya"
+import { expect, headlessTurn, hyaTui, test, textStep, toolStep } from "./hya"
 
 declare global {
   interface Window {
@@ -98,6 +98,29 @@ test.describe("desktop notifications: permission ask", () => {
     await focusTerminal(term)
     await term.press("1")
     await term.waitForText("Ran it.", 20_000)
+  })
+})
+
+test.describe("desktop notifications: another session's ask", () => {
+  test.use({ model: { steps: [toolStep("bash", { command: "echo elsewhere" }), textStep("Done elsewhere.")] } })
+
+  test("an ask of a session this TUI does not have open notifies once while unfocused, naming the session", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await captureOsc9(term)
+    await blurTerminal(term)
+    const other = await headlessTurn(backend, "run it over there")
+    await expect.poll(() => osc9Payloads(term), { timeout: 20_000 }).toHaveLength(1)
+    expect((await osc9Payloads(term))[0]).toMatch(new RegExp(`^Permission needed: bash echo elsewhere · in \\d+\\. ${other}$`))
+    await term.waitForText(/Pending \(1\)/)
+    // Going there shows the same ask as the prompt; it was notified once.
+    await focusTerminal(term)
+    await term.type(`/open ${other}`)
+    await term.press("Enter")
+    await term.waitForText("asked by build", 20_000)
+    expect(await osc9Payloads(term)).toHaveLength(1)
+    await term.press("1")
+    await term.waitForText("Done elsewhere.", 20_000)
   })
 })
 

@@ -339,9 +339,11 @@ the bordered input, and the instruction line. The permission mode picker
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
   `Pending (N)` box appears above the prompt with up to three of them
-  (`! <title> · <id>`) and the commands that answer them; open that session
-  to get its prompt. `/interactions` lists every detail. It disappears when
-  nothing else is pending.
+  (`! <title> · <n>. <session> · <id>`: which session asks, by its `/open`
+  number and title) and the commands that answer them; `/open <n>` goes to
+  that session to answer with its prompt. They arrive live — see
+  [Asks of other sessions](#asks-of-other-sessions). `/interactions` lists
+  every detail. It disappears when nothing else is pending.
 - **Keys and the browser.** Ctrl+B, Ctrl+O, and Ctrl+G are not reserved by
   browsers, so they also work in the WebUI (`packages/hya-tui-web`). Ctrl+B is tmux's
   default prefix; inside tmux press it twice (tmux passes the second one
@@ -551,10 +553,22 @@ marker line. For example, `/compact` after a short exchange shows:
 Summary: the user asked for …
 ```
 
-Dividers come from the stream (and the `ListEvents` gap-fill after a
-reconnect), so they show for compactions that happen while the session is
-open; reopening a session later shows the summary message but not the
-divider.
+**Compactions from before the session was opened.** Opening a session
+(at start with `--session`/`--continue`, `/open`, `/sessions`, a subagent's
+view) shows a divider for every compaction already in its history, at the
+same place: right before each summary message. These are derived from the
+transcript itself — every compaction appends its summary as a system
+message starting with `HYA_COMPACTED_CONTEXT` (all five mechanisms do) —
+so they cost no extra request. The strategy and folded count live only in
+the durable `CompactionApplied` event, which the TUI does not replay from
+the start of the log, so a history divider reads just:
+
+```text
+── context compacted ──
+```
+
+A live `compactionApplied` for a summary already shown takes that divider's
+place (same position, full text) — a summary never gets two dividers.
 
 **Engine system messages.** A message with the system role (for example a
 `TEAM QUIESCED …` coordination notice) renders as a muted notice line, not
@@ -1113,8 +1127,10 @@ default.
 support it; one that does not simply never reports a blur, so nothing is
 ever sent). Focusing the terminal again does not resend anything already
 missed. A subagent's turn ending or ask never notifies — only the open
-(root-viewed) session's own; keeps the rule simple, since a subagent's work
-already shows in its parent's task card.
+(root-viewed) session's own, and an ask of a session outside the open tree
+([Asks of other sessions](#asks-of-other-sessions)); keeps the rule simple,
+since a subagent's work already shows in its parent's task card. Each ask
+notifies at most once, even when both streams carry it.
 
 The message: `hya` as the title, and one of:
 
@@ -1124,6 +1140,7 @@ The message: `hya` as the title, and one of:
 | Turn failed | `Turn failed: <error>` |
 | Permission ask | `Permission needed: <what it asks about>` |
 | Question ask | `Question: <the question's title>` |
+| Ask of another session | the same, then ` · in <n>. <session>` |
 
 **Interfaces.** Two escape sequences, both sent for the same event (some
 terminals understand one, some the other): OSC 9 (`ESC ] 9 ; <body> BEL`)
@@ -1142,7 +1159,9 @@ reporting), read through `TerminalAccess.onFocusChange` into
 (skipped for a user-cancelled turn); the ask hook is in `applyEvent`'s
 handling of a fresh `permissionRequested`/`questionRequested` of the open
 session's own stream (a descendant's ask never reaches it — see
-`state/prompts.ts` `askFrameRoute`).
+`state/prompts.ts` `askFrameRoute`) and in `onGlobalFrame` for another
+session's ask; both go through `notifyAsk(id, kind, detail)`, which
+remembers the ids it handled.
 
 The WebUI (ADR-0021, [tui-web.md](tui-web.md#desktop-notifications)) maps
 both sequences to a browser `Notification`, generically — the host does not
@@ -1283,8 +1302,67 @@ subagent's ask appears in the parent view, labelled `asked by subagent
 approval`, and its sidebar row `· ◌ waiting`. Opening the subagent's
 read-only view shows the same prompt there (only that subtree's asks); you
 can answer in either view. Asks of unrelated sessions stay in the
-[pending block](#layout); they are not on the open session's stream, so
-they appear with the next listing (session open, reconnect, Ctrl+R).
+[pending block](#layout); they arrive on the global stream
+([Asks of other sessions](#asks-of-other-sessions)).
+
+### Asks of other sessions
+
+A permission request or question can come from a session this TUI does not
+have open: a session of another TUI or WebUI tab on the same server, or a
+headless run (`hya run`, the HTTP API). The TUI shows it the moment it is
+raised, names the session it belongs to, and never answers it by accident:
+its prompt only appears once you open that session.
+
+**Usage.** When such an ask arrives:
+
+- the [pending block](#layout) lists it as `! <title> · <n>. <session> ·
+  <id>` (`?` for a question), where `<n>` is the session's number in the
+  sidebar and `/open`;
+- the status line says `Permission needed in <n>. <session> · /open <n> to
+  answer there` (`Question in …` for a question);
+- while the terminal is unfocused, a [desktop
+  notification](#desktop-notifications) says `Permission needed: <title> ·
+  in <n>. <session>`.
+
+`/open <n>` (or `/sessions`) opens that session; its prompt appears as
+usual and `1`/`2`/`3` answer it there. `/approve <id>`, `/deny <id>`, and
+`/answer <id> <text>` still answer from anywhere; the pending line shows
+which session the id belongs to first. An ask answered elsewhere (in the
+other tab) disappears at once. A session created since the last listing
+is listed again when its first ask arrives, so the line can name it (a
+session the listing does not return — another directory — is named by its
+id, and `/open <id>` still works).
+
+Example: this TUI views session 1 while another tab's session 2 asks to run
+a command:
+
+```text
+╭Pending (1)──────────────────────────────────────────────────────────╮
+│ ! bash echo hi · 2. Fix the build · perm_01a0…                      │
+│ /open <n> answers there · /approve <id> · /deny <id> · …            │
+╰─────────────────────────────────────────────────────────────────────╯
+Permission needed in 2. Fix the build · /open 2 to answer there
+```
+
+**Interfaces.** From start, the TUI keeps one subscription to
+`GET /v1/events/stream?sinceSeq=18446744073709551615` (`StreamGlobalEvents`,
+SSE `StreamFrame`s of every session). `sinceSeq` is the largest uint64, so
+the server drops every durable event; only live-only frames arrive — the
+ask planes' `permissionRequested {interaction}`, `questionRequested
+{interaction}`, and `interactionResolved {request}` (never durable), and
+in-flight text deltas, which the TUI ignores. `state/prompts.ts`
+`globalAskRoute(event, context)` returns `ignore` for anything but those
+three, `tree` for an ask of the open session's tree (its own stream carries
+it too; applying it again is harmless — asks are kept by id), and `other`
+otherwise; `app/controller.ts` `onGlobalFrame` applies both through
+`store.applyAsk` and, for a new `other` ask, sets the status notice
+(`state/format.ts` `otherAskNotice`) and notifies. The stream is not a
+history: after every (re)subscribe and every `resync` the TUI reads
+`GET /v1/interactions` once. It reconnects after 800 ms, doubling to at most
+15 s while it keeps failing (a backend without the route); its failures do
+not touch the status bar's connection state, which the session stream
+owns. `state/format.ts` `askSessionLabel(sessionId, sessions)` renders
+`<n>. <title or id>` (or the bare id when the list does not have it).
 
 The only polling left is the child-session round for `task` cards (their
 status and latest activity, `GetSession` + `ListMessages` of each child,
@@ -1506,6 +1584,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/fs/find?pattern=**/*<text>*&limit=50` | No body (`FindFiles`, scoped by `x-hya-directory`) | `FindFilesResponse.paths: string[]` (relative paths) for `@file` suggestions. |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N&includeDescendants=true` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. `includeDescendants=true` adds the ask frames of every subagent session below (see [Subagent asks](#subagent-asks)). |
+| `GET /v1/events/stream?sinceSeq=18446744073709551615` | SSE | `StreamFrame`s of every session, live-only (no durable event passes the watermark); the TUI reads only ask/resolve frames (see [Asks of other sessions](#asks-of-other-sessions)). |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
@@ -1562,7 +1641,7 @@ rules follow the protocol guide's
 | `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); also for a subagent's ask. |
 | `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. |
 | `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, the header and sidebar) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
-| `compactionApplied {untilSeq, strategy, message, foldedCount, manual}` | durable | Appended to `state.dividers` (once per seq) and spliced into the transcript right before `message`, the summary, or right after the message that was newest at the time until the summary is read (see [Notices](#notices)). |
+| `compactionApplied {untilSeq, strategy, message, foldedCount, manual}` | durable | Appended to `state.dividers` (once per seq) and spliced into the transcript right before `message`, the summary, or right after the message that was newest at the time until the summary is read (see [Notices](#notices)). A summary message (system role, `HYA_COMPACTED_CONTEXT` first line) without such a divider — a compaction from before the session was opened — gets a derived `── context compacted ──` divider (`state/messages.ts` `withDividers`, id `compaction-<message id>`). |
 | `tokensRecorded {message, model, usage}` | durable | With a non-empty `message`: the newest round, the live source of `ctx N%` (`state.liveRound`). Any `tokensRecorded` also re-reads the open session (debounced) for `SessionInfo.usage`. |
 | `todoUpdated {items}` | durable | Replaces the sidebar's todo list with `items` (the whole list). |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
@@ -1622,22 +1701,22 @@ together.
 | `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text (which also names `HYA_TUI_CONFIG`). |
 | `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences`. |
 | `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
-| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
+| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`). |
 | `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
-| `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`. |
+| `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`; transcript notices spliced in by `withDividers()`, including the dividers derived from compaction summaries in the history. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
 | `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (status bar text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
 | `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
 | `src/state/catalog.ts` | `/model`/`/agent`/`/sessions` picker row builders: `modelRows()` (tagged by provider), `agentRows()` (visible agents, tagged by default model), `sessionRows()` (the `New session` row + `sessionTree()`, relative time), `relativeTime()`. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
-| `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`. |
+| `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
 | `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
-| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, concealed key entry, and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, concealed key entry, and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
 | `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
@@ -1825,6 +1904,12 @@ a spec sets `HYA_TUI_CONFIG`, so a developer's own `tui.json` never changes
 a spec's colors. `e2e/hya-tui-status.spec.ts` also
 covers `ctx N%` and the token total (fake-model usage and a
 `contextLimit`), `todoUpdated` (no todo re-read, through the logging proxy
-in `e2e/proxy.ts`), and the `/compact` divider; `e2e/hya-tui-prompts.spec.ts`
+in `e2e/proxy.ts`), and the `/compact` divider, live and after reopening the
+session (a new TUI with `--session`, `/new` then `/open`, about 80
+columns); `e2e/hya-tui-prompts.spec.ts`
 checks that a subagent's ask arrives on the `includeDescendants` stream
-with no interactions listing in between.
+with no interactions listing in between, and that an ask of a session run
+headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
+pending block with its session, then `/open <n>` answers it there (default
+and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
+single desktop notification.

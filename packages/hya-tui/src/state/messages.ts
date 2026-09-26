@@ -9,7 +9,7 @@
  * delta rebuilds only the view of the message it touched.
  */
 import type { MessageInfo, MessagePart } from "../client"
-import { modelReference } from "./format"
+import { historyCompactionText, modelReference } from "./format"
 import { mergeTranscript } from "./overlay"
 import type { AppState, QueuedPrompt } from "./store"
 import { toolCard, type ToolCardView } from "./tools"
@@ -48,6 +48,8 @@ export interface MessageView {
   streaming: boolean
   /** A prompt waiting in the client-side queue. */
   queued: boolean
+  /** A compaction's summary system message (its text started with `compactedMarker`): a divider goes right before it. */
+  compaction?: true
 }
 
 export interface Attribution {
@@ -116,6 +118,7 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
       ? { ...item, text: item.text.slice(compactedMarker.length).replace(/^\s*\n/, "") }
       : item)
   const notice = finishNotice(message)
+  const compaction = role === "system" && parts.some((part) => part.text?.text?.startsWith(compactedMarker))
   return {
     id: message.id,
     role,
@@ -125,6 +128,7 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
     ...(notice ? { notice } : {}),
     streaming,
     queued: false,
+    ...(compaction ? { compaction: true as const } : {}),
   }
 }
 
@@ -199,8 +203,20 @@ export function dividerView(divider: { id: string; text: string }): MessageView 
  * message that was newest when it happened; one from an empty transcript
  * goes first; one whose message fell out of the rendered window (or was
  * never seen) goes at the end, before queued prompts.
+ *
+ * History: every compaction summary in the transcript without a live
+ * divider (a compaction from before the session was opened) gets one
+ * derived from the summary message itself (`historyCompactionText`, id
+ * `compaction-<message id>`). A live `CompactionApplied` for the same
+ * summary names it in `beforeMessageId` and takes its place, so a summary
+ * never gets two dividers.
  */
 function withDividers(views: MessageView[], dividers: AppState["dividers"]): MessageView[] {
+  const anchored = new Set(dividers.flatMap((divider) => divider.beforeMessageId ? [divider.beforeMessageId] : []))
+  const history = views
+    .filter((view) => view.compaction && !anchored.has(view.id))
+    .map((view) => ({ id: `compaction-${view.id}`, text: historyCompactionText, beforeMessageId: view.id }))
+  if (history.length) dividers = [...history, ...dividers]
   if (!dividers.length) return views
   const result = [...views]
   // Notices from an empty transcript go first, in order.

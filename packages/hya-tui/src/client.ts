@@ -574,6 +574,33 @@ export class HyaClient {
     includeDescendants = false,
   ): Promise<void> {
     const path = `/v1/sessions/${encodeURIComponent(session)}/events/stream?sinceSeq=${encodeURIComponent(sinceSeq)}${includeDescendants ? "&includeDescendants=true" : ""}`
+    await this.readStream(path, onFrame, signal, onOpen)
+  }
+
+  /**
+   * `StreamGlobalEvents` (`GET /v1/events/stream`): every session's live
+   * frames, for the permission/question asks (and their resolves) of
+   * sessions this TUI does not have open. `sinceSeq` is the largest uint64,
+   * so the server drops every durable event: only live-only frames arrive —
+   * the ask planes' frames (never durable) and in-flight text deltas, which
+   * the caller ignores. No history is replayed.
+   */
+  async streamGlobal(
+    onFrame: (frame: StreamFrame) => void | Promise<void>,
+    signal: AbortSignal,
+    /** Runs once the stream is subscribed, before any frame is read. */
+    onOpen?: () => void | Promise<void>,
+  ): Promise<void> {
+    await this.readStream(`/v1/events/stream?sinceSeq=${maxSeq}`, onFrame, signal, onOpen)
+  }
+
+  /** Open one SSE stream and hand every frame to `onFrame` until it ends or `signal` aborts. */
+  private async readStream(
+    path: string,
+    onFrame: (frame: StreamFrame) => void | Promise<void>,
+    signal: AbortSignal,
+    onOpen?: () => void | Promise<void>,
+  ): Promise<void> {
     const response = await this.fetcher(`${this.base}${path}`, {
       headers: { "x-hya-directory": this.directory, accept: "text/event-stream" },
       signal,
@@ -601,3 +628,6 @@ export class HyaClient {
     }
   }
 }
+
+/** The largest uint64 `seq`: as a `sinceSeq` it filters out every durable event. */
+const maxSeq = "18446744073709551615"
