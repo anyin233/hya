@@ -56,9 +56,10 @@ use tokio_util::task::TaskTracker;
 
 pub use limits::{
     DEFAULT_ACCEPT_TIMEOUT, DEFAULT_EARLY_DATA_LIMIT, DEFAULT_HANDSHAKE_TIMEOUT,
-    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
-    DEFAULT_MAX_ROOMS, DEFAULT_MAX_ROOMS_PER_PEER, DEFAULT_MAX_STREAMS_PER_PEER,
-    DEFAULT_MAX_STREAMS_PER_ROOM, DEFAULT_STREAM_RATE_BURST_BYTES,
+    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_EARLY_DATA_BYTES,
+    DEFAULT_MAX_PENDING_REGISTRATIONS, DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
+    DEFAULT_MAX_ROOMS, DEFAULT_MAX_ROOMS_PER_PEER, DEFAULT_MAX_STREAMS,
+    DEFAULT_MAX_STREAMS_PER_PEER, DEFAULT_MAX_STREAMS_PER_ROOM, DEFAULT_STREAM_RATE_BURST_BYTES,
     DEFAULT_STREAM_RATE_BYTES_PER_SEC, ProxyLimits,
 };
 
@@ -72,9 +73,10 @@ use crate::transport::{ChunkTransport, ProxyControlTransport};
 /// Opaque identity of the client behind a relay stream, used only for
 /// per-client limits.
 ///
-/// The binding decides what it is — typically the remote IP, or a
-/// forwarded client IP when the operator trusts forwarding headers. The
-/// core only compares identities for equality.
+/// The binding decides what it is — typically the remote IP (IPv6 bucketed
+/// by its /64, since one host usually holds a whole /64), or a forwarded
+/// client IP when the operator trusts a forwarding header. The core only
+/// compares identities for equality.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PeerInfo(String);
 
@@ -107,6 +109,10 @@ pub struct ProxyStats {
     pub streams: usize,
     /// Streams still waiting for `Accept`.
     pub pending_streams: usize,
+    /// Host control streams still in registration.
+    pub pending_registrations: usize,
+    /// Opener `data` bytes buffered before their hosts accepted.
+    pub early_data_bytes: usize,
 }
 
 /// The relay proxy state machine, shared by every binding.
@@ -133,6 +139,7 @@ impl ProxyCore {
         Self {
             inner: Arc::new(Inner {
                 limits,
+                early_data: AtomicUsize::new(0),
                 state: Mutex::new(State::default()),
                 shutdown: CancellationToken::new(),
                 tracker: TaskTracker::new(),
@@ -154,6 +161,8 @@ impl ProxyCore {
             rooms: state.rooms.len(),
             streams: state.streams,
             pending_streams: state.pending.len(),
+            pending_registrations: state.pending_registrations,
+            early_data_bytes: self.inner.early_data.load(Ordering::SeqCst),
         }
     }
 
@@ -207,6 +216,8 @@ impl ProxyCore {
 /// Shared proxy state.
 pub(crate) struct Inner {
     pub(crate) limits: ProxyLimits,
+    /// Early-data bytes buffered across all waiting openers.
+    early_data: AtomicUsize,
     state: Mutex<State>,
     pub(crate) shutdown: CancellationToken,
     tracker: TaskTracker,
@@ -221,6 +232,8 @@ struct State {
     peer_rooms: HashMap<PeerInfo, usize>,
     /// Control streams per client identity still in registration.
     peer_pending_registrations: HashMap<PeerInfo, usize>,
+    /// Control streams still in registration, over all clients.
+    pending_registrations: usize,
     streams: usize,
     next_generation: u64,
 }
@@ -294,6 +307,29 @@ impl Drop for PendingRegistration {
     fn drop(&mut self) {
         let mut state = self.inner.state();
         decrement(&mut state.peer_pending_registrations, &self.peer);
+        state.pending_registrations = state.pending_registrations.saturating_sub(1);
+    }
+}
+
+/// Early-data bytes one waiting opener buffered, counted in the proxy-wide
+/// total until dropped (delivered to the host or the stream ended).
+pub(crate) struct EarlyData {
+    inner: Arc<Inner>,
+    bytes: usize,
+}
+
+impl EarlyData {
+    pub(crate) fn add(&mut self, bytes: usize) {
+        self.bytes += bytes;
+        self.inner.early_data.fetch_add(bytes, Ordering::SeqCst);
+    }
+}
+
+impl Drop for EarlyData {
+    fn drop(&mut self) {
+        self.inner
+            .early_data
+            .fetch_sub(self.bytes, Ordering::SeqCst);
     }
 }
 
@@ -330,12 +366,31 @@ impl Inner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Start counting early data of one waiting opener.
+    pub(crate) fn early_data(self: &Arc<Self>) -> EarlyData {
+        EarlyData {
+            inner: self.clone(),
+            bytes: 0,
+        }
+    }
+
+    /// Whether the proxy-wide early-data buffer has room for another read.
+    pub(crate) fn early_data_available(&self) -> bool {
+        self.early_data.load(Ordering::SeqCst) < self.limits.max_early_data_bytes
+    }
+
     /// Take a slot among `peer`'s control streams still in registration.
     pub(crate) fn begin_registration(
         self: &Arc<Self>,
         peer: &PeerInfo,
     ) -> Result<PendingRegistration, RelayError> {
         let mut state = self.state();
+        if state.pending_registrations >= self.limits.max_pending_registrations {
+            return Err(RelayError::new(
+                RelayErrorCode::ResourceExhausted,
+                "the proxy has the maximum number of pending registrations",
+            ));
+        }
         let pending = state
             .peer_pending_registrations
             .entry(peer.clone())
@@ -347,6 +402,7 @@ impl Inner {
             ));
         }
         *pending += 1;
+        state.pending_registrations += 1;
         Ok(PendingRegistration {
             inner: self.clone(),
             peer: peer.clone(),
@@ -453,6 +509,12 @@ impl Inner {
             return Err(RelayError::new(
                 RelayErrorCode::ResourceExhausted,
                 "this client has the maximum number of streams",
+            ));
+        }
+        if state.streams >= self.limits.max_streams {
+            return Err(RelayError::new(
+                RelayErrorCode::ResourceExhausted,
+                "the proxy carries the maximum number of streams",
             ));
         }
         let stream_id = loop {

@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, timeout};
 
 use super::limits::TokenBucket;
-use super::{Inner, PeerInfo, Room, shutting_down};
+use super::{EarlyData, Inner, PeerInfo, Room, shutting_down};
 use crate::link::RoomId;
 use crate::proto::{Chunk, Close, Heartbeat, Opened, RelayError, RelayErrorCode, chunk};
 use crate::transport::{ChunkTransport, TransportError};
@@ -136,6 +136,7 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
     let limit = inner.limits.early_data_limit;
     let mut early: Vec<Chunk> = Vec::new();
     let mut early_bytes = 0usize;
+    let mut early_data = inner.early_data();
     let mut opener_closed = false;
     let accept_deadline = sleep(inner.limits.accept_timeout);
     tokio::pin!(accept_deadline);
@@ -161,7 +162,9 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
                 }
                 // An Accept claimed it just now; its leg is on the way.
             }
-            next = opener.next(), if !opener_closed && early_bytes < limit => match next {
+            next = opener.next(),
+                if !opener_closed && early_bytes < limit && inner.early_data_available() =>
+            match next {
                 None => {
                     opener_closed = true;
                     early.push(close_chunk());
@@ -173,6 +176,7 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
                             return fail(&mut opener, oversized(&inner)).await;
                         }
                         early_bytes += bytes.len();
+                        early_data.add(bytes.len());
                         early.push(chunk(chunk::Frame::Data(bytes)));
                     }
                     Some(chunk::Frame::Close(_)) => {
@@ -207,7 +211,15 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
         let relay_error = error(RelayErrorCode::Unavailable, "the opener went away");
         return fail(&mut host_leg, relay_error).await;
     }
-    splice(&inner, &room, opener, host_leg, early, opener_closed).await;
+    splice(
+        &inner,
+        &room,
+        opener,
+        host_leg,
+        (early, early_data),
+        opener_closed,
+    )
+    .await;
     drop(slot);
 }
 
@@ -370,7 +382,7 @@ async fn splice(
     room: &Room,
     opener: ChunkTransport,
     host_leg: ChunkTransport,
-    early: Vec<Chunk>,
+    (early, early_data): (Vec<Chunk>, EarlyData),
     opener_closed: bool,
 ) {
     let (opener_sink, opener_stream) = opener.split();
@@ -390,6 +402,8 @@ async fn splice(
             host_sink.close().await;
         }
     }
+    // Delivered (or failed): no longer buffered.
+    drop(early_data);
 
     // `Fault` from the opener→host pump is reported relative to that
     // direction; map it onto (to_opener, to_host).

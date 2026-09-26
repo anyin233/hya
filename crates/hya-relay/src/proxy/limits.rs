@@ -19,6 +19,10 @@ pub struct ProxyLimits {
     /// Maximum concurrent streams opened by one client identity
     /// ([`PeerInfo`](super::PeerInfo)). Over the limit: `RESOURCE_EXHAUSTED`.
     pub max_streams_per_peer: usize,
+    /// Maximum concurrent streams (waiting for `Accept` or spliced) on the
+    /// whole proxy, whoever opened them. Over the limit:
+    /// `RESOURCE_EXHAUSTED`.
+    pub max_streams: usize,
     /// Maximum rooms registered by one client identity. Replacing a room
     /// the same client already holds needs no new slot. Over the limit:
     /// `RESOURCE_EXHAUSTED`.
@@ -28,6 +32,10 @@ pub struct ProxyLimits {
     /// Over the limit the new control stream gets `RESOURCE_EXHAUSTED`
     /// instead of a challenge.
     pub max_pending_registrations_per_peer: usize,
+    /// Maximum host control streams still in registration on the whole
+    /// proxy. Over the limit the new control stream gets
+    /// `RESOURCE_EXHAUSTED` instead of a challenge.
+    pub max_pending_registrations: usize,
     /// A stream leg or host control stream that delivers no frame at all
     /// (heartbeats count) for this long is closed with `DEADLINE_EXCEEDED`.
     /// Also bounds how long the proxy waits for a peer to take a frame.
@@ -43,6 +51,11 @@ pub struct ProxyLimits {
     /// `data` bytes buffered from an opener before the host accepted the
     /// stream; beyond it the proxy stops reading the opener (backpressure).
     pub early_data_limit: usize,
+    /// `data` bytes buffered from all openers together before their hosts
+    /// accepted; beyond it the proxy stops reading every waiting opener
+    /// (backpressure) until buffered data is delivered. Checked before each
+    /// read, so it can be exceeded by at most one chunk per waiting stream.
+    pub max_early_data_bytes: usize,
     /// How long an `Open` waits for the host's `Accept`; then the opener
     /// fails with `UNAVAILABLE`.
     pub accept_timeout: Duration,
@@ -58,10 +71,14 @@ pub const DEFAULT_MAX_ROOMS: usize = 1024;
 pub const DEFAULT_MAX_STREAMS_PER_ROOM: usize = 64;
 /// Default [`ProxyLimits::max_streams_per_peer`].
 pub const DEFAULT_MAX_STREAMS_PER_PEER: usize = 256;
+/// Default [`ProxyLimits::max_streams`].
+pub const DEFAULT_MAX_STREAMS: usize = 8192;
 /// Default [`ProxyLimits::max_rooms_per_peer`].
 pub const DEFAULT_MAX_ROOMS_PER_PEER: usize = 16;
 /// Default [`ProxyLimits::max_pending_registrations_per_peer`].
 pub const DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER: usize = 8;
+/// Default [`ProxyLimits::max_pending_registrations`].
+pub const DEFAULT_MAX_PENDING_REGISTRATIONS: usize = 256;
 /// Default [`ProxyLimits::idle_timeout`] (8 missed 15 s heartbeats).
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Default [`ProxyLimits::stream_rate_bytes_per_sec`] (8 MiB/s).
@@ -72,6 +89,9 @@ pub const DEFAULT_STREAM_RATE_BURST_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_DATA: usize = 256 * 1024;
 /// Default [`ProxyLimits::early_data_limit`] (64 KiB).
 pub const DEFAULT_EARLY_DATA_LIMIT: usize = 64 * 1024;
+/// Default [`ProxyLimits::max_early_data_bytes`] (64 MiB: a thousand
+/// openers at the full per-stream early-data buffer).
+pub const DEFAULT_MAX_EARLY_DATA_BYTES: usize = 64 * 1024 * 1024;
 /// Default [`ProxyLimits::accept_timeout`].
 pub const DEFAULT_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default [`ProxyLimits::handshake_timeout`].
@@ -83,13 +103,16 @@ impl Default for ProxyLimits {
             max_rooms: DEFAULT_MAX_ROOMS,
             max_streams_per_room: DEFAULT_MAX_STREAMS_PER_ROOM,
             max_streams_per_peer: DEFAULT_MAX_STREAMS_PER_PEER,
+            max_streams: DEFAULT_MAX_STREAMS,
             max_rooms_per_peer: DEFAULT_MAX_ROOMS_PER_PEER,
             max_pending_registrations_per_peer: DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
+            max_pending_registrations: DEFAULT_MAX_PENDING_REGISTRATIONS,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             stream_rate_bytes_per_sec: DEFAULT_STREAM_RATE_BYTES_PER_SEC,
             stream_rate_burst_bytes: DEFAULT_STREAM_RATE_BURST_BYTES,
             max_chunk_data: DEFAULT_MAX_CHUNK_DATA,
             early_data_limit: DEFAULT_EARLY_DATA_LIMIT,
+            max_early_data_bytes: DEFAULT_MAX_EARLY_DATA_BYTES,
             accept_timeout: DEFAULT_ACCEPT_TIMEOUT,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
         }

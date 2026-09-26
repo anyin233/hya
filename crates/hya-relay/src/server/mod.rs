@@ -14,9 +14,11 @@
 //!   go to the gRPC service (after stripping the path prefix); everything
 //!   else goes to the WebSocket routes, and any other path answers `404`
 //!   with the plain-text body [`NOT_FOUND_BODY`].
-//! - **Client identity.** [`PeerInfo`] is the remote socket IP, or with
-//!   [`RelayServerConfig::trust_forwarded`] the first valid address from
-//!   `CF-Connecting-IP`, `X-Real-IP`, or the leftmost `X-Forwarded-For`.
+//! - **Client identity.** [`PeerInfo`] is the remote socket IP (IPv6
+//!   bucketed by /64), or with [`RelayServerConfig::trust_forwarded`] the
+//!   address in exactly one named [`ForwardedHeader`]: `CF-Connecting-IP`,
+//!   `X-Real-IP`, or the rightmost `X-Forwarded-For` entry (the one the
+//!   trusted hop appended).
 //!
 //! [`RelayServer::bind`] binds the listener and returns the address plus the
 //! serve future; it shuts down gracefully when the given signal completes.
@@ -24,6 +26,8 @@
 pub(crate) mod duplex;
 mod grpc;
 mod peer;
+
+pub use peer::{ForwardedHeader, UnknownForwardedHeader};
 mod tls;
 mod ws;
 
@@ -95,7 +99,7 @@ pub struct RelayServerConfig {
     bind: SocketAddr,
     path_prefix: String,
     tls: Option<TlsFiles>,
-    trust_forwarded: bool,
+    trust_forwarded: Option<ForwardedHeader>,
     limits: ProxyLimits,
     drain_timeout: Duration,
 }
@@ -108,7 +112,7 @@ impl RelayServerConfig {
             bind,
             path_prefix: String::new(),
             tls: None,
-            trust_forwarded: false,
+            trust_forwarded: None,
             limits: ProxyLimits::default(),
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
         }
@@ -133,12 +137,13 @@ impl RelayServerConfig {
         self
     }
 
-    /// Identify clients by forwarding headers (`CF-Connecting-IP`, then
-    /// `X-Real-IP`, then the leftmost `X-Forwarded-For`) instead of the
-    /// socket address. Only safe behind a hop that sets them.
+    /// Identify clients by the address in `header` (for `X-Forwarded-For`
+    /// its rightmost entry) instead of the socket address; `None` (the
+    /// default) trusts no header. Only safe behind a hop that overwrites
+    /// (or, for `X-Forwarded-For`, appends to) exactly that header.
     #[must_use]
-    pub fn trust_forwarded(mut self, trust: bool) -> Self {
-        self.trust_forwarded = trust;
+    pub fn trust_forwarded(mut self, header: Option<ForwardedHeader>) -> Self {
+        self.trust_forwarded = header;
         self
     }
 
@@ -272,7 +277,7 @@ type ResBody = UnsyncBoxBody<Bytes, BoxError>;
 struct Shared {
     core: ProxyCore,
     prefix: String,
-    trust_forwarded: bool,
+    trust_forwarded: Option<ForwardedHeader>,
     grpc: GrpcRelayServer<grpc::GrpcRelay>,
     router: axum::Router,
     builder: auto::Builder<TokioExecutor>,
