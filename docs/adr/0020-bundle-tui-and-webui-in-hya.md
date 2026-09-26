@@ -19,6 +19,8 @@ The `hya` binary orchestrates processes; it does not render.
   (`<db>.lock` held and `<db>.server.json` healthy), `hya` starts no server and
   attaches both frontends to that one. Quitting then stops only the
   frontends.
+  *Superseded by ADR-0023:* `hya` runs no server in-process. It finds or
+  starts the database's backend daemon, which outlives it.
 - **Bun children.** `hya` runs the web host (`bun <tui-web>/src/main.ts --host
   127.0.0.1 --port <port> --cwd <cwd> -- bun <tui>/src/main.ts --server <url>
   --dir <cwd>`) on `--port` (default 3250, `0` = a free port), in its own

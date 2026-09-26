@@ -1371,6 +1371,7 @@ dependencies = [
  "hya-proto",
  "hya-provider",
  "hya-relay",
+ "hya-sdk-v1",
  "hya-server",
  "hya-store",
  "hya-updater",

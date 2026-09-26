@@ -48,20 +48,30 @@ async fn create_session(
     State(st): State<ServerState>,
     Json(request): Json<pb::CreateSessionRequest>,
 ) -> Result<Json<pb::CreateSessionResponse>, V1Error> {
-    if request.agent.trim().is_empty() {
-        return Err(V1Error::invalid_argument("agent is required"));
-    }
-    if request.model.trim().is_empty() {
-        return Err(V1Error::invalid_argument("model is required"));
-    }
     let placement = session_placement(&st, &request).await?;
-    let agent = crate::support::bound_agent_metadata::resolve_session_agent(
-        &st,
-        std::path::Path::new(&placement.workdir),
-        Some(request.agent.as_str()),
-    )
-    .await
-    .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
+    let workdir = std::path::Path::new(&placement.workdir);
+    let (agent, model) = if request.agent.trim().is_empty() || request.model.trim().is_empty() {
+        // An empty agent or model takes the server's default, resolved as
+        // for a headless root session (`hya exec`): config `default_agent`,
+        // else the built-in agent, on that agent's effective model.
+        let requested = Some(request.agent.trim()).filter(|agent| !agent.is_empty());
+        let explicit = Some(request.model.trim())
+            .filter(|model| !model.is_empty())
+            .map(hya_proto::ModelRef::new);
+        crate::support::bound_agent_metadata::resolve_new_session_agent_model(
+            &st, workdir, requested, explicit,
+        )
+        .await?
+    } else {
+        let agent = crate::support::bound_agent_metadata::resolve_session_agent(
+            &st,
+            workdir,
+            Some(request.agent.as_str()),
+        )
+        .await
+        .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
+        (agent, hya_proto::ModelRef::new(request.model.clone()))
+    };
     let session = st
         .engine
         .create_with_id(
@@ -69,7 +79,7 @@ async fn create_session(
             CreateSession {
                 parent: placement.parent,
                 agent,
-                model: hya_proto::ModelRef::new(request.model.clone()),
+                model,
                 workdir: placement.workdir,
                 project: placement.project,
                 kind: placement.kind,
@@ -421,6 +431,9 @@ async fn delete_session(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::DeleteSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
+    // Root-ness and Project membership must be read before the log (and so
+    // the parent link) goes.
+    let root = crate::session_list::is_root(&st, session).await;
     let in_project = st
         .engine
         .read_projection_shared(session)
@@ -434,6 +447,10 @@ async fn delete_session(
     }
     if in_project {
         st.notify_projects_updated();
+    }
+    if root {
+        st.session_list
+            .publish(crate::session_list::SessionListNotice::Deleted { session });
     }
     Ok(Json(pb::DeleteSessionResponse {}))
 }

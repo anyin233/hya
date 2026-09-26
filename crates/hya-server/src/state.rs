@@ -12,14 +12,17 @@ use tokio::sync::{broadcast, mpsc};
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::provider_control::{EmptyProviderControl, ProviderControl};
+use crate::session_list::SessionListHub;
+use crate::streams::StreamShutdown;
 use crate::support;
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{pending, runs};
 
 /// Holds the session engine, process agent base, permission/question queues,
 /// MCP and Workflow control handles, workspace adapters, and formatter status.
-/// The router wraps this into internal `ServerState` (run registry + Compat
-/// process-local state).
+/// The router wraps this into internal `ServerState` (Compat process-local
+/// state). The run registry and the session-list hub live here, so every
+/// router and gRPC binding built from one `AppState` shares them.
 #[derive(Clone)]
 pub struct AppState {
     /// Shared session engine for all routes.
@@ -39,8 +42,11 @@ pub struct AppState {
     projects_updates: broadcast::Sender<()>,
     project_lock: Arc<tokio::sync::Mutex<()>>,
     scratch_root: Option<PathBuf>,
+    streams: StreamShutdown,
     pure_guidance: bool,
     auto_title: bool,
+    runs: runs::RunRegistry,
+    session_list: SessionListHub,
 }
 
 impl AppState {
@@ -66,8 +72,11 @@ impl AppState {
             projects_updates,
             project_lock: Arc::new(tokio::sync::Mutex::new(())),
             scratch_root: hya_store::user_cache_dir().map(|dir| dir.join("scratch")),
+            streams: StreamShutdown::default(),
             pure_guidance: false,
             auto_title: false,
+            runs: runs::RunRegistry::default(),
+            session_list: SessionListHub::default(),
         }
     }
 
@@ -212,6 +221,15 @@ impl AppState {
         self.catalog_updates.subscribe()
     }
 
+    /// The live event streams' shutdown signal. Every clone of this state,
+    /// and every router or gRPC binding built from it, shares it: call
+    /// [`StreamShutdown::close`] when the server starts shutting down so open
+    /// streams end instead of holding the graceful shutdown open.
+    #[must_use]
+    pub fn streams(&self) -> StreamShutdown {
+        self.streams.clone()
+    }
+
     /// Clone the catalog-update publisher for background refresh tasks.
     #[must_use]
     pub fn catalog_updates_sender(&self) -> broadcast::Sender<Value> {
@@ -242,8 +260,10 @@ pub(crate) struct ServerState {
     /// two local clients starting in the same directory share one Project.
     pub(crate) project_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) scratch_root: Option<PathBuf>,
+    pub(crate) streams: StreamShutdown,
     pub(crate) pure_guidance: bool,
     pub(crate) auto_title: bool,
+    pub(crate) session_list: SessionListHub,
 }
 
 impl ServerState {
@@ -252,7 +272,7 @@ impl ServerState {
         Self {
             engine: app.engine,
             agent: app.agent,
-            runs: runs::RunRegistry::default(),
+            runs: app.runs,
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
             global,
@@ -268,8 +288,10 @@ impl ServerState {
             projects_updates: app.projects_updates,
             project_lock: app.project_lock,
             scratch_root: app.scratch_root,
+            streams: app.streams,
             pure_guidance: app.pure_guidance,
             auto_title: app.auto_title,
+            session_list: app.session_list,
         }
     }
 

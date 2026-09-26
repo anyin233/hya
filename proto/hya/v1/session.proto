@@ -189,8 +189,11 @@ message SessionRevert {
 // components.
 message CreateSessionRequest {
   // Agent name or catalog id to bind as the session's default agent.
+  // Empty: the server's default agent (config `default_agent`, else the
+  // built-in agent).
   string agent = 1;
   // Model reference the session starts on (`provider/model[#variant]`).
+  // Empty: that agent's effective model.
   string model = 2;
   // Absolute workdir for tools and relative paths in this session; see the
   // rules above.

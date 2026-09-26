@@ -16,11 +16,18 @@
 - Exception: `BundleRegistry` owns the separate
   `<data_root>/bundles/registry.sqlite3` installed-package control-plane DB;
   builtins are not rows, and it is not a session projection.
-- One server per session database (ADR-0022): `hya serve` and bare `hya`'s
-  in-process server take `<db>.lock` (`flock`, `crates/hya-backend/src/db_lock.rs`)
+- One server per session database (ADR-0022, ADR-0023): `hya serve` (in the
+  foreground, or as the backend daemon `hya serve start` / bare `hya` / the
+  TUI start) takes `<db>.lock` (`flock`, `crates/hya-backend/src/db_lock.rs`)
   before `open_store` and publish `<db>.server.json` once listening. Frontends
-  attach to that server; they never open a served database themselves. New
-  long-lived writers of a session database must claim the same lock.
+  attach to that server; they never open a served database themselves. Every
+  writer of a session database claims the same lock through
+  `crates/hya-backend/src/db_writer.rs`: headless commands (`exec`/`run`,
+  `workflow use|run|state`, `sessions archive|unarchive`) hold it for their
+  run, or go through the owning server over `/v1`
+  (`crates/hya-backend/src/routed.rs`), or exit 75. Read-only commands
+  (`sessions` listing, `tail-session`) never write projection snapshots and
+  do not lock.
 
 ---
 

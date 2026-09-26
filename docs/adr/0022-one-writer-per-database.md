@@ -64,7 +64,9 @@ database ties discovery to the store rather than to a per-user registry:
 - An attached frontend depends on the owner. When the owner exits (for
   example the first TUI quits and stops the `hya serve` it started),
   attached TUIs lose their server and say so. They do not take over. Restart
-  them to start a new owner.
+  them to start a new owner. *Superseded by
+  [ADR-0023](0023-persistent-backend-daemon.md):* the server is a daemon no
+  client owns or stops, and a TUI that loses it finds or starts the next one.
 - Flags that shape the server (`--model`, `--yolo`, `--pure`, config and
   environment) come from the owner. Bare `hya` notes in its log that its own
   flags do not apply when it attaches.
@@ -73,7 +75,14 @@ database ties discovery to the store rather than to a per-user registry:
   possible and accepted.
 - `hya exec`, `hya sessions`, `tail-session`, and `workflow` open the store
   without the lock, as before. Read-only commands are safe. `exec --db` on a
-  served database remains a second writer.
+  served database remains a second writer. *Amended:* every writing command
+  now respects the lock. With a live server on the database, `exec`/`run`,
+  `workflow use|run|state`, and `sessions archive|unarchive` go through that
+  server over `/v1`, or exit 75 when they cannot be expressed there
+  (`--pure`, `workflow run --revision`). With no holder they take the lock
+  for their whole run. With a holder that has not published a server they
+  exit 75. Listing and `tail-session` only read and never lock. The per-command
+  table is in docs/cli.md, "Database lock and the backend daemon".
 - Advisory locks on network filesystems may not work. Keep the database on a
   local disk.
 - Amends ADR-0020: bare `hya` starts its in-process server only when no

@@ -325,6 +325,37 @@ async fn v1_turn_runs_event_driven_and_finishes() {
     assert!(content_type.starts_with("text/event-stream"));
 }
 
+/// An empty agent or model takes the server's default, as for a headless
+/// root session (`hya exec` routed through a daemon relies on this).
+#[tokio::test]
+async fn v1_create_session_defaults_an_empty_agent_and_model() {
+    let app = router(state().await);
+    let workdir = std::env::temp_dir().to_string_lossy().into_owned();
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/sessions",
+        json!({ "workdir": workdir }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The default agent on its default model (the bare `fake` here, which
+    // the wire `ModelRef` cannot split into provider/model).
+    assert_eq!(body["session"]["agent"], json!("build"), "{body}");
+
+    // An explicit model with the default agent.
+    let (status, body) = send(
+        app,
+        Method::POST,
+        "/v1/sessions",
+        json!({ "workdir": workdir, "model": "other/m" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["session"]["agent"], json!("build"), "{body}");
+    assert_eq!(body["session"]["model"]["modelId"], json!("m"), "{body}");
+}
+
 #[tokio::test]
 async fn v1_invalid_requests_render_the_stable_error_model() {
     let app = router(state().await);

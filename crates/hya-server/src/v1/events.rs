@@ -154,12 +154,15 @@ fn session_stream(
 
 /// The shared live frame producer backing both SSE and gRPC streams.
 ///
-/// Merges five feeds: the engine event bus, the pending permission plane,
-/// the pending question plane, provider-catalog notices (a live-only,
-/// process-wide `catalogUpdated` frame on every scope), and Project-list
-/// notices (a live-only `projectsUpdated` frame on the global scope only). With
-/// `interactions_only` the engine bus (and so its `resync` frames) is left
-/// out. Permission and question frames are
+/// Merges the engine event bus, the pending permission plane, the pending
+/// question plane, provider-catalog notices (a live-only, process-wide
+/// `catalogUpdated` frame on every scope), and — on the global scope only —
+/// Project-list notices (a live-only `projectsUpdated` frame) and the live
+/// root-session list notices (`sessionUpdated {busy}`, `sessionDeleted`; see
+/// `crate::session_list`). With `interactions_only` the engine bus is
+/// narrowed to the durable list frames of root sessions (`sessionStarted`,
+/// `sessionUpdated`); its lag still yields `resync`.
+/// Permission and question frames are
 /// live-only (`seq == 0`): the pending queues are the authoritative
 /// listing, the streams are delivery. A session scope with `descendants`
 /// also passes interaction frames whose session lies below the streamed one
@@ -172,12 +175,17 @@ fn session_stream(
 /// bus capacity behind gets one `resync` frame per lag and loses the
 /// frames in the gap, live deltas included; the durable log (and so the
 /// projection) is unaffected.
+///
+/// Every stream ends when the server starts shutting down
+/// (`StreamShutdown::close`), so connected clients never hold the graceful
+/// shutdown open; its last frame is a live `serverStopping {reason}`.
 pub(crate) fn frame_stream(
     st: ServerState,
     scope: StreamScope,
     since_seq: u64,
     interactions_only: bool,
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
+    let closed = st.streams.closed();
     let session = scope.session_id();
     let lineage = st.engine.clone();
     let engine =
@@ -253,10 +261,148 @@ pub(crate) fn frame_stream(
             .filter_map(|result| async { result.ok().map(|()| Ok(projects_updated_frame())) });
         feeds.push(Box::pin(projects));
     }
-    if !interactions_only {
+    if interactions_only {
+        feeds.push(Box::pin(session_list_engine_feed(&st, since_seq)));
+    } else {
         feeds.push(engine);
     }
+    if session.is_none() {
+        feeds.push(Box::pin(session_list_notice_feed(&st, since_seq)));
+    }
+    // The last frame says why the server goes away (only when it does: the
+    // feeds never end on their own while the state lives).
+    let shutdown = st.streams.clone();
+    // Never an error; the Result matches the merged item type (as above).
+    #[allow(clippy::result_large_err)]
+    let stopping = futures::stream::once(async move {
+        shutdown
+            .reason()
+            .map(|reason| Ok(server_stopping_frame(reason)))
+    })
+    .filter_map(futures::future::ready);
     futures::stream::select_all(feeds)
+        .take_until(closed)
+        .chain(stopping)
+}
+
+/// The durable session-list frames of root sessions from the engine bus
+/// (the `interactions_only` global stream's share of it): `sessionStarted`
+/// and `sessionUpdated` (title, agent, model, permission mode, archived).
+/// A lag yields one `resync` frame: list frames were lost.
+#[allow(clippy::result_large_err)]
+fn session_list_engine_feed(
+    st: &ServerState,
+    since_seq: u64,
+) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send + use<> {
+    let state = st.clone();
+    BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
+        let state = state.clone();
+        async move {
+            let envelope = match result {
+                Ok(envelope) => envelope,
+                Err(_lagged) => return Some(Ok(resync_frame(since_seq))),
+            };
+            if is_live(&envelope) || envelope.seq.0 <= since_seq {
+                return None;
+            }
+            let root = match &envelope.event {
+                hya_proto::Event::SessionCreated { parent, .. } => parent.is_none(),
+                hya_proto::Event::SessionTitled { session, .. }
+                | hya_proto::Event::AgentSwitched { session, .. }
+                | hya_proto::Event::ModelSwitched { session, .. }
+                | hya_proto::Event::SessionPermissionModeSet { session, .. }
+                | hya_proto::Event::SessionArchived { session, .. }
+                | hya_proto::Event::SessionUnarchived { session, .. } => {
+                    crate::session_list::is_root(&state, *session).await
+                }
+                _ => return None,
+            };
+            if !root {
+                return None;
+            }
+            let event = stream_event(&envelope)?;
+            Some(Ok(pb::StreamFrame {
+                frame: Some(pb::stream_frame::Frame::Event(event)),
+            }))
+        }
+    })
+}
+
+/// The live session-list notices of root sessions (global scope only):
+/// `sessionUpdated {busy}` and `sessionDeleted`. A lag yields one `resync`.
+#[allow(clippy::result_large_err)]
+fn session_list_notice_feed(
+    st: &ServerState,
+    since_seq: u64,
+) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send + use<> {
+    BroadcastStream::new(st.session_list.subscribe()).map(move |result| {
+        Ok(match result {
+            Ok(notice) => session_list_frame(notice),
+            Err(_lagged) => resync_frame(since_seq),
+        })
+    })
+}
+
+fn resync_frame(last_seq: u64) -> pb::StreamFrame {
+    pb::StreamFrame {
+        frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
+            last_seq,
+        })),
+    }
+}
+
+/// One live session-list notice as its frame (`seq` 0).
+fn session_list_frame(notice: crate::session_list::SessionListNotice) -> pb::StreamFrame {
+    use crate::session_list::SessionListNotice as N;
+    let (session, payload) = match notice {
+        N::Busy { session, busy } => (
+            session,
+            pb::stream_event::Payload::SessionUpdated(pb::SessionUpdated {
+                busy: Some(busy),
+                ..Default::default()
+            }),
+        ),
+        N::Deleted { session } => (
+            session,
+            pb::stream_event::Payload::SessionDeleted(pb::SessionDeleted {}),
+        ),
+    };
+    pb::StreamFrame {
+        frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+            seq: 0,
+            session: session.to_string(),
+            time_recorded: now_timestamp(),
+            payload: Some(payload),
+        })),
+    }
+}
+
+/// Milliseconds since the Unix epoch, as the frames' `timeRecorded`.
+fn now_timestamp() -> Option<pbjson_types::Timestamp> {
+    super::convert::timestamp(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+            .unwrap_or_default(),
+    )
+}
+
+/// The live-only, process-wide `serverStopping` frame: the last frame of
+/// every stream when the server shuts down.
+fn server_stopping_frame(reason: crate::streams::ShutdownReason) -> pb::StreamFrame {
+    pb::StreamFrame {
+        frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+            seq: 0,
+            session: String::new(),
+            time_recorded: now_timestamp(),
+            payload: Some(pb::stream_event::Payload::ServerStopping(
+                pb::ServerStopping {
+                    reason: reason.as_str().to_owned(),
+                },
+            )),
+        })),
+    }
 }
 
 /// The live-only, process-wide `catalogUpdated` frame.
@@ -279,13 +425,7 @@ fn process_notice_frame(payload: pb::stream_event::Payload) -> pb::StreamFrame {
         frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
             seq: 0,
             session: String::new(),
-            time_recorded: super::convert::timestamp(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
-                    .unwrap_or_default(),
-            ),
+            time_recorded: now_timestamp(),
             payload: Some(payload),
         })),
     }

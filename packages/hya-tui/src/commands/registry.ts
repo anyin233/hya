@@ -40,8 +40,15 @@ export interface AppActions {
   scheduleRefresh(): void
   /** Cancel the running turn (`CancelTurn`); throws `No active turn` when none runs. */
   cancelTurn(): Promise<void>
-  /** Leave the TUI and restore the terminal. */
-  quit(): void
+  /**
+   * Leave the TUI and restore the terminal. `archive` (`/exit`, Ctrl+C twice)
+   * archives the open session's root; `background` (`/to-background`,
+   * Ctrl+D) leaves it running on the daemon. An empty session this client
+   * created is dropped either way (app/sessionKeeper.ts).
+   */
+  quit(mode: "archive" | "background"): void
+  /** `/resume [id]`, `--resume [id]`: unarchive and open a session, or pick one (app/resume.ts). */
+  resume(id?: string): Promise<void>
   /** Open the modal picker (components/Picker.tsx); the choice runs `spec.onSelect`. */
   openPicker(spec: PickerSpec): void
   /** Open the key and command help overlay (`/help`, `?`; commands/help.ts). */
@@ -60,6 +67,16 @@ export interface AppActions {
   redo(): Promise<void>
   /** `/fork`: open the fork picker. */
   fork(): void
+  /** `/reconnect`: find or start the database's backend now (app/reconnect.ts). */
+  reconnect(): Promise<void>
+  /**
+   * Delete a session (`/sessions` Ctrl+D). Goes through this, not
+   * `client.deleteSession` directly: it marks the id so the global stream's
+   * echo of this same delete (`docs/protocol/README.md` "Session list push")
+   * does not also show the "deleted elsewhere" notice and open a second new
+   * session — the picker's own delete flow already navigates.
+   */
+  deleteSession(id: string): Promise<void>
 }
 
 export interface CommandContext {
@@ -91,6 +108,8 @@ export interface CommandSpec {
   name: string
   description: string
   argumentHint?: string
+  /** Not offered in a WebUI tab (`--web-tab`): hidden from the command menu, help, and completion; typing it still runs it. */
+  terminalOnly?: boolean
   complete?(position: ArgumentPosition, context: CompletionContext): string[]
   run(context: CommandContext, invocation: CommandInvocation): Promise<void> | void
 }

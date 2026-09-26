@@ -1,5 +1,5 @@
 /**
- * Entry point: `bun packages/hya-tui/src/main.ts [--server URL] [--dir PATH] [--hya PATH] [--db PATH] [--continue | --session ID]`
+ * Entry point: `bun packages/hya-tui/src/main.ts [--server URL] [--dir PATH] [--hya PATH] [--db PATH] [--continue | --session ID | --resume [ID]] [--web-tab]`
  * (src/cli.ts `usage`). Without `--server` the TUI starts its own `hya serve` (src/launch.ts).
  *
  * Registers the Solid JSX transform before any `.tsx` module or solid-js is

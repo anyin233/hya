@@ -172,10 +172,10 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.waitForText("b", 20_000)
 
     await prompt(term, "/sessions")
-    await term.waitForText("F3 all projects")
+    await term.waitForText("F3 all")
     expect(await term.find(firstId)).toBeNull()
     await term.press("F3")
-    await term.waitForText("all projects")
+    await term.waitForText("Sessions · all projects")
     await term.waitForText(firstId)
   })
 })

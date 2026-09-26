@@ -16,12 +16,15 @@ mod agent_cmd;
 mod auth_cmd;
 mod bundle_cmd;
 mod cli_args;
+mod daemon;
 mod db_lock;
+mod db_writer;
 mod exec_stream;
 mod frontend;
 mod models_cmd;
 mod proxy_cmd;
 mod relay_doctor;
+mod routed;
 mod rpc;
 mod serve;
 mod sessions_cmd;
@@ -75,6 +78,16 @@ fn resolve_interactive_db(cli_db: &str) -> String {
         .into_owned()
 }
 
+/// `db` as an absolute path (relative to the working directory), so a
+/// daemon, its clients, and `hya serve stop` name the same file wherever they
+/// run. In-memory stores and SQLite URIs are returned unchanged.
+fn absolute_db(db: String) -> String {
+    if db.is_empty() || db == ":memory:" || db.starts_with("file:") || db.starts_with("sqlite:") {
+        return db;
+    }
+    std::path::absolute(&db).map_or(db, |path| path.to_string_lossy().into_owned())
+}
+
 /// `$XDG_STATE_HOME/hya`, else `$HOME/.local/state/hya` (else
 /// `./.local/state/hya`), created if missing: the default database and the
 /// bare-`hya` log file live here.
@@ -91,6 +104,49 @@ fn state_dir() -> std::path::PathBuf {
         .join("hya");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// `hya exec`/`run` on `db`, respecting the database lock
+/// ([`db_writer`]): through the server that owns a file database, else
+/// in process while holding its lock (in-memory stores are not locked).
+async fn exec_entry(
+    command: &str,
+    prompt: String,
+    model_override: Option<String>,
+    db: &str,
+    yolo: bool,
+    json: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    match db_writer::claim(db, command)? {
+        db_writer::Writer::Server(server) => {
+            if pure {
+                db_writer::exit_unroutable(
+                    command,
+                    db,
+                    &server,
+                    "--pure cannot apply to a running server (it loaded its own context)",
+                );
+            }
+            routed::exec(
+                &server.url,
+                routed::ExecRequest {
+                    prompt,
+                    model: model_override,
+                    yolo,
+                    json,
+                },
+            )
+            .await
+        }
+        // The lock (if any) is held until the run returns; an early exit
+        // (a stop signal) releases it with the process.
+        db_writer::Writer::Direct(lock) => {
+            let result = cmd_exec(prompt, model_override, db, yolo, json, pure).await;
+            drop(lock);
+            result
+        }
+    }
 }
 
 async fn cmd_exec(
@@ -852,6 +908,8 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let web_port = cli_args::bare_web_port(&cli)?;
+    let backend = cli_args::bare_backend(&cli)?;
+    let resume = cli_args::bare_resume(&cli)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let pure = cli.pure;
@@ -869,9 +927,9 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|error| eprintln!("goal error: {error:#}"));
     }
     match cli.command {
-        // Bare `hya` on a terminal starts the TUI and the WebUI next to an
-        // in-process server (frontend.rs); without a terminal it only points
-        // at the other surfaces.
+        // Bare `hya` on a terminal starts the TUI and the WebUI against the
+        // database's backend daemon (frontend.rs, daemon.rs); without a
+        // terminal it only points at the other surfaces.
         None => {
             use std::io::IsTerminal as _;
             if frontend::should_launch(
@@ -880,7 +938,9 @@ async fn main() -> anyhow::Result<()> {
             ) {
                 return frontend::run(frontend::LaunchRequest {
                     port: web_port,
-                    db: resolve_interactive_db(&db),
+                    db: absolute_db(resolve_interactive_db(&db)),
+                    backend,
+                    resume,
                     model,
                     yolo,
                     pure,
@@ -904,7 +964,8 @@ async fn main() -> anyhow::Result<()> {
             format,
             json,
         }) => {
-            cmd_exec(
+            exec_entry(
+                "run",
                 message.join(" "),
                 model,
                 &db,
@@ -915,7 +976,22 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Some(Command::Exec { prompt, json }) => {
-            cmd_exec(prompt, model, &db, yolo, json, pure).await
+            exec_entry("exec", prompt, model, &db, yolo, json, pure).await
+        }
+        Some(Command::Serve {
+            action: Some(action),
+            db: command_db,
+            ..
+        }) => {
+            let path = command_db.unwrap_or_else(|| db.clone());
+            serve::cmd_serve_action(
+                action,
+                absolute_db(resolve_interactive_db(&path)),
+                model,
+                yolo,
+                pure,
+            )
+            .await
         }
         Some(Command::Serve {
             bind,
@@ -923,6 +999,7 @@ async fn main() -> anyhow::Result<()> {
             port,
             mdns,
             db: command_db,
+            action: None,
             ..
         }) => {
             serve::cmd_serve(

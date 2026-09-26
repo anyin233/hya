@@ -26,7 +26,8 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openProjectView: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
-    quit: () => { calls.push("quit") },
+    quit: (mode) => { calls.push(`quit ${mode}`) },
+    resume: async (id) => { calls.push(`resume ${id ?? ""}`.trim()) },
     openPicker: (picker) => { pickers.push(picker) },
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
     openHelp: () => { calls.push("help") },
@@ -36,6 +37,8 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     undo: async () => { calls.push("undo") },
     redo: async () => { calls.push("redo") },
     fork: () => { calls.push("fork") },
+    reconnect: async () => { calls.push("reconnect") },
+    deleteSession: async (id) => { calls.push(`delete ${id}`); await (client as HyaClient).deleteSession(id) },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -225,26 +228,25 @@ test("/status shows the WebUI that bare hya serves, or why it is unavailable", a
   store.setWeb({ url: "http://127.0.0.1:3250/" })
   await run("/status")
   expect(store.state.statusText).toContain("WebUI       http://127.0.0.1:3250")
-  expect(store.state.statusText).toContain("Backend     in the hya process (bare hya)")
   store.setWeb({ error: "port 3250 is in use" })
   await run("/status")
   expect(store.state.statusText).toContain("WebUI       unavailable: port 3250 is in use · hya --port <N>")
 })
 
-test("/status says whether the backend was started by this TUI or attached to a running server", async () => {
+test("/status shows the backend daemon: pid, database, and when it started; an explicit URL says so", async () => {
   const { store, run } = harness()
-  store.setBackend({ pid: 11, bin: "/b/hya", db: "/s/sessions.db" })
+  const fiveMinutesAgo = Date.now() - 5 * 60_000
+  store.setBackend({ pid: 11, db: "/s/sessions.db", startedAt: fiveMinutesAgo })
   await run("/status")
-  expect(store.state.statusText).toContain("Backend     started by this TUI · pid 11 · /b/hya · db /s/sessions.db")
-  store.setBackend({ pid: 22, db: "/s/sessions.db", attached: true })
+  expect(store.state.statusText).toContain("Backend     daemon · pid 11 · db /s/sessions.db · started 5m ago")
+  store.setBackend({ pid: 22, explicit: true })
   await run("/status")
-  expect(store.state.statusText).toContain("Backend     attached to a running server · pid 22 · db /s/sessions.db")
-  // Bare hya that attached passes only the pid.
-  store.setWeb({ url: "http://127.0.0.1:3250/" })
-  store.setBackend({ pid: 33, attached: true })
+  expect(store.state.statusText).toContain("Backend     daemon · pid 22 · via --backend/--server")
+  // Nothing known but the server's own pid (bootstrap location).
+  store.setBackend(undefined)
+  store.applyBootstrap({ location: { version: "0.42.0", pid: 33 } })
   await run("/status")
-  expect(store.state.statusText).toContain("Backend     attached to a running server · pid 33")
-  expect(store.state.statusText).not.toContain("in the hya process")
+  expect(store.state.statusText).toContain("Backend     daemon · pid 33 · via --backend/--server")
 })
 
 test("argument completion comes from the command's own completer", () => {
@@ -277,12 +279,12 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
   expect(registry.complete("/sidebar o", store.completionContext())).toEqual(["/sidebar off", "/sidebar on"])
 })
 
-test("/exit and /quit quit; /cancel cancels the running turn", async () => {
+test("/exit and /quit quit and archive; /cancel cancels the running turn", async () => {
   const { calls, run } = harness()
   await run("/exit")
   await run("/quit")
   await run("/cancel")
-  expect(calls).toEqual(["quit", "quit", "cancel"])
+  expect(calls).toEqual(["quit archive", "quit archive", "cancel"])
 })
 
 test("/permissions opens the mode picker from the backend listing; /permissions <mode> switches directly", async () => {
@@ -324,7 +326,7 @@ test("/sessions opens a picker with a New session row first, then the tree, the 
   expect(picker.title).toBe("Sessions")
   expect(picker.rows.map((row) => row.id)).toEqual(["__new__", "hysec_1", "hysec_2"])
   expect(picker.rows[1]?.current).toBe(true)
-  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete", "allProjects"])
+  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete", "archived", "allProjects"])
   // Enter on a row opens it; on the New session row it creates one.
   await picker.onSelect(picker.rows[2]!)
   expect(calls).toContain("open hysec_2")
@@ -466,4 +468,11 @@ test("/status names the session a fork came from", async () => {
   store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", forkedFrom: { session: "hysec_src" } })
   await run("/status")
   expect(store.state.statusText).toContain("Forked      from Parser")
+})
+
+test("/reconnect finds or starts the backend now", async () => {
+  const { calls, run, registry } = harness()
+  expect(registry.get("/reconnect")?.description).toContain("hya serve stop")
+  await run("/reconnect")
+  expect(calls).toEqual(["reconnect"])
 })

@@ -438,6 +438,7 @@ fn archived_update(archived: bool) -> hya_api::v1::stream_event::Payload {
         background: None,
         permission_mode: None,
         archived: Some(archived),
+        busy: None,
     })
 }
 
@@ -475,6 +476,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             background: None,
             permission_mode: None,
             archived: None,
+            busy: None,
         }),
         Event::AgentSwitched { agent, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
@@ -483,6 +485,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             background: None,
             permission_mode: None,
             archived: None,
+            busy: None,
         }),
         Event::ModelSwitched { model, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
@@ -491,6 +494,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             background: None,
             permission_mode: None,
             archived: None,
+            busy: None,
         }),
         Event::SessionPermissionModeSet { mode, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
@@ -499,6 +503,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             background: None,
             permission_mode: Some(mode.clone()),
             archived: None,
+            busy: None,
         }),
         // A legacy zero stamp cleared the archive.
         Event::SessionArchived { archived, .. } => {

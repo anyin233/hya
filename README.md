@@ -12,9 +12,10 @@ a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
 (`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. The
 interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`: running
-`hya` in a terminal starts it together with an in-process server and the
-WebUI, the same TUI rendered in a browser through `packages/hya-tui-web` (see
-[Run the TUI](#run-the-tui)). Other clients use `hya-sdk-v1`, `hya-client`,
+`hya` in a terminal starts it together with the WebUI, the same TUI rendered
+in a browser through `packages/hya-tui-web`, both connected to a backend
+daemon that `hya` starts when none runs and that keeps running after you quit
+(`hya serve status|stop|restart`; see [Run the TUI](#run-the-tui)). Other clients use `hya-sdk-v1`, `hya-client`,
 or any `hya.v1` client.
 
 

@@ -2,8 +2,9 @@
 
 This guide runs hya from the workspace. The only shipped binary is `hya`.
 Running `hya` in a terminal starts the interactive OpenTUI frontend
-(`packages/hya-tui`) and the WebUI (`packages/hya-tui-web`) with Bun, next to
-a server inside the `hya` process; see [Run the TUI](#run-the-tui) and
+(`packages/hya-tui`) and the WebUI (`packages/hya-tui-web`) with Bun, both
+connected to the backend daemon of the database (started on demand, kept
+running after you quit); see [Run the TUI](#run-the-tui) and
 [OpenTUI frontend](tui.md).
 Other clients drive the backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC
 contract.
@@ -148,9 +149,9 @@ generated [API reference](protocol/api-reference.md).
 
 ## Run the TUI
 
-Run `hya` in a terminal. It starts a server inside the `hya` process, the
-WebUI on `http://127.0.0.1:3250` (`--port <N>` to change it, `0` for a free
-port), and the TUI on the terminal. From a checkout, install the frontends'
+Run `hya` in a terminal. It connects to the backend daemon of the database
+(starting one if none runs), then starts the WebUI on `http://127.0.0.1:3250`
+(`--port <N>` to change it, `0` for a free port) and the TUI on the terminal. From a checkout, install the frontends'
 dependencies once:
 
 ```sh
@@ -161,16 +162,20 @@ target/debug/hya
 ```
 
 Type a prompt and press Enter; `?` shows every key and command, and Ctrl+C
-twice (or `/exit`) quits and stops the WebUI and the server. Open the address
-the status bar shows (`WebUI http://127.0.0.1:3250`) in a browser for the same
-TUI there; every tab shares the server and its sessions. Sessions are kept in
-`$XDG_STATE_HOME/hya/sessions.db` (else `~/.local/state/hya/sessions.db`), and
-the server's own output goes to `hya.log` in the same directory. See
-[Bare `hya`](cli.md#bare-hya).
+twice (or `/exit`) quits the TUI and the WebUI. The daemon keeps running, so
+the next start is instant; `hya serve status` shows it and `hya serve stop`
+stops it. Open the address the status bar shows (`WebUI
+http://127.0.0.1:3250`) in a browser for the same TUI there; every tab shares
+the daemon and its sessions, and the terminal and the browser can each resume
+the other's sessions. Sessions are kept in `$XDG_STATE_HOME/hya/sessions.db`
+(else `~/.local/state/hya/sessions.db`); the daemon's output goes to
+`sessions.db.server.log` and bare `hya`'s own to `hya.log` in the same
+directory. See [Bare `hya`](cli.md#bare-hya) and
+[Backend daemon](cli.md#backend-daemon).
 
-To run the TUI alone with Bun (development), it starts its own backend (a
-`hya serve` on a free local port, in `--dir`) and stops it when you quit. It
-finds the binary through `--hya <path>`, then `HYA_BIN`, then `hya` on `PATH`:
+To run the TUI alone with Bun (development), it uses the same daemon (and
+starts it when none runs). It finds the binary through `--hya <path>`, then
+`HYA_BIN`, then `hya` on `PATH`:
 
 ```sh
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"

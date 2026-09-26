@@ -1,9 +1,9 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
-import { agentRows, modelRows, sessionRows } from "../state/catalog"
+import { agentRows, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { modelReference, sessionTree, strategyText } from "../state/format"
+import { modelReference, sessionTree, strategyText, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
@@ -13,42 +13,86 @@ import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
-/** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh), F3 toggles showing every Project's sessions. */
+/**
+ * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never
+ * Ctrl+R — that key means refresh), Ctrl+A shows or hides archived sessions,
+ * F3 toggles showing every Project's sessions.
+ */
 export const sessionPickerActions: readonly PickerAction[] = [
   { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
-  { id: "allProjects", key: "f3", label: "F3 all projects", prompt: "toggle" },
+  { id: "archived", key: "a", ctrl: true, label: "Ctrl+A archived sessions (show or hide; opening one unarchives it)", prompt: "none" },
+  { id: "allProjects", key: "f3", label: "F3 all projects", prompt: "none" },
 ]
 
-/** `/status`'s Backend row: started by this TUI, attached to another process's server, bare hya's in-process server, or `--server`. */
-function backendText(backend: BackendInfo | undefined, bareHya: boolean): string {
-  if (backend?.attached) return ["attached to a running server", `pid ${backend.pid}`, ...(backend.db ? [`db ${backend.db}`] : [])].join(" · ")
-  if (backend) return `started by this TUI · pid ${backend.pid} · ${backend.bin ?? "hya"} · db ${backend.db ?? ""}`
-  return bareHya ? "in the hya process (bare hya)" : "external (--server)"
+/**
+ * `/to-background` and Ctrl+D: quit at once and leave the session running on
+ * the daemon (no archive). In a WebUI tab (`--web-tab`) closing the tab
+ * already does that, so this only says so.
+ */
+export function toBackground({ store, actions }: CommandContext): void {
+  if (store.state.webTab) {
+    store.setStatus(webTabBackgroundNotice)
+    return
+  }
+  actions.quit("background")
+}
+
+/**
+ * `/status`'s Backend row: the daemon's pid, database, and start time
+ * (ADR-0023); `via --backend/--server` when the URL was given explicitly.
+ * `serverPid` (bootstrap) fills in a pid nothing else named.
+ */
+export function backendText(backend: BackendInfo | undefined, serverPid?: number, now = Date.now()): string {
+  const pid = backend?.pid ?? serverPid
+  const parts = ["daemon"]
+  if (pid) parts.push(`pid ${pid}`)
+  if (backend?.db) parts.push(`db ${backend.db}`)
+  if (backend?.startedAt) {
+    const ago = relativeTime(new Date(backend.startedAt).toISOString(), now)
+    if (ago) parts.push(`started ${ago} ago`)
+  }
+  if (!backend || backend.explicit) parts.push("via --backend/--server")
+  return parts.join(" · ")
 }
 
 /**
  * Open the `/sessions` picker (C13): a `New session` row first, then the
  * tree, scoped to the active Project unless F3's "all projects" toggle is on
  * (state/store.ts `sessionsPickerAllProjects`); Enter opens, F2 renames,
- * Ctrl+D deletes with confirmation.
+ * Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions
+ * (listed with `includeArchived`, tagged `archived`; opening one unarchives
+ * it, like `/resume`).
  */
-function openSessionsPicker(context: CommandContext): void {
+async function openSessionsPicker(context: CommandContext, showArchived = false): Promise<void> {
   const { store, client, actions } = context
   const allProjects = store.state.sessionsPickerAllProjects
+  // The sidebar keeps the default listing; the archived view is this picker's own.
+  const sessions = showArchived ? await client.listSessions({ includeArchived: true }) : store.state.sessions
+  const archived = new Set(sessions.filter((session) => session.archived).map((session) => session.id))
+  const title = ["Sessions", ...(allProjects ? ["all projects"] : []), ...(showArchived ? ["archived included"] : [])].join(" · ")
   actions.openPicker({
-    title: allProjects ? "Sessions · all projects" : "Sessions",
-    rows: sessionRows(store.state.sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects }),
-    hint: "Enter opens · F2 renames · Ctrl+D deletes · F3 all projects · Esc closes · type to filter",
+    title,
+    rows: sessionRows(sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects }),
+    // Kept at 72 columns or less (docs/tui.md "Sidebar"): the picker box's content
+    // width is `min(96, terminalWidth - 4) - 4` (border + `paddingX`), and 80-column
+    // terminals are common (`min(96, 80 - 4) - 4 = 72`).
+    // Enter-to-open is left implicit to make room for F3.
+    hint: `F2 rename · Ctrl+D del · Ctrl+A ${showArchived ? "hides" : "shows"} archived · F3 all · Esc closes`,
     actions: sessionPickerActions,
     onSelect: async (row) => {
       if (row.id === "__new__") { await actions.newSession(); return }
+      if (archived.has(row.id)) { await actions.resume(row.id); return }
       await actions.openSession(row.id)
     },
     onAction: async (id, row, value) => {
+      if (id === "archived") {
+        await openSessionsPicker(context, !showArchived)
+        return
+      }
       if (id === "allProjects") {
         store.setSessionsPickerAllProjects(!allProjects)
-        openSessionsPicker(context)
+        await openSessionsPicker(context, showArchived)
         return
       }
       if (id === "rename") {
@@ -58,9 +102,9 @@ function openSessionsPicker(context: CommandContext): void {
         if (store.state.selected?.id === row.id) store.setSelected(info)
         await actions.refresh()
         store.setStatus(`Renamed to ${title}`)
-        openSessionsPicker(context)
+        await openSessionsPicker(context, showArchived)
       } else if (id === "delete") {
-        await client.deleteSession(row.id)
+        await actions.deleteSession(row.id)
         const wasOpen = store.state.selected?.id === row.id
         await actions.refresh()
         if (wasOpen) {
@@ -175,8 +219,15 @@ export const nativeCommandSpecs: CommandSpec[] = [
       // The list lives in the sidebar; show it when the width hides it.
       if (!sidebarVisible(store.state.sidebar, store.state.columns)) store.setSidebar("open")
       await actions.refresh()
-      openSessionsPicker(context)
+      await openSessionsPicker(context)
     },
+  },
+  {
+    name: "/resume",
+    description: "Reopen a session and unarchive it: pick one of the active Project's sessions (archived ones included, newest first), or name its id",
+    argumentHint: "[id]",
+    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.sessions) : [],
+    run: ({ actions }, { args }) => actions.resume(args[0]),
   },
   {
     name: "/new",
@@ -339,7 +390,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
-        `Backend     ${backendText(store.state.backend, store.state.web !== undefined)}`,
+        `Backend     ${backendText(store.state.backend, store.state.serverPid)}`,
       ]
       const web = store.state.web
       if (web) lines.push(`WebUI       ${web.url ? web.url.replace(/\/$/, "") : `unavailable: ${web.error ?? ""} · hya --port <N>`}`)
@@ -488,6 +539,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: async ({ actions }) => { await actions.refresh(); await actions.refreshMessages() },
   },
   {
+    name: "/reconnect",
+    description: "Find or start the backend now (after hya serve stop)",
+    run: ({ actions }) => actions.reconnect(),
+  },
+  {
     name: "/sidebar",
     description: "Show or hide the sidebar (Ctrl+B)",
     argumentHint: "[on|off]",
@@ -578,13 +634,19 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/exit",
-    description: "Quit the TUI (Ctrl+C twice, Ctrl+D on an empty input)",
-    run: ({ actions }) => { actions.quit() },
+    description: "Quit the TUI and archive the session (Ctrl+C twice); an empty session is deleted. /resume brings an archived one back",
+    run: ({ actions }) => { actions.quit("archive") },
   },
   {
     name: "/quit",
     description: "Alias for /exit",
-    run: ({ actions }) => { actions.quit() },
+    run: ({ actions }) => { actions.quit("archive") },
+  },
+  {
+    name: "/to-background",
+    description: "Quit the TUI at once and leave the session running on the backend daemon, not archived (Ctrl+D on an empty input). Not in a WebUI tab: close the tab instead",
+    terminalOnly: true,
+    run: (context) => { toBackground(context) },
   },
   {
     name: "/api",

@@ -166,19 +166,23 @@ test("a local start ensures the Project of --dir and makes it active; the Projec
   expect(h.store.state.activeProjectId).toBe("prj_work")
   expect(h.store.state.projects.map((row) => row.id)).toEqual(["prj_work", "prj_other"])
   expect(h.store.state.remote).toBe(false)
+  // A plain start opens a new session right away, in the active Project.
+  expect(h.named("createSession")).toEqual([["createSession", { projectId: "prj_work", workdir: "/work/sub" }]])
   h.controller.dispose()
 })
 
 test("a new session in the active Project works in --dir when --dir lies inside it, else in the primary root", async () => {
   const inside = harness({ directory: "/docs/api" })
   await inside.controller.start()
+  inside.calls.length = 0
   await inside.controller.newSession()
   expect(inside.named("createSession")).toEqual([["createSession", { projectId: "prj_work", workdir: "/docs/api" }]])
-  expect(inside.store.state.selected?.id).toBe("new_1")
+  expect(inside.store.state.selected?.id).toBe("new_2")
   inside.controller.dispose()
 
   const outside = harness({ directory: "/work/sub" })
   await outside.controller.start()
+  outside.calls.length = 0
   await outside.controller.switchProject("prj_other")
   expect(outside.named("createSession")).toEqual([["createSession", { projectId: "prj_other" }]])
   outside.controller.dispose()
@@ -187,6 +191,7 @@ test("a new session in the active Project works in --dir when --dir lies inside 
 test("newTemporarySession creates a SESSION_KIND_TEMPORARY session", async () => {
   const h = harness()
   await h.controller.start()
+  h.calls.length = 0
   await h.controller.newTemporarySession()
   expect(h.named("createSession")).toEqual([["createSession", { temporary: true }]])
   expect(h.store.state.selected?.kind).toBe("SESSION_KIND_TEMPORARY")
@@ -205,6 +210,7 @@ test("switchProject sets the active Project and scope, opens its newest root ses
     ],
   })
   await h.controller.start()
+  h.calls.length = 0
   await h.controller.switchProject("prj_other")
   expect(h.store.state.activeProjectId).toBe("prj_other")
   expect(h.directory).toBe("/other")
