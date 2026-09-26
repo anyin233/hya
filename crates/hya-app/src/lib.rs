@@ -17,6 +17,7 @@ pub mod bundle_config;
 mod bundle_runtime;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
+mod config_edit;
 /// Formatter plane construction from optional formatter config.
 pub mod formatter_config;
 mod installed_bundle_refresh;
