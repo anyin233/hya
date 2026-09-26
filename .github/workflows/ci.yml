@@ -76,8 +76,9 @@ jobs:
           cache-on-failure: true
       # hya-e2e runs in its own job: it spawns real backend processes, and
       # docs/testing/process-e2e.md requires serial execution.
+      # --no-fail-fast: one failing crate must not hide the failures behind it.
       - name: test
-        run: cargo test --workspace --exclude hya-e2e
+        run: cargo test --workspace --exclude hya-e2e --no-fail-fast
 
   e2e:
     runs-on: ubuntu-latest
@@ -98,7 +99,7 @@ jobs:
         run: cargo build --locked -p hya-backend --bin hya
       - name: agent process e2e (Track P)
         if: ${{ !cancelled() }}
-        run: cargo test -p hya-e2e -- --test-threads=1
+        run: cargo test -p hya-e2e --no-fail-fast -- --test-threads=1
 
   tui:
     runs-on: ubuntu-latest
