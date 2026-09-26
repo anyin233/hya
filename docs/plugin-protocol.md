@@ -657,11 +657,16 @@ current directory instead of the host process's own working directory.
 
 This lets a plugin declare a relative `command` (for example a script under
 `<project root>/.hya/plugins/<id>/`) that resolves against the Project root
-holding it, rather than requiring an absolute path or the server's cwd. It
-does not change `spawn`/`spawn_bundle`/`connect_all`/`connect_all_observed`,
-which keep spawning in the host's own working directory; per-Project plugin
-loading is not yet wired to call the `_in` variants (tracked in the secure
-relay F1/F2 design) — this documents their contract for when it is.
+holding it, rather than requiring an absolute path or the server's cwd. A
+plugin that crashes and is respawned within its restart budget starts in the
+same directory again. `spawn`/`spawn_bundle`/`connect_all`/
+`connect_all_observed` keep spawning in the host's own working directory.
+
+Project plugins (`<root>/.hya/plugins/<name>/plugin.toml`) use the `_in`
+variants: `hya-app` starts each one in the Project root that holds its
+`.hya/plugins` directory, at the Project's first bind (see
+[Configuration: Plugins](configuration.md#plugins)). Plugins declared in
+`config.yaml` are spawned in the server's working directory as before.
 
 ---
 

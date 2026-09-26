@@ -30,10 +30,11 @@ pub mod models_cache;
 pub mod oauth;
 /// Headless permission auto-reject responder for non-interactive runs.
 pub mod permission;
-/// Resolve plugin specs from config and `.hya/plugins` manifests.
+/// Resolve plugin specs from config and per-root `.hya/plugins` manifests.
 pub mod plugins;
 mod preset_inventory;
 pub mod project_bundles;
+pub mod project_plugins;
 mod project_scope;
 /// Live provider management behind the v1 provider routes.
 pub mod provider_control;

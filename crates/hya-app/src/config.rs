@@ -1955,6 +1955,18 @@ pub fn load_categories() -> CategoryRegistry {
         .unwrap_or_default()
 }
 
+/// Every plugin id declared under `plugins:` (enabled or not). A project
+/// plugin manifest with one of these ids never loads: config wins.
+#[must_use]
+pub fn load_configured_plugin_ids() -> Vec<String> {
+    config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .map(|file| file.plugins.into_keys().collect())
+        .unwrap_or_default()
+}
+
 /// Resolve subagent caps independent of provider config, so the offline path
 /// (where [`load`] returns `None`) still honors configured/env limits.
 #[must_use]

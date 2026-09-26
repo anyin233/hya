@@ -348,9 +348,10 @@ mcp:
     timeout_ms: 1000                     # milliseconds; omit for 30s default
     # enabled: false                     # set to skip this server
 
-# Plugins. Also discovered from $CWD/.hya/plugins/<name>/plugin.toml
-# (backend process working directory at startup — not the session workdir;
-# one directory deep — not recursive).
+# Plugins. These run process-wide. Project plugins are discovered per
+# registered Project from <root>/.hya/plugins/<name>/plugin.toml of every root
+# (one directory deep — not recursive); an entry here beats a manifest with
+# the same id.
 plugins:
   memory:
     command: [python3, memory.py]        # stdio JSON-RPC process
@@ -1449,13 +1450,37 @@ resources.
 
 ## Plugins
 
-Plugins may be declared directly in config or discovered from
-**`$CWD/.hya/plugins/<name>/plugin.toml`** — the backend process working
-directory at startup (`plugins::plugins_dir()`), **not** the per-session
-workdir (**one directory deep** — nested `plugin.toml` files are never found).
-The two coincide when the launcher starts the backend with
-`.current_dir(project)`; a bare `hya serve` from another directory only
-scans that process CWD:
+Plugins come from two places:
+
+- **Config plugins** — the `plugins:` block of `config.yaml`. They start with
+  the process (in the server's working directory) and serve every session.
+- **Project plugins** — **`<root>/.hya/plugins/<name>/plugin.toml`** of a
+  registered Project's roots (**one directory deep** — nested `plugin.toml`
+  files are never found). They serve only that Project's sessions: their
+  tools, Skills, and hooks (`permission.ask` included) never reach temporary
+  sessions, directories outside every Project, the project-less global view,
+  or another Project. Nothing is read from the directory the process started
+  in.
+
+Project plugins load lazily: no process starts until the Project's first bind
+(its first session turn, or a catalog read for a directory inside it). Every
+root is scanned in order and the **first root wins** by plugin id; a later
+root's manifest with the same id is skipped with a warning. A config plugin
+with the same id always wins over a manifest (the manifest is skipped with a
+warning). Each project plugin is spawned with its **Project root** (the root
+holding its `.hya/plugins` directory) as its working directory, so a relative
+`command` such as `["python3", ".hya/plugins/memory/plugin.py"]` resolves
+against that root; a crash respawn uses the same directory.
+
+A change to a Project's plugin inputs — any `plugin.toml` added, removed, or
+edited, or a plugin directory added or removed — **respawns that Project's
+plugins at its next bind**: the next turn gets fresh processes with the new
+declaration, and the old processes stop once no running turn uses them. Other
+Projects and config plugins are not touched. Project plugins stop when their
+Project's scope is dropped (see [Catalog Scope Cache](#catalog-scope-cache))
+or the Project's roots change. Workspace adapters declared by a project plugin
+are not supported and are ignored with a warning; `--pure` loads no project
+plugins.
 
 ```yaml
 plugins:
@@ -1484,14 +1509,19 @@ Config entries support:
 
 ### Directory manifests
 
-Layout: `$CWD/.hya/plugins/<name>/plugin.toml` (process CWD at compose time —
-see above) scanned from each **immediate** subdirectory of `.hya/plugins` only
+Layout: `<root>/.hya/plugins/<name>/plugin.toml` for each root of a
+registered Project (see above), scanned from each **immediate** subdirectory
+of `.hya/plugins` only, in directory-name order
 ([`crates/hya-app/src/plugins.rs`](../crates/hya-app/src/plugins.rs)
-`plugins_dir` / `scan_manifests`). Missing or **unreadable** `plugin.toml` is
+`project_plugin_specs` / `scan_manifests`; per-Project loading in
+[`crates/hya-app/src/project_plugins.rs`](../crates/hya-app/src/project_plugins.rs)).
+Two manifests of one root with the same id: the first directory wins, the
+other is skipped with a warning. Missing or **unreadable** `plugin.toml` is
 skipped **silently** (`read_to_string` failure → `continue` with no log). Only
 an **unparseable** file prints
 `hya: skipping plugin manifest <path> (<error>)` on stderr. Neither case fails
-startup.
+the bind; a project plugin that fails to start is logged and left out of the
+Project's catalog until its manifest changes or the scope is rebuilt.
 
 Example:
 
@@ -1526,11 +1556,14 @@ posture overrides.
 
 ### Config-over-manifest merge
 
-From [`hya_plugin::config::merge`](../crates/hya-plugin/src/config.rs):
+Config plugins and project manifests are resolved separately (config
+plugins process-wide at startup, manifests per Project at its first bind), with
+the same rules as [`hya_plugin::config::merge`](../crates/hya-plugin/src/config.rs):
 
-1. Config entries are emitted **first** (skipping any with `enabled: false`).
-2. Manifests are appended only if their id was **not** already claimed by a
-   config entry **and** the manifest itself is enabled.
+1. Config entries are used **first** (skipping any with `enabled: false`).
+2. A Project's manifests are used only if their id is **not** declared by a
+   config entry (enabled or not), was not claimed by an earlier Project root,
+   **and** the manifest itself is enabled.
 
 Consequences: config always beats a same-id manifest; config `plugins` is a
 `BTreeMap`, so config-declared plugins fold in **lexicographic plugin-id order**

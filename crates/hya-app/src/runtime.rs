@@ -1063,7 +1063,8 @@ pub struct RuntimeConfig {
     pub reasoning: Option<ReasoningEffort>,
     /// MCP server configs to connect at engine build.
     pub mcp: BTreeMap<String, McpServerConfig>,
-    /// Plugin specs already merged from config + manifests.
+    /// Plugin specs from `config.yaml` (process-wide). Project plugins
+    /// (`<root>/.hya/plugins`) load per Project at its first bind.
     pub plugins: Vec<PluginSpec>,
     /// Preferred primary agent when workdir does not select one.
     pub default_agent: Option<String>,
@@ -1171,7 +1172,7 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 model,
                 reasoning,
                 mcp: cfg.mcp,
-                plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
+                plugins: plugins::resolve(cfg.plugins),
                 default_agent: cfg.default_agent,
                 categories: cfg.categories,
                 offline_notice,
@@ -2461,9 +2462,21 @@ async fn build_session_engine_with_mcp_defer(
         registry.remove("websearch");
     }
 
-    // Plugin hooks remain startup-bound. Their tool declarations are prepared
-    // here but become effective only through RuntimeReconciler publication.
+    // Config-file plugin hooks remain startup-bound and process-wide. Their
+    // tool declarations are prepared here but become effective only through
+    // RuntimeReconciler publication. Project plugins load per Project scope
+    // (ProjectScopeRefresh) at the Project's first bind.
     let plugin_specs = plugins.clone();
+    let project_plugins = if options.pure {
+        crate::project_plugins::ProjectPluginSettings::disabled()
+    } else {
+        crate::project_plugins::ProjectPluginSettings::new(host_info()).with_configured_ids(
+            plugins
+                .iter()
+                .map(|spec| spec.id.clone())
+                .chain(crate::config::load_configured_plugin_ids()),
+        )
+    };
     let (plugin_host, plugin_failures) =
         hya_plugin::PluginHost::connect_all_observed(plugins, host_info()).await;
     let plugin_host = Arc::new(plugin_host);
@@ -2506,10 +2519,13 @@ async fn build_session_engine_with_mcp_defer(
     ))
     .await
     .context("load Agent model configuration before engine readiness")?;
-    let catalog_refresh = Arc::new(crate::ProjectScopeRefresh::new(Arc::new(
-        InstalledBundleRefresh::new(bundle_registry_path())
-            .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
-    )));
+    let catalog_refresh = Arc::new(
+        crate::ProjectScopeRefresh::new(Arc::new(
+            InstalledBundleRefresh::new(bundle_registry_path())
+                .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
+        ))
+        .with_project_plugins(project_plugins),
+    );
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),

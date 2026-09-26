@@ -25,7 +25,8 @@ const USE_MCP_COMMAND: &str =
     "Call mcp__echo__ping with msg=$ARGUMENTS, then return echo:$ARGUMENTS.";
 
 /// The required project plugin manifest.  The relative command is intentional:
-/// `BackendProcess` starts the child with the temporary project as its cwd.
+/// a project plugin starts with its Project root (the temporary project) as
+/// its cwd.
 const PLUGIN_MANIFEST: &str = r#"id = "toolbox"
 kind = "rust"
 command = ["python3", ".hya/plugins/toolbox/plugin.py"]
@@ -1325,6 +1326,7 @@ async fn custom_command_invokes_plugin_tool() {
         tool_step("toolbox__remember", json!({"value": "DRIFT"})),
         text_step("PLUGIN_DRIFT_ERROR"),
         text_step("SESSION_AFTER_DRIFT"),
+        text_step("PLUGIN_RESPAWNED_AFTER_EDIT"),
     ])
     .yolo(true)
     .build()
@@ -1485,47 +1487,34 @@ async fn custom_command_invokes_plugin_tool() {
         "Session must remain usable after drift"
     );
 
-    // Editing plugin.toml is startup-bound.  The running host still exposes
-    // the old schema; a fresh BackendProcess is the visibility boundary.
+    // The session's workdir is the fixture directory, so the session belongs
+    // to a Project rooted there and the plugin runs as that Project's plugin
+    // (spawned in the root, so the relative command resolves).  Editing
+    // plugin.toml respawns the Project's plugins at its next bind: the next
+    // turn of the same running backend already sees the new declaration.
+    std::fs::write(
+        env.project_path(".hya/plugins/toolbox/plugin-v2.py"),
+        PLUGIN_SCRIPT_V2,
+    )
+    .expect("write v2 plugin script");
     std::fs::write(
         env.project_path(".hya/plugins/toolbox/plugin.toml"),
         "id = \"toolbox\"\nkind = \"rust\"\ncommand = [\"python3\", \".hya/plugins/toolbox/plugin-v2.py\"]\ntimeout_ms = 1000\n",
     )
     .expect("edit plugin manifest");
-    assert!(
-        tool_names(&env.fake_requests().expect("old plugin requests")[0])
-            .iter()
-            .any(|name| name == "toolbox__remember"),
-        "running backend keeps old plugin declaration"
-    );
-
-    let restarted = E2eEnvBuilder::new()
-        .project_file(
-            ".hya/plugins/toolbox/plugin.toml",
-            b"id = \"toolbox\"\nkind = \"rust\"\ncommand = [\"python3\", \".hya/plugins/toolbox/plugin-v2.py\"]\ntimeout_ms = 1000\n".to_vec(),
-        )
-        .project_file(
-            ".hya/plugins/toolbox/plugin.py",
-            PLUGIN_SCRIPT.as_bytes().to_vec(),
-        )
-        .project_file(
-            ".hya/plugins/toolbox/plugin-v2.py",
-            PLUGIN_SCRIPT_V2.as_bytes().to_vec(),
-        )
-        .scripts(vec![text_step("RESTARTED_PLUGIN")])
-        .build()
+    let before_edit = env.fake_requests().expect("requests before edit").len();
+    env.prompt(session, "inspect respawned plugin")
         .await
-        .expect("restarted plugin env");
-    let restarted_session = restarted.create_session().await.expect("restarted session");
-    restarted
-        .prompt(restarted_session, "inspect restarted plugin")
-        .await
-        .expect("restarted prompt");
-    let restarted_requests = restarted.fake_requests().expect("restarted requests");
-    let schema = restarted_requests[0].to_string();
+        .expect("prompt after manifest edit");
+    let respawned = env.fake_requests().expect("requests after edit");
+    let schema = respawned[before_edit].to_string();
     assert!(
         schema.contains("Remember v2"),
-        "manifest edit visible after restart: {schema}"
+        "manifest edit visible at the next bind: {schema}"
+    );
+    assert!(
+        !schema.contains("Remember a fact"),
+        "the old declaration is gone after the respawn: {schema}"
     );
 }
 
@@ -2133,8 +2122,9 @@ async fn dynamic_resource_snapshots_and_reload() {
         )
     }));
 
-    // The plugin declaration is startup-bound; a separate fresh process with a
-    // changed command is the only publication point.
+    // Two fresh processes with different plugin commands each publish their
+    // own declaration (in-process hot respawn on a manifest edit is covered by
+    // `custom_command_invokes_plugin_tool`).
     let plugin_old = plugin_builder(vec![text_step("PLUGIN_OLD")])
         .build()
         .await

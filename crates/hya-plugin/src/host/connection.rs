@@ -81,6 +81,7 @@ async fn connect_one_impl(
         timeout,
         command: spec.command,
         bundle_root,
+        cwd,
         env: spec.env,
         host_info: host,
         live: tokio::sync::Mutex::new(Some(LiveClient {

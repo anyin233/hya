@@ -7,19 +7,51 @@ use hya_plugin::config::{PluginEntry, PluginSpec};
 use hya_plugin::manifest::Manifest;
 use hya_plugin::messages::PluginKindWire;
 
-/// Project-local plugin directory: `$CWD/.hya/plugins`, when cwd is available.
-pub fn plugins_dir() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    Some(cwd.join(".hya/plugins"))
+/// The project plugin directory of one Project root: `<root>/.hya/plugins`.
+#[must_use]
+pub fn root_plugins_dir(root: &Path) -> PathBuf {
+    root.join(".hya/plugins")
 }
 
-/// Merge config plugin entries with optional on-disk manifests into host specs.
+/// Resolve the config-file (`config.yaml` `plugins:`) entries into host specs.
 ///
 /// Bun entries without a command are rewritten to the bundled Bun adapter and
 /// `claude` entries without a command to the bundled Claude adapter when Bun
 /// is on `PATH` (or `BUN`); otherwise they are skipped with a notice.
-pub fn resolve(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<PluginSpec> {
-    resolve_with_bun(config, dir, find_bun)
+/// Project plugins (`<root>/.hya/plugins`) are not part of this set: they load
+/// per Project, see [`project_plugin_specs`].
+pub fn resolve(config: BTreeMap<String, PluginEntry>) -> Vec<PluginSpec> {
+    resolve_js_specs(specs_from_config(config), find_bun)
+}
+
+/// Specs of one Project root's plugins: every enabled
+/// `<root>/.hya/plugins/<name>/plugin.toml` (one directory deep, in directory
+/// name order; a later manifest reusing an earlier id is skipped with a
+/// warning), resolved like config entries (Bun adapter for command-less
+/// `kind: bun`).
+#[must_use]
+pub fn project_plugin_specs(root: &Path) -> Vec<PluginSpec> {
+    let mut manifests = scan_manifests(&root_plugins_dir(root));
+    let mut seen = std::collections::BTreeSet::new();
+    manifests.retain(|(path, manifest)| {
+        let fresh = seen.insert(manifest.id.clone());
+        if !fresh {
+            tracing::warn!(
+                plugin = %manifest.id,
+                manifest = %path.display(),
+                "skipping a project plugin manifest whose id an earlier manifest of the same root claims"
+            );
+        }
+        fresh
+    });
+    let manifests = manifests
+        .into_iter()
+        .map(|(_, manifest)| manifest)
+        .collect();
+    resolve_js_specs(
+        hya_plugin::config::merge(BTreeMap::new(), manifests),
+        find_bun,
+    )
 }
 
 pub(crate) fn bundle_sidecar_command() -> Option<Vec<String>> {
@@ -48,21 +80,12 @@ pub fn claude_adapter_dir() -> PathBuf {
     )
 }
 
+#[cfg(test)]
 fn resolve_with_bun(
     config: BTreeMap<String, PluginEntry>,
-    dir: Option<&Path>,
     find_bun: impl Fn() -> Option<PathBuf>,
 ) -> Vec<PluginSpec> {
-    let specs = raw_specs(config, dir);
-    resolve_js_specs(specs, find_bun)
-}
-
-fn raw_specs(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<PluginSpec> {
-    let Some(dir) = dir else {
-        return specs_from_config(config);
-    };
-    let manifests = scan_manifests(dir);
-    hya_plugin::config::merge(config, manifests)
+    resolve_js_specs(specs_from_config(config), find_bun)
 }
 
 fn resolve_js_specs(
@@ -234,22 +257,57 @@ fn specs_from_config(config: BTreeMap<String, PluginEntry>) -> Vec<PluginSpec> {
     hya_plugin::config::merge(config, Vec::new())
 }
 
-fn scan_manifests(dir: &Path) -> Vec<Manifest> {
+/// Parse every `<dir>/<name>/plugin.toml` in directory name order.
+fn scan_manifests(dir: &Path) -> Vec<(PathBuf, Manifest)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
+    let mut paths = entries
+        .flatten()
+        .map(|entry| entry.path().join("plugin.toml"))
+        .collect::<Vec<_>>();
+    paths.sort();
     let mut manifests = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path().join("plugin.toml");
+    for path in paths {
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
         };
         match Manifest::parse(&contents) {
-            Ok(manifest) => manifests.push(manifest),
+            Ok(manifest) => manifests.push((path, manifest)),
             Err(error) => eprintln!("hya: skipping plugin manifest {} ({error})", path.display()),
         }
     }
     manifests
+}
+
+/// Fold one root's project plugin inputs into `hasher`: the plugin
+/// directory listing and every `plugin.toml`'s bytes. Returns whether the
+/// root has any `plugin.toml`.
+pub(crate) fn project_plugins_digest(root: &Path, hasher: &mut sha2::Sha256) -> bool {
+    use sha2::Digest as _;
+    let Ok(entries) = std::fs::read_dir(root_plugins_dir(root)) else {
+        hasher.update(b"no-plugins\0");
+        return false;
+    };
+    let mut dirs = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    dirs.sort();
+    let mut any = false;
+    for dir in dirs {
+        hasher.update(b"plugin-entry\0");
+        hasher.update(dir.as_os_str().as_encoded_bytes());
+        match std::fs::read(dir.join("plugin.toml")) {
+            Ok(bytes) => {
+                any = true;
+                hasher.update(b"manifest\0");
+                hasher.update(sha2::Sha256::digest(bytes));
+            }
+            Err(_) => hasher.update(b"no-manifest\0"),
+        }
+    }
+    any
 }
 
 #[cfg(test)]
@@ -305,8 +363,7 @@ mod tests {
             },
         );
 
-        let specs =
-            super::resolve_with_bun(config, None, || Some(PathBuf::from("/usr/local/bin/bun")));
+        let specs = super::resolve_with_bun(config, || Some(PathBuf::from("/usr/local/bin/bun")));
 
         assert_eq!(specs.len(), 1);
         let spec = &specs[0];
@@ -370,7 +427,7 @@ mod tests {
             },
         );
 
-        let specs = super::resolve_with_bun(config, None, || None);
+        let specs = super::resolve_with_bun(config, || None);
 
         assert!(specs.is_empty());
     }
@@ -391,7 +448,7 @@ mod tests {
                 plugin_dir: None,
             },
         );
-        let specs = super::resolve_with_bun(config, None, || panic!("bun must not be probed"));
+        let specs = super::resolve_with_bun(config, || panic!("bun must not be probed"));
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].command, vec!["my-plugin"]);
     }
@@ -411,7 +468,7 @@ mod tests {
             },
         );
 
-        let specs = super::resolve_with_bun(config, None, || None);
+        let specs = super::resolve_with_bun(config, || None);
 
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].command, vec!["custom-adapter", "--stdio"]);
@@ -436,8 +493,7 @@ mod tests {
             claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
         );
 
-        let specs =
-            super::resolve_with_bun(config, None, || Some(PathBuf::from("/usr/local/bin/bun")));
+        let specs = super::resolve_with_bun(config, || Some(PathBuf::from("/usr/local/bin/bun")));
 
         assert_eq!(specs.len(), 1);
         let spec = &specs[0];
@@ -471,8 +527,7 @@ mod tests {
         let mut config = BTreeMap::new();
         config.insert("cc".to_string(), claude_entry(None));
 
-        let specs =
-            super::resolve_with_bun(config, None, || Some(PathBuf::from("/usr/local/bin/bun")));
+        let specs = super::resolve_with_bun(config, || Some(PathBuf::from("/usr/local/bin/bun")));
 
         assert!(
             specs.is_empty(),
@@ -488,7 +543,7 @@ mod tests {
             claude_entry(Some(PathBuf::from("/plugins/cc-demo"))),
         );
 
-        let specs = super::resolve_with_bun(config, None, || None);
+        let specs = super::resolve_with_bun(config, || None);
 
         assert!(specs.is_empty());
     }
@@ -508,7 +563,7 @@ mod tests {
             },
         );
 
-        let specs = super::resolve_with_bun(config, None, || None);
+        let specs = super::resolve_with_bun(config, || None);
 
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].command, vec!["custom-claude-adapter"]);
