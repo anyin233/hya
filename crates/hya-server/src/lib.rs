@@ -21,6 +21,7 @@ mod pending;
 mod provider_control;
 mod runs;
 mod state;
+mod streams;
 mod support;
 mod v1;
 mod workflow;
@@ -43,6 +44,7 @@ pub use provider_control::{
 };
 pub use state::AppState;
 pub(crate) use state::ServerState;
+pub use streams::StreamShutdown;
 pub use v1::V1Grpc;
 
 /// Largest `CreateTurn` HTTP JSON body the server reads: room for the 20 MiB

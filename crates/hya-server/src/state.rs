@@ -11,6 +11,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::provider_control::{EmptyProviderControl, ProviderControl};
+use crate::streams::StreamShutdown;
 use crate::support;
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{pending, runs};
@@ -35,6 +36,7 @@ pub struct AppState {
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
+    streams: StreamShutdown,
     pure_guidance: bool,
     auto_title: bool,
 }
@@ -58,6 +60,7 @@ impl AppState {
             formatter_status: Vec::new(),
             default_agent: None,
             catalog_updates,
+            streams: StreamShutdown::default(),
             pure_guidance: false,
             auto_title: false,
         }
@@ -188,6 +191,15 @@ impl AppState {
         self.catalog_updates.subscribe()
     }
 
+    /// The live event streams' shutdown signal. Every clone of this state,
+    /// and every router or gRPC binding built from it, shares it: call
+    /// [`StreamShutdown::close`] when the server starts shutting down so open
+    /// streams end instead of holding the graceful shutdown open.
+    #[must_use]
+    pub fn streams(&self) -> StreamShutdown {
+        self.streams.clone()
+    }
+
     /// Clone the catalog-update publisher for background refresh tasks.
     #[must_use]
     pub fn catalog_updates_sender(&self) -> broadcast::Sender<Value> {
@@ -213,6 +225,7 @@ pub(crate) struct ServerState {
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
     pub(crate) catalog_updates: broadcast::Sender<Value>,
+    pub(crate) streams: StreamShutdown,
     pub(crate) pure_guidance: bool,
     pub(crate) auto_title: bool,
 }
@@ -236,6 +249,7 @@ impl ServerState {
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
             catalog_updates: app.catalog_updates,
+            streams: app.streams,
             pure_guidance: app.pure_guidance,
             auto_title: app.auto_title,
         }

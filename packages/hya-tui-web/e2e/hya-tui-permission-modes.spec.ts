@@ -237,7 +237,8 @@ test.describe("/permissions picker", () => {
 
 test.describe("before a session exists", () => {
   test("the chosen mode is shown and applied right after the session is created", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    // --continue with no earlier session: none is open (a plain start creates one).
+    const term = await tui([...hyaTui(backend), "--continue"])
     await term.waitForText("Connected to hya")
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)

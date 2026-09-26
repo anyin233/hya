@@ -282,7 +282,10 @@ export const launchTest = withOptions.extend<{ workspace: Workspace }>({
     requireHya()
     const root = await mkdtemp(join(tmpdir(), "hya-tui-launch-"))
     const { dir, env } = await prepareBackend(root, setupOf(fakeModel, model, projectBundles))
-    await use({ root, dir, env: { ...env, HYA_BIN: hyaBin, ...(fakeModel ? { HYA_MODEL: fakeModelRef } : {}) } })
+    const workspace = { root, dir, env: { ...env, HYA_BIN: hyaBin, ...(fakeModel ? { HYA_MODEL: fakeModelRef } : {}) } }
+    await use(workspace)
+    // The TUIs' backend daemon outlives them (ADR-0023): stop it with the workspace.
+    await daemon(workspace, ["stop", "--force", "--timeout", "10"]).catch(() => undefined)
     await rm(root, { recursive: true, force: true })
   },
   // Capture the final screen while the fake model (a workspace dependency) still runs.
@@ -374,6 +377,31 @@ export function selfLaunch(workspace: Workspace, extra: string[] = [], options: 
     ["bun", tuiMain, "--dir", workspace.dir, ...extra],
     { ...options, env: { ...workspace.env, ...options.env } },
   ]
+}
+
+/** The workspace's default database (`$XDG_STATE_HOME/hya/sessions.db`): the one its TUIs' daemon serves. */
+export function workspaceDb(workspace: Workspace): string {
+  return join(workspace.env.XDG_STATE_HOME!, "hya", "sessions.db")
+}
+
+/** `hya serve <args> --db <workspace db>` with the workspace environment; stdout, stderr, and exit code. */
+export function daemon(workspace: Workspace, args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  const { HYA_MODEL: _model, ...inherited } = process.env
+  return new Promise((resolve, reject) => {
+    const child = spawn(hyaBin, ["serve", ...args, "--db", workspaceDb(workspace)], { cwd: workspace.dir, env: { ...inherited, ...workspace.env }, stdio: ["ignore", "pipe", "pipe"] })
+    let stdout = ""
+    let stderr = ""
+    child.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString()))
+    child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()))
+    child.once("error", reject)
+    child.once("exit", (code) => resolve({ stdout, stderr, code }))
+  })
+}
+
+/** The workspace daemon's `hya serve status --json`, or `undefined` when none runs. */
+export async function daemonStatus(workspace: Workspace): Promise<{ url: string; pid: number; version: string; startedAt: number } | undefined> {
+  const result = await daemon(workspace, ["status", "--json"])
+  return result.code === 0 ? JSON.parse(result.stdout.trim()) : undefined
 }
 
 /** Init a git repo with one commit in `dir` (E22 status bar git branch). */

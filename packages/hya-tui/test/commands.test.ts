@@ -221,26 +221,25 @@ test("/status shows the WebUI that bare hya serves, or why it is unavailable", a
   store.setWeb({ url: "http://127.0.0.1:3250/" })
   await run("/status")
   expect(store.state.statusText).toContain("WebUI       http://127.0.0.1:3250")
-  expect(store.state.statusText).toContain("Backend     in the hya process (bare hya)")
   store.setWeb({ error: "port 3250 is in use" })
   await run("/status")
   expect(store.state.statusText).toContain("WebUI       unavailable: port 3250 is in use · hya --port <N>")
 })
 
-test("/status says whether the backend was started by this TUI or attached to a running server", async () => {
+test("/status shows the backend daemon: pid, database, and when it started; an explicit URL says so", async () => {
   const { store, run } = harness()
-  store.setBackend({ pid: 11, bin: "/b/hya", db: "/s/sessions.db" })
+  const fiveMinutesAgo = Date.now() - 5 * 60_000
+  store.setBackend({ pid: 11, db: "/s/sessions.db", startedAt: fiveMinutesAgo })
   await run("/status")
-  expect(store.state.statusText).toContain("Backend     started by this TUI · pid 11 · /b/hya · db /s/sessions.db")
-  store.setBackend({ pid: 22, db: "/s/sessions.db", attached: true })
+  expect(store.state.statusText).toContain("Backend     daemon · pid 11 · db /s/sessions.db · started 5m ago")
+  store.setBackend({ pid: 22, explicit: true })
   await run("/status")
-  expect(store.state.statusText).toContain("Backend     attached to a running server · pid 22 · db /s/sessions.db")
-  // Bare hya that attached passes only the pid.
-  store.setWeb({ url: "http://127.0.0.1:3250/" })
-  store.setBackend({ pid: 33, attached: true })
+  expect(store.state.statusText).toContain("Backend     daemon · pid 22 · via --backend/--server")
+  // Nothing known but the server's own pid (bootstrap location).
+  store.setBackend(undefined)
+  store.applyBootstrap({ location: { version: "0.42.0", pid: 33 } })
   await run("/status")
-  expect(store.state.statusText).toContain("Backend     attached to a running server · pid 33")
-  expect(store.state.statusText).not.toContain("in the hya process")
+  expect(store.state.statusText).toContain("Backend     daemon · pid 33 · via --backend/--server")
 })
 
 test("argument completion comes from the command's own completer", () => {

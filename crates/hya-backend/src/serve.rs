@@ -42,6 +42,116 @@ pub(crate) async fn cmd_serve(
     serve_until(prepared, wait_for_termination(terminate)).await
 }
 
+/// `hya serve start|status|stop|restart` (ADR-0023): control the backend
+/// daemon of `db` (already resolved to the durable default when unset).
+pub(crate) async fn cmd_serve_action(
+    action: crate::cli_args::ServeAction,
+    db: String,
+    model: Option<String>,
+    yolo: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    use crate::cli_args::ServeAction;
+    use crate::daemon;
+    let spec = || -> anyhow::Result<daemon::DaemonSpec> {
+        Ok(daemon::DaemonSpec {
+            db: db.clone(),
+            model: model.clone(),
+            yolo,
+            pure,
+            exe: std::env::current_exe().context("find the hya binary")?,
+            cwd: std::env::current_dir().context("read the working directory")?,
+        })
+    };
+    let print_ready = |ready: &daemon::Ready, json: bool| {
+        if json {
+            println!("{}", daemon::ready_json(ready, &db));
+        } else {
+            println!("{}", daemon::ready_line(ready, &db));
+        }
+        if let Some(note) = daemon::version_note(&ready.discovery) {
+            eprintln!("{note}");
+        }
+    };
+    // `quiet`: report on stderr (restart --json keeps stdout for the JSON).
+    let stop = |timeout: u64, force: bool, quiet: bool| {
+        let db = db.clone();
+        async move {
+            let line =
+                match daemon::stop(&db, std::time::Duration::from_secs(timeout), force).await? {
+                    daemon::Stopped::NotRunning => format!("no hya server is running on {db}"),
+                    daemon::Stopped::Stopped { pid, killed } => {
+                        let how = if killed { "killed" } else { "stopped" };
+                        format!("{how} hya server pid {pid} (db {db})")
+                    }
+                };
+            if quiet {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
+            anyhow::Ok(())
+        }
+    };
+    match action {
+        ServeAction::Start { json } => {
+            let ready = daemon::start(&spec()?, daemon::START_WAIT).await?;
+            print_ready(&ready, json);
+        }
+        ServeAction::Restart {
+            json,
+            force,
+            timeout,
+        } => {
+            stop(timeout, force, json).await?;
+            let ready = daemon::start(&spec()?, daemon::START_WAIT).await?;
+            print_ready(&ready, json);
+        }
+        ServeAction::Stop { force, timeout } => stop(timeout, force, false).await?,
+        ServeAction::Status { json } => {
+            let Some(found) = daemon::running(&db).await else {
+                match db_lock::holder(&db).ok().flatten() {
+                    Some(busy) => eprintln!(
+                        "hya server pid {} holds {db} but does not answer (starting or stopping)",
+                        busy.holder_pid
+                            .map_or_else(|| "unknown".to_string(), |pid| pid.to_string())
+                    ),
+                    None => eprintln!("no hya server is running on {db}"),
+                }
+                std::process::exit(1);
+            };
+            let uptime = daemon::uptime(found.started_at);
+            let log = daemon::log_path(&db).map(|path| path.to_string_lossy().into_owned());
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "url": found.url,
+                        "pid": found.pid,
+                        "version": found.version,
+                        "startedAt": found.started_at,
+                        "uptimeMs": u64::try_from(uptime.as_millis()).unwrap_or(u64::MAX),
+                        "db": db,
+                        "log": log,
+                    })
+                );
+            } else {
+                println!("hya server pid {} running at {}", found.pid, found.url);
+                println!("  version  {}", found.version);
+                println!("  db       {db}");
+                println!("  uptime   {}", daemon::human_duration(uptime));
+                if let Some(log) = log {
+                    println!("  log      {log}");
+                }
+            }
+            if let Some(note) = daemon::version_note(&found) {
+                eprintln!("{note}");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A composed `hya serve` whose listener is bound but not yet serving.
 pub(crate) struct PreparedServer {
     /// `http://<addr>` of the bound listener.
@@ -52,6 +162,8 @@ pub(crate) struct PreparedServer {
     /// The database lock; released (and the discovery file removed) only
     /// after the server has drained and shut down.
     lock: Option<db_lock::DbLock>,
+    /// Ends every live event stream when the shutdown begins.
+    streams: hya_server::StreamShutdown,
 }
 
 /// Serve `prepared` until `stop` resolves, then drain and tear down.
@@ -70,12 +182,18 @@ pub(crate) async fn serve_until(
         router,
         mut built,
         lock,
+        streams,
         ..
     } = prepared;
     let supervisor = built.resident_supervisor();
     let serve_result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             stop.await;
+            // End every client's live event stream first: they never finish
+            // on their own, and connected clients (the daemon outlives them,
+            // ADR-0023) must not hold the shutdown open. Health answers
+            // `unavailable` from here on, so they reconnect elsewhere.
+            streams.close();
             supervisor
                 .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
                 .await;
@@ -228,6 +346,7 @@ pub(crate) async fn prepare_server(
     Ok(PreparedServer {
         url: format!("http://{addr}"),
         listener,
+        streams: state.streams(),
         router: server_router(state),
         built,
         lock,

@@ -1,7 +1,7 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
-import { agentRows, modelRows, sessionRows } from "../state/catalog"
+import { agentRows, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { modelReference, sessionTree, strategyText } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
@@ -19,11 +19,22 @@ export const sessionPickerActions: readonly PickerAction[] = [
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
 ]
 
-/** `/status`'s Backend row: started by this TUI, attached to another process's server, bare hya's in-process server, or `--server`. */
-function backendText(backend: BackendInfo | undefined, bareHya: boolean): string {
-  if (backend?.attached) return ["attached to a running server", `pid ${backend.pid}`, ...(backend.db ? [`db ${backend.db}`] : [])].join(" · ")
-  if (backend) return `started by this TUI · pid ${backend.pid} · ${backend.bin ?? "hya"} · db ${backend.db ?? ""}`
-  return bareHya ? "in the hya process (bare hya)" : "external (--server)"
+/**
+ * `/status`'s Backend row: the daemon's pid, database, and start time
+ * (ADR-0023); `via --backend/--server` when the URL was given explicitly.
+ * `serverPid` (bootstrap) fills in a pid nothing else named.
+ */
+export function backendText(backend: BackendInfo | undefined, serverPid?: number, now = Date.now()): string {
+  const pid = backend?.pid ?? serverPid
+  const parts = ["daemon"]
+  if (pid) parts.push(`pid ${pid}`)
+  if (backend?.db) parts.push(`db ${backend.db}`)
+  if (backend?.startedAt) {
+    const ago = relativeTime(new Date(backend.startedAt).toISOString(), now)
+    if (ago) parts.push(`started ${ago} ago`)
+  }
+  if (!backend || backend.explicit) parts.push("via --backend/--server")
+  return parts.join(" · ")
 }
 
 /** Open the `/sessions` picker (C13): a `New session` row first, then the tree; Enter opens, F2 renames, Ctrl+D deletes with confirmation. */
@@ -324,7 +335,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
-        `Backend     ${backendText(store.state.backend, store.state.web !== undefined)}`,
+        `Backend     ${backendText(store.state.backend, store.state.serverPid)}`,
       ]
       const web = store.state.web
       if (web) lines.push(`WebUI       ${web.url ? web.url.replace(/\/$/, "") : `unavailable: ${web.error ?? ""} · hya --port <N>`}`)

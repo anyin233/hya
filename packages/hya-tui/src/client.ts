@@ -351,7 +351,7 @@ export interface VcsStatus {
 }
 
 export interface Bootstrap {
-  location?: { version?: string; directory?: string }
+  location?: { version?: string; directory?: string; pid?: number }
   agents?: AgentSummary[]
   models?: ModelSummary[]
   interactions?: Interaction[]
@@ -463,7 +463,7 @@ export function parseApiCommand(input: string): ApiCommand {
 }
 
 export class HyaClient {
-  private readonly base: string
+  private base: string
 
   constructor(
     baseUrl: string,
@@ -475,6 +475,11 @@ export class HyaClient {
 
   /** The server's base URL (`/status`). */
   get baseUrl(): string { return this.base }
+
+  /** Move every later call to another server (the database's next daemon, app/reconnect.ts). */
+  setBaseUrl(baseUrl: string): void {
+    this.base = baseUrl.replace(/\/+$/, "")
+  }
 
   /** One v1 call; `signal` aborts it (the Provider View's Esc on a running call). */
   async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {

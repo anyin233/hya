@@ -1,29 +1,28 @@
 //! Bare `hya` on a terminal: the TUI and the WebUI (`docs/cli.md`, "Bare
-//! `hya`"; ADR-0020).
+//! `hya`"; ADR-0020, ADR-0023).
 //!
 //! `hya` only orchestrates processes here; rendering stays in the Bun
-//! frontends (ADR-0018/0019):
+//! frontends (ADR-0018/0019), and the backend is a separate daemon that
+//! outlives them (ADR-0023):
 //!
-//! 1. the v1 server runs in this process on `127.0.0.1:<free port>` (the same
-//!    composition as `hya serve`, without the readiness line);
+//! 1. the backend: the running daemon of the database (`<db>.server.json`
+//!    whose `/v1/health` answers), else a newly started detached daemon
+//!    (`daemon::start`); with `--backend <url>` that URL, which must answer;
 //! 2. the web host (`packages/hya-tui-web`) serves the WebUI on
-//!    `127.0.0.1:<port>`; every browser tab runs the TUI against that server;
+//!    `127.0.0.1:<port>`; every browser tab runs the TUI against the backend;
 //! 3. the terminal TUI (`packages/hya-tui`) runs on this terminal with
 //!    `--web-url <url>` or `--web-error <reason>`.
 //!
-//! One writer per database (ADR-0022): when another process already serves
-//! the database (`<db>.lock` held, `<db>.server.json` published, and its
-//! `/v1/health` answers), step 1 is skipped and both frontends attach to that
-//! server; quitting then stops only what this `hya` started. A holder that is
-//! still starting is waited for up to [`ATTACH_WAIT`]; one that never
-//! answers is an error before the terminal is touched.
+//! Both TUIs also get `--db <db> --hya <this binary>` (not with `--backend`),
+//! so when the backend stops or crashes they find (or start) the next one.
 //!
 //! When the terminal TUI exits (or `hya` gets SIGINT/SIGTERM/SIGHUP) the web
 //! host is stopped (SIGTERM, SIGKILL after a grace period; it stops its tabs'
-//! TUIs itself), the server drains and shuts down, and `hya` exits with the
-//! TUI's status. While the TUI owns the terminal, this process's stdin is
-//! `/dev/null` and its stdout/stderr (server notices, web host output) go to
-//! the log file `<state dir>/hya.log`.
+//! TUIs itself) and `hya` exits with the TUI's status. The backend keeps
+//! running (`hya serve stop` stops it). While the TUI owns the terminal, this
+//! process's stdin is `/dev/null` and its stdout/stderr (web host output) go
+//! to the log file `<state dir>/hya.log`; the daemon logs to
+//! `<db>.server.log`.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -38,8 +37,8 @@ use anyhow::Context as _;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child, Command};
 
+use crate::daemon;
 use crate::db_lock;
-use crate::serve;
 
 /// How long the web host may take to print its readiness line.
 const WEB_READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -50,10 +49,7 @@ const STOP_GRACE: Duration = Duration::from_secs(8);
 const LOG_ROTATE_BYTES: u64 = 4 * 1024 * 1024;
 /// Most bytes of the web host's stderr kept to explain a failed start.
 const STDERR_KEEP: usize = 4096;
-/// How long bare `hya` waits for the server of a database another process
-/// holds (it may still be starting) before it gives up.
-pub(crate) const ATTACH_WAIT: Duration = Duration::from_secs(20);
-/// One `/v1/health` probe of a discovered server.
+/// One health probe of an explicit `--backend`.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A Bun package `hya` runs: where to find it and how to name it in errors.
@@ -203,6 +199,16 @@ pub(crate) fn web_failure_reason(code: Option<i32>, stderr: &str, port: u16) -> 
     }
 }
 
+/// How the TUIs reach the backend: its URL, and (for a database's daemon,
+/// not an explicit `--backend`) the database and the `hya` binary, so a TUI
+/// that loses the backend rediscovers or restarts it (`--db`, `--hya`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BackendLink {
+    pub(crate) url: String,
+    pub(crate) db: Option<String>,
+    pub(crate) hya: Option<PathBuf>,
+}
+
 /// argv of the web host: every browser tab runs the TUI against `backend`.
 pub(crate) fn web_host_argv(
     bun: &Path,
@@ -210,7 +216,7 @@ pub(crate) fn web_host_argv(
     tui_dir: &Path,
     port: u16,
     cwd: &Path,
-    backend: &str,
+    backend: &BackendLink,
 ) -> Vec<OsString> {
     let mut argv: Vec<OsString> = vec![
         bun.into(),
@@ -227,15 +233,22 @@ pub(crate) fn web_host_argv(
     argv
 }
 
-fn tui_base_argv(bun: &Path, tui_dir: &Path, backend: &str, cwd: &Path) -> Vec<OsString> {
-    vec![
+fn tui_base_argv(bun: &Path, tui_dir: &Path, backend: &BackendLink, cwd: &Path) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![
         bun.into(),
         tui_dir.join("src/main.ts").into(),
         "--server".into(),
-        backend.into(),
+        backend.url.as_str().into(),
         "--dir".into(),
         cwd.into(),
-    ]
+    ];
+    if let Some(db) = &backend.db {
+        argv.extend(["--db".into(), db.into()]);
+    }
+    if let Some(hya) = &backend.hya {
+        argv.extend(["--hya".into(), hya.into()]);
+    }
+    argv
 }
 
 /// Whether the WebUI came up: its URL, or why not.
@@ -247,89 +260,75 @@ pub(crate) enum WebStatus {
     Failed(String),
 }
 
-/// argv of the terminal TUI; `attached` is the pid of the server bare `hya`
-/// attached to instead of starting one (`--attached-pid`, shown in `/status`).
+/// argv of the terminal TUI.
 pub(crate) fn tui_argv(
     bun: &Path,
     tui_dir: &Path,
-    backend: &str,
+    backend: &BackendLink,
     cwd: &Path,
     web: &WebStatus,
-    attached: Option<u32>,
 ) -> Vec<OsString> {
     let mut argv = tui_base_argv(bun, tui_dir, backend, cwd);
     match web {
         WebStatus::Ready(url) => argv.extend(["--web-url".into(), url.into()]),
         WebStatus::Failed(reason) => argv.extend(["--web-error".into(), reason.into()]),
     }
-    if let Some(pid) = attached {
-        argv.extend(["--attached-pid".into(), pid.to_string().into()]);
-    }
     argv
 }
 
-/// Where bare `hya`'s frontends get their server.
-#[derive(Debug)]
-pub(crate) enum ServerPlan {
-    /// Start the in-process server, holding this claim on the database.
-    Start(Option<db_lock::DbLock>),
-    /// Another process serves the database: use its server.
-    Attach(db_lock::Discovery),
-}
-
-/// Claim `db` or find the live server that holds it. A holder without a
-/// published, healthy server is re-checked every 250 ms until `wait` ends
-/// (it may still be starting, or be shutting down and about to release the
-/// lock); then it is an error.
-pub(crate) async fn plan_server(db: &str, wait: Duration) -> anyhow::Result<ServerPlan> {
-    let deadline = tokio::time::Instant::now() + wait;
-    let mut announced = false;
-    loop {
-        let busy =
-            match db_lock::try_claim(db).with_context(|| format!("lock the database {db}"))? {
-                db_lock::Claim::Unlocked => return Ok(ServerPlan::Start(None)),
-                db_lock::Claim::Owned(lock) => return Ok(ServerPlan::Start(Some(lock))),
-                db_lock::Claim::Busy(busy) => busy,
-            };
-        if let Some(found) = &busy.discovery
-            && db_lock::probe(&found.url, PROBE_TIMEOUT).await
-        {
-            return Ok(ServerPlan::Attach(found.clone()));
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!(attach_failure(&busy, wait));
-        }
-        if !announced {
-            announced = true;
-            eprintln!(
-                "hya: database {db} is in use by pid {}; waiting for its server…",
-                holder(&busy)
+/// Find the backend: the explicit `--backend` URL (which must answer), else
+/// the database's running daemon, else a newly started one. The notes are
+/// for the log (written once the terminal is handed to the TUI).
+pub(crate) async fn connect(
+    request: &LaunchRequest,
+    exe: &Path,
+    cwd: &Path,
+) -> anyhow::Result<(BackendLink, Vec<String>)> {
+    if let Some(url) = &request.backend {
+        if !db_lock::probe(url, PROBE_TIMEOUT).await {
+            anyhow::bail!(
+                "no hya server answers at --backend {url} (GET {url}/v1/health); start one (`hya serve start`) or drop --backend"
             );
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        let link = BackendLink {
+            url: url.clone(),
+            db: None,
+            hya: None,
+        };
+        return Ok((link, vec![format!("hya: using --backend {url}")]));
     }
-}
-
-fn holder(busy: &db_lock::Busy) -> String {
-    busy.discovery
-        .as_ref()
-        .map(|found| found.pid)
-        .or(busy.holder_pid)
-        .map_or_else(|| "unknown".to_string(), |pid| pid.to_string())
-}
-
-/// Why bare `hya` could not attach to the process that holds the database.
-pub(crate) fn attach_failure(busy: &db_lock::Busy, wait: Duration) -> String {
-    let server = busy.discovery.as_ref().map_or_else(
-        || "has published no server".to_string(),
-        |found| format!("published {} but it does not answer", found.url),
-    );
-    format!(
-        "database {} is in use by pid {}, which {server} (waited {} s); stop that process or pass another --db",
-        busy.db,
-        holder(busy),
-        wait.as_secs()
-    )
+    let spec = daemon::DaemonSpec {
+        db: request.db.clone(),
+        model: request.model.clone(),
+        yolo: request.yolo,
+        pure: request.pure,
+        exe: exe.to_path_buf(),
+        cwd: cwd.to_path_buf(),
+    };
+    let ready = daemon::start(&spec, daemon::START_WAIT).await?;
+    let found = &ready.discovery;
+    let mut notes = vec![if ready.started {
+        format!(
+            "hya: started the backend daemon pid {} at {} (db {}, log {})",
+            found.pid,
+            found.url,
+            request.db,
+            daemon::log_path(&request.db)
+                .map_or_else(String::new, |path| path.display().to_string())
+        )
+    } else {
+        format!(
+            "hya: using the running backend daemon pid {} at {} (hya {}); --model/--yolo/--pure of this launch do not apply",
+            found.pid, found.url, found.version
+        )
+    }];
+    notes.extend(daemon::version_note(found).map(|note| format!("hya: {note}")));
+    let link = BackendLink {
+        url: found.url.clone(),
+        db: Some(request.db.clone()),
+        hya: Some(exe.to_path_buf()),
+    };
+    Ok((link, notes))
 }
 
 /// `hya`'s exit status for the TUI's: its code, or `128 + signal`.
@@ -350,8 +349,10 @@ pub(crate) fn log_path(state_dir: &Path) -> PathBuf {
 pub(crate) struct LaunchRequest {
     /// WebUI port (`--port`; 0 = a free port).
     pub(crate) port: u16,
-    /// Resolved database path (`resolve_interactive_db`).
+    /// Resolved, absolute database path (`resolve_interactive_db`).
     pub(crate) db: String,
+    /// `--backend <url>`: use this backend instead of the database's daemon.
+    pub(crate) backend: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) yolo: bool,
     pub(crate) pure: bool,
@@ -399,13 +400,25 @@ fn resolve() -> anyhow::Result<Resolved> {
 pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
     // Everything that can fail cheaply fails here, before the terminal is touched.
     let resolved = resolve()?;
-    let plan = plan_server(&request.db, ATTACH_WAIT).await?;
+    let exe = std::env::current_exe().context("find the hya binary")?;
+    let (backend, notes) = connect(&request, &exe, &resolved.cwd).await?;
     let log_file = log_path(&request.state_dir);
     let log =
         open_log(&log_file).with_context(|| format!("open the log file {}", log_file.display()))?;
     let mut signals = StopSignals::install().context("install signal handlers")?;
     let terminal = Terminal::detach(&log).context("hand the terminal to the TUI")?;
-    let outcome = orchestrate(&request, plan, &resolved, &terminal, &mut signals).await;
+    eprintln!(
+        "hya {}: bare launch pid {} in {} (backend {}, db {})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        resolved.cwd.display(),
+        backend.url,
+        backend.db.as_deref().unwrap_or("(explicit --backend)")
+    );
+    for note in notes {
+        eprintln!("{note}");
+    }
+    let outcome = run_frontends(request.port, &resolved, &backend, &terminal, &mut signals).await;
     terminal.restore();
     match outcome {
         Ok(code) => {
@@ -413,82 +426,16 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
             std::process::exit(code);
         }
         Err(error) => {
-            eprintln!(
-                "hya: see {} for the server and WebUI log",
-                log_file.display()
-            );
+            eprintln!("hya: see {} for the WebUI log", log_file.display());
             Err(error)
         }
     }
 }
 
-async fn orchestrate(
-    request: &LaunchRequest,
-    plan: ServerPlan,
-    resolved: &Resolved,
-    terminal: &Terminal,
-    signals: &mut StopSignals,
-) -> anyhow::Result<i32> {
-    eprintln!(
-        "hya {}: bare launch pid {} in {} (db {})",
-        env!("CARGO_PKG_VERSION"),
-        std::process::id(),
-        resolved.cwd.display(),
-        request.db
-    );
-    let lock = match plan {
-        ServerPlan::Start(lock) => lock,
-        ServerPlan::Attach(found) => {
-            // Not ours: the frontends use it, and nothing here stops it.
-            eprintln!(
-                "hya: attached to the running server pid {} at {} (hya {}); --model/--yolo/--pure of this launch do not apply",
-                found.pid, found.url, found.version
-            );
-            return run_frontends(
-                request.port,
-                resolved,
-                &found.url,
-                Some(found.pid),
-                terminal,
-                signals,
-            )
-            .await;
-        }
-    };
-    let prepared = tokio::select! {
-        prepared = serve::prepare_server(
-            "127.0.0.1:0",
-            request.db.clone(),
-            lock,
-            request.model.clone(),
-            request.yolo,
-            request.pure,
-        ) => prepared.context("start the server")?,
-        signal = signals.recv() => return Ok(128 + signal),
-    };
-    let backend = prepared.url.clone();
-    eprintln!("hya: server listening on {backend}");
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = serve::serve_until(prepared, async move {
-        let _ = stop_rx.await;
-    });
-    let frontends = async move {
-        let code = run_frontends(request.port, resolved, &backend, None, terminal, signals).await;
-        let _ = stop_tx.send(());
-        code
-    };
-    let (served, code) = tokio::join!(server, frontends);
-    if let Err(error) = served {
-        eprintln!("hya: server shutdown: {error:#}");
-    }
-    code
-}
-
 async fn run_frontends(
     port: u16,
     resolved: &Resolved,
-    backend: &str,
-    attached: Option<u32>,
+    backend: &BackendLink,
     terminal: &Terminal,
     signals: &mut StopSignals,
 ) -> anyhow::Result<i32> {
@@ -503,7 +450,7 @@ async fn run_frontends(
         Err(reason) => (None, WebStatus::Failed(reason)),
     };
     eprintln!("hya: WebUI {web_status:?}");
-    let argv = tui_argv(bun, tui, backend, cwd, &web_status, attached);
+    let argv = tui_argv(bun, tui, backend, cwd, &web_status);
     let code = match spawn_tui(&argv, cwd, terminal) {
         Ok(mut child) => {
             tokio::select! {
@@ -898,6 +845,14 @@ mod tests {
         );
     }
 
+    fn daemon_link() -> BackendLink {
+        BackendLink {
+            url: "http://127.0.0.1:5555".into(),
+            db: Some("/state/hya/sessions.db".into()),
+            hya: Some(PathBuf::from("/bin/hya")),
+        }
+    }
+
     #[test]
     fn builds_the_web_host_command() {
         let argv = web_host_argv(
@@ -906,7 +861,7 @@ mod tests {
             Path::new("/lib/tui"),
             3250,
             Path::new("/work"),
-            "http://127.0.0.1:5555",
+            &daemon_link(),
         );
         assert_eq!(
             argv,
@@ -926,6 +881,10 @@ mod tests {
                 "http://127.0.0.1:5555",
                 "--dir",
                 "/work",
+                "--db",
+                "/state/hya/sessions.db",
+                "--hya",
+                "/bin/hya",
             ])
         );
     }
@@ -939,14 +898,17 @@ mod tests {
             "http://127.0.0.1:5555",
             "--dir",
             "/work",
+            "--db",
+            "/state/hya/sessions.db",
+            "--hya",
+            "/bin/hya",
         ];
         let ready = tui_argv(
             Path::new("/b/bun"),
             Path::new("/lib/tui"),
-            "http://127.0.0.1:5555",
+            &daemon_link(),
             Path::new("/work"),
             &WebStatus::Ready("http://127.0.0.1:3250/".into()),
-            None,
         );
         let mut expected = os(&base);
         expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
@@ -954,33 +916,32 @@ mod tests {
         let failed = tui_argv(
             Path::new("/b/bun"),
             Path::new("/lib/tui"),
-            "http://127.0.0.1:5555",
+            &daemon_link(),
             Path::new("/work"),
             &WebStatus::Failed("port 3250 is in use".into()),
-            None,
         );
         let mut expected = os(&base);
         expected.extend(os(&["--web-error", "port 3250 is in use"]));
         assert_eq!(failed, expected);
-        let attached = tui_argv(
+        // An explicit --backend: no database, so no rediscovery flags.
+        let explicit = BackendLink {
+            url: "http://127.0.0.1:5555".into(),
+            db: None,
+            hya: None,
+        };
+        let argv = tui_argv(
             Path::new("/b/bun"),
             Path::new("/lib/tui"),
-            "http://127.0.0.1:5555",
+            &explicit,
             Path::new("/work"),
             &WebStatus::Ready("http://127.0.0.1:3250/".into()),
-            Some(4242),
         );
-        let mut expected = os(&base);
-        expected.extend(os(&[
-            "--web-url",
-            "http://127.0.0.1:3250/",
-            "--attached-pid",
-            "4242",
-        ]));
-        assert_eq!(attached, expected);
+        let mut expected = os(&base[..6]);
+        expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
+        assert_eq!(argv, expected);
     }
 
-    /// A one-request `/v1/health` responder (`ok` true or false).
+    /// A `/v1/health` responder (`ok` true or false).
     async fn health_server(ok: bool) -> String {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1000,51 +961,51 @@ mod tests {
         url
     }
 
-    #[tokio::test]
-    async fn plan_starts_a_server_on_a_free_database() {
-        let scratch = Scratch::new("plan-free");
-        let db = scratch.0.join("s.db").to_string_lossy().into_owned();
-        match plan_server(&db, Duration::from_millis(10)).await.unwrap() {
-            ServerPlan::Start(Some(_lock)) => {}
-            other => panic!("expected to start with the lock, got {other:?}"),
+    fn request(backend: Option<String>) -> LaunchRequest {
+        LaunchRequest {
+            port: 0,
+            db: "/nonexistent/hya/sessions.db".into(),
+            backend,
+            model: None,
+            yolo: false,
+            pure: false,
+            state_dir: PathBuf::from("/nonexistent/hya"),
         }
     }
 
     #[tokio::test]
-    async fn plan_attaches_to_the_live_server_holding_the_database() {
-        let scratch = Scratch::new("plan-attach");
-        let db = scratch.0.join("s.db").to_string_lossy().into_owned();
-        let db_lock::Claim::Owned(mut holder) = db_lock::try_claim(&db).unwrap() else {
-            panic!("could not take the lock");
-        };
+    async fn an_explicit_backend_is_used_as_is_without_rediscovery() {
         let url = health_server(true).await;
-        holder.publish(&url).unwrap();
-        match plan_server(&db, Duration::from_secs(5)).await.unwrap() {
-            ServerPlan::Attach(found) => {
-                assert_eq!(found.url, url);
-                assert_eq!(found.pid, std::process::id());
+        let (link, _notes) = connect(
+            &request(Some(url.clone())),
+            Path::new("/bin/hya"),
+            Path::new("/work"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            link,
+            BackendLink {
+                url,
+                db: None,
+                hya: None
             }
-            other => panic!("expected to attach, got {other:?}"),
-        }
+        );
     }
 
     #[tokio::test]
-    async fn plan_fails_when_the_holder_never_answers() {
-        let scratch = Scratch::new("plan-dead");
-        let db = scratch.0.join("s.db").to_string_lossy().into_owned();
-        let db_lock::Claim::Owned(mut holder) = db_lock::try_claim(&db).unwrap() else {
-            panic!("could not take the lock");
-        };
+    async fn an_unreachable_explicit_backend_is_a_clear_error() {
         let url = health_server(false).await;
-        holder.publish(&url).unwrap();
-        let error = plan_server(&db, Duration::from_millis(300))
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("is in use by pid"), "{error}");
+        let error = connect(
+            &request(Some(url.clone())),
+            Path::new("/bin/hya"),
+            Path::new("/work"),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains(&url), "{error}");
-        assert!(error.contains("does not answer"), "{error}");
-        assert!(error.contains("--db"), "{error}");
+        assert!(error.contains("--backend"), "{error}");
     }
 
     #[test]

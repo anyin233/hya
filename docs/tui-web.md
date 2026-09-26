@@ -37,17 +37,22 @@ puts it there), else `HYA_TUI_WEB_DIR`, else the source checkout's
 
 ```text
 bun <tui-web>/src/main.ts --host 127.0.0.1 --port <port> --cwd <cwd> -- \
-  bun <tui>/src/main.ts --server <in-process server URL> --dir <cwd>
+  bun <tui>/src/main.ts --server <daemon URL> --dir <cwd> --db <db> --hya <hya>
 ```
 
-So every browser tab runs its own TUI against the server inside `hya`, the
-same one the terminal TUI uses: sessions, turns, and permission prompts are
-shared. `hya` reads the host's `hya-tui-web listening on <url>` line (stdout)
+So every browser tab runs its own TUI against the database's backend daemon,
+the same one (same database, same `--dir`) the terminal TUI uses: sessions,
+turns, and permission prompts are shared, and a tab can resume a session the
+terminal started and the other way round. `--db` and `--hya` let a tab find or
+start the next daemon when that one stops, and let a new tab fall back to the
+daemon when the URL in its command no longer answers
+([tui.md](tui.md#when-the-server-goes-away)). With `hya --backend <url>` the
+command carries only `--server <url> --dir <cwd>`. `hya` reads the host's `hya-tui-web listening on <url>` line (stdout)
 to learn that it is up and passes the URL to the terminal TUI (`--web-url`),
 or the reason it failed (`--web-error`, for example `port 3250 is in use`).
 The host's output goes to `hya`'s log file (`[webui] ` lines). When the
 terminal TUI exits, `hya` sends the host SIGTERM; the host then ends every
-tab's process (below) before it exits. The host stays generic: `hya` only
+tab's process (below) before it exits. The daemon keeps running. The host stays generic: `hya` only
 chooses the fixed command.
 
 Open `http://127.0.0.1:3250` in a browser on the same machine. The host binds
@@ -70,9 +75,12 @@ bun src/main.ts --port 7681 -- bun e2e/fixtures/opentui-probe.ts
 # hya-tui-web listening on http://127.0.0.1:7681/
 ```
 
-To serve the hya TUI, let it start its own backend (one-command launch; the
-TUI finds `hya` through `--hya`, `HYA_BIN`, or `PATH` and stops the server
-when its tab closes — see [tui.md](tui.md#start-it)):
+To serve the hya TUI, let it use the database's backend daemon (one-command
+launch; the TUI finds `hya` through `--hya`, `HYA_BIN`, or `PATH`, starts the
+daemon when none runs, and leaves it running when its tab closes — see
+[tui.md](tui.md#start-it)). A host started this way uses the same default
+database and so the same daemon and sessions as bare `hya` and a terminal TUI
+in the same directory:
 
 ```sh
 HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts -- \
@@ -87,7 +95,7 @@ bun packages/hya-tui-web/src/main.ts -- \
 ```
 
 The host stays generic either way: it runs the one fixed command, and the
-TUI owns its backend.
+TUI finds its backend.
 
 Each browser tab gets its own process. Closing the tab sends the process
 SIGHUP. When the process exits, the page shows

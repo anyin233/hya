@@ -171,12 +171,17 @@ fn session_stream(
 /// bus capacity behind gets one `resync` frame per lag and loses the
 /// frames in the gap, live deltas included; the durable log (and so the
 /// projection) is unaffected.
+///
+/// Every stream ends when the server starts shutting down
+/// (`StreamShutdown::close`), so connected clients never hold the graceful
+/// shutdown open.
 pub(crate) fn frame_stream(
     st: ServerState,
     scope: StreamScope,
     since_seq: u64,
     interactions_only: bool,
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
+    let closed = st.streams.closed();
     let session = scope.session_id();
     let lineage = st.engine.clone();
     let engine =
@@ -249,7 +254,7 @@ pub(crate) fn frame_stream(
     if !interactions_only {
         feeds.push(engine);
     }
-    futures::stream::select_all(feeds)
+    futures::stream::select_all(feeds).take_until(closed)
 }
 
 /// The live-only, process-wide `catalogUpdated` frame.

@@ -29,11 +29,17 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/bootstrap", get(bootstrap))
 }
 
-async fn health() -> Json<pb::GetHealthResponse> {
-    Json(pb::GetHealthResponse {
+/// Liveness and version. A server that has started shutting down answers
+/// `unavailable`, so a client probing it after its stream ended knows the
+/// server is going away (ADR-0023).
+async fn health(State(st): State<ServerState>) -> Result<Json<pb::GetHealthResponse>, V1Error> {
+    if st.streams.is_closing() {
+        return Err(V1Error::unavailable("the server is shutting down"));
+    }
+    Ok(Json(pb::GetHealthResponse {
         ok: true,
         version: env!("CARGO_PKG_VERSION").to_owned(),
-    })
+    }))
 }
 
 async fn location(State(st): State<ServerState>) -> Json<pb::LocationInfo> {

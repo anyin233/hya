@@ -16,6 +16,7 @@ mod agent_cmd;
 mod auth_cmd;
 mod bundle_cmd;
 mod cli_args;
+mod daemon;
 mod db_lock;
 mod exec_stream;
 mod frontend;
@@ -71,6 +72,16 @@ fn resolve_interactive_db(cli_db: &str) -> String {
         .join("sessions.db")
         .to_string_lossy()
         .into_owned()
+}
+
+/// `db` as an absolute path (relative to the working directory), so a
+/// daemon, its clients, and `hya serve stop` name the same file wherever they
+/// run. In-memory stores and SQLite URIs are returned unchanged.
+fn absolute_db(db: String) -> String {
+    if db.is_empty() || db == ":memory:" || db.starts_with("file:") || db.starts_with("sqlite:") {
+        return db;
+    }
+    std::path::absolute(&db).map_or(db, |path| path.to_string_lossy().into_owned())
 }
 
 /// `$XDG_STATE_HOME/hya`, else `$HOME/.local/state/hya` (else
@@ -842,6 +853,7 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let web_port = cli_args::bare_web_port(&cli)?;
+    let backend = cli_args::bare_backend(&cli)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let pure = cli.pure;
@@ -859,9 +871,9 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|error| eprintln!("goal error: {error:#}"));
     }
     match cli.command {
-        // Bare `hya` on a terminal starts the TUI and the WebUI next to an
-        // in-process server (frontend.rs); without a terminal it only points
-        // at the other surfaces.
+        // Bare `hya` on a terminal starts the TUI and the WebUI against the
+        // database's backend daemon (frontend.rs, daemon.rs); without a
+        // terminal it only points at the other surfaces.
         None => {
             use std::io::IsTerminal as _;
             if frontend::should_launch(
@@ -870,7 +882,8 @@ async fn main() -> anyhow::Result<()> {
             ) {
                 return frontend::run(frontend::LaunchRequest {
                     port: web_port,
-                    db: resolve_interactive_db(&db),
+                    db: absolute_db(resolve_interactive_db(&db)),
+                    backend,
                     model,
                     yolo,
                     pure,
@@ -908,11 +921,27 @@ async fn main() -> anyhow::Result<()> {
             cmd_exec(prompt, model, &db, yolo, json, pure).await
         }
         Some(Command::Serve {
+            action: Some(action),
+            db: command_db,
+            ..
+        }) => {
+            let path = command_db.unwrap_or_else(|| db.clone());
+            serve::cmd_serve_action(
+                action,
+                absolute_db(resolve_interactive_db(&path)),
+                model,
+                yolo,
+                pure,
+            )
+            .await
+        }
+        Some(Command::Serve {
             bind,
             hostname,
             port,
             mdns,
             db: command_db,
+            action: None,
             ..
         }) => {
             serve::cmd_serve(

@@ -899,6 +899,29 @@ The first server frame replays the current buffer. Resize currently relies
 on the shell's own TTY sizing; a runtime resize API is tracked in the
 consolidation plan.
 
+## Server shutdown
+
+When a server begins to shut down (SIGTERM/SIGINT/SIGHUP, `hya serve stop`,
+`hya serve restart`), it ends every live event stream at once —
+`StreamSessionEvents` and `StreamGlobalEvents`, over SSE (the response body
+ends) and gRPC (the stream completes) — and from then on answers
+`GET /v1/health` (`GetHealth`) with **503** / gRPC `UNAVAILABLE`:
+
+```json
+{"error": {"code": "unavailable", "message": "the server is shutting down"}}
+```
+
+Streams never end on their own otherwise, so a stream that ends while the
+client did not cancel it means the server is going away (or the connection
+dropped). Probe `GET /v1/health`: `{"ok": true}` means reconnect to the same
+server; `unavailable` or no answer means find its successor. Local clients of
+a database do that through `<db>.server.json`
+([ADR-0022](../adr/0022-one-writer-per-database.md),
+[ADR-0023](../adr/0023-persistent-backend-daemon.md)); the TUI's rules are in
+[tui.md](../tui.md#when-the-server-goes-away). Durable events are never lost:
+resubscribe with `sinceSeq` and gap-fill with `ListEvents` as after any
+disconnect.
+
 ## Minimal client walkthrough
 
 ```

@@ -45,11 +45,15 @@ pub(crate) struct Discovery {
     pub(crate) started_at: u64,
 }
 
-/// `<db>.lock` and `<db>.server.json` of one database.
+/// `<db>.lock`, `<db>.server.json`, and the daemon log `<db>.server.log` of
+/// one database.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DbPaths {
     pub(crate) lock: PathBuf,
     pub(crate) discovery: PathBuf,
+    /// Where a detached `hya serve` daemon of this database writes its
+    /// output (ADR-0023).
+    pub(crate) log: PathBuf,
 }
 
 /// The lock and discovery paths of `db`, or `None` for stores that are not
@@ -73,6 +77,7 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
     Some(DbPaths {
         lock: with(".lock"),
         discovery: with(".server.json"),
+        log: with(".server.log"),
     })
 }
 
@@ -176,6 +181,48 @@ pub(crate) fn try_claim(db: &str) -> std::io::Result<Claim> {
         published: false,
         _file: file,
     }))
+}
+
+/// Who holds `db`'s lock, found without keeping it: `None` when the lock is
+/// free or the store is not locked. (Testing a `flock` means taking it for an
+/// instant; a `hya serve` that tries to claim it in that instant exits 75,
+/// which every caller of this already retries.)
+pub(crate) fn holder(db: &str) -> std::io::Result<Option<Busy>> {
+    let Some(paths) = paths(db) else {
+        return Ok(None);
+    };
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&paths.lock)
+    {
+        Ok(file) => file,
+        // No database directory: nothing can hold it.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(with_path(error, &paths.lock)),
+    };
+    match file.try_lock() {
+        // Free: closing the file releases the instant claim.
+        Ok(()) => Ok(None),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let mut text = String::new();
+            let holder_pid = file
+                .read_to_string(&mut text)
+                .ok()
+                .and_then(|_| text.trim().parse().ok());
+            Ok(Some(Busy {
+                db: db.to_string(),
+                discovery: read_discovery(&paths.discovery),
+                paths,
+                holder_pid,
+            }))
+        }
+        Err(std::fs::TryLockError::Error(error)) => Err(with_path(error, &paths.lock)),
+    }
 }
 
 fn with_path(error: std::io::Error, path: &Path) -> std::io::Error {
@@ -345,6 +392,26 @@ mod tests {
         let found = paths(&spelled).unwrap();
         assert_eq!(found.lock, scratch.0.join("sessions.db.lock"));
         assert_eq!(found.discovery, scratch.0.join("sessions.db.server.json"));
+        assert_eq!(found.log, scratch.0.join("sessions.db.server.log"));
+    }
+
+    #[test]
+    fn holder_reports_the_lock_owner_without_keeping_the_lock() {
+        let scratch = Scratch::new("holder");
+        let db = scratch.db();
+        assert!(holder(&db).unwrap().is_none(), "a free lock has no holder");
+        // Asking did not keep the lock: it can be claimed right after.
+        let mut lock = owned(try_claim(&db).unwrap());
+        let held = holder(&db).unwrap().expect("held");
+        assert_eq!(held.holder_pid, Some(std::process::id()));
+        assert_eq!(held.discovery, None);
+        let published = lock.publish("http://127.0.0.1:4").unwrap();
+        assert_eq!(holder(&db).unwrap().unwrap().discovery, Some(published));
+        drop(lock);
+        assert!(holder(&db).unwrap().is_none());
+        assert!(holder(":memory:").unwrap().is_none());
+        let missing = scratch.0.join("no-such-dir/s.db");
+        assert!(holder(&missing.to_string_lossy()).unwrap().is_none());
     }
 
     #[test]
