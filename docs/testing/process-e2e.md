@@ -121,6 +121,47 @@ Helpers:
   same FakeLlm as normal turns — script an extra `text_step` for the summary
   body before any post-compact turn.
 
+## Relay scenarios (`p38_relay`)
+
+`tests/p38_relay.rs` (T2.35–T2.37) runs the secure relay end to end with three
+real processes: `hya proxy --host 127.0.0.1 --port 0` (readiness line on
+stdout), the FakeLlm-backed `hya serve` with `--relay <url>` (and
+`--relay-transport grpc|ws` / `--relay-ca`), and
+`hya bridge - --json --exit-with-stdin` with the link written to its stdin
+(readiness is one JSON line). After the bridge is up, `E2eEnv`'s client and
+raw-JSON helpers are pointed at the bridge URL, so every scenario request goes
+through the tunnel; the backend's own loopback URL is only used to show that
+`RelayControl` works there.
+
+A transparent TCP forwarder in the test sits in front of the proxy and records
+every byte per connection and direction; `--relay` names the forwarder, so the
+link does too, and both the backend's and the bridge's relay traffic crosses
+it. The recording must contain the room id (the control that the search finds
+plain bytes) and must not contain the prompt, file contents, the assistant's
+answer, the PTY output, or the link's PSK (raw, base64url, or the whole
+fragment), before and after `hya serve relay rotate`.
+
+Harness pieces the relay file uses:
+
+- `E2eEnvBuilder::serve_arg(arg)` — extra `hya serve` arguments
+  (`BackendSpec::serve_args`), reapplied on `reopen`.
+- `env.backend.wait_stderr_line("hya relay link: ", timeout)` — the backend's
+  stderr is kept; the link line is echoed as `<redacted>`.
+- `env.backend.cli(&["--db", db, "serve", "relay", "status", "--json"])` — run
+  `hya` under the backend's HOME/XDG roots (status, rotate).
+- `env.backend.pid()` — deliver SIGTERM while clients keep observing (the
+  bridge-side SSE client must get `serverStopping`).
+
+```sh
+cargo build -p hya-backend --bin hya
+cargo test -p hya-e2e --test p38_relay -- --test-threads=1
+```
+
+The three scenarios take about a second together. Real intermediaries (nginx,
+Cloudflare Tunnel, Caddy, Tailscale) are not part of this suite; the in-process
+conformance suite (`crates/hya-relay/tests/conformance.rs`) covers hop
+behavior.
+
 ## Oracle rules (do not weaken)
 
 | Feature | Prefer |
@@ -159,6 +200,7 @@ Install requires a path ending in `.hyabundle` — use
 cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
 cargo test -p hya-e2e --test p03_permissions -- --nocapture
+cargo test -p hya-e2e --test p38_relay -- --test-threads=1
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 

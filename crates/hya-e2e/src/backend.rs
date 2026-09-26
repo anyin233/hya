@@ -3,6 +3,7 @@
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::E2eError;
@@ -52,6 +53,8 @@ pub struct BackendSpec {
     pub preinstall_bundles: Vec<PathBuf>,
     /// Extra environment variables passed to the backend process.
     pub env: Vec<(String, String)>,
+    /// Extra arguments appended to `hya serve --bind 127.0.0.1:0` (e.g. `--relay <url>`).
+    pub serve_args: Vec<String>,
 }
 
 impl BackendSpec {
@@ -70,6 +73,7 @@ impl BackendSpec {
             project_files: Vec::new(),
             preinstall_bundles: Vec::new(),
             env: Vec::new(),
+            serve_args: Vec::new(),
         }
     }
 }
@@ -98,6 +102,10 @@ pub struct BackendProcess {
     has_mcp: bool,
     /// Extra environment variables reapplied on reopen.
     env: Vec<(String, String)>,
+    /// Extra `hya serve` arguments reapplied on reopen.
+    serve_args: Vec<String>,
+    /// Every stderr line of the current child, in order.
+    stderr_lines: Arc<Mutex<Vec<String>>>,
     /// Set once the child has been signalled and reaped, so `Drop` does not signal a pid
     /// that the OS may already have handed to an unrelated process.
     stopped: bool,
@@ -212,6 +220,7 @@ permission:
             .arg("serve")
             .arg("--bind")
             .arg("127.0.0.1:0")
+            .args(&spec.serve_args)
             .current_dir(&project)
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", &xdg_config_home)
@@ -267,16 +276,9 @@ permission:
                 }
             });
         }
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
         if let Some(stderr) = child.stderr.take() {
-            std::thread::spawn(move || {
-                use std::io::BufRead;
-                for line in std::io::BufReader::new(stderr).lines() {
-                    match line {
-                        Ok(line) => eprintln!("[backend] {line}"),
-                        Err(_) => break,
-                    }
-                }
-            });
+            forward_stderr(stderr, Arc::clone(&stderr_lines));
         }
 
         Ok(Self {
@@ -292,6 +294,8 @@ permission:
             yolo: spec.yolo,
             has_mcp: !mcp.is_empty(),
             env: spec.env.clone(),
+            serve_args: spec.serve_args.clone(),
+            stderr_lines,
             stopped: false,
         })
     }
@@ -317,6 +321,7 @@ permission:
             .arg("serve")
             .arg("--bind")
             .arg("127.0.0.1:0")
+            .args(&self.serve_args)
             .current_dir(&self.project)
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", &self.xdg_config_home)
@@ -360,8 +365,13 @@ permission:
                 )));
             }
         };
+        let stderr_lines = Arc::new(Mutex::new(Vec::new()));
+        if let Some(stderr) = child.stderr.take() {
+            forward_stderr(stderr, Arc::clone(&stderr_lines));
+        }
         self.child = child;
         self.url = url;
+        self.stderr_lines = stderr_lines;
         self.stopped = false;
         Ok(())
     }
@@ -377,6 +387,45 @@ permission:
         }
         self.stopped = true;
         terminate_process_group(&mut self.child)
+    }
+
+    /// OS pid of the backend (the leader of its process group), e.g. to deliver a
+    /// signal while the test keeps observing clients.
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Wait until the backend has written a stderr line starting with `prefix` and
+    /// return it. Lines already written count.
+    pub fn wait_stderr_line(&self, prefix: &str, timeout: Duration) -> Result<String, E2eError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(lines) = self.stderr_lines.lock()
+                && let Some(line) = lines.iter().find(|line| line.starts_with(prefix))
+            {
+                return Ok(line.clone());
+            }
+            if Instant::now() >= deadline {
+                return Err(E2eError::Timeout(format!("backend stderr line `{prefix}`")));
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Run the `hya` binary with `args` under this backend's HOME/XDG roots and
+    /// project cwd (e.g. `serve relay rotate --db <db>`).
+    pub fn cli(&self, args: &[&str]) -> Result<std::process::Output, E2eError> {
+        Command::new(&self.binary)
+            .args(args)
+            .env("XDG_DATA_HOME", &self.xdg_data_home)
+            .env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", &self.xdg_config_home)
+            .env("XDG_STATE_HOME", self.root.join("state"))
+            .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .current_dir(&self.project)
+            .output()
+            .map_err(|e| E2eError::Backend(format!("hya cli: {e}")))
     }
 
     /// Project workdir as a string for API `workdir` fields.
@@ -438,6 +487,26 @@ fn terminate_process_group(child: &mut Child) -> Option<std::process::ExitStatus
         libc::kill(-pid, libc::SIGKILL);
     }
     status.or_else(|| child.wait().ok())
+}
+
+/// Echo the backend's stderr as `[backend] …` lines and keep a copy for
+/// [`BackendProcess::wait_stderr_line`]. A relay link is a credential: its line is
+/// kept but echoed redacted.
+fn forward_stderr(stderr: impl std::io::Read + Send + 'static, lines: Arc<Mutex<Vec<String>>>) {
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if line.starts_with("hya relay link: ") {
+                eprintln!("[backend] hya relay link: <redacted>");
+            } else {
+                eprintln!("[backend] {line}");
+            }
+            if let Ok(mut lines) = lines.lock() {
+                lines.push(line);
+            }
+        }
+    });
 }
 
 fn render_mcp(mcp: &[McpFixture]) -> String {

@@ -28,3 +28,9 @@ tokio-util = { workspace = true }
 hya-bundle = { path = "../hya-bundle" }
 # the seeded handle minter, to predict `HYA_HANDLE_SEED` subagent handles
 hya-core = { path = "../hya-core" }
+# p38 relay golden path: PTY WebSocket over the bridge, link secret decoding,
+# and a self-signed certificate for the proxy's TLS run
+base64 = { workspace = true }
+futures = { workspace = true }
+rcgen = { workspace = true }
+tokio-tungstenite = { workspace = true }
