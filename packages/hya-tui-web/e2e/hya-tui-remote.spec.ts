@@ -205,8 +205,10 @@ test.describe("/connect-remote", () => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
     await term.waitForText("Connected to hya", 30_000)
     await term.waitForText(/hya · hysec_\w+/)
-    // Same relay and room, a well-formed but wrong secret: the remote rejects the handshake.
-    const at = remote.link.length - 10
+    // Same relay, room, and PSK (the proxy lets it through), a wrong server key: the remote
+    // rejects the handshake. (A wrong PSK never reaches the remote: the proxy answers it like
+    // an offline room, and the bridge starts and reports "offline, or the link was rotated".)
+    const at = remote.link.indexOf("#") + 5
     const wrong = `${remote.link.slice(0, at)}${remote.link[at] === "A" ? "B" : "A"}${remote.link.slice(at + 1)}`
     await term.type(`/connect-remote ${wrong}`)
     await term.press("Enter")

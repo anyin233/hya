@@ -22,7 +22,7 @@
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
-import type { SessionInfo } from "./client"
+import { bridgeTokenHeaders, type SessionInfo } from "./client"
 import { newestTopLevelSession } from "./state/projects"
 
 /** A backend start failure; `detail` is the child's output tail (may be empty), `exitCode` the child's status when it exited. */
@@ -174,10 +174,13 @@ export function parseDiscovery(text: string): DiscoveryInfo | undefined {
   return { url, pid, version: typeof version === "string" ? version : "", startedAt: typeof startedAt === "number" ? startedAt : 0 }
 }
 
-/** Whether `GET <url>/v1/health` answers `{ ok: true }` within `timeoutMs`. */
-export async function probeHealth(url: string, fetcher: typeof fetch = fetch, timeoutMs = 2_000): Promise<boolean> {
+/**
+ * Whether `GET <url>/v1/health` answers `{ ok: true }` within `timeoutMs`.
+ * `token`: a relay bridge's token (`x-hya-bridge-token`), for a bridge URL.
+ */
+export async function probeHealth(url: string, fetcher: typeof fetch = fetch, timeoutMs = 2_000, token?: string): Promise<boolean> {
   try {
-    const response = await fetcher(`${url.replace(/\/+$/, "")}/v1/health`, { signal: AbortSignal.timeout(timeoutMs) })
+    const response = await fetcher(`${url.replace(/\/+$/, "")}/v1/health`, { headers: bridgeTokenHeaders(token), signal: AbortSignal.timeout(timeoutMs) })
     if (!response.ok) return false
     const body = (await response.json()) as { ok?: unknown }
     return body?.ok === true

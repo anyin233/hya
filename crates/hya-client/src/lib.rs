@@ -58,6 +58,17 @@ impl Client {
         }
     }
 
+    /// Build a client targeting `base_url` that sends every request through
+    /// `http` (for example one with default headers, such as the
+    /// `x-hya-bridge-token` a `hya bridge` requires).
+    #[must_use]
+    pub fn with_http_client(base_url: impl Into<String>, http: reqwest::Client) -> Self {
+        Self {
+            base: base_url.into(),
+            http,
+        }
+    }
+
     async fn call<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
         &self,
         method: reqwest::Method,

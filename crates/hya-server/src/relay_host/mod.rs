@@ -694,14 +694,17 @@ async fn host_loop(
             return;
         }
         let delay = backoff.next_delay(ended.kind);
+        // The error text may come from the relay (a close reason): no
+        // terminal escapes in the log or the status.
+        let error = crate::sanitize::display_text(&ended.error);
         tracing::warn!(
-            error = %ended.error,
+            error = %error,
             retry_in_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
             "relay host connection ended"
         );
         inner.update(|shared| {
             shared.state = RelayState::Backoff;
-            shared.last_error = Some(ended.error);
+            shared.last_error = Some(error);
             shared.connected_since = None;
         });
         tokio::select! {

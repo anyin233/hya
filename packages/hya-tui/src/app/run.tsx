@@ -17,7 +17,10 @@
  * URL; `/disconnect-remote` comes back to the database's daemon (found or
  * started) or to a fixed local `--server`. A TUI started remote (bare
  * `hya --connect`: `--remote --server-label`, no `--db`) has no local
- * backend to come back to.
+ * backend to come back to. Its `--server` is bare `hya --connect`'s bridge,
+ * whose token comes in `HYA_SERVER_TOKEN` (never argv): read once at
+ * startup and removed from the environment together with `HYA_RELAY_LINK`,
+ * so no child (editor, shell, bridge) inherits either.
  *
  * Lifecycle: every way out runs `shutdown()` once: restore the terminal,
  * settle the open session (app/sessionKeeper.ts, at most 2 s), then exit.
@@ -34,7 +37,7 @@ import { render } from "@opentui/solid"
 import type { Options } from "../cli"
 import { HyaClient } from "../client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
-import { startBridge } from "../bridge"
+import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
 import { setTheme } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
@@ -48,6 +51,9 @@ const exitSignals = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const
 const sameUrl = (a: string, b: string): boolean => a.replace(/\/+$/, "") === b.replace(/\/+$/, "")
 
 export async function run(options: Options): Promise<void> {
+  // First, before anything can spawn a child. The token belongs to `--server` only.
+  const envToken = takeServerToken()
+  let serverToken = options.server ? envToken : undefined
   let renderer: CliRenderer | undefined
   let controller: Controller | undefined
   let stopping = false
@@ -77,9 +83,10 @@ export async function run(options: Options): Promise<void> {
   let server = options.server
   let backend: BackendInfo | undefined
   try {
-    if (server && db && !(await probeHealth(server))) {
+    if (server && db && !(await probeHealth(server, fetch, undefined, serverToken))) {
       process.stdout.write(`hya-tui: ${server} does not answer; using the hya server daemon of ${db}…\n`)
       server = undefined
+      serverToken = undefined
     }
     if (!server) {
       process.stdout.write(`hya-tui: connecting to the hya server daemon of ${db}, or starting one…\n`)
@@ -109,7 +116,7 @@ export async function run(options: Options): Promise<void> {
   }
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
-  const client = new HyaClient(server, options.remote ? "" : options.directory)
+  const client = new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
   const store = createAppStore()
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)

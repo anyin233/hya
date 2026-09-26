@@ -16,16 +16,18 @@ const work: ProjectInfo = { id: "prj_work", name: "work", roots: ["/work"], busy
 const remoteProject: ProjectInfo = { id: "prj_remote", name: "remote-project", roots: ["/srv/app"], busy: false }
 
 /** A fake bridge child as the controller sees it; `crash()` ends it without `stop()`. */
-function fakeBridge(url = bridgeUrl) {
+const bridgeToken = "d".repeat(64)
+
+function fakeBridge(url = bridgeUrl, lastLine = "hya bridge: relay hya+insecure://127.0.0.1:8766 is unreachable") {
   let exit!: (code: number) => void
   const exited = new Promise<number>((resolve) => (exit = resolve))
   let stopping = false
   let stops = 0
   const bridge: Bridge = {
-    url, room: "room123", proxy: "hya+insecure://127.0.0.1:8766", label,
+    url, room: "room123", proxy: "hya+insecure://127.0.0.1:8766", label, token: bridgeToken,
     exited,
     get stopping() { return stopping },
-    lastLine: () => "hya bridge: relay hya+insecure://127.0.0.1:8766 is unreachable",
+    lastLine: () => lastLine,
     stop: async () => { stopping = true; stops++; exit(0) },
   }
   return { bridge, crash: () => exit(1), get stops() { return stops } }
@@ -38,13 +40,16 @@ const remoteFiles: Record<string, Uint8Array> = {
 }
 
 /** A fake server per base URL (local and remote), recording calls with the URL they went to. */
-function harness(options: { home?: boolean; bridgeError?: string; remote?: boolean; label?: string } = {}) {
+function harness(options: { home?: boolean; bridgeError?: string; remote?: boolean; label?: string; lastLine?: string } = {}) {
   const store = createAppStore()
   const statuses: string[] = []
   const setStatus = store.setStatus.bind(store)
   store.setStatus = (text: string) => { statuses.push(text); setStatus(text) }
   const calls: Array<[string, string, ...unknown[]]> = []
   let base = localUrl
+  let token: string | undefined
+  /** Every recorded call's base URL and the bridge token the client held then. */
+  const tokens: Array<[string, string | undefined]> = []
   let directory = "/work/sub"
   let created = 0
   const sessions: SessionInfo[] = []
@@ -55,10 +60,11 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
   const globalEnds: Array<() => void> = []
   const untilAbort = (signal: AbortSignal) => new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
   const projectsOf = () => (base === localUrl ? [work] : [remoteProject])
-  const record = (name: string, ...rest: unknown[]) => calls.push([name, base, ...rest])
+  const record = (name: string, ...rest: unknown[]) => { tokens.push([base, token]); calls.push([name, base, ...rest]) }
   const client = {
     get baseUrl() { return base },
-    setBaseUrl(url: string) { base = url.replace(/\/+$/, "") },
+    setBaseUrl(url: string, next?: string) { base = url.replace(/\/+$/, ""); token = next || undefined },
+    get token() { return token },
     get directory() { return directory },
     setDirectory(next: string) { directory = next },
     bootstrap: async () => { record("bootstrap"); return { location: { version: "test" }, agents: [{ name: "build" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] } },
@@ -133,7 +139,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
       bridgeCalls.push({ link: given, flags })
       onLine("hya bridge: relay hya+insecure://127.0.0.1:8766: grpc binding")
       if (options.bridgeError) throw new Error(options.bridgeError)
-      const next = fakeBridge()
+      const next = fakeBridge(bridgeUrl, options.lastLine)
       bridges.push(next)
       return next.bridge
     },
@@ -141,7 +147,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
   })
   if (options.label) store.setServerLabel(options.label)
   return {
-    store, controller, calls, statuses, sessions, bridges, bridgeCalls, reconnects, homes, client,
+    store, controller, calls, statuses, sessions, bridges, bridgeCalls, reconnects, homes, client, tokens,
     get base() { return base },
     named: (name: string) => calls.filter((call) => call[0] === name),
     /** End every open global stream (the server went away). */
@@ -444,5 +450,36 @@ test("remote mode sends no directory scope until a Project is chosen, then the P
   // Back home: the local --dir again.
   await h.controller.submit("/disconnect-remote")
   expect(h.client.directory).toBe("/work/sub")
+  h.controller.dispose()
+})
+
+test("/connect-remote uses the bridge's token for every call to it; /disconnect-remote drops it", async () => {
+  const h = harness()
+  await h.controller.start()
+  expect(h.client.token).toBeUndefined()
+  await h.controller.submit(`/connect-remote ${link}`)
+  expect(h.client.token).toBe(bridgeToken)
+  await h.controller.switchProject("prj_remote")
+  const onBridge = h.tokens.filter(([url]) => url === bridgeUrl)
+  expect(onBridge.length).toBeGreaterThan(0)
+  expect(onBridge.every(([, token]) => token === bridgeToken)).toBe(true)
+  h.tokens.length = 0
+  await h.controller.submit("/disconnect-remote")
+  expect(h.client.token).toBeUndefined()
+  const local = h.tokens.filter(([url]) => url === localUrl)
+  expect(local.length).toBeGreaterThan(0)
+  expect(local.every(([, token]) => token === undefined)).toBe(true)
+  // The token never reaches a status line or the store.
+  expect(h.visible()).not.toContain(bridgeToken)
+  h.controller.dispose()
+})
+
+test("a bridge exit reason is shown without terminal controls", async () => {
+  const h = harness({ lastLine: "hya bridge: \x1b]0;pwned\x07relay \x1b[31mgone\x1b[0m\x9b2J" })
+  await h.controller.start()
+  await h.controller.submit(`/connect-remote ${link}`)
+  h.bridges[0]!.crash()
+  await Bun.sleep(0)
+  expect(h.store.state.status).toStartWith("Remote bridge exited (relay gone) · ")
   h.controller.dispose()
 })

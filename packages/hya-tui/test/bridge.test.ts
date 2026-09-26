@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { secretMask } from "../src/state/format"
-import { bridgeArgv, containsRelayLink, historyEntry, looksLikeRelayLink, parseBridgeReady, parseConnectRemote, redactRelayLinks, startBridge, type BridgeProcess } from "../src/bridge"
+import { bridgeArgv, bridgeEnv, containsRelayLink, historyEntry, looksLikeRelayLink, parseBridgeReady, parseConnectRemote, redactRelayLinks, startBridge, takeServerToken, type BridgeProcess } from "../src/bridge"
 
 const link = "hya+insecure://127.0.0.1:8766/room123?t=grpc#SECRETKEY.SECRETPSK"
 const readyLine = JSON.stringify({ url: "http://127.0.0.1:40001", room: "room123", proxy: "hya+insecure://127.0.0.1:8766", label: "remote: 127.0.0.1:8766/room123" })
@@ -154,4 +154,66 @@ test("secretMask shows at most 32 bullets and the character count", () => {
   expect(secretMask(0)).toBe(" ")
   expect(secretMask(1)).toBe("•  1 character")
   expect(secretMask(40)).toBe(`${"•".repeat(32)}…  40 characters`)
+})
+
+test("parseBridgeReady reads the bridge token; a missing or unprintable one is left out", () => {
+  const token = "0123456789abcdef".repeat(4)
+  const base = { url: "http://127.0.0.1:40001", room: "room123", proxy: "hya+insecure://127.0.0.1:8766", label: "remote: 127.0.0.1:8766/room123" }
+  expect(parseBridgeReady(JSON.stringify({ ...base, token }))).toEqual({ ...base, token })
+  expect(parseBridgeReady(JSON.stringify(base))).toEqual(base)
+  for (const bad of ["", "has space", "tab\there", "esc\x1b[31m", "ünï", 42, null]) {
+    expect(parseBridgeReady(JSON.stringify({ ...base, token: bad }))).toEqual(base)
+  }
+})
+
+test("parseBridgeReady strips terminal controls from the shown fields", () => {
+  const ready = parseBridgeReady(JSON.stringify({ url: "http://127.0.0.1:40001", room: "r\x1b]0;x\x07oom", proxy: "hya://relay\x1b[2J", label: "remote: \x1b[31mrelay/room\x1b[0m\x9b" }))
+  expect(ready).toEqual({ url: "http://127.0.0.1:40001", room: "room", proxy: "hya://relay", label: "remote: relay/room" })
+})
+
+test("bridgeEnv drops HYA_RELAY_LINK and HYA_SERVER_TOKEN and keeps the rest", () => {
+  const env = { PATH: "/bin", HOME: "/h", HYA_RELAY_LINK: link, HYA_SERVER_TOKEN: "t".repeat(64), EMPTY: undefined }
+  expect(bridgeEnv(env)).toEqual({ PATH: "/bin", HOME: "/h" })
+  // The input is not changed.
+  expect(env.HYA_RELAY_LINK).toBe(link)
+})
+
+test("startBridge hands on the readiness token", async () => {
+  const fake = fakeBridge()
+  const token = "f".repeat(64)
+  const starting = startBridge({ bin: "hya", link, spawn: () => fake.process })
+  fake.stdout(JSON.stringify({ ...JSON.parse(readyLine), token }))
+  const bridge = await starting
+  expect(bridge.token).toBe(token)
+  fake.exit(0)
+})
+
+test("bridge stderr lines lose terminal controls before onLine, lastLine, and the failure reason", async () => {
+  const fake = fakeBridge()
+  const lines: string[] = []
+  const starting = startBridge({ bin: "hya", link, spawn: () => fake.process, onLine: (line) => lines.push(line) })
+  fake.stderr("hya bridge: \x1b]0;pwned\x07relay \x1b[31moffline\x1b[0m\r")
+  fake.stderr("hya bridge: \x1b]8;;https://evil.example\x1b\\click\x1b]8;;\x1b\\ \x9b2Jgone\x7f")
+  fake.exit(1)
+  const error = await starting.then(() => undefined, (reason: unknown) => reason) as Error
+  expect(lines).toEqual(["hya bridge: relay offline", "hya bridge: click gone"])
+  expect(error.message).toBe("click gone")
+
+  // And lastLine() of a running bridge.
+  const next = fakeBridge()
+  const running = startBridge({ bin: "hya", link, spawn: () => next.process })
+  next.stdout(readyLine)
+  const bridge = await running
+  next.stderr("hya bridge: remote \x1b[1moffline\x1b[0m\x07")
+  await Bun.sleep(0)
+  expect(bridge.lastLine()).toBe("hya bridge: remote offline")
+  next.exit(0)
+})
+
+test("takeServerToken reads HYA_SERVER_TOKEN once and removes it and HYA_RELAY_LINK", () => {
+  const env: Record<string, string | undefined> = { PATH: "/bin", HYA_SERVER_TOKEN: "e".repeat(64), HYA_RELAY_LINK: link }
+  expect(takeServerToken(env)).toBe("e".repeat(64))
+  expect(env).toEqual({ PATH: "/bin" })
+  expect(takeServerToken(env)).toBeUndefined()
+  expect(takeServerToken({ HYA_SERVER_TOKEN: "" })).toBeUndefined()
 })

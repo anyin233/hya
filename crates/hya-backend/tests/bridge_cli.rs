@@ -10,6 +10,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -38,6 +39,11 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(20);
+/// The header carrying the bridge token.
+const TOKEN_HEADER: &str = "x-hya-bridge-token";
+/// The bridge's answer when the proxy says the room is not there (offline,
+/// or a rotated or wrong PSK: the proxy cannot be told apart from offline).
+const OFFLINE: &str = "remote backend is offline, or the relay link was rotated or is wrong (ask for a new link: `hya serve relay link`)";
 
 // ---- relay and test backend ----
 
@@ -97,6 +103,8 @@ impl Identity {
 
 struct Host {
     link: RelayLink,
+    /// Relay streams the proxy announced to this host (`Incoming` frames).
+    incoming: Arc<AtomicUsize>,
     /// Lets `/stream` send its second event.
     release: Arc<Notify>,
     task: JoinHandle<()>,
@@ -117,11 +125,15 @@ async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
         hya_relay::keys::OpenToken::derive(&identity.psk, &identity.room()).hash();
     let room = register_host(&mut control, &identity.key, &open_token_hash, WAIT)
         .await
-        .unwrap();
+        .unwrap()
+        .room()
+        .clone();
     assert_eq!(room, identity.room());
     let link = identity.link(relay);
     let release = Arc::new(Notify::new());
     let shared = release.clone();
+    let incoming_count = Arc::new(AtomicUsize::new(0));
+    let counter = incoming_count.clone();
     let task = tokio::spawn(async move {
         while let Some(Ok(frame)) = control.next().await {
             let ProxyToHost {
@@ -130,6 +142,7 @@ async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
             else {
                 continue;
             };
+            counter.fetch_add(1, Ordering::SeqCst);
             let client = client.clone();
             let identity = identity.clone();
             let room = room.clone();
@@ -172,6 +185,7 @@ async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
     });
     Host {
         link,
+        incoming: incoming_count,
         release,
         task,
     }
@@ -268,6 +282,13 @@ async fn app(
             let body = request.into_body().collect().await.unwrap().to_bytes();
             full(StatusCode::OK, "application/octet-stream", body)
         }
+        "/headers" => {
+            let mut text = String::new();
+            for (name, value) in request.headers() {
+                text.push_str(&format!("{name}: {}\n", value.to_str().unwrap_or("?")));
+            }
+            full(StatusCode::OK, "text/plain", text)
+        }
         "/stream" => {
             let (tx, rx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Infallible>>(4);
             tokio::spawn(async move {
@@ -311,6 +332,9 @@ async fn app(
 struct BridgeProcess {
     child: Child,
     first_line: String,
+    /// The bridge token (the JSON line's `token`, or the plain
+    /// `hya bridge token <token>` line).
+    token: String,
     stderr: Arc<Mutex<String>>,
 }
 
@@ -322,6 +346,23 @@ impl BridgeProcess {
 
     fn url(&self) -> String {
         self.json()["url"].as_str().unwrap().to_owned()
+    }
+
+    /// An HTTP client sending the bridge token on every request.
+    fn client(&self) -> reqwest::Client {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(TOKEN_HEADER, self.token.parse().unwrap());
+        reqwest::Client::builder()
+            .timeout(WAIT)
+            .default_headers(headers)
+            .build()
+            .unwrap()
+    }
+
+    /// `head` with the token header added after the request line.
+    fn authed(&self, head: &str) -> Vec<u8> {
+        let (line, rest) = head.split_once("\r\n").unwrap();
+        format!("{line}\r\n{TOKEN_HEADER}: {}\r\n{rest}", self.token).into_bytes()
     }
 
     fn stderr(&self) -> String {
@@ -399,10 +440,23 @@ async fn spawn_bridge(
         .unwrap_or_else(|_| panic!("no readiness line; stderr: {}", stderr.lock().unwrap()))
         .unwrap()
         .unwrap_or_else(|| panic!("the bridge exited; stderr: {}", stderr.lock().unwrap()));
+    let token = if let Ok(json) = serde_json::from_str::<Value>(&first_line) {
+        json["token"].as_str().unwrap_or_default().to_owned()
+    } else {
+        let line = timeout(WAIT, out_lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_or_default();
+        line.strip_prefix("hya bridge token ")
+            .unwrap_or_else(|| panic!("no token line: {line:?}"))
+            .to_owned()
+    };
     tokio::spawn(async move { while let Ok(Some(_)) = out_lines.next_line().await {} });
     BridgeProcess {
         child,
         first_line,
+        token,
         stderr,
     }
 }
@@ -471,7 +525,7 @@ async fn http_requests_cross_the_bridge_and_the_json_line_names_the_remote() {
         format!("remote: 127.0.0.1:{}/{}", relay.port(), host.link.room_id())
     );
 
-    let client = http();
+    let client = bridge.client();
     let health: Value = client
         .get(format!("{url}/v1/health"))
         .send()
@@ -509,11 +563,90 @@ async fn http_requests_cross_the_bridge_and_the_json_line_names_the_remote() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_without_the_token_is_refused_before_any_relay_stream() {
+    let (relay, _relay) = start_relay().await;
+    let host = start_host(relay, 10, Mode::Http).await;
+    let bridge = bridge_json(&host.link).await;
+    assert_eq!(bridge.token.len(), 64, "{}", bridge.first_line);
+    assert!(bridge.token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    // The start-up check opened one stream.
+    let before = host.incoming.load(Ordering::SeqCst);
+    let url = bridge.url();
+    let wrong = "0".repeat(64);
+    for request in [
+        http().get(format!("{url}/v1/health")),
+        http()
+            .get(format!("{url}/v1/health"))
+            .header(TOKEN_HEADER, &wrong),
+        http()
+            .get(format!("{url}/v1/health"))
+            .header("authorization", format!("Bearer {}", bridge.token)),
+        http()
+            .get(format!("{url}/v1/health"))
+            .header("origin", "https://evil.example"),
+    ] {
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), 401);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(TOKEN_HEADER),
+            "{body}"
+        );
+    }
+    // Not HTTP at all: reset, no stream either.
+    let (received, _) = raw(&url, b"\x16\x03\x01 not http\r\n\r\n").await;
+    assert!(received.is_empty());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        host.incoming.load(Ordering::SeqCst),
+        before,
+        "a refused connection opened a relay stream"
+    );
+    // With the token: through, and the header does not reach the backend.
+    let echoed = bridge
+        .client()
+        .get(format!("{url}/v1/health"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(echoed.status(), 200);
+    assert_eq!(host.incoming.load(Ordering::SeqCst), before + 1);
+    let (received, _) = raw(
+        &url,
+        &bridge.authed("POST /headers HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    let text = String::from_utf8_lossy(&received).to_ascii_lowercase();
+    assert!(text.starts_with("http/1.1 200"), "{text}");
+    assert!(text.contains("host: 127.0.0.1"), "{text}");
+    assert!(
+        !text.contains(TOKEN_HEADER),
+        "the token was forwarded: {text}"
+    );
+    let stderr = bridge.stderr();
+    assert!(stderr.contains("without the bridge token"), "{stderr}");
+    assert_eq!(
+        stderr.matches("without the bridge token").count(),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&bridge.token),
+        "the token was logged: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_streamed_response_arrives_as_it_is_written() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 2, Mode::Http).await;
     let bridge = bridge_json(&host.link).await;
-    let response = http()
+    let response = bridge
+        .client()
         .get(format!("{}/stream", bridge.url()))
         .send()
         .await
@@ -538,10 +671,10 @@ async fn a_websocket_upgrade_crosses_the_bridge() {
     let bridge = bridge_json(&host.link).await;
     let addr = bridge.url().trim_start_matches("http://").to_owned();
     let mut tcp = TcpStream::connect(addr).await.unwrap();
-    tcp.write_all(
-        b"GET /ws HTTP/1.1\r\nHost: bridge\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+    tcp.write_all(&bridge.authed(
+        "GET /ws HTTP/1.1\r\nHost: bridge\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
           Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
-    )
+    ))
     .await
     .unwrap();
     let mut head = Vec::new();
@@ -572,7 +705,8 @@ async fn an_offline_backend_answers_503_json_and_other_bytes_are_reset() {
     // Nobody registered this room.
     let link = Identity::new(4).link(relay);
     let bridge = bridge_json(&link).await;
-    let response = http()
+    let response = bridge
+        .client()
         .get(format!("{}/v1/health", bridge.url()))
         .send()
         .await
@@ -581,7 +715,7 @@ async fn an_offline_backend_answers_503_json_and_other_bytes_are_reset() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(
         body,
-        serde_json::json!({"error": {"code": "unavailable", "message": "remote backend is offline"}})
+        serde_json::json!({"error": {"code": "unavailable", "message": OFFLINE}})
     );
     // Not HTTP: the connection is reset, not answered.
     let (received, error) = raw(&bridge.url(), b"\x00\x01not http at all\r\n\r\n").await;
@@ -600,7 +734,11 @@ async fn a_truncated_response_resets_the_client_connection() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 5, Mode::Truncate).await;
     let bridge = bridge_json(&host.link).await;
-    let (_received, error) = raw(&bridge.url(), b"GET / HTTP/1.1\r\nHost: b\r\n\r\n").await;
+    let (_received, error) = raw(
+        &bridge.url(),
+        &bridge.authed("GET / HTTP/1.1\r\nHost: b\r\n\r\n"),
+    )
+    .await;
     assert_eq!(
         error.map(|e| e.kind()),
         Some(std::io::ErrorKind::ConnectionReset),
@@ -613,7 +751,11 @@ async fn a_tampered_response_resets_the_client_connection() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 6, Mode::Tamper).await;
     let bridge = bridge_json(&host.link).await;
-    let (received, error) = raw(&bridge.url(), b"GET / HTTP/1.1\r\nHost: b\r\n\r\n").await;
+    let (received, error) = raw(
+        &bridge.url(),
+        &bridge.authed("GET / HTTP/1.1\r\nHost: b\r\n\r\n"),
+    )
+    .await;
     assert!(received.is_empty(), "no tampered plaintext: {received:?}");
     assert_eq!(
         error.map(|e| e.kind()),
@@ -651,7 +793,9 @@ async fn the_link_comes_from_the_environment_and_listen_pins_the_port() {
         bridge.first_line,
         format!("hya bridge listening on http://127.0.0.1:{port}")
     );
-    let health = http()
+    assert_eq!(bridge.token.len(), 64);
+    let health = bridge
+        .client()
         .get(format!("http://127.0.0.1:{port}/v1/health"))
         .send()
         .await
@@ -680,13 +824,14 @@ async fn exit_with_stdin_stops_the_bridge_when_its_parent_goes_away() {
 async fn a_rejected_link_fails_at_start_without_printing_the_secret() {
     let (relay, _relay) = start_relay().await;
     let host = start_host(relay, 9, Mode::Http).await;
-    // Right room, wrong PSK: the backend rejects the handshake.
+    // Right room and PSK (the proxy admits it), wrong server key: the
+    // backend's handshake fails.
     let wrong = RelayLink::new(
         host.link.address().clone(),
         host.link.room_id().clone(),
         Transport::Auto,
-        *host.link.server_key(),
-        [0x42; 32],
+        *Identity::new(99).noise.public(),
+        *host.link.psk(),
     );
     let secret = wrong.to_secret_string();
     // A link given as an argument works but earns a warning (process listings).
@@ -699,4 +844,47 @@ async fn a_rejected_link_fails_at_start_without_printing_the_secret() {
     assert!(stderr.contains("process list"), "{stderr}");
     assert_no_secret(&stderr, &wrong);
     assert_no_secret(&String::from_utf8_lossy(&output.stdout), &wrong);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rotated_link_looks_offline_and_is_answered_503_without_the_secret() {
+    let (relay, _relay) = start_relay().await;
+    let host = start_host(relay, 11, Mode::Http).await;
+    // Right room, wrong (for example rotated) PSK: the proxy refuses its open
+    // token exactly like a room without a host, so the bridge starts and
+    // answers 503 with a message that names both causes.
+    let rotated = RelayLink::new(
+        host.link.address().clone(),
+        host.link.room_id().clone(),
+        Transport::Auto,
+        *host.link.server_key(),
+        [0x42; 32],
+    );
+    let secret = rotated.to_secret_string();
+    let mut bridge = spawn_bridge(bridge_command(&["--json", &secret]), None, false).await;
+    let response = bridge
+        .client()
+        .get(format!("{}/v1/health", bridge.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 503);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["message"], OFFLINE, "{body}");
+    assert_eq!(
+        host.incoming.load(Ordering::SeqCst),
+        0,
+        "a wrong open token never reaches the backend"
+    );
+    // SAFETY: `kill` has no memory-safety preconditions; the pid is our child.
+    unsafe {
+        libc::kill(bridge.pid(), libc::SIGTERM);
+    }
+    let _ = wait_exit(&mut bridge.child).await;
+    let stderr = bridge.stderr();
+    assert!(stderr.contains("rotated or is wrong"), "{stderr}");
+    assert!(stderr.contains("process list"), "{stderr}");
+    assert_no_secret(&stderr, &rotated);
+    assert_no_secret(&bridge.first_line, &rotated);
+    assert_no_secret(&body.to_string(), &rotated);
 }

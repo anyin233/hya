@@ -17,7 +17,7 @@
 //!   stream, a PTY WebSocket, a temporary session, `RelayControl` refused
 //!   from relay origin, key rotation (the running bridge is rejected, a new
 //!   bridge with the new link works), and shutdown (`serverStopping` on the
-//!   bridge-side SSE stream, then `503 remote backend is offline`).
+//!   bridge-side SSE stream, then `503 remote backend is offline, …`).
 //! - T2.37: TLS to the proxy (`hya://` link, private CA, `t=auto`): health,
 //!   a session, a prompt, and the same capture assertions.
 
@@ -53,6 +53,34 @@ const FINAL_MARKER: &str = "RELAY-FINAL-ANSWER-35e0c2";
 const PTY_MARKER: &str = "RELAYPTY-51f7ac";
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+/// `(bridge url, bridge token)` of every bridge started: each bridge
+/// requires its token (`x-hya-bridge-token`) on every connection.
+static BRIDGE_TOKENS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+/// The bridge token header.
+const BRIDGE_TOKEN_HEADER: &str = "x-hya-bridge-token";
+/// The bridge's 503 message when the proxy says the room is not there: an
+/// offline backend, or a rotated or wrong link (the proxy answers both
+/// alike).
+const OFFLINE_MESSAGE: &str = "remote backend is offline, or the relay link was rotated or is wrong (ask for a new link: `hya serve relay link`)";
+
+/// The token of the bridge `url` points at, if it is one.
+fn bridge_token(url: &str) -> Option<String> {
+    BRIDGE_TOKENS
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(bridge, _)| url.starts_with(bridge.as_str()))
+        .map(|(_, token)| token.clone())
+}
+
+/// `builder` with the bridge token of `url` when `url` is a bridge's.
+fn authed(builder: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+    match bridge_token(url) {
+        Some(token) => builder.header(BRIDGE_TOKEN_HEADER, token),
+        None => builder,
+    }
+}
 
 fn fixture_dir(label: &str) -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -273,6 +301,7 @@ impl Drop for Tls {
 
 struct Bridge {
     url: String,
+    token: String,
     room: String,
     _stdin: ChildStdin,
     _child: Child,
@@ -305,12 +334,19 @@ impl Bridge {
             .unwrap_or_else(|e| panic!("bridge readiness is JSON ({e}): {line}"));
         let url = ready["url"].as_str().expect("bridge url").to_owned();
         assert!(url.starts_with("http://127.0.0.1:"), "{ready}");
+        let token = ready["token"].as_str().expect("bridge token").to_owned();
+        assert_eq!(token.len(), 64, "{ready}");
+        BRIDGE_TOKENS
+            .lock()
+            .unwrap()
+            .push((url.clone(), token.clone()));
         assert!(
             !line.contains('#'),
             "the readiness line never holds the secret"
         );
         Self {
             url,
+            token,
             room: ready["room"].as_str().expect("bridge room").to_owned(),
             _stdin: stdin,
             _child: child,
@@ -359,10 +395,21 @@ async fn wait_relay_connected(env: &E2eEnv) {
     }
 }
 
-/// Point every client helper of `env` (typed client and raw JSON) at `url`.
-fn route_through(env: &mut E2eEnv, url: &str) {
-    env.backend.url = url.to_owned();
-    env.client = Client::new(url.to_owned());
+/// Point every client helper of `env` (typed client and raw JSON) at the
+/// bridge `bridge`, sending its token.
+fn route_through(env: &mut E2eEnv, bridge: &Bridge) {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        BRIDGE_TOKEN_HEADER,
+        bridge.token.parse().expect("token header value"),
+    );
+    let http = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .expect("bridge client");
+    env.backend.url = bridge.url.clone();
+    env.http = http.clone();
+    env.client = Client::with_http_client(bridge.url.clone(), http);
 }
 
 /// The link's secret parts as needles: the fragment, the PSK as base64url,
@@ -387,7 +434,7 @@ async fn fresh_get(url: &str) -> (u16, Value) {
         .pool_max_idle_per_host(0)
         .build()
         .unwrap();
-    match client.get(url).send().await {
+    match authed(client.get(url), url).send().await {
         Ok(response) => {
             let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
@@ -429,8 +476,7 @@ impl Sse {
     /// Open `url` and return once the response head arrived (the server
     /// subscribes before it answers, so no later frame is missed).
     async fn open(url: &str) -> Self {
-        let response = reqwest::Client::new()
-            .get(url)
+        let response = authed(reqwest::Client::new().get(url), url)
             .header("accept", "text/event-stream")
             .send()
             .await
@@ -479,8 +525,7 @@ impl Sse {
 }
 
 async fn post(url: &str, body: Value) -> (u16, Value) {
-    let response = reqwest::Client::new()
-        .post(url)
+    let response = authed(reqwest::Client::new().post(url), url)
         .json(&body)
         .send()
         .await
@@ -504,7 +549,15 @@ async fn pty_echo(bridge: &str, cwd: &Path) {
     assert_eq!(status, 200, "{token}");
     let path = token["url"].as_str().expect("connect url");
     let ws = format!("{}{path}", bridge.replacen("http://", "ws://", 1));
-    let (mut socket, response) = tokio_tungstenite::connect_async(ws)
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let mut upgrade = ws.into_client_request().expect("ws request");
+    if let Some(token) = bridge_token(bridge) {
+        upgrade.headers_mut().insert(
+            BRIDGE_TOKEN_HEADER,
+            token.parse().expect("token header value"),
+        );
+    }
+    let (mut socket, response) = tokio_tungstenite::connect_async(upgrade)
         .await
         .expect("PTY WebSocket upgrade through the bridge");
     assert_eq!(response.status(), 101);
@@ -584,8 +637,18 @@ async fn golden_path(binding: &str) {
     assert_eq!(status["binding"], json!(binding), "{status}");
 
     let bridge = Bridge::start(&link, None).await;
-    route_through(&mut env, &bridge.url);
+    route_through(&mut env, &bridge);
     let api = bridge.url.clone();
+
+    // Without the bridge token a connection is refused before any tunnel.
+    let refused = reqwest::Client::new()
+        .get(format!("{api}/v1/health"))
+        .send()
+        .await
+        .expect("request without the token");
+    assert_eq!(refused.status(), 401);
+    let body: Value = refused.json().await.expect("401 envelope");
+    assert_eq!(body["error"]["code"], json!("unauthenticated"), "{body}");
 
     // Bootstrap and health.
     let health = env
@@ -736,9 +799,7 @@ async fn golden_path(binding: &str) {
         |status, body| {
             status == 503
                 && body["error"]["code"] == "unavailable"
-                && body["error"]["message"]
-                    .as_str()
-                    .is_some_and(|m| m.contains("offline") || m.contains("rejected the relay link"))
+                && body["error"]["message"] == OFFLINE_MESSAGE
         },
     )
     .await;
@@ -746,13 +807,13 @@ async fn golden_path(binding: &str) {
     drop(bridge);
     wait_relay_connected(&env).await;
     let bridge = Bridge::start(&new_link, None).await;
-    route_through(&mut env, &bridge.url);
+    route_through(&mut env, &bridge);
     let api = bridge.url.clone();
     let health = env.get_json("/v1/health").await.expect("health, new link");
     assert_eq!(health["ok"], json!(true));
 
     // Shutdown: a bridge-side SSE client gets serverStopping, then the bridge
-    // answers 503 "remote backend is offline".
+    // answers 503 "remote backend is offline, or …".
     let global = Sse::open(&format!("{api}/v1/events/stream")).await;
     // SAFETY: `kill` has no memory-safety preconditions; the pid is our child.
     unsafe {
@@ -780,7 +841,7 @@ async fn golden_path(binding: &str) {
         |status, body| {
             status == 503
                 && body["error"]["code"] == "unavailable"
-                && body["error"]["message"] == "remote backend is offline"
+                && body["error"]["message"] == OFFLINE_MESSAGE
         },
     )
     .await;
@@ -845,7 +906,7 @@ async fn t2_37_relay_over_tls_with_a_private_ca() {
     );
     wait_relay_connected(&env).await;
     let bridge = Bridge::start(&link, Some(&tls.cert)).await;
-    route_through(&mut env, &bridge.url);
+    route_through(&mut env, &bridge);
 
     let health = env.get_json("/v1/health").await.expect("health over TLS");
     assert_eq!(health["ok"], json!(true));

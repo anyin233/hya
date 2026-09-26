@@ -1154,6 +1154,9 @@ fetch or preflight, or a browser WebSocket handshake — is refused with `403
 permission_denied` ("browser requests are not accepted over the relay")
 before any route runs.
 
+`RelayStatus.lastError` holds no terminal escape sequences or control
+characters (it may carry the relay's text).
+
 ## Minimal client walkthrough
 
 ```

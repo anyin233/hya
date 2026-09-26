@@ -216,6 +216,11 @@ fn serve_command(spec: &DaemonSpec, relay: &RelayFlags, dir: &std::path::Path) -
     for host in &spec.allow_hosts {
         command.args(["--allow-host", host]);
     }
+    // The daemon never inherits a relay link or a bridge token of the
+    // command that starts it (`hya --connect`, a TUI).
+    command
+        .env_remove(crate::bridge::LINK_ENV)
+        .env_remove(crate::bridge::TOKEN_ENV);
     if let Some(url) = &relay.relay {
         command.args(["--relay", url]);
         if let Some(transport) = &relay.relay_transport {
@@ -523,6 +528,20 @@ mod tests {
                 "--allow-host",
                 "192.168.1.20"
             ]
+        );
+        // Never the starter's relay link or bridge token.
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            removed.contains(&"HYA_RELAY_LINK".to_owned()),
+            "{removed:?}"
+        );
+        assert!(
+            removed.contains(&"HYA_SERVER_TOKEN".to_owned()),
+            "{removed:?}"
         );
         let plain = DaemonSpec {
             model: None,
