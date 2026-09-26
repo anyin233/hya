@@ -17,8 +17,10 @@ use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod agent_model_control;
 mod mcp_control;
+mod origin;
 mod pending;
 mod provider_control;
+pub mod relay_host;
 mod runs;
 mod session_list;
 mod state;
@@ -37,12 +39,14 @@ pub use agent_model_control::{
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
+pub use origin::Origin;
 pub use provider_control::{
     PROVIDER_CONTROL_FAILURE, PROVIDER_CONTROL_UNAVAILABLE, PROVIDER_INVALID_REQUEST,
     PROVIDER_NOT_FOUND, ProviderChange, ProviderControl, ProviderControlError,
     ProviderControlFuture, ProviderDiscoveryReport, ProviderKeySource, ProviderModelOverride,
     ProviderSettings, ProviderUpsert, valid_provider_id,
 };
+pub use relay_host::{RelayHost, RelayHostConfig, RelaySettings};
 pub use state::AppState;
 pub(crate) use state::ServerState;
 pub use streams::{ShutdownReason, StreamShutdown};

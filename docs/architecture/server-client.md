@@ -5,7 +5,7 @@ serves exactly one contract — `hya.v1` — over two transports:
 
 - **HTTP/JSON + SSE + WebSocket** (axum): the `/v1` routes generated from
   the `proto/hya/v1` IDL (`crates/hya-api`).
-- **gRPC** (tonic): `hya_server::V1Grpc` implements all seventeen generated
+- **gRPC** (tonic): `hya_server::V1Grpc` implements all eighteen generated
   services and dispatches every unary call through the *same* axum `/v1`
   router (protojson in, protojson out, stable error codes mapped from the
   JSON error body), so dual-transport parity holds by construction. The one

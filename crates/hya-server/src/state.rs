@@ -12,6 +12,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::provider_control::{EmptyProviderControl, ProviderControl};
+use crate::relay_host::RelayHost;
 use crate::session_list::SessionListHub;
 use crate::streams::StreamShutdown;
 use crate::support;
@@ -47,6 +48,7 @@ pub struct AppState {
     auto_title: bool,
     runs: runs::RunRegistry,
     session_list: SessionListHub,
+    relay: RelayHost,
 }
 
 impl AppState {
@@ -77,7 +79,25 @@ impl AppState {
             auto_title: false,
             runs: runs::RunRegistry::default(),
             session_list: SessionListHub::default(),
+            relay: RelayHost::default(),
         }
+    }
+
+    /// Install the relay host connector (ADR-0025) the `RelayControl` rpcs
+    /// drive. The default is a disconnected connector with an ephemeral
+    /// identity; the backend installs one with the database's identity
+    /// file.
+    #[must_use]
+    pub fn with_relay_host(mut self, relay: RelayHost) -> Self {
+        self.relay = relay;
+        self
+    }
+
+    /// The relay host connector shared by every router built from this
+    /// state.
+    #[must_use]
+    pub fn relay_host(&self) -> RelayHost {
+        self.relay.clone()
     }
 
     /// Directory under which temporary sessions get their scratch
@@ -264,6 +284,7 @@ pub(crate) struct ServerState {
     pub(crate) pure_guidance: bool,
     pub(crate) auto_title: bool,
     pub(crate) session_list: SessionListHub,
+    pub(crate) relay: RelayHost,
 }
 
 impl ServerState {
@@ -292,6 +313,7 @@ impl ServerState {
             pure_guidance: app.pure_guidance,
             auto_title: app.auto_title,
             session_list: app.session_list,
+            relay: app.relay,
         }
     }
 

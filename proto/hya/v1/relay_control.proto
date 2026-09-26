@@ -1,0 +1,130 @@
+// hya API v1 — control of the backend's secure-relay host connector
+// (ADR-0025; docs/relay.md "Hosting a backend on a relay").
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Joins, leaves, inspects, and re-keys the relay this backend is hosted on.
+// Not to be confused with `hya.relay.v1.Relay`, the proxy's own protocol.
+//
+// Loopback only: every rpc answers `permission_denied` to a request that
+// arrived through the relay (a link holder may not change the relay or
+// read or rotate the link away from the local owner), to a TCP peer that is
+// not a loopback address, and to a browser request (one with an `Origin`
+// or `Sec-Fetch-Site` header).
+service RelayControl {
+  // Join a relay: load (or create) the relay identity and keep a host
+  // control stream to `proxy_url`, reconnecting with backoff. Replaces any
+  // current relay connection. Returns once the connector runs, before the
+  // room is registered (see `GetRelayStatus`). `invalid_argument` for an
+  // unparsable `proxy_url` or `transport`, or an unreadable CA file.
+  //
+  // hya.http: POST /v1/relay/connect
+  rpc ConnectRelay(ConnectRelayRequest) returns (ConnectRelayResponse);
+
+  // Leave the relay: close the control stream (the proxy releases the room)
+  // and every open relay stream. Disconnecting while disconnected is not an
+  // error.
+  //
+  // hya.http: POST /v1/relay/disconnect
+  rpc DisconnectRelay(DisconnectRelayRequest) returns (RelayStatus);
+
+  // The connector's state. Never contains key material.
+  //
+  // hya.http: GET /v1/relay/status
+  rpc GetRelayStatus(GetRelayStatusRequest) returns (RelayStatus);
+
+  // The full relay link — a secret: whoever holds it controls this backend.
+  // `failed_precondition` while not connected to a relay.
+  //
+  // hya.http: GET /v1/relay/link
+  rpc GetRelayLink(GetRelayLinkRequest) returns (RelayLinkResponse);
+
+  // Issue a new pre-shared key: every earlier link fails its next
+  // handshake, and every open relay stream is closed. Persisted to the
+  // identity file unless the identity is ephemeral. `link` is empty while
+  // not connected. `failed_precondition` when there is no identity to
+  // rotate (an in-memory database that never connected).
+  //
+  // hya.http: POST /v1/relay/rotate
+  rpc RotateRelayKey(RotateRelayKeyRequest) returns (RelayLinkResponse);
+}
+
+message ConnectRelayRequest {
+  // The relay's public URL: `https://host[:port][/prefix]` (TLS to the
+  // first hop) or `http://…` (plaintext, LAN/tailnet/dev). The same forms
+  // with `hya://` and `hya+insecure://` are accepted.
+  string proxy_url = 1;
+  // Relay binding: `auto` (default when empty), `grpc`, or `ws`. Also the
+  // link's `t=` hint.
+  string transport = 2;
+  // A PEM file of extra trusted CA certificates (private CAs). Optional.
+  string extra_ca_path = 3;
+  // Use a throwaway identity for this connection instead of the database's
+  // identity file: the link dies with the connection.
+  bool ephemeral = 4;
+}
+
+message ConnectRelayResponse {
+  // The connector's state right after starting.
+  RelayStatus status = 1;
+  // The full relay link (secret).
+  string link = 2;
+}
+
+message DisconnectRelayRequest {}
+
+message GetRelayStatusRequest {}
+
+message GetRelayLinkRequest {}
+
+message RotateRelayKeyRequest {}
+
+// The host connector's state.
+enum RelayState {
+  RELAY_STATE_UNSPECIFIED = 0;
+  // Not joined to any relay.
+  RELAY_STATE_DISCONNECTED = 1;
+  // Opening the control stream or registering the room.
+  RELAY_STATE_CONNECTING = 2;
+  // The room is registered: clients holding the link can connect.
+  RELAY_STATE_CONNECTED = 3;
+  // The last attempt failed; waiting before the next (`last_error`).
+  RELAY_STATE_BACKOFF = 4;
+}
+
+message RelayStatus {
+  // Connector state.
+  RelayState state = 1;
+  // The relay's public URL (`https://host[:port][/prefix]`), empty while
+  // disconnected.
+  string proxy = 2;
+  // The room this backend owns on the relay (26 base32 characters).
+  string room_id = 3;
+  // The link without its secret part: `hya[+insecure]://host[:port][/prefix]/<room>`.
+  string redacted_link = 4;
+  // The configured binding: `auto`, `grpc`, or `ws`.
+  string transport = 5;
+  // The binding in use (`grpc` or `ws`), empty before the first
+  // negotiation.
+  string binding = 6;
+  // Why that binding: pinned, gRPC works, or why gRPC failed.
+  string binding_reason = 7;
+  // The last connection or registration failure, empty after success.
+  string last_error = 8;
+  // When the room was registered (unset unless connected).
+  google.protobuf.Timestamp connected_since = 9;
+  // Relay streams (client connections) currently served.
+  uint32 active_streams = 10;
+  // Whether the identity is a throwaway one (no identity file).
+  bool ephemeral = 11;
+}
+
+message RelayLinkResponse {
+  // The full relay link (secret); empty while not connected.
+  string link = 1;
+  // The connector's state.
+  RelayStatus status = 2;
+}

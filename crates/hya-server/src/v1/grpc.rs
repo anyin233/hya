@@ -1527,3 +1527,61 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
         )
     }
 }
+
+// ---------------------------------------------------------------------------
+// RelayControl (loopback-only: a non-loopback gRPC peer is refused here; the
+// in-process dispatch below carries no relay origin)
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::result_large_err)]
+fn require_loopback_peer<T>(request: &GrpcRequest<T>) -> Result<(), Status> {
+    match request.remote_addr() {
+        Some(peer) if !peer.ip().is_loopback() => Err(Status::permission_denied(
+            "relay control is loopback-only: refused for a non-loopback client",
+        )),
+        _ => Ok(()),
+    }
+}
+
+#[tonic::async_trait]
+impl pb::relay_control_server::RelayControl for V1Grpc {
+    async fn connect_relay(
+        &self,
+        request: GrpcRequest<pb::ConnectRelayRequest>,
+    ) -> Result<GrpcResponse<pb::ConnectRelayResponse>, Status> {
+        require_loopback_peer(&request)?;
+        unary!(self, "POST", "/v1/relay/connect", request)
+    }
+
+    async fn disconnect_relay(
+        &self,
+        request: GrpcRequest<pb::DisconnectRelayRequest>,
+    ) -> Result<GrpcResponse<pb::RelayStatus>, Status> {
+        require_loopback_peer(&request)?;
+        unary!(self, "POST", "/v1/relay/disconnect", request)
+    }
+
+    async fn get_relay_status(
+        &self,
+        request: GrpcRequest<pb::GetRelayStatusRequest>,
+    ) -> Result<GrpcResponse<pb::RelayStatus>, Status> {
+        require_loopback_peer(&request)?;
+        get_rpc!(self, "/v1/relay/status", request)
+    }
+
+    async fn get_relay_link(
+        &self,
+        request: GrpcRequest<pb::GetRelayLinkRequest>,
+    ) -> Result<GrpcResponse<pb::RelayLinkResponse>, Status> {
+        require_loopback_peer(&request)?;
+        get_rpc!(self, "/v1/relay/link", request)
+    }
+
+    async fn rotate_relay_key(
+        &self,
+        request: GrpcRequest<pb::RotateRelayKeyRequest>,
+    ) -> Result<GrpcResponse<pb::RelayLinkResponse>, Status> {
+        require_loopback_peer(&request)?;
+        unary!(self, "POST", "/v1/relay/rotate", request)
+    }
+}

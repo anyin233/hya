@@ -1679,6 +1679,7 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
+ "ed25519-dalek",
  "futures",
  "http-body-util",
  "hya-api",
@@ -1687,11 +1688,15 @@ dependencies = [
  "hya-mcp",
  "hya-proto",
  "hya-provider",
+ "hya-relay",
  "hya-store",
  "hya-tool",
+ "hyper",
+ "hyper-util",
  "libc",
  "mime_guess",
  "pbjson-types",
+ "rand_core 0.9.5",
  "regex",
  "serde",
  "serde_json",
@@ -1705,6 +1710,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ path segment.
 - [Process service](#service-process)
 - [Project service](#service-project)
 - [Pty service](#service-pty)
+- [RelayControl service](#service-relaycontrol)
 - [Session service](#service-session)
 - [Turn service](#service-turn)
 - [Workflow service](#service-workflow)
@@ -648,6 +649,61 @@ Mint a one-time token authorizing a terminal connection.
 
 Bidirectional terminal stream: client sends input/resize/ping,
 server replies output/exit/pong.
+
+
+## Service `RelayControl`
+
+Joins, leaves, inspects, and re-keys the relay this backend is hosted on.
+Not to be confused with `hya.relay.v1.Relay`, the proxy's own protocol.
+
+Loopback only: every rpc answers `permission_denied` to a request that
+arrived through the relay (a link holder may not change the relay or
+read or rotate the link away from the local owner), to a TCP peer that is
+not a loopback address, and to a browser request (one with an `Origin`
+or `Sec-Fetch-Site` header).
+
+| RPC | HTTP | gRPC | Request | Response |
+|---|---|---|---|---|
+| `ConnectRelay` | `POST /v1/relay/connect` | `hya.v1.RelayControl.ConnectRelay` | `ConnectRelayRequest` | `ConnectRelayResponse` |
+| `DisconnectRelay` | `POST /v1/relay/disconnect` | `hya.v1.RelayControl.DisconnectRelay` | `DisconnectRelayRequest` | `RelayStatus` |
+| `GetRelayStatus` | `GET /v1/relay/status` | `hya.v1.RelayControl.GetRelayStatus` | `GetRelayStatusRequest` | `RelayStatus` |
+| `GetRelayLink` | `GET /v1/relay/link` | `hya.v1.RelayControl.GetRelayLink` | `GetRelayLinkRequest` | `RelayLinkResponse` |
+| `RotateRelayKey` | `POST /v1/relay/rotate` | `hya.v1.RelayControl.RotateRelayKey` | `RotateRelayKeyRequest` | `RelayLinkResponse` |
+
+### `RelayControl.ConnectRelay`
+
+Join a relay: load (or create) the relay identity and keep a host
+control stream to `proxy_url`, reconnecting with backoff. Replaces any
+current relay connection. Returns once the connector runs, before the
+room is registered (see `GetRelayStatus`). `invalid_argument` for an
+unparsable `proxy_url` or `transport`, or an unreadable CA file.
+
+
+### `RelayControl.DisconnectRelay`
+
+Leave the relay: close the control stream (the proxy releases the room)
+and every open relay stream. Disconnecting while disconnected is not an
+error.
+
+
+### `RelayControl.GetRelayStatus`
+
+The connector's state. Never contains key material.
+
+
+### `RelayControl.GetRelayLink`
+
+The full relay link — a secret: whoever holds it controls this backend.
+`failed_precondition` while not connected to a relay.
+
+
+### `RelayControl.RotateRelayKey`
+
+Issue a new pre-shared key: every earlier link fails its next
+handshake, and every open relay stream is closed. Persisted to the
+identity file unless the identity is ephemeral. `link` is empty while
+not connected. `failed_precondition` when there is no identity to
+rotate (an in-memory database that never connected).
 
 
 ## Service `Session`
@@ -2556,6 +2612,49 @@ Server-to-client terminal frame.
 | `exit` (2) | `oneof `frame`: int32` | Session exit with the shell's exit code. |
 | `pong` (3) | `oneof `frame`: bool` | Liveness pong. |
 
+### `ConnectRelayRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `proxy_url` (1) | `string` | The relay's public URL: `https://host[:port][/prefix]` (TLS to the first hop) or `http://…` (plaintext, LAN/tailnet/dev). The same forms with `hya://` and `hya+insecure://` are accepted. |
+| `transport` (2) | `string` | Relay binding: `auto` (default when empty), `grpc`, or `ws`. Also the link's `t=` hint. |
+| `extra_ca_path` (3) | `string` | A PEM file of extra trusted CA certificates (private CAs). Optional. |
+| `ephemeral` (4) | `bool` | Use a throwaway identity for this connection instead of the database's identity file: the link dies with the connection. |
+
+### `ConnectRelayResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `status` (1) | `RelayStatus` | The connector's state right after starting. |
+| `link` (2) | `string` | The full relay link (secret). |
+
+### `RelayStatus`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `state` (1) | `RelayState` | Connector state. |
+| `proxy` (2) | `string` | The relay's public URL (`https://host[:port][/prefix]`), empty while disconnected. |
+| `room_id` (3) | `string` | The room this backend owns on the relay (26 base32 characters). |
+| `redacted_link` (4) | `string` | The link without its secret part: `hya[+insecure]://host[:port][/prefix]/<room>`. |
+| `transport` (5) | `string` | The configured binding: `auto`, `grpc`, or `ws`. |
+| `binding` (6) | `string` | The binding in use (`grpc` or `ws`), empty before the first negotiation. |
+| `binding_reason` (7) | `string` | Why that binding: pinned, gRPC works, or why gRPC failed. |
+| `last_error` (8) | `string` | The last connection or registration failure, empty after success. |
+| `connected_since` (9) | `google.protobuf.Timestamp` | When the room was registered (unset unless connected). |
+| `active_streams` (10) | `uint32` | Relay streams (client connections) currently served. |
+| `ephemeral` (11) | `bool` | Whether the identity is a throwaway one (no identity file). |
+
+### `RelayLinkResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `link` (1) | `string` | The full relay link (secret); empty while not connected. |
+| `status` (2) | `RelayStatus` | The connector's state. |
+
 ### `SessionRef`
 
 Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on
@@ -3250,6 +3349,18 @@ Change status of one file.
 | `VCS_FILE_STATUS_DELETED` | 3 | Deletion. |
 | `VCS_FILE_STATUS_RENAMED` | 4 | Rename. |
 | `VCS_FILE_STATUS_UNTRACKED` | 5 | Not tracked by VCS. |
+
+### `RelayState`
+
+The host connector's state.
+
+| Value | Number | Description |
+|---|---|---|
+| `RELAY_STATE_UNSPECIFIED` | 0 |  |
+| `RELAY_STATE_DISCONNECTED` | 1 | Not joined to any relay. |
+| `RELAY_STATE_CONNECTING` | 2 | Opening the control stream or registering the room. |
+| `RELAY_STATE_CONNECTED` | 3 | The room is registered: clients holding the link can connect. |
+| `RELAY_STATE_BACKOFF` | 4 | The last attempt failed; waiting before the next (`last_error`). |
 
 ### `SessionKind`
 

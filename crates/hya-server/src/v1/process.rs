@@ -122,13 +122,19 @@ fn merge_objects(base: Value, patch: Value) -> Value {
     }
 }
 
-async fn dispose() -> Result<Json<pb::DisposeProcessResponse>, V1Error> {
+async fn dispose(
+    extensions: axum::http::Extensions,
+) -> Result<Json<pb::DisposeProcessResponse>, V1Error> {
+    super::relay::refuse_relay_origin(&extensions, "stopping the backend")?;
     Err(V1Error::unavailable(
         "process disposal is owned by the host process supervisor; HTTP dispose is not wired",
     ))
 }
 
-async fn upgrade() -> Result<Json<pb::UpgradeProcessResponse>, V1Error> {
+async fn upgrade(
+    extensions: axum::http::Extensions,
+) -> Result<Json<pb::UpgradeProcessResponse>, V1Error> {
+    super::relay::refuse_relay_origin(&extensions, "upgrading the backend")?;
     Err(V1Error::unavailable(
         "self-update runs through the verified launcher updater; HTTP upgrade is not wired",
     ))
