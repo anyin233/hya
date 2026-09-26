@@ -653,9 +653,10 @@ trimmed. A legacy `offset: 0` maps to line 1; zero is not advertised.
 
 The workdir is absolutized and lexically normalized. Relative paths join the
 workdir; absolute paths remain absolute. `.` is removed and `..` pops one text
-component. Symlinks are not canonicalized for the external-directory check, so
-a symlink inside the workdir is not external solely because its target is
-outside. A lexically external Read authorizes one kind-blind parent wildcard
+component. The external-directory check then uses `ProjectScope` (ADR-0026):
+the path is inside when any workspace root contains it after symlink
+resolution, so a symlink inside a root whose target is elsewhere is external.
+An external Read authorizes one kind-blind lexical parent wildcard
 before metadata, existence, target-kind, normal Read permission, or missing-path
 details are observed.
 
@@ -870,8 +871,9 @@ Example:
 *** End Patch
 ```
 
-Every path in the envelope must be relative and must not escape the session
-workdir: an absolute path or a `..` component is an **input error**. Every
+Relative paths resolve against the session workdir; absolute paths are
+accepted. A `..` component, or a path outside every workspace root once
+symlinks are resolved (ADR-0026), is an **input error**. Every
 touched path (and move destination) is permission-checked as `Action::Edit`
 **before** any file is written, so a denial leaves the whole patch unapplied.
 ([crates/hya-tool/src/apply_patch/mod.rs](../../crates/hya-tool/src/apply_patch/mod.rs))
@@ -894,7 +896,7 @@ Operations (exact `operation` enum values):
 The call takes a file path (`filePath`) plus 1-based `line` and `character`
 (converted to LSP 0-based internally), plus an optional `query` used only by
 `workspaceSymbol`. The tool is `ToolPermission::ReadOnly`. It performs an
-`Action::ExternalDirectory` check for files outside the workdir, then
+`Action::ExternalDirectory` check for files outside every workspace root, then
 `Action::Lsp` on the resolved path. When no language server is registered for the
 file type, the tool returns a tool error whose message is
 `No LSP server available for this file type.`
@@ -910,8 +912,9 @@ GLOB, FIND, and GREP use native Rust traversal. GREP does not invoke `rg` or
 another external process. Search workers are deterministic and retain only
 bounded rows/metadata. GLOB and GREP check cancellation inside traversal work,
 not only between completed files. Relative roots resolve against the session
-workdir where the tool contract requires it; one kind-blind lexical external
-resource is authorized before metadata or target-kind probing.
+workdir where the tool contract requires it; a root outside every workspace
+root (judged by `ProjectScope`) authorizes one kind-blind lexical external
+resource before metadata or target-kind probing.
 
 ### GLOB and FIND
 
@@ -1005,10 +1008,10 @@ and Grep derive the containing lexical `<dir>/*` scope and authorize it before
 metadata/existence/target-kind probing; denied file and directory siblings use
 the same resource. Tool-specific permission follows, then filesystem work.
 Bash checks command permission before process creation and checks
-`ExternalDirectory` for an outside `cwd`. Paths are absolutized and lexically
-normalized without symlink canonicalization, preserving the existing symlink
-policy. A call-scoped invocation grant never satisfies the separate
-external-directory check.
+`ExternalDirectory` for a `cwd` outside the workdir. File-tool paths are absolutized
+and lexically normalized for the resource, and containment in the workspace
+roots is judged after symlink resolution. A call-scoped invocation grant never
+satisfies the separate external-directory check.
 
 At normal app startup, the action-level snapshot explicitly allows READ, GLOB,
 and GREP. Tools still make their own typed action/resource assertions. An

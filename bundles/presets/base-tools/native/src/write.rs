@@ -84,8 +84,8 @@ impl Tool for WriteTool {
         let workdir = normalize(&absolutize(&ctx.workdir));
         let requested_path = resolve_write_target(ctx, &workdir, &input.path)?;
 
-        // Keep the lexical permission boundary before any symlink resolution or I/O.
-        assert_external_file(ctx, &workdir, &requested_path).await?;
+        // Judge the Project-root boundary (symlinks resolved) before any I/O.
+        crate::fs_tools::assert_external_directory(ctx, &requested_path, false).await?;
         ctx.permission
             .assert(Action::Edit, Resource::Path(display_path(&requested_path)))
             .await?;
@@ -555,23 +555,6 @@ fn dedup_warnings(warnings: Vec<String>) -> Vec<String> {
         }
     }
     result
-}
-
-/// Require external-directory permission before mutating an outside path.
-async fn assert_external_file(ctx: &ToolCtx, workdir: &Path, path: &Path) -> Result<(), ToolError> {
-    if path.starts_with(workdir) {
-        return Ok(());
-    }
-    let parent = path
-        .parent()
-        .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
-    ctx.permission
-        .assert(
-            Action::ExternalDirectory,
-            Resource::Path(display_path(&parent.join("*"))),
-        )
-        .await?;
-    Ok(())
 }
 
 /// Compute a relative Write title, falling back to an absolute display path.

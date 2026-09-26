@@ -146,7 +146,7 @@ impl Tool for ReadTool {
         }
         let path = resolve_read_target(ctx, &workdir, file_path)?;
         check_cancel(ctx)?;
-        let external_result = assert_external_path(ctx, &workdir, &path).await;
+        let external_result = crate::fs_tools::assert_external_directory(ctx, &path, false).await;
         check_cancel(ctx)?;
         external_result?;
         check_cancel(ctx)?;
@@ -1084,33 +1084,6 @@ async fn similar_paths(path: &Path, cancel: &CancellationToken) -> Result<Vec<St
     suggestions.sort();
     suggestions.truncate(3);
     Ok(suggestions)
-}
-
-/// Require external-directory permission before reading an outside path.
-///
-/// # Parameters
-/// - `ctx`: Tool context carrying the permission plane.
-/// - `workdir`: Normalized session working directory.
-/// - `path`: Lexically resolved requested path.
-///
-/// The permission resource is based on the lexical parent for both files and directories.
-///
-/// # Returns
-/// Success when the path is inside the workdir or external access is allowed.
-async fn assert_external_path(ctx: &ToolCtx, workdir: &Path, path: &Path) -> Result<(), ToolError> {
-    if path.starts_with(workdir) {
-        return Ok(());
-    }
-    let directory = path
-        .parent()
-        .map_or_else(|| Path::new("/").to_path_buf(), Path::to_path_buf);
-    ctx.permission
-        .assert(
-            Action::ExternalDirectory,
-            Resource::Path(display_path(&directory.join("*"))),
-        )
-        .await?;
-    Ok(())
 }
 
 /// Normalize the hidden zero-offset compatibility spelling to line one.

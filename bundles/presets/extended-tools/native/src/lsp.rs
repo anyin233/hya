@@ -1,12 +1,10 @@
-use std::path::Path;
-
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::lsp_path::{absolutize, display_path, file_uri, normalize, resolve_file};
-use hya_tool::{Action, Resource};
+use hya_tool::{Action, ProjectScope, Resource};
 use hya_tool::{LspOperation, LspRequest};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
@@ -63,7 +61,11 @@ impl Tool for LspTool {
 
         let workdir = normalize(&absolutize(&ctx.workdir));
         let file = resolve_file(&workdir, &input.file_path);
-        assert_external_directory(ctx, &workdir, &file).await?;
+        ProjectScope::for_ctx(ctx)
+            .authorize(&ctx.permission, &file, |scope| {
+                scope.outside_dir_pattern(&file)
+            })
+            .await?;
         ctx.permission
             .assert(Action::Lsp, Resource::Path(display_path(&file)))
             .await?;
@@ -120,23 +122,4 @@ impl Tool for LspTool {
             "output": output,
         }))
     }
-}
-
-async fn assert_external_directory(
-    ctx: &ToolCtx,
-    workdir: &Path,
-    file: &Path,
-) -> Result<(), ToolError> {
-    if file.starts_with(workdir) {
-        return Ok(());
-    }
-    let parent = file.parent().unwrap_or(file);
-    let glob = parent.join("*");
-    ctx.permission
-        .assert(
-            Action::ExternalDirectory,
-            Resource::Path(display_path(&glob)),
-        )
-        .await?;
-    Ok(())
 }

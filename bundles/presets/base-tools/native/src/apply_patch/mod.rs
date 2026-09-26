@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::lsp_post_edit;
 use crate::utf8_bom;
-use hya_tool::{Action, Resource};
+use hya_tool::{Action, ProjectScope, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
 pub(crate) struct ApplyPatchTool;
@@ -54,6 +54,15 @@ impl Tool for ApplyPatchTool {
             return Err(ToolError::Other("patch rejected: empty patch".to_string()));
         }
 
+        // Every target must lie inside a Project root (ADR-0026), judged after
+        // symlink resolution, before any permission ask or file I/O.
+        let scope = ProjectScope::for_ctx(ctx);
+        for hunk in &hunks {
+            ensure_in_project(&scope, &ctx.workdir, hunk.path())?;
+            if let Some(move_path) = hunk.move_path() {
+                ensure_in_project(&scope, &ctx.workdir, move_path)?;
+            }
+        }
         for hunk in &hunks {
             let path = resolve_workdir_path(&ctx.workdir, hunk.path())?;
             ctx.permission
@@ -150,36 +159,44 @@ impl Tool for ApplyPatchTool {
     }
 }
 
+/// Resolve a patch path against the workdir.
+///
+/// Relative paths resolve against the workdir; absolute paths are kept. A
+/// `..` component is rejected so the checked and the written path agree.
 fn resolve_workdir_path(workdir: &Path, raw: &str) -> Result<PathBuf, ToolError> {
-    let raw_path = Path::new(raw);
-    if raw_path.is_absolute() {
-        return Err(ToolError::Input(
-            "apply_patch paths must be relative to the working directory".to_string(),
-        ));
-    }
-
     let mut normalized = PathBuf::new();
-    for component in raw_path.components() {
+    let mut named = false;
+    for component in Path::new(raw).components() {
         match component {
             Component::CurDir => {}
-            Component::Normal(part) => normalized.push(part),
+            Component::Normal(part) => {
+                named = true;
+                normalized.push(part);
+            }
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
             Component::ParentDir => {
                 return Err(ToolError::Input(
-                    "apply_patch paths must not escape the working directory".to_string(),
-                ));
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(ToolError::Input(
-                    "apply_patch paths must be relative to the working directory".to_string(),
+                    "apply_patch paths must not contain `..`".to_string(),
                 ));
             }
         }
     }
-
-    if normalized.as_os_str().is_empty() {
+    if !named {
         return Err(ToolError::Input("apply_patch path is empty".to_string()));
     }
     Ok(workdir.join(normalized))
+}
+
+/// Reject a patch path that lies outside every Project root.
+fn ensure_in_project(scope: &ProjectScope, workdir: &Path, raw: &str) -> Result<(), ToolError> {
+    let path = resolve_workdir_path(workdir, raw)?;
+    if scope.contains(&path) {
+        Ok(())
+    } else {
+        Err(ToolError::Input(format!(
+            "apply_patch path is outside the Project roots: {raw}"
+        )))
+    }
 }
 
 fn display_path(path: &Path) -> String {

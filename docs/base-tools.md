@@ -114,6 +114,46 @@ The loader enters each bundle's Tokio runtime for native future polls while
 the host runtime remains available to session planes. Bundled filesystem,
 process, timer, and HTTP operations use the bundle's reactor.
 
+### Path boundary
+
+The file tools (`read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`,
+`apply_patch`, and `lsp`) may touch anything inside the session's workspace
+roots without an extra ask. A Project session's roots are its Project's
+roots; any other session's single root is its workdir (ADR-0024, ADR-0026).
+Every tool uses one shared helper, `hya_tool::ProjectScope`, which resolves
+symlinks before deciding, so a link inside a root that points elsewhere counts
+as outside.
+
+A path outside every root raises an `ExternalDirectory` ask for a concrete
+`<dir>/*` pattern, before the tool's normal `read`/`edit` check. `apply_patch`
+refuses such a path with an input error instead of asking.
+
+For example, with roots `/work/app` and `/work/lib` and workdir `/work/app`,
+`read {"path": "/work/lib/src/mod.rs"}` runs without asking, while
+`read {"path": "/etc/hosts"}` asks `ExternalDirectory` for `/etc/*`, and in
+yolo (`danger`) mode runs without asking.
+
+```rust
+use std::path::{Path, PathBuf};
+use hya_tool::ProjectScope;
+
+let roots = [PathBuf::from("/work/app"), PathBuf::from("/work/lib")];
+let scope = ProjectScope::new(Path::new("/work/app"), &roots);
+let inside = scope.contains(Path::new("/work/lib/src/mod.rs"));
+let ask = scope.outside_dir_pattern(Path::new("/etc/hosts")); // "/etc/*"
+```
+
+`ProjectScope` interface (`crates/hya-tool/src/project_scope.rs`):
+
+| Item | Contract |
+| --- | --- |
+| `ProjectScope::new(workdir, roots)` | Canonicalizes each root once; an unresolvable root keeps its lexical absolute form; empty `roots` means `[workdir]`. |
+| `ProjectScope::for_ctx(ctx)` | `new(&ctx.workdir, &ctx.roots)`. |
+| `contains(path) -> bool` | Relative paths resolve against the workdir. Canonicalizes the path, or its nearest existing ancestor plus the missing remainder (a `..` in the remainder is outside). Component-wise containment in any root. Unreadable paths and symlink loops are outside. |
+| `outside_dir_pattern(path) -> String` | `<lexical parent>/*`, the file-tool ask resource. |
+| `outside_directory_pattern(dir) -> String` | `<dir>/*`, the directory-tool (`ls`, `find`) ask resource. |
+| `authorize(plane, path, pattern)` | Asks `ExternalDirectory` for `pattern(scope)` unless `contains(path)`. |
+
 ## Interface definitions
 
 The companion policy has this closed shape:
