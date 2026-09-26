@@ -642,6 +642,18 @@ impl RuntimeRegistry {
             .map(|entry| Arc::clone(&entry.overlay))
     }
 
+    /// Whether a live [`TurnBinding`] still retains the composed snapshot
+    /// of scope `key` (a turn of that scope is in flight). `false` when the
+    /// scope has no overlay.
+    #[must_use]
+    pub fn scope_in_use(&self, key: &ScopeKey) -> bool {
+        self.scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .is_some_and(|entry| Arc::strong_count(&entry.snapshot) > 1)
+    }
+
     /// Keys of every published scope overlay, sorted.
     #[must_use]
     pub fn scope_keys(&self) -> Vec<ScopeKey> {
@@ -751,49 +763,13 @@ impl RuntimeRegistry {
     /// endpoints. The returned handle retains that generation's process.
     #[must_use]
     pub fn bundle_apis(&self, bundle_id: &str) -> Option<crate::bundle_apis::SourceApis> {
-        let active = self.active();
-        if !active
-            .catalog
-            .bundles()
-            .bundles()
-            .iter()
-            .any(|bundle| bundle.identity().id == bundle_id)
-        {
-            return None;
-        }
-        active
-            .sources
-            .get(&RuntimeSourceId::bundle(bundle_id))?
-            .apis
-            .clone()
+        snapshot_bundle_apis(&self.active(), bundle_id)
     }
 
     /// Every published bundle's declared endpoints, sorted by bundle id.
     #[must_use]
     pub fn published_bundle_apis(&self) -> Vec<crate::bundle_apis::PublishedBundleApis> {
-        let active = self.active();
-        active
-            .sources
-            .iter()
-            .filter(|(id, _)| id.kind() == RuntimeSourceKind::Bundle)
-            .filter(|(id, _)| {
-                active
-                    .catalog
-                    .bundles()
-                    .bundles()
-                    .iter()
-                    .any(|bundle| bundle.identity().id == id.configured_id())
-            })
-            .filter_map(|(id, source)| {
-                source
-                    .apis
-                    .as_ref()
-                    .map(|apis| crate::bundle_apis::PublishedBundleApis {
-                        bundle: id.configured_id().to_string(),
-                        apis: apis.apis.clone(),
-                    })
-            })
-            .collect()
+        snapshot_published_bundle_apis(&self.active())
     }
 
     /// Every published bundle's declared session permission modes, sorted
@@ -1867,6 +1843,53 @@ fn sources_match(
         })
 }
 
+fn snapshot_bundle_apis(
+    snapshot: &RuntimeSnapshot,
+    bundle_id: &str,
+) -> Option<crate::bundle_apis::SourceApis> {
+    if !snapshot
+        .catalog
+        .bundles()
+        .bundles()
+        .iter()
+        .any(|bundle| bundle.identity().id == bundle_id)
+    {
+        return None;
+    }
+    snapshot
+        .sources
+        .get(&RuntimeSourceId::bundle(bundle_id))?
+        .apis
+        .clone()
+}
+
+fn snapshot_published_bundle_apis(
+    snapshot: &RuntimeSnapshot,
+) -> Vec<crate::bundle_apis::PublishedBundleApis> {
+    snapshot
+        .sources
+        .iter()
+        .filter(|(id, _)| id.kind() == RuntimeSourceKind::Bundle)
+        .filter(|(id, _)| {
+            snapshot
+                .catalog
+                .bundles()
+                .bundles()
+                .iter()
+                .any(|bundle| bundle.identity().id == id.configured_id())
+        })
+        .filter_map(|(id, source)| {
+            source
+                .apis
+                .as_ref()
+                .map(|apis| crate::bundle_apis::PublishedBundleApis {
+                    bundle: id.configured_id().to_string(),
+                    apis: apis.apis.clone(),
+                })
+        })
+        .collect()
+}
+
 fn published_permission_modes(
     snapshot: &RuntimeSnapshot,
 ) -> Vec<crate::permission_mode::PublishedPermissionMode> {
@@ -1897,6 +1920,30 @@ fn published_permission_modes(
 }
 
 impl TurnBinding {
+    /// The API endpoints `bundle_id` serves in this binding's generation
+    /// (its scope's view: a Project binding sees the Project's bundles).
+    /// `None` when the bundle is not in the catalog or declares no endpoints.
+    #[must_use]
+    pub fn bundle_apis(&self, bundle_id: &str) -> Option<crate::bundle_apis::SourceApis> {
+        snapshot_bundle_apis(&self.snapshot, bundle_id)
+    }
+
+    /// Every bundle's declared endpoints in this binding's generation,
+    /// sorted by bundle id.
+    #[must_use]
+    pub fn published_bundle_apis(&self) -> Vec<crate::bundle_apis::PublishedBundleApis> {
+        snapshot_published_bundle_apis(&self.snapshot)
+    }
+
+    /// Every bundle's declared session permission modes in this binding's
+    /// generation, sorted by bundle id then mode id.
+    #[must_use]
+    pub fn published_permission_modes(
+        &self,
+    ) -> Vec<crate::permission_mode::PublishedPermissionMode> {
+        published_permission_modes(&self.snapshot)
+    }
+
     /// The declaring bundle's process hooks when `bundle_id` publishes the
     /// session permission mode `mode` in this generation; `None` when the
     /// bundle is gone, no longer declares the mode, or has no process.

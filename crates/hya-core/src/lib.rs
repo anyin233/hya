@@ -117,11 +117,11 @@ pub use completion::{
 };
 pub use engine::{
     AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
-    BoundWorkflowSender, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError, MAX_DIRTY_BYTES,
-    MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT, ModelProbeReply,
-    RevertError, RevertOutcome, RevertTarget, RuntimeCatalogRefresh, SessionEngine,
-    SpawnAdmissionOutcome, TurnBoundaryObserver, TurnDrainReport, TurnLease, advertise_tool,
-    fork_cut,
+    BoundWorkflowSender, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
+    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
+    ModelProbeReply, RevertError, RevertOutcome, RevertTarget, RuntimeCatalogRefresh,
+    SessionEngine, SpawnAdmissionOutcome, TurnBoundaryObserver, TurnDrainReport, TurnLease,
+    advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{
