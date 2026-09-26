@@ -443,7 +443,7 @@ async fn bash_clamps_positive_timeout_bounds_and_reports_a_notice() {
 }
 
 #[tokio::test]
-async fn bash_checks_command_permission_before_external_cwd_permission() {
+async fn bash_denied_command_does_not_run_in_an_outside_cwd() {
     // Given
     let dir = tempdir();
     let outside = tempdir();
@@ -478,46 +478,15 @@ async fn bash_checks_command_permission_before_external_cwd_permission() {
 }
 
 #[tokio::test]
-async fn bash_requires_external_directory_permission_for_outside_cwd() {
-    // Given
+async fn bash_runs_in_a_cwd_outside_the_roots_without_an_external_directory_check() {
+    // Given: bash has no path boundary (ADR-0026), so even a blanket
+    // ExternalDirectory deny must not stop a command whose cwd is elsewhere.
     let dir = tempdir();
     let outside = tempdir();
     let ctx = ctx_with(
         vec![
             allow(Action::Bash, "*"),
             deny(Action::ExternalDirectory, "*"),
-        ],
-        dir,
-    );
-    let tool = ToolRegistry::builtins().get("bash").unwrap();
-
-    // When
-    let result = execute_with_guard(
-        tool.as_ref(),
-        &ctx,
-        json!({ "command": "pwd", "cwd": outside.to_string_lossy() }),
-    )
-    .await;
-
-    // Then
-    assert!(matches!(
-        result,
-        Err(ToolError::Permission(hya_tool::PermissionError::Denied {
-            action: Action::ExternalDirectory,
-            ..
-        }))
-    ));
-}
-
-#[tokio::test]
-async fn bash_allows_external_cwd_when_external_permission_is_granted() {
-    // Given
-    let dir = tempdir();
-    let outside = tempdir();
-    let ctx = ctx_with(
-        vec![
-            allow(Action::Bash, "*"),
-            allow(Action::ExternalDirectory, "*"),
         ],
         dir,
     );

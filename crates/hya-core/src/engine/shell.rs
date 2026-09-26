@@ -44,8 +44,8 @@ struct ShellPart {
 /// still win, and the `ToolExecuteBefore` veto runs before authorization.
 /// It short-circuits the plugin `permission.ask` bridge and a bundle mode's
 /// `permission.approve` approver, since neither may override the user's own
-/// decision. `ExternalDirectory` checks are deferred, so a command whose cwd
-/// leaves the workdir still asks. Model-issued `bash` calls never see it.
+/// decision. Other actions are deferred; `bash` itself has no path boundary
+/// (ADR-0026). Model-issued `bash` calls never see it.
 struct UserShellApproval;
 
 #[async_trait::async_trait]
