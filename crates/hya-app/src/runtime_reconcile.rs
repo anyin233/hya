@@ -978,12 +978,16 @@ impl hya_server::McpControl for RuntimeMcpControl {
                 .reconciler
                 .upsert_mcp(name, config)
                 .map_err(|error| error.to_string())?;
-            self.reconcile_plan(plan)
-                .await
-                .map(|outcome| {
+            match self.reconcile_plan(plan).await {
+                Ok(outcome) => {
                     trace_publication(&outcome);
-                })
-                .map_err(|error| error.to_string())
+                    Ok(())
+                }
+                // The server is stored and its status is FAILED with this
+                // error; the add itself succeeded.
+                Err(ReconcileError::PreparationFailed { .. }) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            }
         })
     }
 
@@ -996,13 +1000,15 @@ impl hya_server::McpControl for RuntimeMcpControl {
             else {
                 return Ok(false);
             };
-            self.reconcile_plan(plan)
-                .await
-                .map(|outcome| {
+            match self.reconcile_plan(plan).await {
+                Ok(outcome) => {
                     trace_publication(&outcome);
-                    true
-                })
-                .map_err(|error| error.to_string())
+                    Ok(true)
+                }
+                // A connect failure is the server's FAILED status.
+                Err(ReconcileError::PreparationFailed { .. }) => Ok(true),
+                Err(error) => Err(error.to_string()),
+            }
         })
     }
 
@@ -1316,6 +1322,62 @@ mod tests {
                 permission,
             )],
         )
+    }
+
+    /// `POST /v1/mcp` semantics: a server that cannot start is stored and
+    /// reported FAILED with its error (the add succeeds), and a disabled
+    /// server is stored without connecting.
+    #[tokio::test]
+    async fn mcp_add_keeps_failed_servers_and_never_connects_disabled() -> anyhow::Result<()> {
+        use hya_mcp::McpStatus;
+        use hya_server::McpControl as _;
+
+        let registry = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            crate::runtime::builtin_agent_catalog()?,
+        ));
+        let control = super::RuntimeMcpControl::new(Arc::new(RuntimeReconciler::new(registry)));
+        let broken = McpServerConfig {
+            command: vec!["/nonexistent/hya-mcp-missing-binary".to_string()],
+            ..McpServerConfig::default()
+        };
+        control
+            .upsert("broken".to_string(), broken.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let status = control.status().await;
+        assert!(
+            matches!(status.get("broken"), Some(McpStatus::Failed { error }) if !error.is_empty()),
+            "{status:?}"
+        );
+
+        control
+            .upsert(
+                "off".to_string(),
+                McpServerConfig {
+                    enabled: Some(false),
+                    ..broken
+                },
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let status = control.status().await;
+        assert_eq!(status.get("off"), Some(&McpStatus::Disabled), "{status:?}");
+
+        // Enabling the disabled server tries to connect; its failure is a
+        // FAILED status, not an error.
+        assert!(
+            control
+                .set_enabled("off".to_string(), true)
+                .await
+                .map_err(anyhow::Error::msg)?
+        );
+        let status = control.status().await;
+        assert!(
+            matches!(status.get("off"), Some(McpStatus::Failed { .. })),
+            "{status:?}"
+        );
+        Ok(())
     }
 
     #[test]

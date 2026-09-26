@@ -263,6 +263,7 @@ async fn model_summaries_carry_context_and_output_limits() {
         },
         reasoning_variants: Vec::new(),
         reasoning_default: None,
+        reasoning: None,
         display_name: None,
         source: ModelCatalogSource::Configured,
     };
@@ -552,12 +553,14 @@ async fn manual_compaction_streams_and_records_compaction_applied() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // The response names the strategy the recorded event carries.
+    assert_eq!(body["strategy"], json!("local_summarizer"), "{body}");
 
     let frames = collector.await.unwrap();
     let applied = of_kind(frame_events(&frames), "compactionApplied");
     assert_eq!(applied.len(), 1, "{frames:#?}");
     let applied = &applied[0];
-    assert_eq!(applied["strategy"], json!("LocalSummarizer"), "{applied}");
+    assert_eq!(applied["strategy"], json!("local_summarizer"), "{applied}");
     assert_eq!(applied["manual"], json!(true), "{applied}");
     assert_eq!(applied["foldedCount"], json!(4), "{applied}");
 
@@ -611,5 +614,6 @@ async fn manual_compaction_streams_and_records_compaction_applied() {
     .await
     .expect("compactionApplied over gRPC");
     assert!(applied.manual);
+    assert_eq!(applied.strategy, "local_summarizer");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -4,13 +4,15 @@
 
 use std::collections::BTreeMap;
 
+use axum::Router;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+
+use super::Json;
 use futures::{SinkExt, StreamExt};
 
 use crate::ServerState;

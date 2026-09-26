@@ -727,8 +727,9 @@ into the cache before printing; a failed fetch is reported on stderr as
 `hya: <provider>: model list <result>: <error>` and keeps the old rows.
 
 With `--verbose`, each id is followed by a JSON line with `id`, `provider`,
-`source` (`remote`, `config`, `override`, or `offline`), `name` (when known),
-`context`, `output` (when known), and `reasoning`:
+`source` (`remote`, `config`, `override`, or `offline`), and — each only when
+the model's metadata (config entry or remote model list) declares it —
+`name`, `context`, `output`, and `reasoning`:
 
 ```sh
 $ hya models openrouter --verbose

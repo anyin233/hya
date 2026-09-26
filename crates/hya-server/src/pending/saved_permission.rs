@@ -1,19 +1,9 @@
 use hya_store::{SavedPermission, SessionStore, StoreError};
 use hya_tool::Action;
-use serde::Serialize;
 
 #[derive(Clone)]
 pub(crate) struct SavedPermissions {
     store: SessionStore,
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct SavedPermissionInfo {
-    id: String,
-    #[serde(rename = "projectID")]
-    project_id: String,
-    action: String,
-    resource: String,
 }
 
 impl SavedPermissions {
@@ -23,18 +13,20 @@ impl SavedPermissions {
         Self { store }
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn list(
         &self,
         project_id: Option<&str>,
-    ) -> Result<Vec<SavedPermissionInfo>, StoreError> {
-        let saved = self.store.list_saved_permissions(project_id).await?;
-        Ok(saved.into_iter().map(SavedPermissionInfo::from).collect())
+    ) -> Result<Vec<SavedPermission>, StoreError> {
+        self.store.list_saved_permissions(project_id).await
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn remove(&self, id: &str) -> Result<(), StoreError> {
-        self.store.remove_saved_permission(id).await
+    /// Delete a grant, returning the removed row (`None` when absent).
+    pub(crate) async fn remove(&self, id: &str) -> Result<Option<SavedPermission>, StoreError> {
+        let row = self.store.saved_permission(id).await?;
+        if row.is_some() {
+            self.store.remove_saved_permission(id).await?;
+        }
+        Ok(row)
     }
 
     #[allow(dead_code)]
@@ -44,37 +36,16 @@ impl SavedPermissions {
         action: Action,
         resource: String,
     ) -> Result<(), StoreError> {
-        let entry = SavedPermissionInfo {
+        // Grants are process-wide (the permission plane is shared by every
+        // session and project), so rows are stored under the "global" scope.
+        let entry = SavedPermission {
             id: format!("psv_{request_id}"),
             project_id: "global".to_string(),
             action: action_name(action),
             resource,
+            time_created_ms: None,
         };
-        self.store
-            .save_permission(&SavedPermission::from(entry))
-            .await
-    }
-}
-
-impl From<SavedPermission> for SavedPermissionInfo {
-    fn from(entry: SavedPermission) -> Self {
-        Self {
-            id: entry.id,
-            project_id: entry.project_id,
-            action: entry.action,
-            resource: entry.resource,
-        }
-    }
-}
-
-impl From<SavedPermissionInfo> for SavedPermission {
-    fn from(entry: SavedPermissionInfo) -> Self {
-        Self {
-            id: entry.id,
-            project_id: entry.project_id,
-            action: entry.action,
-            resource: entry.resource,
-        }
+        self.store.save_permission(&entry).await
     }
 }
 
@@ -83,4 +54,9 @@ pub(super) fn action_name(action: Action) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Parse a saved row's action name back into an [`Action`].
+pub(crate) fn parse_action(name: &str) -> Option<Action> {
+    serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
 }

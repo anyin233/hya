@@ -3,10 +3,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+
+use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;
@@ -162,17 +164,47 @@ fn file_status(file: &crate::support::git::FileStatus) -> i32 {
 
 async fn get_vcs_diff(
     State(_st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
+    Query(query): Query<Vec<(String, String)>>,
     headers: HeaderMap,
 ) -> Result<Json<pb::GetVcsDiffResponse>, V1Error> {
-    let request: pb::GetVcsDiffRequest = super::query_request(&[], &query)?;
+    let request: pb::GetVcsDiffRequest =
+        super::query_request_pairs(&[], query.iter().map(|(k, v)| (k, v)), &["paths"])?;
     let workdir = scope_directory(&headers, &request.directory);
+    let paths = diff_paths(&request.paths)?;
+    // `raw` is accepted and ignored: the diff is always git's unified patch.
     let diff = if crate::support::git::is_repo(&workdir) {
-        crate::support::git::raw_diff(&workdir).map_err(V1Error::from)?
+        crate::support::git::raw_diff(&workdir, &paths).map_err(V1Error::from)?
     } else {
         String::new()
     };
     Ok(Json(pb::GetVcsDiffResponse { diff }))
+}
+
+/// Validate `GetVcsDiff.paths`: relative paths inside the scope directory.
+/// Empty entries are dropped; an empty result diffs everything.
+fn diff_paths(paths: &[String]) -> Result<Vec<String>, V1Error> {
+    let mut out = Vec::new();
+    for path in paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|p| !p.is_empty())
+    {
+        let escapes = std::path::Path::new(path).components().any(|part| {
+            matches!(
+                part,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        });
+        if escapes {
+            return Err(V1Error::invalid_argument(format!(
+                "diff path must be relative to the repository: {path}"
+            )));
+        }
+        out.push(path.to_owned());
+    }
+    Ok(out)
 }
 
 async fn apply_patch(

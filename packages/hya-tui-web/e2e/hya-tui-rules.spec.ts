@@ -24,14 +24,14 @@ test.describe("hya TUI Saved Rules view", () => {
     await prompt(term, "/rules")
     await term.waitForText("Saved Rules")
     await term.waitForText(/EFFECT\s+TOOL\s+PATTERN\s+SAVED/)
-    await term.waitForText(/ask\s+bash/)
+    await term.waitForText(/allow\s+bash/)
     await term.waitForText("↑↓ move · d delete · r refresh · / filter · Esc close")
 
     await term.press("d")
     await term.waitForText(/Delete bash .*\? Enter confirms · Esc cancels/)
     await term.press("Enter")
     await term.waitForText(/Deleted rule/)
-    await expect.poll(() => term.find("ask    bash")).toBeNull()
+    await expect.poll(async () => /allow\s+bash/.test(await term.text())).toBe(false)
 
     await term.press("Escape")
     await term.waitForText("Enter a prompt · /new creates a session")
@@ -46,7 +46,7 @@ test.describe("hya TUI Saved Rules view", () => {
     await term.waitForText("Ran it.", 20_000)
 
     await prompt(term, "/rules")
-    await term.waitForText(/ask\s+bash/)
+    await term.waitForText(/allow\s+bash/)
     await term.press("d")
     await term.waitForText("Enter confirms · Esc cancels")
     await term.press("Escape")

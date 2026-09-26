@@ -1,5 +1,16 @@
 # 0.41.0
 
+## Server fixes: saved rules, compaction names, stream filters, bad request bodies, MCP add
+
+- Saved permission rules now report `allow` and when they were saved. `tool` and `pattern` name the tool or command they allow. Saved grants now survive a server restart, and deleting a rule revokes it at once. Rules stay global; `directory` is ignored.
+- Compaction strategy names are now stable snake_case: `native`, `local_summarizer`, `snap_compact`, or `handoff`. `/compact` (`CompactSession`) and `CompactionApplied` both report `local_summarizer` for a manual compaction; before, one said `soft` and the other `LocalSummarizer`. `untilSeq` is deprecated and ignored.
+- `GET /v1/vcs/diff` honors `paths`, given as pathspecs relative to the directory.
+- `GET /v1/events/stream?interactionsOnly=true` sends only permission and question frames, plus a new live `catalogUpdated` frame. `catalogUpdated` also reaches session streams whenever providers, keys, or model lists change.
+- A request body that can't be decoded now returns a v1 `invalid_argument` JSON error on every route, instead of a plain-text 422, 400, or 415.
+- Models that report no context limit or reasoning support now show those fields as unknown instead of a made-up `200000` and `reasoning: true`. The runtime still assumes 200000 for compaction.
+- `POST /v1/mcp` keeps a server that fails to start as `FAILED` with its error, instead of failing the request. Connect errors now return `unavailable` instead of `not_found`.
+- A forked session is titled `<source title> (fork)`, and auto-titling leaves that title alone. See [Protocol guide](docs/protocol/README.md).
+
 ## TUI image attachments
 
 - Mention an image file with `@path` (png, jpg, jpeg, gif, webp) and it is sent with the prompt. The `@path` text stays in the prompt. Pasting an image file's path, even quoted or with escaped spaces, inserts the mention.

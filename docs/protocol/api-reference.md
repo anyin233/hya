@@ -374,12 +374,19 @@ Status of every configured MCP server in a directory.
 
 ### `Mcp.AddMcpServer`
 
-Add (or replace) one MCP server in desired state.
+Add (or replace) one MCP server in desired state. The server is stored
+even when it cannot start: a spawn or handshake failure is answered
+with `state: MCP_SERVER_STATE_FAILED` and `error` (the call succeeds).
+With `enabled: false` the server is stored without connecting
+(`MCP_SERVER_STATE_DISCONNECTED`). Re-adding an unchanged config does
+not reconnect.
 
 
 ### `Mcp.ConnectMcp`
 
-Connect one MCP server now.
+Enable and connect one MCP server now. A connect failure is answered
+with `state: MCP_SERVER_STATE_FAILED` and `error`; an unknown name is
+`not_found`.
 
 
 ### `Mcp.DisconnectMcp`
@@ -1008,10 +1015,10 @@ One selectable model.
 | `provider_id` (2) | `string` | Provider identifier. |
 | `model_id` (3) | `string` | Provider-local model identifier. |
 | `display_name` (4) | `string` | Display name when the provider publishes one. |
-| `reasoning` (5) | `bool` | Whether the route supports reasoning effort variants. |
+| `reasoning` (5) | `optional bool` | Whether the model supports reasoning effort variants, as declared by its metadata (the remote model list or the config `reasoning` field); unset when unknown. An unknown model still accepts the provider family's effort variants at runtime. |
 | `auth` (6) | `AuthStatus` | Auth state of the owning provider route. |
-| `context_limit` (7) | `uint64` | Context window of the route in tokens: the configured `limit.context`, else the route's advertised default. 0 when unknown. |
-| `output_limit` (8) | `uint64` | Maximum output tokens (`limit.output`); 0 when unknown. |
+| `context_limit` (7) | `uint64` | Context window in tokens from the model's metadata (config `limit.context`, else the remote model list); 0 (omitted) when unknown. With no known window the runtime sizes compaction against a 200000-token fallback. |
+| `output_limit` (8) | `uint64` | Maximum output tokens from the model's metadata (config `limit.output`, else the remote model list); 0 (omitted) when unknown. |
 | `source` (9) | `string` | Where the row comes from: `remote` (the provider's remote model list, via the model cache), `config` (only a `models:` entry in `config.yaml`), `override` (both; config fields win field by field), or `offline` (the built-in `hya/offline` row). |
 | `image_input` (10) | `optional bool` | Whether the model accepts image input (config `modalities.input` contains `image`); unset when unknown. Prompt turns with attachments are refused only when this is `false`. |
 
@@ -1101,10 +1108,10 @@ Provider detail with its model rows.
 | `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
 | `provider_id` (2) | `string` | Configured provider id. |
 | `model_id` (3) | `string` | Provider-local model id (may contain `/` and `:`). |
-| `display_name` (4) | `optional string` | Display name written as the entry's `name`; absent removes it. |
-| `context_limit` (5) | `optional uint32` | Context window written as `limit.context`; absent or 0 removes it. |
-| `output_limit` (6) | `optional uint32` | Max output tokens written as `limit.output`; absent or 0 removes it. |
-| `reasoning` (7) | `optional bool` | Reasoning switch written as `reasoning: true|false`; absent removes a boolean `reasoning` (a detailed `reasoning:` mapping is kept when this is absent or true). |
+| `display_name` (4) | `optional string` | Patch semantics: an absent field keeps the entry's current value; a present field sets it, and `""` / `0` clears it. The entry is created when missing.  Display name written as the entry's `name`; absent keeps it, `""` removes it. |
+| `context_limit` (5) | `optional uint32` | Context window written as `limit.context`; absent keeps it, 0 removes it. A value outside 0..=4294967295 (or not an integer) is `invalid_argument`. |
+| `output_limit` (6) | `optional uint32` | Max output tokens written as `limit.output`; absent keeps it, 0 removes it. Must not exceed `context_limit` when both are set. |
+| `reasoning` (7) | `optional bool` | Reasoning switch written as `reasoning: true|false`; absent keeps the current `reasoning` field (a detailed `reasoning:` mapping is kept when this is true). Only `RemoveProviderModel` clears it. |
 
 ### `RemoveProviderModelRequest`
 
@@ -1328,6 +1335,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope; empty means the process default directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
+| `interactions_only` (3) | `bool` | Deliver only the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session plus the process-wide `catalogUpdated` notice; skip every session's engine events and their `resync` frames. For a client that follows one session on its session stream and needs only the asks of the others. |
 
 ### `StreamFrame`
 
@@ -1376,9 +1384,11 @@ One curated projected event from the event log.
 | `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
 | `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
 | `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
+| `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | The provider/model catalog changed (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`. |
 
 ### `PartsAdded`
 
+The provider/model catalog changed; carries no fields.
 Complete parts added to a message in one step.
 
 | Field | Type | Description |
@@ -1575,7 +1585,7 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 | Field | Type | Description |
 |---|---|---|
 | `until_seq` (1) | `uint64` | Sequence of this compaction record. |
-| `strategy` (2) | `string` | Strategy that fired: `Native`, `LocalSummarizer`, `SnapCompact`, or `Handoff` (a manual compaction reports `LocalSummarizer`). |
+| `strategy` (2) | `string` | Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or `handoff` (a manual compaction reports `local_summarizer`). |
 | `message` (3) | `string` | System message carrying the summary (the transcript divider). |
 | `folded_count` (4) | `uint32` | Number of messages folded behind the summary. |
 | `manual` (5) | `bool` | Whether a client asked for it (`CompactSession`) rather than the context crossing its threshold. |
@@ -1763,22 +1773,24 @@ Response to a question request.
 
 ### `SavedRule`
 
-A persisted permission decision.
+A persisted permission decision: an "allow always" reply. Saved rules are
+process-wide (shared by every session and project), reload into the
+permission plane when the server starts, and deleting one revokes it live.
 
 | Field | Type | Description |
 |---|---|---|
 | `id` (1) | `string` | Rule identifier. |
-| `permission` (2) | `RulePermission` | Effect of the rule. |
-| `tool` (3) | `string` | Tool name the rule matches; empty matches every tool. |
-| `pattern` (4) | `string` | Pattern the rule matches (command prefix, path prefix, ...). |
-| `time_created` (5) | `google.protobuf.Timestamp` | When the rule was saved. |
+| `permission` (2) | `RulePermission` | Effect of the rule; always RULE_PERMISSION_ALLOW for saved grants. |
+| `tool` (3) | `string` | Tool the rule matches: the exact tool or MCP tool name for a tool grant, `bash` for a command grant, or the action name (`read`, `edit`, `webfetch`, ...) for an action-wide grant. |
+| `pattern` (4) | `string` | Pattern the rule matches: the exact command for a `bash` grant, `*` for an action-wide grant, empty for an exact tool grant. |
+| `time_created` (5) | `google.protobuf.Timestamp` | When the rule was saved; absent for rules saved before creation times were recorded. |
 
 ### `ListSavedRulesRequest`
 
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Accepted for symmetry and ignored: saved rules are process-wide. |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `ListSavedRulesResponse`
@@ -1794,7 +1806,7 @@ A persisted permission decision.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; empty means the process default directory. |
+| `directory` (1) | `string` | Accepted for symmetry and ignored: saved rules are process-wide. |
 | `rule` (2) | `string` | Rule identifier to delete. |
 
 ### `IngestLogRequest`
@@ -2275,8 +2287,8 @@ One changed file.
 | Field | Type | Description |
 |---|---|---|
 | `directory` (1) | `string` | Directory scope; empty means the process default directory. |
-| `raw` (2) | `bool` | Output format: unified patch (default) or raw. |
-| `paths` (3) | `repeated string` | Restrict to these repository-relative paths; empty diffs everything. |
+| `raw` (2) | `bool` | Accepted and ignored: the diff is always git's unified patch (`git diff HEAD` plus untracked files). |
+| `paths` (3) | `repeated string` | Restrict to these paths (git pathspecs relative to the scope directory: a file or a directory prefix); empty diffs everything. Over HTTP repeat the query key (`?paths=a&paths=b`). A path that is absolute or contains `..` is `invalid_argument`. |
 
 ### `GetVcsDiffResponse`
 
@@ -2546,7 +2558,7 @@ A pending revert of a session.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `string` | Session identifier to compact. |
-| `until_seq` (2) | `uint64` | Compact events up to this sequence number; 0 compacts at the head. |
+| `until_seq` (2) | `uint64` | Deprecated and ignored: a manual compaction always folds the whole transcript at the head. The response's `compacted_until_seq` reports the watermark actually reached. |
 
 ### `CompactSessionResponse`
 
@@ -2554,7 +2566,7 @@ A pending revert of a session.
 | Field | Type | Description |
 |---|---|---|
 | `compacted_until_seq` (1) | `uint64` | Watermark the context was compacted up to. |
-| `strategy` (2) | `string` | Which compaction method fired (`shake`, `remote`, `soft`, `snap_compact`, `handoff`). |
+| `strategy` (2) | `string` | Compaction strategy that ran, the same name the recorded `CompactionApplied.strategy` carries. A manual compaction is always `local_summarizer`. |
 
 ### `SummarizeSessionRequest`
 

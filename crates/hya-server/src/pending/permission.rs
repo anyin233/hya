@@ -344,17 +344,41 @@ impl PermissionRequests {
         allowed
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn list_saved(
         &self,
         project_id: Option<&str>,
-    ) -> Result<Vec<super::SavedPermissionInfo>, StoreError> {
+    ) -> Result<Vec<hya_store::SavedPermission>, StoreError> {
         self.saved.list(project_id).await
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn remove_saved(&self, id: &str) -> Result<(), StoreError> {
-        self.saved.remove(id).await
+    /// Delete a saved grant and revoke it on `plane` (shared by every
+    /// session plane), so the next matching call asks again.
+    pub(crate) async fn remove_saved(
+        &self,
+        id: &str,
+        plane: &hya_tool::PermissionPlane,
+    ) -> Result<(), StoreError> {
+        if let Some(row) = self.saved.remove(id).await?
+            && let Some(action) = super::saved_permission::parse_action(&row.action)
+        {
+            plane.revoke_saved(action, &row.resource).await;
+        }
+        Ok(())
+    }
+
+    /// Install every saved grant on `plane`; returns how many were restored.
+    pub(crate) async fn restore_saved(
+        &self,
+        plane: &hya_tool::PermissionPlane,
+    ) -> Result<usize, StoreError> {
+        let mut restored = 0;
+        for row in self.saved.list(None).await? {
+            if let Some(action) = super::saved_permission::parse_action(&row.action) {
+                plane.grant_saved(action, &row.resource).await;
+                restored += 1;
+            }
+        }
+        Ok(restored)
     }
 }
 

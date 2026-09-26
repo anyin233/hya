@@ -1109,6 +1109,20 @@ pub enum CompactionStrategy {
     Handoff,
 }
 
+impl CompactionStrategy {
+    /// Stable snake_case wire name (the serde form): `native`,
+    /// `local_summarizer`, `snap_compact`, or `handoff`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::LocalSummarizer => "local_summarizer",
+            Self::SnapCompact => "snap_compact",
+            Self::Handoff => "handoff",
+        }
+    }
+}
+
 impl Event {
     /// The session this event belongs to, if any.
     #[must_use]
@@ -1359,6 +1373,11 @@ mod tests {
             let json = serde_json::to_string(&strategy).expect("serialize");
             let back: CompactionStrategy = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(strategy, back, "strategy must round-trip: {json}");
+            assert_eq!(
+                json,
+                format!("\"{}\"", strategy.as_str()),
+                "as_str is the serde name"
+            );
         }
         assert_eq!(
             serde_json::to_string(&CompactionStrategy::LocalSummarizer).expect("serialize"),

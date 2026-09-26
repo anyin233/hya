@@ -2002,6 +2002,77 @@ impl<'de> serde::Deserialize<'de> for CancelTurnRequest {
         deserializer.deserialize_struct("hya.v1.CancelTurnRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for CatalogUpdated {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.CatalogUpdated", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for CatalogUpdated {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = CatalogUpdated;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.CatalogUpdated")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<CatalogUpdated, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(CatalogUpdated {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.CatalogUpdated", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CommandSummary {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -15693,7 +15764,7 @@ impl serde::Serialize for ModelSummary {
         if !self.display_name.is_empty() {
             len += 1;
         }
-        if self.reasoning {
+        if self.reasoning.is_some() {
             len += 1;
         }
         if self.auth != 0 {
@@ -15724,8 +15795,8 @@ impl serde::Serialize for ModelSummary {
         if !self.display_name.is_empty() {
             struct_ser.serialize_field("displayName", &self.display_name)?;
         }
-        if self.reasoning {
-            struct_ser.serialize_field("reasoning", &self.reasoning)?;
+        if let Some(v) = self.reasoning.as_ref() {
+            struct_ser.serialize_field("reasoning", v)?;
         }
         if self.auth != 0 {
             let v = AuthStatus::try_from(self.auth)
@@ -15878,7 +15949,7 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             if reasoning__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("reasoning"));
                             }
-                            reasoning__ = Some(map_.next_value()?);
+                            reasoning__ = map_.next_value()?;
                         }
                         GeneratedField::Auth => {
                             if auth__.is_some() {
@@ -15921,7 +15992,7 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                     provider_id: provider_id__.unwrap_or_default(),
                     model_id: model_id__.unwrap_or_default(),
                     display_name: display_name__.unwrap_or_default(),
-                    reasoning: reasoning__.unwrap_or_default(),
+                    reasoning: reasoning__,
                     auth: auth__.unwrap_or_default(),
                     context_limit: context_limit__.unwrap_or_default(),
                     output_limit: output_limit__.unwrap_or_default(),
@@ -24202,6 +24273,9 @@ impl serde::Serialize for StreamEvent {
                 stream_event::Payload::PartsAdded(v) => {
                     struct_ser.serialize_field("partsAdded", v)?;
                 }
+                stream_event::Payload::CatalogUpdated(v) => {
+                    struct_ser.serialize_field("catalogUpdated", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -24260,6 +24334,8 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             "sessionReverted",
             "parts_added",
             "partsAdded",
+            "catalog_updated",
+            "catalogUpdated",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24288,6 +24364,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             MemberUpdated,
             SessionReverted,
             PartsAdded,
+            CatalogUpdated,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24333,6 +24410,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             "memberUpdated" | "member_updated" => Ok(GeneratedField::MemberUpdated),
                             "sessionReverted" | "session_reverted" => Ok(GeneratedField::SessionReverted),
                             "partsAdded" | "parts_added" => Ok(GeneratedField::PartsAdded),
+                            "catalogUpdated" | "catalog_updated" => Ok(GeneratedField::CatalogUpdated),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24525,6 +24603,13 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::PartsAdded)
 ;
                         }
+                        GeneratedField::CatalogUpdated => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("catalogUpdated"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::CatalogUpdated)
+;
+                        }
                     }
                 }
                 Ok(StreamEvent {
@@ -24661,6 +24746,9 @@ impl serde::Serialize for StreamGlobalEventsRequest {
         if self.since_seq != 0 {
             len += 1;
         }
+        if self.interactions_only {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.StreamGlobalEventsRequest", len)?;
         if !self.directory.is_empty() {
             struct_ser.serialize_field("directory", &self.directory)?;
@@ -24669,6 +24757,9 @@ impl serde::Serialize for StreamGlobalEventsRequest {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("sinceSeq", ToString::to_string(&self.since_seq).as_str())?;
+        }
+        if self.interactions_only {
+            struct_ser.serialize_field("interactionsOnly", &self.interactions_only)?;
         }
         struct_ser.end()
     }
@@ -24683,12 +24774,15 @@ impl<'de> serde::Deserialize<'de> for StreamGlobalEventsRequest {
             "directory",
             "since_seq",
             "sinceSeq",
+            "interactions_only",
+            "interactionsOnly",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Directory,
             SinceSeq,
+            InteractionsOnly,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24712,6 +24806,7 @@ impl<'de> serde::Deserialize<'de> for StreamGlobalEventsRequest {
                         match value {
                             "directory" => Ok(GeneratedField::Directory),
                             "sinceSeq" | "since_seq" => Ok(GeneratedField::SinceSeq),
+                            "interactionsOnly" | "interactions_only" => Ok(GeneratedField::InteractionsOnly),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24733,6 +24828,7 @@ impl<'de> serde::Deserialize<'de> for StreamGlobalEventsRequest {
             {
                 let mut directory__ = None;
                 let mut since_seq__ = None;
+                let mut interactions_only__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Directory => {
@@ -24749,11 +24845,18 @@ impl<'de> serde::Deserialize<'de> for StreamGlobalEventsRequest {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::InteractionsOnly => {
+                            if interactions_only__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("interactionsOnly"));
+                            }
+                            interactions_only__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(StreamGlobalEventsRequest {
                     directory: directory__.unwrap_or_default(),
                     since_seq: since_seq__.unwrap_or_default(),
+                    interactions_only: interactions_only__.unwrap_or_default(),
                 })
             }
         }

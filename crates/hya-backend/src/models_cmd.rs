@@ -35,11 +35,16 @@ fn verbose_line(provider: &str, id: &str, row: Option<&ProviderModel>) -> serde_
         if let Some(name) = model.display_name.as_deref() {
             line["name"] = serde_json::json!(name);
         }
-        line["context"] = serde_json::json!(model.capabilities.max_context);
+        // Unknown metadata is omitted rather than reported as a default.
+        if model.capabilities.max_context > 0 {
+            line["context"] = serde_json::json!(model.capabilities.max_context);
+        }
         if model.capabilities.max_output > 0 {
             line["output"] = serde_json::json!(model.capabilities.max_output);
         }
-        line["reasoning"] = serde_json::json!(!model.reasoning_variants.is_empty());
+        if let Some(reasoning) = model.reasoning {
+            line["reasoning"] = serde_json::json!(reasoning);
+        }
     }
     line
 }
@@ -72,6 +77,7 @@ mod tests {
             capabilities: Default::default(),
             reasoning_variants: Vec::new(),
             reasoning_default: None,
+            reasoning: None,
             display_name: None,
             source,
         }
@@ -107,6 +113,7 @@ mod tests {
         row.display_name = Some("Vendor M".to_string());
         row.capabilities.max_context = 64_000;
         row.capabilities.max_output = 4_096;
+        row.reasoning = Some(false);
         assert_eq!(
             super::verbose_line("gw", "vendor/m", Some(&row)),
             serde_json::json!({

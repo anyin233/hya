@@ -707,7 +707,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             ..
         } => P::CompactionApplied(pb::CompactionApplied {
             until_seq: envelope.seq.0,
-            strategy: format!("{strategy:?}"),
+            strategy: strategy.as_str().to_owned(),
             message: message.to_string(),
             folded_count: *folded_count,
             // Automatic strategies record the threshold that tripped; a

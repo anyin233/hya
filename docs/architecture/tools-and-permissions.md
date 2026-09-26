@@ -351,6 +351,33 @@ When an action evaluates to `Ask`:
    (`Rule(action, "*", Allow)`).
 7. `Reject` returns a permission error, optionally carrying user feedback.
 
+### Saved grants
+
+An "allow always" answered by a client through the server
+(`POST /v1/interactions/{id}/respond`) is also persisted as a
+`saved_permission` row (`id`, `project_id` — always `global`, `action` — the
+serde name above, `resource` — the exact subject value or `*`,
+`time_created` — ms since the epoch; migration `0013` added it, older rows
+keep it `NULL`). Grants are process-wide because the permission plane is:
+every session plane is derived from the one process plane and shares its
+remembered grants.
+
+- **Startup.** `AppState::restore_saved_permissions` (called by `hya serve`
+  and the in-process runtime before serving) replays every row into the
+  process plane with `PermissionPlane::grant_saved`: `*` restores the
+  action-wide `Rule(action, "*", Allow)`; any other value restores the exact
+  subject for `tool` (`PermissionTarget::Tool`), `mcp` (`Mcp`), and `bash`
+  (`Command`).
+- **Delete.** `DELETE /v1/permissions/rules/{rule}` removes the row and calls
+  `PermissionPlane::revoke_saved`, so the next matching call asks again.
+  Configured (snapshot) rules are never touched.
+- **Listing.** `GET /v1/permissions/rules` reports each row as a
+  `SavedRule` with `permission: RULE_PERMISSION_ALLOW` and its
+  `timeCreated`; see the [protocol guide](../protocol/README.md#saved-permission-rules).
+
+Grants answered by an interceptor (plugin bridge, bundle approver) stay
+in-memory only.
+
 Pending asks coalesce using the same remember scope: native asks group only an
 identical subject, while legacy asks retain action-wide grouping. The server
 surfaces pending asks to connected clients through its interaction endpoints.

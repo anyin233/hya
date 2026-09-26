@@ -14,6 +14,7 @@ fn model(provider_id: &str, model_id: &str, source: ModelCatalogSource) -> Provi
         capabilities: Capabilities::default(),
         reasoning_variants: Vec::new(),
         reasoning_default: None,
+        reasoning: None,
         display_name: None,
         source,
     }

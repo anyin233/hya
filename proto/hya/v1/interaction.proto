@@ -124,17 +124,23 @@ message RespondInteractionResponse {
   bool applied = 1;
 }
 
-// A persisted permission decision.
+// A persisted permission decision: an "allow always" reply. Saved rules are
+// process-wide (shared by every session and project), reload into the
+// permission plane when the server starts, and deleting one revokes it live.
 message SavedRule {
   // Rule identifier.
   string id = 1;
-  // Effect of the rule.
+  // Effect of the rule; always RULE_PERMISSION_ALLOW for saved grants.
   RulePermission permission = 2;
-  // Tool name the rule matches; empty matches every tool.
+  // Tool the rule matches: the exact tool or MCP tool name for a tool grant,
+  // `bash` for a command grant, or the action name (`read`, `edit`,
+  // `webfetch`, ...) for an action-wide grant.
   string tool = 3;
-  // Pattern the rule matches (command prefix, path prefix, ...).
+  // Pattern the rule matches: the exact command for a `bash` grant, `*` for
+  // an action-wide grant, empty for an exact tool grant.
   string pattern = 4;
-  // When the rule was saved.
+  // When the rule was saved; absent for rules saved before creation times
+  // were recorded.
   google.protobuf.Timestamp time_created = 5;
 }
 
@@ -151,7 +157,7 @@ enum RulePermission {
 }
 
 message ListSavedRulesRequest {
-  // Directory scope; empty means the process default directory.
+  // Accepted for symmetry and ignored: saved rules are process-wide.
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
@@ -165,7 +171,7 @@ message ListSavedRulesResponse {
 }
 
 message DeleteSavedRuleRequest {
-  // Directory scope; empty means the process default directory.
+  // Accepted for symmetry and ignored: saved rules are process-wide.
   string directory = 1;
   // Rule identifier to delete.
   string rule = 2;

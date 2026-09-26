@@ -196,24 +196,25 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText("Saved manual-1 to config.yaml")
       await term.waitForText(/manual-1\s+Manual One\s+config\s+32k \/ 4k/)
 
-      // Edit the remote model (the server shows it with fallback metadata: 200k context, reasoning):
-      // only the changed field is written, and the row becomes an override.
+      // Edit the remote model (its list publishes no metadata, so the server reports the limits and
+      // reasoning as unknown): only the changed field is written, and the row becomes an override.
       await term.press("ArrowUp")
       await term.type("e")
       await term.waitForText("Edit model · gw/alpha")
       await term.type("Alpha X")
       await term.press("Enter")
-      await term.waitForText(/Context limit\s*200000/)
+      await term.waitForText(/Context limit\s*▏?\s*tokens · optional/)
       await term.press("Enter")
       await term.press("Enter")
-      // Reasoning: 1 default · 2 on · 3 off (a digit picks one); back on "on", as it opened: unchanged.
+      // Reasoning: 1 default · 2 on · 3 off (a digit picks one); back on "default", as it opened: unchanged.
       await term.type("3")
       await term.waitForText("● 3. off")
-      await term.type("2")
-      await term.waitForText("● 2. on")
+      await term.type("1")
+      await term.waitForText("● 1. default")
       await term.press("Enter")
       await term.waitForText("Saved alpha to config.yaml")
-      await term.waitForText(/alpha\s+Alpha X\s+override\s+200k \/ —\s+reasoning/)
+      await term.waitForText(/alpha\s+Alpha X\s+override\s+— \/ —/)
+      expect(await term.text()).not.toMatch(/alpha\s+Alpha X.*reasoning/)
       let written = await config(backend)
       expect(written).toContain("manual-1")
       expect(written).toContain("Manual One")

@@ -210,6 +210,9 @@ pub struct HttpProvider {
     /// Optional per-model context/output limits (configured `limit` blocks or
     /// `models.yml.cache` rows).
     model_limits: BTreeMap<String, ModelLimitOverride>,
+    /// Reasoning support declared by each model's metadata (catalog display
+    /// only; runtime effort support uses the variant maps).
+    model_reasoning_declared: BTreeMap<String, bool>,
     /// Per-model image-input support from config `modalities.input`;
     /// absent models report unknown (`Capabilities::image_input = None`).
     model_image_input: BTreeMap<String, bool>,
@@ -326,6 +329,7 @@ impl HttpProvider {
             model_reasoning_variants: BTreeMap::new(),
             model_reasoning_defaults: BTreeMap::new(),
             model_limits: BTreeMap::new(),
+            model_reasoning_declared: BTreeMap::new(),
             model_image_input: BTreeMap::new(),
             model_display_names: BTreeMap::new(),
             model_sources: BTreeMap::new(),
@@ -428,6 +432,19 @@ impl HttpProvider {
             .into_iter()
             .filter_map(|(model, effort)| effort.map(|effort| (model, effort)))
             .collect();
+        self
+    }
+
+    /// Attach per-model reasoning support declared by model metadata (remote
+    /// model list or config `reasoning`). Models absent here publish
+    /// [`ProviderModel::reasoning`] as unknown; this never changes which
+    /// efforts a request may use.
+    #[must_use]
+    pub fn with_model_reasoning_declared(
+        mut self,
+        declared: impl IntoIterator<Item = (String, bool)>,
+    ) -> Self {
+        self.model_reasoning_declared = declared.into_iter().collect();
         self
     }
 
@@ -772,6 +789,18 @@ impl HttpProvider {
         caps
     }
 
+    /// Capabilities published on a catalog row: [`Self::caps_for_model`],
+    /// except that the context window is the model's known limit or 0 when
+    /// unknown (the route-wide default is a runtime fallback, not metadata).
+    fn catalog_caps_for_model(&self, model_id: &str) -> Capabilities {
+        let mut caps = self.caps_for_model(model_id);
+        caps.max_context = self
+            .model_limits
+            .get(model_id)
+            .map_or(0, |limit| limit.context);
+        caps
+    }
+
     /// Rewrite the request to the bare upstream model id, apply the model's
     /// known output limit, and encode its body.
     ///
@@ -1067,13 +1096,14 @@ impl Provider for HttpProvider {
             .map(|model| ProviderModel {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
-                capabilities: self.caps_for_model(model),
+                capabilities: self.catalog_caps_for_model(model),
                 reasoning_variants: self
                     .model_reasoning_variants
                     .get(model)
                     .cloned()
                     .unwrap_or_else(|| variants.clone()),
                 reasoning_default: self.model_reasoning_defaults.get(model).copied(),
+                reasoning: self.model_reasoning_declared.get(model).copied(),
                 display_name: self.model_display_names.get(model).cloned(),
                 source: self
                     .model_sources

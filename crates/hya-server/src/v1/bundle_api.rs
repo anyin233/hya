@@ -10,12 +10,14 @@
 
 use std::collections::BTreeMap;
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
-use axum::{Json, Router};
+
+use super::Json;
 use hya_api::error::Code;
 use hya_api::v1 as pb;
 use hya_core::{

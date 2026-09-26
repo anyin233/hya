@@ -412,3 +412,52 @@ async fn a_fork_of_a_reverted_session_copies_only_the_visible_messages() {
     let fork = forked["session"]["id"].as_str().unwrap().to_owned();
     assert_eq!(fx.messages(&fork).await.len(), 2);
 }
+
+/// A fork is titled after its source (`<title> (fork)`, the source id when
+/// the source is untitled), never stacks the suffix, and is not renamed by
+/// automatic titling later.
+#[tokio::test]
+async fn a_fork_is_titled_after_its_source_and_keeps_that_title() {
+    let fx = fixture(
+        "v1-fork-title",
+        [write_turn("one"), write_turn("two")].concat(),
+    )
+    .await;
+    let session = fx.session().await;
+    fx.prompt(&session, "first").await;
+
+    let (status, forked) = fx.fork(&session, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{forked}");
+    assert_eq!(
+        forked["session"]["title"],
+        json!(format!("{session} (fork)")),
+        "an untitled source falls back to its id"
+    );
+
+    let source: hya_proto::SessionId = session.parse().unwrap();
+    fx.engine
+        .set_title(source, "Plan the work".to_owned())
+        .await
+        .unwrap();
+    let (status, forked) = fx.fork(&session, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{forked}");
+    assert_eq!(forked["session"]["title"], json!("Plan the work (fork)"));
+    let fork = forked["session"]["id"].as_str().unwrap().to_owned();
+
+    let (status, again) = fx.fork(&fork, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["session"]["title"],
+        json!("Plan the work (fork)"),
+        "a fork of a fork does not stack the suffix"
+    );
+
+    let fork_id: hya_proto::SessionId = fork.parse().unwrap();
+    assert!(
+        !fx.engine
+            .auto_title_session(fork_id, &ModelRef::new("fake"))
+            .await
+            .unwrap(),
+        "automatic titling never renames a fork"
+    );
+}

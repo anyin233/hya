@@ -61,6 +61,12 @@ Stable codes and their HTTP status / gRPC code:
 | `bundle_api_bad_request` | 400 | `InvalidArgument` | Malformed bundle API request: body over 512 KiB or not JSON, bad percent escape, unparsable query, unknown method (gRPC). |
 | `bundle_api_failed` | 502 | `Unavailable` | The bundle process failed, timed out, or answered malformed data while serving an endpoint. |
 
+A JSON body that does not decode into the request message — malformed JSON,
+a wrong field type, an unknown field, or a number outside the field's range
+(for example `"contextLimit": -1` or a value above `4294967295` for a
+`uint32`) — is `invalid_argument` with this same `{"error": ...}` shape,
+never a plain-text 422. A body over the transport limit stays HTTP 413.
+
 ## Pagination
 
 Paginated list rpcs take `page: {cursor, limit}` and answer
@@ -203,12 +209,22 @@ foldedCount, manual }`: `message` is the system message holding the summary
 (the transcript divider), `foldedCount` the number of messages folded behind
 it, and `manual` is true for a client-requested `CompactSession` (or
 `SummarizeSession`, which compacts the same way) and false when the context
-crossed its threshold mid-turn. `strategy` is `Native`, `LocalSummarizer`
-(also every manual compaction), `SnapCompact`, or `Handoff`. The record is
-in `ListEvents` too, so a transcript read can place the divider.
+crossed its threshold mid-turn. `strategy` is a stable snake_case name:
+`native` (provider-native compaction), `local_summarizer` (a model-written
+summary; also every manual compaction), `snap_compact` (a local dense
+archive, no model call), or `handoff` (a model-written handoff document).
+The record is in `ListEvents` too, so a transcript read can place the
+divider.
+
+`POST /v1/sessions/{id}/compact` (`CompactSession`) answers
+`{ compactedUntilSeq, strategy }` with the same `strategy` name the recorded
+`compactionApplied` carries (`local_summarizer`). The request's `untilSeq` is
+deprecated and ignored: a manual compaction always folds the whole
+transcript at the head, and `compactedUntilSeq` reports the watermark
+reached. Without a configured summarizer the call is `503 unavailable`.
 
 ```json
-{ "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "LocalSummarizer", "message": "msg_...", "foldedCount": 12, "manual": true } } }
+{ "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "local_summarizer", "message": "msg_...", "foldedCount": 12, "manual": true } } }
 ```
 
 ## Prompt attachments (images)
@@ -349,6 +365,13 @@ new ids; the source's file snapshots are not copied, so reverting a copied
 turn in the fork restores no files. Prompt images of copied messages are
 copied with them (see [Prompt attachments](#prompt-attachments-images)).
 
+The fork is titled `<source title> (fork)` — the source's session id stands
+in for a missing or default title, and a fork of a fork keeps the single
+`(fork)` suffix (`Plan the work (fork)`, not `… (fork) (fork)`). Automatic
+titling renames only sessions whose title is missing or a default, so it
+never renames a fork; rename one with `PATCH /v1/sessions/{id}`
+(`{"title": "..."}`).
+
 ## Live and durable frames
 
 Stream events come in two kinds:
@@ -358,9 +381,27 @@ Stream events come in two kinds:
   (`ListMessages`, `GetMessage`) folds them.
 - **Live-only** events carry no `seq` (it is `0`, which protojson omits).
   They are never persisted and `ListEvents` never returns them: the
-  assistant text of an in-flight provider round, and the pending
+  assistant text of an in-flight provider round, the pending
   interaction frames (`permissionRequested`, `questionRequested`,
-  `interactionResolved`; `GET /v1/interactions` is their listing).
+  `interactionResolved`; `GET /v1/interactions` is their listing), and the
+  process-wide `catalogUpdated` notice.
+
+**`catalogUpdated`.** When the provider/model catalog changes — a provider
+is added, edited, or refreshed, a key is set or removed, or startup model
+discovery finishes — every live stream (global and each session stream)
+receives one live-only `catalogUpdated` frame with an empty payload and an
+empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
+
+```json
+{ "event": { "timeRecorded": "2026-09-26T10:00:00Z", "catalogUpdated": {} } }
+```
+
+**Interactions-only global stream.** `GET /v1/events/stream?interactionsOnly=true`
+(gRPC `StreamGlobalEventsRequest.interactions_only`) delivers only the live
+interaction frames of every session plus `catalogUpdated`; every session's
+engine events (text, tools, messages, status) and their `resync` frames are
+left out. A client that follows its open session on the session stream uses
+it to see the other sessions' asks without receiving their live text.
 
 While a provider round streams, each assistant text part arrives live as
 `partStarted` (`kind: "text"`), one `partAppended` per delta, and
@@ -584,8 +625,9 @@ modes](../configuration.md#session-permission-modes).
 
 The provider routes back the TUI Provider View (`/key`). Every write applies
 **live**: the server rebuilds that provider's route and catalog rows, swaps
-them into the running engine, and emits `catalog.updated` on the event
-streams — no restart. The effective model list of a provider is its cached
+them into the running engine, and emits a live `catalogUpdated` frame on
+every v1 event stream (see [Live and durable frames](#live-and-durable-frames))
+— no restart. The effective model list of a provider is its cached
 remote models merged per model id with its `config.yaml` `models:` entries;
 see [Configuration — Model cache and config
 overrides](../configuration.md#model-cache-and-config-overrides).
@@ -627,9 +669,12 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
 
 // ModelSummary (also GET /v1/models)
 { "id": "gw/alpha", "providerId": "gw", "modelId": "alpha",
-  "displayName": "Alpha", "reasoning": true, "auth": "AUTH_STATUS_CREDENTIALED",
-  "contextLimit": "64000", "outputLimit": "4096",   // uint64 → strings
-  "source": "override" }                            // remote | config | override | offline
+  "displayName": "Alpha",
+  "reasoning": true,        // declared by metadata; absent when unknown
+  "auth": "AUTH_STATUS_CREDENTIALED",
+  "contextLimit": "64000",  // uint64 → strings; absent when unknown
+  "outputLimit": "4096",    // absent when unknown
+  "source": "override" }    // remote | config | override | offline
 
 // ProviderUpdate
 { "provider": ProviderInfo,
@@ -662,6 +707,13 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
   fetches the model list into the model cache. `404 not_found` when the id
   is not in `config.yaml`. A 401/403 clears the cached rows; a transport or
   decode failure keeps them.
+- `ModelSummary` reports only the metadata the model publishes (config
+  `models:` fields, else the remote model list). A model without a known
+  context window omits `contextLimit` (the runtime then sizes compaction
+  against a 200000-token fallback); without a known output limit it omits
+  `outputLimit`; without a reasoning claim it omits `reasoning` (the route
+  still accepts its provider family's effort variants). `reasoning: false`
+  is an explicit claim (`reasoning: false` in config).
 - `SetProviderModel` patches one model entry in the provider's `models:`
   (adding a bare `- <modelId>` entry when there is none). An absent field
   keeps the entry's current value; `displayName: ""` removes `name`;
@@ -689,6 +741,55 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
   is written to any session.
 - Without an application provider control (a bare `hya_server::router`
   embedder) the write routes and `GET /v1/auth` answer `503 unavailable`.
+
+## Saved permission rules
+
+An "allow always" reply to a permission ask is saved as a rule and applies
+at once to every session. Saved rules are process-wide (not per project or
+directory; the `directory` field is accepted and ignored), survive a server
+restart (they are reloaded into the permission plane at startup), and a
+deleted rule stops applying immediately: the next matching call asks again.
+
+| Call | HTTP | Answer |
+| --- | --- | --- |
+| `Interactions.ListSavedRules` | `GET /v1/permissions/rules` | `{rules: [SavedRule], page}`, stable id order |
+| `Interactions.DeleteSavedRule` | `DELETE /v1/permissions/rules/{rule}` | `{}` (also for an unknown id) |
+
+```jsonc
+// SavedRule
+{ "id": "psv_per_...",
+  "permission": "RULE_PERMISSION_ALLOW",   // always ALLOW for saved grants
+  "tool": "bash",                          // exact tool or MCP tool name, `bash`
+                                           // for a command, else the action name
+  "pattern": "cargo test",                 // the exact command for `bash`, `*` for an
+                                           // action-wide grant, empty for a tool grant
+  "timeCreated": "2026-09-26T10:00:00Z" }  // absent for rules saved before creation
+                                           // times were recorded
+```
+
+## Working-tree diff
+
+`GET /v1/vcs/diff` (`Project.GetVcsDiff`) answers `{ diff }`: git's unified
+patch of the scope directory's working tree against `HEAD` (`git diff HEAD`)
+followed by a patch for every untracked file; empty outside a git
+repository. `paths` restricts it to those files or directory prefixes
+(pathspecs relative to the scope directory); over HTTP repeat the key:
+`/v1/vcs/diff?paths=src/main.rs&paths=docs`. A path that is absolute or
+contains `..` is `invalid_argument`. `raw` is accepted and ignored.
+
+## MCP servers
+
+`POST /v1/mcp` (`Mcp.AddMcpServer`) stores (or replaces) one server —
+`{name, command: {command, args, env} | url: {url}, enabled?}` — and
+answers its `McpServerStatus {name, state, tools, error, authRequired}`.
+The server is stored even when it cannot start: a spawn or handshake
+failure answers `200` with `state: "MCP_SERVER_STATE_FAILED"` and `error`.
+`enabled: false` stores it without connecting
+(`MCP_SERVER_STATE_DISCONNECTED`). Re-adding an unchanged config does not
+reconnect. `POST /v1/mcp/{name}/connect` enables and connects a stored
+server (a failure is again a `FAILED` status; an unknown name is
+`404 not_found`), `POST /v1/mcp/{name}/disconnect` disables it, and
+`GET /v1/mcp` lists every server's status.
 
 ## Bundle API endpoints
 

@@ -85,15 +85,21 @@ pub(crate) fn diff(
     Ok(out)
 }
 
-pub(crate) fn raw_diff(workdir: &Path) -> Result<String, ApiError> {
+/// Unified `git diff HEAD` plus untracked files, restricted to `paths`
+/// (git pathspecs relative to `workdir`) when non-empty.
+pub(crate) fn raw_diff(workdir: &Path, paths: &[String]) -> Result<String, ApiError> {
+    let dot = [".".to_owned()];
+    let pathspecs = if paths.is_empty() { &dot[..] } else { paths };
     let mut chunks = Vec::new();
     if has_head(workdir) {
-        let tracked = text(workdir, &["diff", "HEAD"])?;
+        let mut args = vec!["diff", "HEAD", "--"];
+        args.extend(pathspecs.iter().map(String::as_str));
+        let tracked = text(workdir, &args)?;
         if !tracked.is_empty() {
             chunks.push(tracked);
         }
     }
-    for item in status::items(workdir)?
+    for item in status::items_in(workdir, pathspecs)?
         .into_iter()
         .filter(|item| item.code == "??")
     {

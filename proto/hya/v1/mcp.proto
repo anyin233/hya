@@ -14,12 +14,19 @@ service Mcp {
   // hya.http: GET /v1/mcp
   rpc GetMcpStatus(GetMcpStatusRequest) returns (GetMcpStatusResponse);
 
-  // Add (or replace) one MCP server in desired state.
+  // Add (or replace) one MCP server in desired state. The server is stored
+  // even when it cannot start: a spawn or handshake failure is answered
+  // with `state: MCP_SERVER_STATE_FAILED` and `error` (the call succeeds).
+  // With `enabled: false` the server is stored without connecting
+  // (`MCP_SERVER_STATE_DISCONNECTED`). Re-adding an unchanged config does
+  // not reconnect.
   //
   // hya.http: POST /v1/mcp
   rpc AddMcpServer(AddMcpServerRequest) returns (McpServerStatus);
 
-  // Connect one MCP server now.
+  // Enable and connect one MCP server now. A connect failure is answered
+  // with `state: MCP_SERVER_STATE_FAILED` and `error`; an unknown name is
+  // `not_found`.
   //
   // hya.http: POST /v1/mcp/{name}/connect
   rpc ConnectMcp(ConnectMcpRequest) returns (McpServerStatus);

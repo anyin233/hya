@@ -235,6 +235,7 @@ async fn saved_permission_resumes_after_reconnect() {
         project_id: "global".to_string(),
         action: "bash".to_string(),
         resource: "*".to_string(),
+        time_created_ms: Some(1_700_000_000_000),
     };
     {
         let store = SessionStore::connect(&path).await.unwrap();
@@ -243,9 +244,35 @@ async fn saved_permission_resumes_after_reconnect() {
 
     let reopened = SessionStore::connect(&path).await.unwrap();
     let saved = reopened.list_saved_permissions(None).await.unwrap();
-    assert_eq!(saved, vec![entry]);
+    assert_eq!(saved, vec![entry.clone()]);
+
+    assert_eq!(
+        reopened.saved_permission("psv_per_1").await.unwrap(),
+        Some(entry.clone())
+    );
 
     reopened.remove_saved_permission("psv_per_1").await.unwrap();
     let reopened = SessionStore::connect(&path).await.unwrap();
     assert_eq!(reopened.list_saved_permissions(None).await.unwrap(), vec![]);
+}
+
+#[tokio::test]
+async fn saved_permission_without_time_is_stamped_on_insert() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let entry = SavedPermission {
+        id: "psv_per_2".to_string(),
+        project_id: "global".to_string(),
+        action: "tool".to_string(),
+        resource: "write".to_string(),
+        time_created_ms: None,
+    };
+    store.save_permission(&entry).await.unwrap();
+    let saved = store.list_saved_permissions(None).await.unwrap();
+    assert_eq!(saved.len(), 1);
+    assert!(
+        saved[0]
+            .time_created_ms
+            .is_some_and(|ms| ms > 1_600_000_000_000),
+        "insert must stamp the creation time: {saved:?}"
+    );
 }

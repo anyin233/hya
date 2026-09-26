@@ -1,7 +1,7 @@
 //! `/v1` logs domain: frontend log ingest into the backend's structured
 //! logging.
 
-use axum::Json;
+use super::Json;
 use axum::Router;
 use axum::routing::post;
 use serde_json::Value;

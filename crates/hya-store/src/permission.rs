@@ -15,19 +15,24 @@ pub struct SavedPermission {
     pub action: String,
     /// Resource pattern or identifier the grant covers.
     pub resource: String,
+    /// Creation time in milliseconds since the Unix epoch; `None` for rows
+    /// saved before creation times were recorded. [`SessionStore::save_permission`]
+    /// stamps the current time when this is `None`.
+    pub time_created_ms: Option<i64>,
 }
 
 impl SessionStore {
     /// Insert a grant if the id is new (`INSERT OR IGNORE`); no-op on conflict.
     pub async fn save_permission(&self, entry: &SavedPermission) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT OR IGNORE INTO saved_permission (id, project_id, action, resource) \
-             VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO saved_permission \
+             (id, project_id, action, resource, time_created) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&entry.id)
         .bind(&entry.project_id)
         .bind(&entry.action)
         .bind(&entry.resource)
+        .bind(entry.time_created_ms.unwrap_or_else(now_ms))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -38,25 +43,35 @@ impl SessionStore {
         &self,
         project_id: Option<&str>,
     ) -> Result<Vec<SavedPermission>, StoreError> {
-        let rows = match project_id {
-            Some(project_id) => {
-                sqlx::query(
-                    "SELECT id, project_id, action, resource FROM saved_permission \
+        let rows =
+            match project_id {
+                Some(project_id) => sqlx::query(
+                    "SELECT id, project_id, action, resource, time_created FROM saved_permission \
                      WHERE project_id = ? ORDER BY id",
                 )
                 .bind(project_id)
                 .fetch_all(&self.pool)
-                .await?
-            }
-            None => {
-                sqlx::query(
-                    "SELECT id, project_id, action, resource FROM saved_permission ORDER BY id",
+                .await?,
+                None => sqlx::query(
+                    "SELECT id, project_id, action, resource, time_created FROM saved_permission \
+                     ORDER BY id",
                 )
                 .fetch_all(&self.pool)
-                .await?
-            }
-        };
+                .await?,
+            };
         rows.into_iter().map(saved_permission).collect()
+    }
+
+    /// Read one grant by id.
+    pub async fn saved_permission(&self, id: &str) -> Result<Option<SavedPermission>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, project_id, action, resource, time_created FROM saved_permission \
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(saved_permission).transpose()
     }
 
     /// Delete a grant by id (no error if the row is already absent).
@@ -75,5 +90,14 @@ fn saved_permission(row: sqlx::sqlite::SqliteRow) -> Result<SavedPermission, Sto
         project_id: row.try_get("project_id")?,
         action: row.try_get("action")?,
         resource: row.try_get("resource")?,
+        time_created_ms: row.try_get("time_created")?,
     })
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+        .unwrap_or_default()
 }
