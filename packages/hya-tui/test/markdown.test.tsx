@@ -78,7 +78,18 @@ test("renders nested lists with indentation", async () => {
 
 test("fenced code blocks sit on the panel color with a language label and highlighted tokens", async () => {
   await render(() => "Before\n\n```ts\nconst answer = \"forty-two\"\n```\n\nAfter")
-  await until(() => hex(span("const")?.fg) === syntaxColors.keyword, "highlighted keyword")
+  // Wait for the whole frame we're about to assert on, not just the keyword
+  // highlight: under CPU load the trailing "After" paragraph's block can lag
+  // a tick behind the async tree-sitter highlight callback resolving, and a
+  // predicate that only checks the highlight color can pass while the rest
+  // of the frame is still catching up.
+  await until(
+    () =>
+      hex(span("const")?.fg) === syntaxColors.keyword &&
+      hex(span("\"forty-two\"")?.fg) === syntaxColors.string &&
+      frame().includes("After"),
+    "highlighted keyword, string, and trailing paragraph",
+  )
   expect(hex(span("\"forty-two\"")?.fg)).toBe(syntaxColors.string)
   expect(hex(span("const")?.bg)).toBe(colors.panel)
   const lines = frame()

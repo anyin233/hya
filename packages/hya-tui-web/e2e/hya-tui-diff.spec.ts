@@ -5,7 +5,14 @@
 import { execFileSync } from "node:child_process"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { hyaTui, initGitRepo, test } from "./hya"
+import { expect, hyaTui, initGitRepo, test } from "./hya"
+import type { Tui } from "./harness"
+
+async function at(term: Tui, needle: string) {
+  const found = await term.find(needle)
+  expect(found, `screen shows ${needle}`).not.toBeNull()
+  return found!
+}
 
 test.describe("hya TUI Diff view", () => {
   test("not a git repository: the empty state", async ({ tui, backend }) => {
@@ -49,6 +56,57 @@ test.describe("hya TUI Diff view", () => {
     await writeFile(join(backend.dir, "tracked.txt"), "one\ntwo\nthree\n")
     await term.press("r")
     await term.waitForText(/tracked\.txt\s+\+2 -0/)
+
+    await term.press("Escape")
+    await term.waitForText("Enter a prompt · /new creates a session")
+  })
+
+  test("a diff long enough to scroll: PgDn/PgUp/Home/End and the mouse wheel move the visible lines", async ({ tui, backend }) => {
+    await initGitRepo(backend.dir)
+    // A small tracked file, committed, then 80 new lines appended: a
+    // pure-addition diff (no matching "-" lines to confuse the assertions)
+    // long enough to overflow the scrollbox.
+    await writeFile(join(backend.dir, "long.txt"), "intro\n")
+    execFileSync("git", ["-C", backend.dir, "add", "long.txt"])
+    execFileSync("git", ["-C", backend.dir, "-c", "user.email=e2e@hya.test", "-c", "user.name=e2e", "commit", "-q", "-m", "add long"])
+    const added = Array.from({ length: 80 }, (_, index) => `added ${String(index + 1).padStart(2, "0")}`)
+    await writeFile(join(backend.dir, "long.txt"), `intro\n${added.join("\n")}\n`)
+
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await term.type("/diff")
+    await term.press("Enter")
+    await term.waitForText("Diff › long.txt")
+    await term.waitForText(/long\.txt\s+\+80 -0/)
+    // The top of the diff is visible first.
+    await term.waitForText("+ added 01")
+
+    await term.press("PageDown")
+    await expect.poll(async () => (await term.text()).includes("+ added 01")).toBe(false)
+    await term.waitForText(/\+ added \d\d/)
+
+    await term.press("End")
+    // The last lines of a long file: End jumps further than a single PgDn did.
+    await term.waitForText("+ added 79")
+    await expect.poll(async () => (await term.text()).includes("+ added 01")).toBe(false)
+
+    await term.press("Home")
+    await term.waitForText("+ added 01")
+    await expect.poll(async () => (await term.text()).includes("+ added 79")).toBe(false)
+
+    await term.press("PageDown")
+    await term.press("PageDown")
+    await expect.poll(async () => (await term.text()).includes("+ added 01")).toBe(false)
+    const midMatch = (await term.text()).match(/\+ added \d\d/)!
+    const midRow = await at(term, midMatch[0])
+    const box = (await term.page.locator(".xterm-screen").boundingBox())!
+    const size = await term.size()
+    await term.page.mouse.move(box.x + box.width / 2, box.y + ((midRow.row + 0.5) / size.rows) * box.height)
+    await term.page.mouse.wheel(0, -600)
+    // Scrolling up with the wheel moves the view away from where it was
+    // (a longer poll: the wheel event's round trip through the PTY can lag
+    // under heavy parallel load).
+    await expect.poll(async () => (await term.text()).includes(midMatch[0]), { timeout: 15_000 }).toBe(false)
 
     await term.press("Escape")
     await term.waitForText("Enter a prompt · /new creates a session")
