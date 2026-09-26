@@ -333,3 +333,94 @@ fn link_is_built_from_parts() {
         link("hya://relay.example.com/mzuhvlpymk6xo3epygfy5h4oea")
     );
 }
+
+#[test]
+fn open_token_is_hmac_sha256_of_the_room_under_the_psk() {
+    use hya_relay::keys::{OpenToken, Psk, open_token_hash};
+    // Computed independently: HMAC-SHA256(key = [7; 32],
+    // "hya.relay.v1/open\0" || room) and its sha256.
+    let room = RoomId::from_ed25519(&[1; 32]);
+    assert_eq!(room.as_str(), "olgw5bbcyqd7w3ijq2ipceylpx");
+    let token = OpenToken::derive(&Psk::from_bytes([7; 32]), &room);
+    assert_eq!(
+        hex(token.as_bytes()),
+        "8142fdb28d7bd5e3785a349374df31ebe01e65f0987ab9f60a8655a4071e80cb"
+    );
+    assert_eq!(
+        hex(&token.hash()),
+        "01663e0e9ae0d88ee4907b6e08bb17d45aca0cc28e739151e32606227214981c"
+    );
+    assert_eq!(open_token_hash(token.as_bytes()), token.hash());
+    // Other rooms and PSKs give other tokens; Debug never prints it.
+    assert_ne!(
+        OpenToken::derive(&Psk::from_bytes([8; 32]), &room).as_bytes(),
+        token.as_bytes()
+    );
+    assert_ne!(
+        OpenToken::derive(&Psk::from_bytes([7; 32]), &RoomId::from_ed25519(&[2; 32])).as_bytes(),
+        token.as_bytes()
+    );
+    assert!(!format!("{token:?}").contains(&hex(token.as_bytes())));
+}
+
+#[test]
+fn a_link_derives_its_open_token_and_psk() {
+    let parsed = RelayLink::parse(&link(&format!("hya://relay.example.com/{ROOM}"))).unwrap();
+    let psk = parsed.psk_key();
+    assert_eq!(psk.as_bytes(), &[0xff; 32]);
+    let expected = hya_relay::keys::OpenToken::derive(&psk, parsed.room_id());
+    assert_eq!(parsed.open_token().as_bytes(), expected.as_bytes());
+    let from_keys = RelayLink::from_keys(
+        parsed.address().clone(),
+        parsed.room_id().clone(),
+        Transport::Auto,
+        *parsed.server_key(),
+        &psk,
+    );
+    assert_eq!(from_keys, parsed);
+}
+
+#[test]
+fn errors_never_echo_a_pasted_secret() {
+    const SECRET: &str = "S3CR3TPSKMATERIAL";
+    let inputs = [
+        format!("https://relay.example.com#{SECRET}"),
+        format!("https://relay.example.com/a#{SECRET}"),
+        format!("https://relay.example.com/{ROOM}?t=ws#{SECRET}.{SECRET}"),
+        format!("http://relay.example.com/bad path/x#{SECRET}"),
+        format!("hya://relay.example.com/bad path/{ROOM}#{SECRET}"),
+        format!("hya://relay.example.com/a//{ROOM}#{SECRET}.{SECRET}"),
+        format!("hya://relay.example.com/{ROOM}#{SECRET}"),
+        format!("hya://relay.example.com/{ROOM}/#{SECRET}.x"),
+    ];
+    for input in &inputs {
+        for error in [
+            RelayAddress::parse_proxy_url(input).err(),
+            RelayLink::parse(input).err(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let shown = format!("{error} {error:?}");
+            assert!(!shown.contains(SECRET), "{input} -> {shown}");
+        }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn the_public_part_of_a_link_parses_without_a_secret() {
+    let (address, room, transport) =
+        RelayLink::parse_public(&format!("hya://relay.example.com:8443/hya/{ROOM}?t=ws")).unwrap();
+    assert_eq!(address.base_url(), "https://relay.example.com:8443/hya");
+    assert_eq!(room.as_str(), ROOM);
+    assert_eq!(transport, Transport::Ws);
+    // A fragment is ignored, never parsed.
+    let (_, again, _) =
+        RelayLink::parse_public(&format!("hya://relay.example.com/{ROOM}#junk")).unwrap();
+    assert_eq!(again.as_str(), ROOM);
+    assert!(RelayLink::parse_public("hya://relay.example.com/").is_err());
+}

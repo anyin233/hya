@@ -1,5 +1,5 @@
-//! Tunnel key material: the backend's Noise static X25519 keypair and the
-//! relay pre-shared key.
+//! Tunnel key material: the backend's Noise static X25519 keypair, the
+//! relay pre-shared key, and the open token derived from it.
 //!
 //! Both are 32 bytes and appear in the relay link fragment (the public key
 //! and the PSK); the static secret never leaves the backend. Secret bytes are
@@ -9,10 +9,14 @@
 
 use std::fmt;
 
+use hmac::{Hmac, Mac};
 use rand_core::{OsRng, TryRngCore};
+use sha2::{Digest, Sha256};
 use snow::params::DHChoice;
 use snow::resolvers::{CryptoResolver, DefaultResolver};
 use zeroize::{Zeroize, Zeroizing};
+
+use crate::link::RoomId;
 
 /// Length of every tunnel key (X25519 keys and the PSK).
 pub const KEY_LEN: usize = 32;
@@ -135,10 +139,74 @@ impl Psk {
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
     }
+
+    /// Wrap zeroizing PSK storage without copying it out.
+    pub(crate) fn from_zeroizing(bytes: Zeroizing<[u8; KEY_LEN]>) -> Self {
+        Psk(bytes)
+    }
+
+    /// The zeroizing storage, for types that keep a PSK copy (links).
+    pub(crate) fn zeroizing(&self) -> &Zeroizing<[u8; KEY_LEN]> {
+        &self.0
+    }
 }
 
 impl fmt::Debug for Psk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Psk(<redacted>)")
     }
+}
+
+/// Domain-separation prefix of the open token: the HMAC message is
+/// `OPEN_TOKEN_CONTEXT || room_id`.
+pub const OPEN_TOKEN_CONTEXT: &[u8] = b"hya.relay.v1/open\0";
+
+/// The room's open token: `HMAC-SHA256(key = psk, OPEN_TOKEN_CONTEXT ||
+/// room_id)`.
+///
+/// An opener presents it in `Open.open_token`; the host registers only its
+/// SHA-256 ([`OpenToken::hash`]) with the proxy, which admits an `Open` only
+/// when the hashes match. So only link holders can make the host do any work,
+/// while the proxy never holds the PSK (and learns a token only when a link
+/// holder presents it). Rotating the PSK changes the token.
+#[derive(Clone)]
+pub struct OpenToken(Zeroizing<[u8; KEY_LEN]>);
+
+impl OpenToken {
+    /// Derive the open token of `room` from its PSK.
+    #[must_use]
+    pub fn derive(psk: &Psk, room: &RoomId) -> Self {
+        let mut token = Zeroizing::new([0u8; KEY_LEN]);
+        // HMAC accepts keys of any length, so this never fails.
+        if let Ok(mut mac) = <Hmac<Sha256> as Mac>::new_from_slice(psk.as_bytes()) {
+            mac.update(OPEN_TOKEN_CONTEXT);
+            mac.update(room.as_str().as_bytes());
+            token.copy_from_slice(&mac.finalize().into_bytes());
+        }
+        OpenToken(token)
+    }
+
+    /// The token bytes (sent in `Open.open_token`).
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
+        &self.0
+    }
+
+    /// `sha256(token)`: what the host registers with the proxy.
+    #[must_use]
+    pub fn hash(&self) -> [u8; KEY_LEN] {
+        open_token_hash(self.as_bytes())
+    }
+}
+
+impl fmt::Debug for OpenToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("OpenToken(<redacted>)")
+    }
+}
+
+/// `sha256(token)` of presented open token bytes (any length).
+#[must_use]
+pub fn open_token_hash(token: &[u8]) -> [u8; KEY_LEN] {
+    Sha256::digest(token).into()
 }

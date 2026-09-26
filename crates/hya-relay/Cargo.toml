@@ -22,6 +22,7 @@ base64 = { workspace = true }
 data-encoding = { workspace = true }
 ed25519-dalek = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -32,6 +33,7 @@ rustls-native-certs = { workspace = true }
 rustls-pki-types = { workspace = true }
 sha2 = { workspace = true }
 snow = { workspace = true }
+subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }

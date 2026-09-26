@@ -3,7 +3,9 @@
 //!
 //! [`RelayClient`] turns a [`RelayAddress`] into relay streams:
 //! [`RelayClient::open`] (client side of a data stream, returned once the
-//! proxy acknowledged it with `opened`), [`RelayClient::accept`] (host side
+//! proxy acknowledged it with `opened`; it presents the room's open token,
+//! which a client made [from a link](RelayClient::from_link) derives from the
+//! link's PSK), [`RelayClient::accept`] (host side
 //! of a data stream), and [`RelayClient::host`] (the host control stream;
 //! [`register_host`] runs the registration on it). Every stream comes back
 //! as the binding-independent transport type, wrapped with application
@@ -49,10 +51,11 @@ pub use heartbeat::{DEFAULT_HEARTBEAT_INTERVAL, HeartbeatConfig, with_heartbeat}
 use self::connect::Tls;
 use self::grpc::GrpcService;
 use self::heartbeat::{IncomingFrame, OutgoingFrame};
+use crate::keys::OpenToken;
 use crate::link::{RelayAddress, RelayLink, RoomId, Transport, WsRoute};
 use crate::proto::{
-    Accept, Chunk, HostFrame, Open, ProxyToHost, Register, RelayErrorCode, chunk, host_frame,
-    proxy_to_host, register_signing_message,
+    Accept, Chunk, HostFrame, Open, ProxyToHost, Register, RelayErrorCode, UpdateOpenToken, chunk,
+    host_frame, proxy_to_host, register_signing_message, update_open_token_signing_message,
 };
 use crate::server::duplex::FinalError;
 use crate::transport::{BoxedTransport, ChunkTransport, HostControlTransport, TransportError};
@@ -300,6 +303,8 @@ pub struct RelayClient {
 
 struct Inner {
     address: RelayAddress,
+    /// The room and open token of the link this client was made from.
+    link_token: Option<(RoomId, OpenToken)>,
     config: ClientConfig,
     tls: Option<Tls>,
     grpc: tokio::sync::Mutex<Option<GrpcService>>,
@@ -330,6 +335,7 @@ impl RelayClient {
         Ok(Self {
             inner: Arc::new(Inner {
                 address,
+                link_token: None,
                 config,
                 tls,
                 grpc: tokio::sync::Mutex::new(None),
@@ -344,11 +350,18 @@ impl RelayClient {
     ///
     /// # Errors
     /// As [`RelayClient::new`].
+    ///
+    /// The client keeps the link's open token, so [`RelayClient::open`] to
+    /// the link's room presents it.
     pub fn from_link(link: &RelayLink, mut config: ClientConfig) -> Result<Self, ClientError> {
         if config.transport == Transport::Auto {
             config.transport = link.transport();
         }
-        Self::new(link.address().clone(), config)
+        let mut client = Self::new(link.address().clone(), config)?;
+        if let Some(inner) = Arc::get_mut(&mut client.inner) {
+            inner.link_token = Some((link.room_id().clone(), link.open_token()));
+        }
+        Ok(client)
     }
 
     /// The relay address.
@@ -446,7 +459,7 @@ impl RelayClient {
         let service = self.grpc_service().await?;
         let started = grpc::start(
             service,
-            Some(open_frame(&random_room())),
+            Some(open_frame(&random_room(), None)),
             |mut c, r| async move { c.open(r).await },
         )
         .await;
@@ -469,7 +482,7 @@ impl RelayClient {
         )
         .await?;
         let mut transport: ChunkTransport = Box::pin(ws::WsTransport::<Chunk, Chunk>::new(socket));
-        let first = match transport.send(open_frame(&random_room())).await {
+        let first = match transport.send(open_frame(&random_room(), None)).await {
             Ok(()) => transport.next().await,
             Err(error) => Some(Err(error)),
         };
@@ -555,17 +568,49 @@ impl RelayClient {
     /// Open a data stream to `room` (the client side) and wait for the
     /// proxy's `opened`; the returned transport carries the tunnel.
     ///
+    /// Presents the open token of the link the client was made from
+    /// ([`RelayClient::from_link`]) when `room` is that link's room, and no
+    /// token otherwise (which the proxy answers like an offline room); see
+    /// [`RelayClient::open_with_token`].
+    ///
     /// # Errors
-    /// [`ClientError::RoomOffline`] (`NOT_FOUND`), [`ClientError::Unavailable`]
-    /// (the host did not accept in time), [`ClientError::Timeout`], or a
-    /// connection failure.
+    /// [`ClientError::RoomOffline`] (`NOT_FOUND`: offline, or the wrong open
+    /// token), [`ClientError::Unavailable`] (the host did not accept in
+    /// time), [`ClientError::Timeout`], or a connection failure.
     pub async fn open(&self, room: &RoomId) -> Result<ChunkTransport, ClientError> {
+        let token = self
+            .inner
+            .link_token
+            .as_ref()
+            .filter(|(linked, _)| linked == room)
+            .map(|(_, token)| token);
+        self.open_stream(room, token).await
+    }
+
+    /// [`RelayClient::open`] presenting `token` (from
+    /// [`RelayLink::open_token`] or [`OpenToken::derive`]).
+    ///
+    /// # Errors
+    /// As [`RelayClient::open`].
+    pub async fn open_with_token(
+        &self,
+        room: &RoomId,
+        token: &OpenToken,
+    ) -> Result<ChunkTransport, ClientError> {
+        self.open_stream(room, Some(token)).await
+    }
+
+    async fn open_stream(
+        &self,
+        room: &RoomId,
+        token: Option<&OpenToken>,
+    ) -> Result<ChunkTransport, ClientError> {
         let open_timeout = self.inner.config.open_timeout;
         let run = async {
             let mut transport = self
                 .stream(
                     WsRoute::Open,
-                    Some(open_frame(room)),
+                    Some(open_frame(room, token)),
                     |mut c, r| async move { c.open(r).await },
                 )
                 .await?;
@@ -620,10 +665,13 @@ impl RelayClient {
     }
 }
 
-fn open_frame(room: &RoomId) -> Chunk {
+fn open_frame(room: &RoomId, token: Option<&OpenToken>) -> Chunk {
     Chunk {
         frame: Some(chunk::Frame::Open(Open {
             room_id: room.as_str().to_owned(),
+            open_token: token
+                .map(|token| token.as_bytes().to_vec())
+                .unwrap_or_default(),
         })),
     }
 }
@@ -705,9 +753,48 @@ fn classify_transport(binding: Binding, detail: &str) -> ProbeFailure {
     }
 }
 
-/// Answer the registration challenge on a fresh control stream with `key`.
-/// Returns the registered room once the proxy confirmed it, within
-/// `deadline`.
+/// A room registration on one host control stream.
+#[derive(Debug, Clone)]
+pub struct HostRegistration {
+    room: RoomId,
+    nonce: Vec<u8>,
+}
+
+impl HostRegistration {
+    /// The registered room.
+    #[must_use]
+    pub fn room(&self) -> &RoomId {
+        &self.room
+    }
+
+    /// The signed `update_open_token` frame that replaces the room's open
+    /// token hash on this control stream (after a PSK rotation). The proxy
+    /// answers `open_token_updated`.
+    #[must_use]
+    pub fn update_open_token_frame(
+        &self,
+        key: &SigningKey,
+        open_token_hash: &[u8; 32],
+    ) -> HostFrame {
+        HostFrame {
+            frame: Some(host_frame::Frame::UpdateOpenToken(UpdateOpenToken {
+                open_token_hash: open_token_hash.to_vec(),
+                signature: key
+                    .sign(&update_open_token_signing_message(
+                        &self.nonce,
+                        open_token_hash,
+                    ))
+                    .to_bytes()
+                    .to_vec(),
+            })),
+        }
+    }
+}
+
+/// Answer the registration challenge on a fresh control stream with `key`,
+/// registering `open_token_hash` (`sha256` of the room's open token,
+/// [`OpenToken::hash`]). Returns the registration once the proxy confirmed
+/// it, within `deadline`.
 ///
 /// # Errors
 /// [`ClientError::Relay`] with the proxy's code (for example
@@ -716,8 +803,9 @@ fn classify_transport(binding: Binding, detail: &str) -> ProbeFailure {
 pub async fn register_host(
     transport: &mut HostControlTransport,
     key: &SigningKey,
+    open_token_hash: &[u8; 32],
     deadline: Duration,
-) -> Result<RoomId, ClientError> {
+) -> Result<HostRegistration, ClientError> {
     let run = async {
         let nonce = match next_control(transport).await? {
             proxy_to_host::Frame::Challenge(challenge) => challenge.nonce,
@@ -731,9 +819,10 @@ pub async fn register_host(
             frame: Some(host_frame::Frame::Register(Register {
                 ed25519_pubkey: key.verifying_key().as_bytes().to_vec(),
                 signature: key
-                    .sign(&register_signing_message(&nonce))
+                    .sign(&register_signing_message(&nonce, open_token_hash))
                     .to_bytes()
                     .to_vec(),
+                open_token_hash: open_token_hash.to_vec(),
             })),
         };
         transport
@@ -742,6 +831,7 @@ pub async fn register_host(
             .map_err(ClientError::from_transport)?;
         match next_control(transport).await? {
             proxy_to_host::Frame::Registered(registered) => RoomId::parse(&registered.room_id)
+                .map(|room| HostRegistration { room, nonce })
                 .map_err(|_| ClientError::Protocol("malformed registered room id".to_owned())),
             other => Err(ClientError::Protocol(format!(
                 "expected `registered`, got {other:?}"

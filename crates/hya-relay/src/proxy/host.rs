@@ -12,36 +12,85 @@ use tokio::sync::mpsc;
 use super::{Inner, PeerInfo, RoomRegistration, random_bytes, shutting_down};
 use crate::link::RoomId;
 use crate::proto::{
-    Challenge, Heartbeat, HostFrame, Incoming, ProxyToHost, Register, Registered, RelayError,
-    RelayErrorCode, host_frame, proxy_to_host, register_signing_message,
+    Challenge, Heartbeat, HostFrame, Incoming, OpenTokenUpdated, ProxyToHost, Register, Registered,
+    RelayError, RelayErrorCode, UpdateOpenToken, host_frame, proxy_to_host,
+    register_signing_message, update_open_token_signing_message,
 };
 use crate::transport::ProxyControlTransport;
 
 /// How long the proxy tries to deliver a final error frame.
 const ERROR_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Check a registration against the challenge nonce; the room it owns.
-pub(crate) fn verify_registration(nonce: &[u8], register: &Register) -> Result<RoomId, RelayError> {
-    let unauthenticated = |message: &str| RelayError::new(RelayErrorCode::Unauthenticated, message);
+/// A verified registration.
+pub(crate) struct Verified {
+    room_id: RoomId,
+    key: VerifyingKey,
+    open_token_hash: [u8; 32],
+}
+
+fn unauthenticated(message: &str) -> RelayError {
+    RelayError::new(RelayErrorCode::Unauthenticated, message)
+}
+
+fn token_hash(bytes: &[u8]) -> Result<[u8; 32], RelayError> {
+    bytes.try_into().map_err(|_| {
+        RelayError::new(
+            RelayErrorCode::InvalidArgument,
+            "open_token_hash must be 32 bytes (upgrade the host)",
+        )
+    })
+}
+
+fn signature(bytes: &[u8]) -> Result<Signature, RelayError> {
+    let bytes: [u8; 64] = bytes
+        .try_into()
+        .map_err(|_| unauthenticated("ed25519 signature must be 64 bytes"))?;
+    Ok(Signature::from_bytes(&bytes))
+}
+
+/// Check a registration against the challenge nonce: the room it owns, its
+/// key, and its open token hash.
+pub(crate) fn verify_registration(
+    nonce: &[u8],
+    register: &Register,
+) -> Result<Verified, RelayError> {
+    let open_token_hash = token_hash(&register.open_token_hash)?;
     let key: [u8; 32] = register
         .ed25519_pubkey
         .as_slice()
         .try_into()
         .map_err(|_| unauthenticated("ed25519 public key must be 32 bytes"))?;
-    let signature: [u8; 64] = register
-        .signature
-        .as_slice()
-        .try_into()
-        .map_err(|_| unauthenticated("ed25519 signature must be 64 bytes"))?;
+    let signature = signature(&register.signature)?;
     let verifying_key =
         VerifyingKey::from_bytes(&key).map_err(|_| unauthenticated("invalid ed25519 key"))?;
     verifying_key
         .verify_strict(
-            &register_signing_message(nonce),
-            &Signature::from_bytes(&signature),
+            &register_signing_message(nonce, &open_token_hash),
+            &signature,
         )
         .map_err(|_| unauthenticated("registration signature does not verify"))?;
-    Ok(RoomId::from_ed25519(&key))
+    Ok(Verified {
+        room_id: RoomId::from_ed25519(&key),
+        key: verifying_key,
+        open_token_hash,
+    })
+}
+
+/// Check an open token update against the room key and the challenge
+/// nonce of this control stream; the new hash.
+fn verify_update(
+    nonce: &[u8],
+    key: &VerifyingKey,
+    update: &UpdateOpenToken,
+) -> Result<[u8; 32], RelayError> {
+    let open_token_hash = token_hash(&update.open_token_hash)?;
+    let signature = signature(&update.signature)?;
+    key.verify_strict(
+        &update_open_token_signing_message(nonce, &open_token_hash),
+        &signature,
+    )
+    .map_err(|_| unauthenticated("open token update signature does not verify"))?;
+    Ok(open_token_hash)
 }
 
 fn frame(frame: proxy_to_host::Frame) -> ProxyToHost {
@@ -79,6 +128,15 @@ async fn fail(transport: &mut ProxyControlTransport, error: RelayError) {
     .await;
 }
 
+/// A registered room as seen by its control stream.
+struct Registration {
+    registration: RoomRegistration,
+    incoming: mpsc::Receiver<String>,
+    room_id: RoomId,
+    key: VerifyingKey,
+    nonce: [u8; 32],
+}
+
 /// Challenge the host and register its room.
 ///
 /// `Err(None)` means the host went away (nothing to report).
@@ -86,7 +144,7 @@ async fn register(
     inner: &Arc<Inner>,
     transport: &mut ProxyControlTransport,
     peer: &PeerInfo,
-) -> Result<(RoomRegistration, mpsc::Receiver<String>, RoomId), Option<RelayError>> {
+) -> Result<Registration, Option<RelayError>> {
     let nonce = random_bytes::<32>();
     let challenge = proxy_to_host::Frame::Challenge(Challenge {
         nonce: nonce.to_vec(),
@@ -118,9 +176,16 @@ async fn register(
             )));
         }
     };
-    let room_id = verify_registration(&nonce, &register)?;
-    let (registration, incoming) = inner.register_room(&room_id, peer)?;
-    Ok((registration, incoming, room_id))
+    let verified = verify_registration(&nonce, &register)?;
+    let (registration, incoming) =
+        inner.register_room(&verified.room_id, verified.open_token_hash, peer)?;
+    Ok(Registration {
+        registration,
+        incoming,
+        room_id: verified.room_id,
+        key: verified.key,
+        nonce,
+    })
 }
 
 pub(crate) async fn run_host(
@@ -138,7 +203,13 @@ pub(crate) async fn run_host(
     let registered = register(&inner, &mut transport, &peer).await;
     // The registration is decided: free the pending slot before reporting.
     drop(pending);
-    let (registration, mut incoming, room_id) = match registered {
+    let Registration {
+        registration,
+        mut incoming,
+        room_id,
+        key,
+        nonce,
+    } = match registered {
         Ok(registered) => registered,
         Err(Some(error)) => return fail(&mut transport, error).await,
         Err(None) => return,
@@ -185,6 +256,18 @@ pub(crate) async fn run_host(
                         }
                     }
                     Some(host_frame::Frame::Heartbeat(_)) => {}
+                    Some(host_frame::Frame::UpdateOpenToken(update)) => {
+                        match verify_update(&nonce, &key, &update) {
+                            Ok(hash) => inner.update_open_token(&room, hash),
+                            Err(error) => break Some(error),
+                        }
+                        let updated = proxy_to_host::Frame::OpenTokenUpdated(OpenTokenUpdated {});
+                        match send(&inner, &mut transport, updated).await {
+                            Ok(()) => {}
+                            Err(SendFailure::Closed) => break None,
+                            Err(SendFailure::Stalled) => break Some(stalled()),
+                        }
+                    }
                     Some(host_frame::Frame::Register(_)) => {
                         break Some(RelayError::new(
                             RelayErrorCode::FailedPrecondition,

@@ -3,12 +3,16 @@
 //!
 //! A [`RelayHost`] keeps this backend registered in its room on a
 //! `hya proxy`: it holds the host control stream (reconnecting with jittered
-//! backoff, slower after `ALREADY_EXISTS`), and for every `incoming` stream
-//! it accepts the stream, answers the Noise `NKpsk0` handshake as the
-//! responder (bounded by a timeout), and serves the same `/v1` router as the
-//! TCP listener over the decrypted bytes, with the [`crate::Origin::Relay`]
-//! extension on each request. Handshake failures are logged without key
-//! material; in-flight relay streams are capped.
+//! backoff, slower after `ALREADY_EXISTS`), registering the hash of the
+//! room's open token so the proxy only lets link holders open streams (and
+//! replacing it on the same stream after a PSK rotation), and for every
+//! `incoming` stream it accepts the stream, answers the Noise `NKpsk0`
+//! handshake as the responder (bounded by a short timeout), and serves the
+//! same `/v1` router as the TCP listener over the decrypted bytes, with the
+//! [`crate::Origin::Relay`] extension on each request. Handshake failures are
+//! logged without key material. Streams still handshaking and streams being
+//! served have separate caps, so stalled handshakes never take a serving
+//! slot.
 //!
 //! The connector is controlled through the loopback-only `RelayControl`
 //! rpcs (`hya serve relay …`) and by `hya serve --relay`.
@@ -31,19 +35,23 @@ use hya_relay::link::{RelayAddress, RelayLink, RoomId, Transport};
 use hya_relay::proto::{ProxyToHost, proxy_to_host};
 use hya_relay::transport::TransportError;
 use hya_relay::tunnel::{NoiseStream, TunnelConfig};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 pub use identity::{IdentityError, RelayIdentity};
 
-/// Default deadline of one Noise handshake on an accepted stream.
-pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default deadline of one Noise handshake on an accepted stream. The
+/// client sends its hello right after `opened`, so a healthy handshake
+/// takes one round trip.
+pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Default deadline of one room registration.
 pub const DEFAULT_REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
-/// Default cap on relay streams handshaking or being served at once.
+/// Default cap on relay streams being served at once.
 pub const DEFAULT_MAX_STREAMS: usize = 64;
+/// Default cap on relay streams in the Noise handshake at once.
+pub const DEFAULT_MAX_HANDSHAKES: usize = 16;
 /// Default time open relay streams get to finish at a graceful shutdown.
 pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
@@ -61,9 +69,13 @@ pub struct RelayHostConfig {
     pub handshake_timeout: Duration,
     /// Deadline of one room registration.
     pub register_timeout: Duration,
-    /// Relay streams handshaking or being served at once; more incoming
-    /// streams are not accepted (the proxy times them out).
+    /// Relay streams being served (handshake done) at once; while all are
+    /// taken, incoming streams are not accepted (the proxy times them out).
     pub max_streams: usize,
+    /// Relay streams in the Noise handshake at once, a budget separate from
+    /// [`RelayHostConfig::max_streams`]; incoming streams beyond it are not
+    /// accepted.
+    pub max_handshakes: usize,
     /// Reconnect schedule of the control stream.
     pub reconnect: ReconnectPolicy,
     /// How long open relay streams may finish at a graceful shutdown.
@@ -78,6 +90,7 @@ impl Default for RelayHostConfig {
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
             register_timeout: DEFAULT_REGISTER_TIMEOUT,
             max_streams: DEFAULT_MAX_STREAMS,
+            max_handshakes: DEFAULT_MAX_HANDSHAKES,
             reconnect: ReconnectPolicy::default(),
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
         }
@@ -252,7 +265,16 @@ struct Inner {
     shared: Mutex<Shared>,
     hook: Mutex<Option<SettingsHook>>,
     active: Arc<AtomicUsize>,
+    /// Serving slots ([`RelayHostConfig::max_streams`]).
     limit: Arc<Semaphore>,
+    /// Handshake slots ([`RelayHostConfig::max_handshakes`]).
+    handshakes: Arc<Semaphore>,
+    /// `sha256` of the current identity's open token; the control stream
+    /// registers it and sends every change to the proxy.
+    open_token: watch::Sender<[u8; 32]>,
+    /// The open token hash the proxy confirmed on the current control
+    /// stream (`None` while not registered).
+    confirmed_token: watch::Sender<Option<[u8; 32]>>,
     /// Graceful end of every relay stream (server shutdown).
     graceful: CancellationToken,
     tasks: TaskTracker,
@@ -289,6 +311,7 @@ impl RelayHost {
     #[must_use]
     pub fn new(config: RelayHostConfig) -> Self {
         let limit = Arc::new(Semaphore::new(config.max_streams.max(1)));
+        let handshakes = Arc::new(Semaphore::new(config.max_handshakes.max(1)));
         Self {
             inner: Arc::new(Inner {
                 config,
@@ -308,6 +331,9 @@ impl RelayHost {
                 hook: Mutex::new(None),
                 active: Arc::new(AtomicUsize::new(0)),
                 limit,
+                handshakes,
+                open_token: watch::Sender::new([0; 32]),
+                confirmed_token: watch::Sender::new(None),
                 graceful: CancellationToken::new(),
                 tasks: TaskTracker::new(),
                 stopped: AtomicBool::new(false),
@@ -384,6 +410,7 @@ impl RelayHost {
             shared.connected_since = None;
             shared.binding = None;
         }
+        inner.open_token.send_replace(identity.open_token_hash());
         let task = tokio::spawn(host_loop(
             inner.clone(),
             client,
@@ -454,9 +481,12 @@ impl RelayHost {
         true
     }
 
-    /// Issue a new pre-shared key: earlier links fail their next handshake
-    /// and every open relay stream is closed. Returns the new link while
-    /// connected.
+    /// Issue a new pre-shared key: every open relay stream is closed, the
+    /// proxy is told the new open token hash (so earlier links are refused
+    /// before they reach this backend; waiting at most
+    /// [`RelayHostConfig::register_timeout`] for its confirmation while
+    /// connected), and earlier links would fail their handshake anyway.
+    /// Returns the new link while connected.
     ///
     /// # Errors
     /// [`RelayHostError::FailedPrecondition`] when there is no identity (an
@@ -495,17 +525,33 @@ impl RelayHost {
                 .map_err(|error| RelayHostError::Identity(error.to_string()))?;
         }
         let rotated = Arc::new(rotated);
-        let link = {
+        let new_hash = rotated.open_token_hash();
+        let (link, registered) = {
             let mut shared = lock(&self.inner.shared);
             shared.identity = Some(rotated.clone());
             shared.persisted = persisted;
             shared.streams.cancel();
             shared.streams = CancellationToken::new();
-            match (&shared.address, &shared.settings) {
+            let link = match (&shared.address, &shared.settings) {
                 (Some(address), Some(settings)) => Some(link_of(address, settings, &rotated)),
                 _ => None,
-            }
+            };
+            (link, shared.state == RelayState::Connected)
         };
+        let mut confirmed = self.inner.confirmed_token.subscribe();
+        self.inner.open_token.send_replace(new_hash);
+        if registered {
+            let confirmation = confirmed.wait_for(|hash| *hash == Some(new_hash));
+            if tokio::time::timeout(self.inner.config.register_timeout, confirmation)
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "relay host: the proxy did not confirm the new open token in time; \
+                     old links still fail their handshake"
+                );
+            }
+        }
         drop(control);
         Ok(link)
     }
@@ -590,12 +636,12 @@ fn link_of(
     settings: &RelaySettings,
     identity: &RelayIdentity,
 ) -> RelayLink {
-    RelayLink::new(
+    RelayLink::from_keys(
         address.clone(),
         identity.room_id(),
         settings.transport,
         *identity.noise().public(),
-        *identity.psk().as_bytes(),
+        identity.psk(),
     )
 }
 
@@ -632,7 +678,9 @@ async fn host_loop(
     let mut backoff = Backoff::new(inner.config.reconnect);
     loop {
         inner.update(|shared| shared.state = RelayState::Connecting);
-        let ended = match session(&inner, &client, &identity, &mut backoff, &cancel).await {
+        let ended = session(&inner, &client, &identity, &mut backoff, &cancel).await;
+        inner.confirmed_token.send_replace(None);
+        let ended = match ended {
             Ok(Some(ended)) => ended,
             Ok(None) => return,
             Err(error) => Ended {
@@ -670,20 +718,27 @@ async fn session(
     backoff: &mut Backoff,
     cancel: &CancellationToken,
 ) -> Result<Option<Ended>, ClientError> {
+    let mut token_changes = inner.open_token.subscribe();
+    let token_hash = *token_changes.borrow_and_update();
     let registered = async {
         let mut control = client.host().await?;
-        let room = register_host(
+        let registration = register_host(
             &mut control,
             identity.signing_key(),
+            &token_hash,
             inner.config.register_timeout,
         )
         .await?;
-        Ok::<_, ClientError>((control, room))
+        Ok::<_, ClientError>((control, registration))
     };
-    let (mut control, room) = tokio::select! {
+    let (mut control, registration) = tokio::select! {
         () = cancel.cancelled() => return Ok(None),
         registered = registered => registered?,
     };
+    let room = registration.room().clone();
+    inner.confirmed_token.send_replace(Some(token_hash));
+    // Hashes sent in `update_open_token`, oldest first, awaiting their ack.
+    let mut unconfirmed = std::collections::VecDeque::new();
     backoff.connected();
     let binding = client.binding().await.ok();
     inner.update(|shared| {
@@ -700,9 +755,25 @@ async fn session(
                 let _ = tokio::time::timeout(Duration::from_secs(2), control.close()).await;
                 return Ok(None);
             }
+            Ok(()) = token_changes.changed() => {
+                let hash = *token_changes.borrow_and_update();
+                let update = registration.update_open_token_frame(identity.signing_key(), &hash);
+                if let Err(error) = control.send(update).await {
+                    return Ok(Some(Ended {
+                        kind: RetryKind::of_transport_error(&error),
+                        error: error.to_string(),
+                    }));
+                }
+                unconfirmed.push_back(hash);
+            }
             item = control.next() => match item {
                 Some(Ok(ProxyToHost { frame: Some(proxy_to_host::Frame::Incoming(incoming)) })) => {
                     spawn_stream(inner, client, &room, incoming.stream_id);
+                }
+                Some(Ok(ProxyToHost { frame: Some(proxy_to_host::Frame::OpenTokenUpdated(_)) })) => {
+                    if let Some(hash) = unconfirmed.pop_front() {
+                        inner.confirmed_token.send_replace(Some(hash));
+                    }
                 }
                 Some(Ok(ProxyToHost { frame: Some(proxy_to_host::Frame::Error(error)) })) => {
                     let failure = TransportError::Status {
@@ -733,11 +804,24 @@ async fn session(
 }
 
 /// Accept one relay stream, run the Noise handshake, and serve HTTP on it.
+///
+/// The handshake runs on a handshake slot; the stream takes a serving slot
+/// only once it is authenticated.
 fn spawn_stream(inner: &Arc<Inner>, client: &RelayClient, room: &RoomId, stream_id: String) {
-    let Ok(permit) = inner.limit.clone().try_acquire_owned() else {
+    let too_many_streams = || {
         tracing::warn!(
             max = inner.config.max_streams,
             "relay host: too many relay streams; not accepting another"
+        );
+    };
+    if inner.limit.available_permits() == 0 {
+        too_many_streams();
+        return;
+    }
+    let Ok(handshake_slot) = inner.handshakes.clone().try_acquire_owned() else {
+        tracing::warn!(
+            max = inner.config.max_handshakes,
+            "relay host: too many relay handshakes in progress; not accepting another"
         );
         return;
     };
@@ -782,6 +866,14 @@ fn spawn_stream(inner: &Arc<Inner>, client: &RelayClient, room: &RoomId, stream_
                 tracing::warn!("relay host: handshake timed out");
                 return;
             }
+        };
+        drop(handshake_slot);
+        let Ok(permit) = inner.limit.clone().try_acquire_owned() else {
+            tracing::warn!(
+                max = inner.config.max_streams,
+                "relay host: too many relay streams; closing an authenticated one"
+            );
+            return;
         };
         let io = conn::Killable::new(
             tunnel,

@@ -385,7 +385,7 @@ where
         link: &RelayLink,
         config: TunnelConfig,
     ) -> Result<Self, TunnelError> {
-        let psk = Psk::from_bytes(*link.psk());
+        let psk = link.psk_key();
         Self::initiate(transport, link.room_id(), link.server_key(), &psk, config).await
     }
 

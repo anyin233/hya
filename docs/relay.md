@@ -204,9 +204,17 @@ removes the record, so a later restart stays off the relay.
   30 s doubling to 10 min) and re-registers the room; `status` shows
   `backoff` and the last error meanwhile. Clients' open connections drop
   with a cut stream and are retried by the client.
-- Each relay stream gets a 10 s Noise handshake deadline; failed handshakes
-  (a wrong or rotated link) are logged without key material. At most 64
-  relay streams are handshaking or being served at once.
+- The connector registers the hash of the room's [open token](#the-hyarelayv1-protocol),
+  so the proxy refuses opens without the link (they look like an offline
+  room) before this backend hears of them. `rotate` sends the new hash on
+  the same control stream (`update_open_token`) and waits for the proxy's
+  confirmation, so old links are refused at the proxy from then on.
+- Each relay stream gets a 3 s Noise handshake deadline (the client sends
+  its hello right after `opened`); failed handshakes are logged without key
+  material. At most 16 streams are in the handshake and, separately, at
+  most 64 are being served at once (`RelayHostConfig::max_handshakes` /
+  `max_streams`): a stream takes a serving slot only once it is
+  authenticated, so stalled handshakes never crowd out working streams.
 - Relay streams are served with HTTP/1.1 (with upgrades, for the PTY
   WebSocket) or HTTP/2, whichever the client speaks.
 - At shutdown the live event streams of relay clients get the same last
@@ -388,21 +396,40 @@ Streams:
 | --- | --- | --- | --- |
 | `Host` / `ws/host` | `HostFrame` | `ProxyToHost` | Host control stream: registration, heartbeats, `Incoming` notices. The room is online while it is open. |
 | `Accept` / `ws/accept` | `Chunk` | `Chunk` | Host side of one data stream; first frame `accept{stream_id}`. |
-| `Open` / `ws/open` | `Chunk` | `Chunk` | Client side of one data stream; first frame `open{room_id}`. An offline room fails with `NOT_FOUND`. The proxy sends `opened{}` once the host accepted the stream. |
+| `Open` / `ws/open` | `Chunk` | `Chunk` | Client side of one data stream; first frame `open{room_id, open_token}`. An offline room, and a missing or wrong open token, fail with the same `NOT_FOUND`. The proxy sends `opened{}` once the host accepted the stream. |
 
 Messages:
 
 | Message | Fields | Meaning |
 | --- | --- | --- |
-| `HostFrame` | oneof `register` \| `heartbeat` | Host → proxy on the control stream. |
-| `ProxyToHost` | oneof `challenge` \| `registered` \| `heartbeat` \| `incoming` \| `error` | Proxy → host on the control stream. |
+| `HostFrame` | oneof `register` \| `heartbeat` \| `update_open_token` | Host → proxy on the control stream. |
+| `ProxyToHost` | oneof `challenge` \| `registered` \| `heartbeat` \| `incoming` \| `error` \| `open_token_updated` | Proxy → host on the control stream. |
 | `Challenge` | `nonce: bytes` (32) | First proxy frame; the host must sign it. |
-| `Register` | `ed25519_pubkey: bytes` (32), `signature: bytes` (64) | Ed25519 signature over `"hya.relay.v1/register\0" ‖ nonce` (`hya_relay::proto::register_signing_message`). |
+| `Register` | `ed25519_pubkey: bytes` (32), `signature: bytes` (64), `open_token_hash: bytes` (32) | Ed25519 signature over `"hya.relay.v1/register/v2\0" ‖ nonce ‖ open_token_hash` (`hya_relay::proto::register_signing_message`). The first revision's `"hya.relay.v1/register\0" ‖ nonce` is no longer accepted; the contexts differ at byte 21, so neither signature verifies as the other. A missing hash is `INVALID_ARGUMENT`. |
+| `UpdateOpenToken` | `open_token_hash: bytes` (32), `signature: bytes` (64) | Replaces the room's hash after a PSK rotation. Signed by the room key over `"hya.relay.v1/update-open-token/v1\0" ‖ nonce ‖ open_token_hash`, with this control stream's challenge nonce. |
+| `OpenTokenUpdated` | — | The proxy applied the update: from now on only the new token opens streams. |
 | `Registered` | `room_id: string` | Registration accepted. |
 | `Heartbeat` | `seq: uint64`, `pong: bool` | Liveness probe (`pong=false`) or reply echoing `seq` (`pong=true`); valid in both directions on every stream. |
 | `Incoming` | `stream_id: string` | A client opened a stream; the host calls `Accept` with this id. Proxy-generated and unguessable. |
-| `Chunk` | oneof `open{room_id}` \| `accept{stream_id}` \| `data: bytes` \| `close{}` \| `heartbeat` \| `error` \| `opened{}` | One data-stream frame. `data` is opaque end-to-end ciphertext; `close` ends the sender's direction; `opened` (field 7) is the proxy's open acknowledgement. |
+| `Chunk` | oneof `open{room_id, open_token}` \| `accept{stream_id}` \| `data: bytes` \| `close{}` \| `heartbeat` \| `error` \| `opened{}` | One data-stream frame. `data` is opaque end-to-end ciphertext; `close` ends the sender's direction; `opened` (field 7) is the proxy's open acknowledgement. |
 | `RelayError` | `code: RelayErrorCode`, `message: string` | Terminal failure; the WebSocket stand-in for a gRPC status. |
+
+**Open tokens.** Only link holders may make a host do any work. The room's
+open token is `HMAC-SHA256(key = psk, "hya.relay.v1/open\0" ‖ room_id)`
+(`hya_relay::keys::OpenToken`, `RelayLink::open_token()`). The host
+registers only `sha256(open_token)`; an opener presents the token itself in
+`open.open_token`, and the proxy admits the open only when its sha256
+equals the registered hash (compared in constant time). A missing or wrong
+token gets exactly the answer of an offline room — `NOT_FOUND` "room is
+offline" — before any stream slot is taken or the host is told, so a room
+id alone neither reveals whether the room is online nor spends the room's
+or the host's resources. The proxy never holds the PSK; it learns a token
+only when a link holder presents it, and a token opens nothing but the
+proxy's gate (the Noise handshake still needs the PSK and the server key).
+Rotating the PSK changes the token; the host sends the new hash with
+`update_open_token`, and old tokens are refused from the proxy's
+`open_token_updated` on. Probes (`hya relay doctor`, `auto`) open a random,
+never-registered room without a token and still get `NOT_FOUND`.
 
 **Open acknowledgement.** On an `Open` stream the proxy sends exactly one
 `opened{}` frame once the host's `Accept` for that stream has been spliced;
@@ -438,10 +465,14 @@ streams have finished. The proxy keeps no state on disk.
 
 **Registration.** On a `Host` stream the proxy sends `challenge{nonce}` (32
 fresh random bytes, single use). The first host frame must be
-`register{ed25519_pubkey, signature}` within the handshake timeout. The
-signature must verify (Ed25519 `verify_strict`) over
-`"hya.relay.v1/register\0" ‖ nonce`; the room id is derived from the key and
-returned in `registered{room_id}`. The room is online while the control
+`register{ed25519_pubkey, signature, open_token_hash}` within the handshake
+timeout. The signature must verify (Ed25519 `verify_strict`) over
+`"hya.relay.v1/register/v2\0" ‖ nonce ‖ open_token_hash`; the room id is
+derived from the key and returned in `registered{room_id}`, and the hash
+gates every open of the room. `update_open_token{open_token_hash,
+signature}` (signed over the same nonce) replaces the hash; the proxy
+answers `open_token_updated{}`, or ends the control stream with
+`UNAUTHENTICATED` when the signature does not verify. The room is online while the control
 stream stays open. Afterwards the proxy sends `incoming{stream_id}` per
 opener and answers heartbeat probes with a pong; it does not probe itself.
 A control stream that delivers no frame for the idle timeout is closed, so a
@@ -461,8 +492,10 @@ loop: another process holds the same identity.
 its room is removed and every stream of that room ends with `UNAVAILABLE`.
 
 **Open and accept.** The first frame of an `Open` stream must be
-`open{room_id}` within the handshake timeout. A malformed room id is
-`INVALID_ARGUMENT`; an offline room is `NOT_FOUND`. Otherwise the proxy
+`open{room_id, open_token}` within the handshake timeout. A malformed room
+id is `INVALID_ARGUMENT`; an offline room and a missing or wrong open token
+are both `NOT_FOUND` "room is offline", checked before any limit. Otherwise
+the proxy
 allocates a stream id (128 random bits, 32 lowercase hex characters), sends
 `incoming{stream_id}` to the host, and waits for an `Accept` stream whose
 first frame is `accept{stream_id}`. Each id can be accepted once; an
@@ -497,14 +530,14 @@ final frame as the stream status instead.
 
 | Code | When |
 | --- | --- |
-| `INVALID_ARGUMENT` | Wrong or empty first frame; malformed room id; handshake frame after the splice. |
+| `INVALID_ARGUMENT` | Wrong or empty first frame; malformed room id; a `register` or `update_open_token` without a 32-byte `open_token_hash`; handshake frame after the splice. |
 | `DEADLINE_EXCEEDED` | No first frame (registration, `open`, `accept`) within the handshake timeout; a leg or control stream idle past the idle timeout; a peer that stops reading for that long. |
-| `NOT_FOUND` | `open` to an offline room; `accept` with an unknown, expired, or already accepted stream id. |
+| `NOT_FOUND` | `open` to an offline room or with a missing or wrong open token (indistinguishable); `accept` with an unknown, expired, or already accepted stream id. |
 | `ALREADY_EXISTS` | Sent to a host whose room was taken over by a newer registration. |
 | `RESOURCE_EXHAUSTED` | A room, stream, or per-client limit is reached; a `data` payload over the chunk limit (sent to both sides). |
 | `FAILED_PRECONDITION` | A second `register` on a registered control stream. |
 | `UNAVAILABLE` | The host did not accept in time; the room went offline or was replaced; the other side went away; the proxy is shutting down. |
-| `UNAUTHENTICATED` | Registration key or signature is malformed or does not verify. |
+| `UNAUTHENTICATED` | Registration or open token update key or signature is malformed or does not verify. |
 
 **Limits** (`hya_relay::proxy::ProxyLimits`, ADR-0025 D8):
 
@@ -638,7 +671,9 @@ let tunnel = NoiseStream::initiate_link(leg, &link, TunnelConfig::default()).awa
 // Host side (connector): control stream, then one Accept per `incoming`.
 let client = RelayClient::new(RelayAddress::parse_proxy_url("https://relay.example.com/hya")?, ClientConfig::default())?;
 let mut control = client.host().await?;
-let room = register_host(&mut control, &signing_key, Duration::from_secs(10)).await?;
+let open_token_hash = OpenToken::derive(&psk, &room_id).hash();
+let registration = register_host(&mut control, &signing_key, &open_token_hash, Duration::from_secs(10)).await?;
+// after a PSK rotation: control.send(registration.update_open_token_frame(&signing_key, &new_hash))
 // on ProxyToHost::incoming{stream_id}:
 let leg = client.accept(&stream_id).await?;
 ```
@@ -646,10 +681,11 @@ let leg = client.accept(&stream_id).await?;
 | Method | Returns | Notes |
 | --- | --- | --- |
 | `RelayClient::new(RelayAddress, ClientConfig)` | `Result<RelayClient, ClientError>` | Nothing connects yet; fails only on an unreadable CA file (`Config`). Clones share the gRPC connection. |
-| `RelayClient::from_link(&RelayLink, ClientConfig)` | same | A pinned `t=` in the link wins over `transport: Auto`; a pinned `config.transport` wins over the link. |
-| `open(&RoomId)` | `ChunkTransport` | Sends `open{room}` and returns once `opened` arrived (within `open_timeout`). |
+| `RelayClient::from_link(&RelayLink, ClientConfig)` | same | A pinned `t=` in the link wins over `transport: Auto`; a pinned `config.transport` wins over the link. The client keeps the link's open token. |
+| `open(&RoomId)` | `ChunkTransport` | Sends `open{room, open_token}` — the link's token for the link's room (a `from_link` client), none otherwise — and returns once `opened` arrived (within `open_timeout`). |
+| `open_with_token(&RoomId, &OpenToken)` | `ChunkTransport` | The same with an explicit token. |
 | `accept(&str)` | `ChunkTransport` | Sends `accept{stream_id}`; proxy errors (for example `NOT_FOUND` for an unknown id) arrive on the stream. |
-| `host()` | `HostControlTransport` | The proxy's first frame is the challenge; `register_host(&mut t, &SigningKey, deadline) -> Result<RoomId, ClientError>` answers it. |
+| `host()` | `HostControlTransport` | The proxy's first frame is the challenge; `register_host(&mut t, &SigningKey, &open_token_hash, deadline) -> Result<HostRegistration, ClientError>` answers it. `HostRegistration::room()` is the room; `update_open_token_frame(&SigningKey, &hash)` builds the signed update for this control stream. |
 | `binding()` | `BindingChoice{binding, reason}` | The binding streams use: pinned, remembered, or negotiated now. |
 | `probe(Binding)` | `Result<(), ProbeFailure>` | One end-to-end check of a binding (for `hya relay doctor`). |
 | `remembered_binding()` / `forget_binding()` | | Read or clear the per-address memo. |

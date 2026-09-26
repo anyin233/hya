@@ -16,15 +16,38 @@ mod generated {
 pub use generated::*;
 
 /// Domain-separation prefix of the host registration signature. The host
-/// signs `REGISTER_SIGNING_CONTEXT || Challenge.nonce` with its Ed25519 key.
-pub const REGISTER_SIGNING_CONTEXT: &[u8] = b"hya.relay.v1/register\0";
+/// signs `REGISTER_SIGNING_CONTEXT || Challenge.nonce ||
+/// Register.open_token_hash` with its Ed25519 key.
+///
+/// Versioned: the first protocol revision signed
+/// `"hya.relay.v1/register\0" || nonce` (no open token hash). The contexts
+/// differ at byte 21 (`\0` vs `/`), so a signature over one message can
+/// never verify as the other.
+pub const REGISTER_SIGNING_CONTEXT: &[u8] = b"hya.relay.v1/register/v2\0";
+
+/// Domain-separation prefix of the `UpdateOpenToken` signature: the host
+/// signs `UPDATE_OPEN_TOKEN_SIGNING_CONTEXT || Challenge.nonce ||
+/// UpdateOpenToken.open_token_hash`.
+pub const UPDATE_OPEN_TOKEN_SIGNING_CONTEXT: &[u8] = b"hya.relay.v1/update-open-token/v1\0";
 
 /// The exact bytes a host signs to answer a registration challenge.
 #[must_use]
-pub fn register_signing_message(nonce: &[u8]) -> Vec<u8> {
-    let mut message = Vec::with_capacity(REGISTER_SIGNING_CONTEXT.len() + nonce.len());
-    message.extend_from_slice(REGISTER_SIGNING_CONTEXT);
+pub fn register_signing_message(nonce: &[u8], open_token_hash: &[u8]) -> Vec<u8> {
+    signing_message(REGISTER_SIGNING_CONTEXT, nonce, open_token_hash)
+}
+
+/// The exact bytes a host signs to replace its open token hash on the
+/// control stream whose challenge was `nonce`.
+#[must_use]
+pub fn update_open_token_signing_message(nonce: &[u8], open_token_hash: &[u8]) -> Vec<u8> {
+    signing_message(UPDATE_OPEN_TOKEN_SIGNING_CONTEXT, nonce, open_token_hash)
+}
+
+fn signing_message(context: &[u8], nonce: &[u8], hash: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(context.len() + nonce.len() + hash.len());
+    message.extend_from_slice(context);
     message.extend_from_slice(nonce);
+    message.extend_from_slice(hash);
     message
 }
 

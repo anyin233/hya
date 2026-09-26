@@ -7,10 +7,12 @@ use std::time::Duration;
 
 use ed25519_dalek::{Signer, SigningKey};
 use futures::{SinkExt, StreamExt};
+use hya_relay::keys::{OpenToken, Psk};
 use hya_relay::link::RoomId;
 use hya_relay::proto::{
     Accept, Chunk, Close, Heartbeat, HostFrame, Open, Opened, ProxyToHost, Register,
-    RelayErrorCode, chunk, host_frame, proxy_to_host, register_signing_message,
+    RelayErrorCode, UpdateOpenToken, chunk, host_frame, proxy_to_host, register_signing_message,
+    update_open_token_signing_message,
 };
 use hya_relay::proxy::{PeerInfo, ProxyCore, ProxyLimits};
 use hya_relay::transport::memory::{self, MemoryTransport};
@@ -31,6 +33,32 @@ fn room_of(key: &SigningKey) -> String {
     RoomId::from_ed25519(key.verifying_key().as_bytes())
         .as_str()
         .to_owned()
+}
+
+/// The test PSK of a room: its id bytes, zero-padded.
+fn psk_for(room: &str, generation: u8) -> Psk {
+    let mut bytes = [generation; 32];
+    let len = room.len().min(32);
+    bytes[..len].copy_from_slice(&room.as_bytes()[..len]);
+    Psk::from_bytes(bytes)
+}
+
+/// The open token a link holder of `room` presents (PSK generation 0).
+fn token_for(room: &str) -> Vec<u8> {
+    token_gen(room, 0)
+}
+
+fn token_gen(room: &str, generation: u8) -> Vec<u8> {
+    match RoomId::parse(room) {
+        Ok(id) => OpenToken::derive(&psk_for(room, generation), &id)
+            .as_bytes()
+            .to_vec(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn hash_gen(key: &SigningKey, generation: u8) -> [u8; 32] {
+    hya_relay::keys::open_token_hash(&token_gen(&room_of(key), generation))
 }
 
 fn peer(name: &str) -> PeerInfo {
@@ -92,11 +120,25 @@ async fn challenge(host: &mut HostEnd) -> Vec<u8> {
 }
 
 fn register_frame(key: &SigningKey, nonce: &[u8]) -> HostFrame {
+    let hash = hash_gen(key, 0);
     HostFrame {
         frame: Some(host_frame::Frame::Register(Register {
             ed25519_pubkey: key.verifying_key().as_bytes().to_vec(),
             signature: key
-                .sign(&register_signing_message(nonce))
+                .sign(&register_signing_message(nonce, &hash))
+                .to_bytes()
+                .to_vec(),
+            open_token_hash: hash.to_vec(),
+        })),
+    }
+}
+
+fn update_frame(key: &SigningKey, nonce: &[u8], hash: &[u8; 32]) -> HostFrame {
+    HostFrame {
+        frame: Some(host_frame::Frame::UpdateOpenToken(UpdateOpenToken {
+            open_token_hash: hash.to_vec(),
+            signature: key
+                .sign(&update_open_token_signing_message(nonce, hash))
                 .to_bytes()
                 .to_vec(),
         })),
@@ -135,12 +177,17 @@ async fn incoming(host: &mut HostEnd) -> String {
 }
 
 async fn start_open_as(core: &ProxyCore, room: &str, who: &str) -> ChunkEnd {
+    start_open_with(core, room, token_for(room), who).await
+}
+
+async fn start_open_with(core: &ProxyCore, room: &str, token: Vec<u8>, who: &str) -> ChunkEnd {
     let (mut client, proxy) = memory::pair::<Chunk, Chunk>(4);
     tokio::spawn(core.serve_open(Box::pin(proxy), peer(who)));
     client
         .send(Chunk {
             frame: Some(chunk::Frame::Open(Open {
                 room_id: room.to_owned(),
+                open_token: token,
             })),
         })
         .await
@@ -271,6 +318,7 @@ async fn malformed_key_is_unauthenticated() {
         frame: Some(host_frame::Frame::Register(Register {
             ed25519_pubkey: vec![1; 31],
             signature: vec![0; 64],
+            open_token_hash: vec![0; 32],
         })),
     })
     .await
@@ -1018,3 +1066,156 @@ async fn shutdown_closes_everything_and_refuses_new_work() {
         RelayErrorCode::Unavailable
     );
 }
+
+// ---- open tokens (link-holder gating) ----
+
+/// No `incoming` reaches the host within a short window.
+async fn expect_no_incoming(host: &mut HostEnd) {
+    match timeout(Duration::from_millis(200), host.next()).await {
+        Err(_) => {}
+        Ok(frame) => panic!("the host heard of a rejected open: {frame:?}"),
+    }
+}
+
+#[tokio::test]
+async fn open_without_or_with_a_wrong_token_looks_offline_and_never_reaches_the_host() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let k = key(1);
+    let room = room_of(&k);
+    let mut host = register(&core, &k).await;
+    let wrong_room_token = token_for(&room_of(&key(2)));
+    for token in [
+        Vec::new(),
+        vec![0; 32],
+        token_gen(&room, 1),
+        wrong_room_token,
+    ] {
+        let mut opener = start_open_with(&core, &room, token, "client").await;
+        match recv(&mut opener).await.frame {
+            Some(chunk::Frame::Error(e)) => {
+                assert_eq!(e.error_code(), RelayErrorCode::NotFound);
+                assert_eq!(e.message, "room is offline");
+            }
+            other => panic!("expected NOT_FOUND, got {other:?}"),
+        }
+        assert_eq!(core.stats().streams, 0, "no stream slot was taken");
+    }
+    expect_no_incoming(&mut host).await;
+    // The right token still opens.
+    let _opener = start_open(&core, &room).await;
+    let _ = incoming(&mut host).await;
+}
+
+#[tokio::test]
+async fn a_wrong_token_is_rejected_before_room_limits_apply() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_streams_per_room: 1,
+        ..ProxyLimits::default()
+    });
+    let k = key(1);
+    let room = room_of(&k);
+    let mut host = register(&core, &k).await;
+    let _first = start_open(&core, &room).await;
+    let _ = incoming(&mut host).await;
+    // A room-id holder cannot tell a full room from an offline one.
+    let mut guess = start_open_with(&core, &room, vec![7; 32], "client").await;
+    assert_eq!(chunk_error(&mut guess).await, RelayErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn registration_without_a_token_hash_is_refused() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let mut host = start_host(&core, "host");
+    let nonce = challenge(&mut host).await;
+    let k = key(1);
+    host.send(HostFrame {
+        frame: Some(host_frame::Frame::Register(Register {
+            ed25519_pubkey: k.verifying_key().as_bytes().to_vec(),
+            signature: k
+                .sign(&register_signing_message(&nonce, &[]))
+                .to_bytes()
+                .to_vec(),
+            open_token_hash: Vec::new(),
+        })),
+    })
+    .await
+    .unwrap();
+    assert_eq!(host_error(&mut host).await, RelayErrorCode::InvalidArgument);
+    assert_eq!(core.stats().rooms, 0);
+}
+
+#[tokio::test]
+async fn the_signature_covers_the_token_hash() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let mut host = start_host(&core, "host");
+    let nonce = challenge(&mut host).await;
+    let k = key(1);
+    // Signed for one hash, presenting another (a proxy-side swap).
+    let signed = hash_gen(&k, 0);
+    host.send(HostFrame {
+        frame: Some(host_frame::Frame::Register(Register {
+            ed25519_pubkey: k.verifying_key().as_bytes().to_vec(),
+            signature: k
+                .sign(&register_signing_message(&nonce, &signed))
+                .to_bytes()
+                .to_vec(),
+            open_token_hash: hash_gen(&k, 1).to_vec(),
+        })),
+    })
+    .await
+    .unwrap();
+    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
+}
+
+/// Register `key` and also return the challenge nonce.
+async fn register_with_nonce(core: &ProxyCore, key: &SigningKey) -> (HostEnd, Vec<u8>) {
+    let mut host = start_host(core, "host");
+    let nonce = challenge(&mut host).await;
+    host.send(register_frame(key, &nonce)).await.unwrap();
+    match recv_host(&mut host).await {
+        proxy_to_host::Frame::Registered(_) => {}
+        other => panic!("expected registered, got {other:?}"),
+    }
+    (host, nonce)
+}
+
+#[tokio::test]
+async fn a_token_update_invalidates_old_tokens_at_the_proxy() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let k = key(1);
+    let room = room_of(&k);
+    let (mut host, nonce) = register_with_nonce(&core, &k).await;
+    host.send(update_frame(&k, &nonce, &hash_gen(&k, 1)))
+        .await
+        .unwrap();
+    match recv_host(&mut host).await {
+        proxy_to_host::Frame::OpenTokenUpdated(_) => {}
+        other => panic!("expected open_token_updated, got {other:?}"),
+    }
+    let mut old = start_open_with(&core, &room, token_gen(&room, 0), "client").await;
+    assert_eq!(chunk_error(&mut old).await, RelayErrorCode::NotFound);
+    expect_no_incoming(&mut host).await;
+    let _new = start_open_with(&core, &room, token_gen(&room, 1), "client").await;
+    let _ = incoming(&mut host).await;
+}
+
+#[tokio::test]
+async fn a_token_update_must_be_signed_over_this_streams_nonce() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let k = key(1);
+    let (mut host, nonce) = register_with_nonce(&core, &k).await;
+    // A different nonce (say, replayed from another control stream).
+    let mut other_nonce = nonce.clone();
+    other_nonce[0] ^= 1;
+    host.send(update_frame(&k, &other_nonce, &hash_gen(&k, 1)))
+        .await
+        .unwrap();
+    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
+    // Signed by another key.
+    let (mut host, nonce) = register_with_nonce(&core, &k).await;
+    host.send(update_frame(&key(2), &nonce, &hash_gen(&k, 1)))
+        .await
+        .unwrap();
+    assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
+}
+

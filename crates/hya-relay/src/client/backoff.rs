@@ -12,12 +12,12 @@
 //! let mut backoff = Backoff::new(ReconnectPolicy::default());
 //! loop {
 //!     let kind = match client.host().await {
-//!         Ok(mut control) => match register_host(&mut control, &key, deadline).await {
-//!             Ok(room) => {
+//!         Ok(mut control) => match register_host(&mut control, &key, &token_hash, deadline).await {
+//!             Ok(registration) => {
 //!                 backoff.connected();
 //!                 // Serve `incoming` until the control stream ends; an
 //!                 // `Err(e)` item gives `RetryKind::of_transport_error(&e)`.
-//!                 serve(control, room).await
+//!                 serve(control, registration).await
 //!             }
 //!             Err(error) => RetryKind::of_client_error(&error),
 //!         },

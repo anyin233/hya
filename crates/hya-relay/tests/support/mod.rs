@@ -16,7 +16,7 @@ use futures::StreamExt;
 use hya_relay::client::{
     Backoff, ClientError, ReconnectPolicy, RelayClient, RetryKind, register_host,
 };
-use hya_relay::keys::{Psk, StaticKeypair};
+use hya_relay::keys::{OpenToken, Psk, StaticKeypair};
 use hya_relay::link::{RelayAddress, RelayLink, RoomId, Transport};
 use hya_relay::proto::{ProxyToHost, proxy_to_host};
 use hya_relay::server::{RelayServer, RelayServerConfig, TlsFiles};
@@ -135,14 +135,19 @@ impl Identity {
         RoomId::from_ed25519(self.key.verifying_key().as_bytes())
     }
 
+    /// The open token hash the backend registers.
+    pub fn open_token_hash(&self) -> [u8; 32] {
+        OpenToken::derive(&self.psk, &self.room()).hash()
+    }
+
     /// The relay link a client would be given.
     pub fn link(&self, address: RelayAddress, transport: Transport) -> RelayLink {
-        RelayLink::new(
+        RelayLink::from_keys(
             address,
             self.room(),
             transport,
             *self.noise.public(),
-            *self.psk.as_bytes(),
+            &self.psk,
         )
     }
 }
@@ -228,7 +233,14 @@ async fn session(
     backoff: &mut Backoff,
 ) -> Result<RetryKind, ClientError> {
     let mut control = client.host().await?;
-    let room = register_host(&mut control, &identity.key, WAIT).await?;
+    let registration = register_host(
+        &mut control,
+        &identity.key,
+        &identity.open_token_hash(),
+        WAIT,
+    )
+    .await?;
+    let room = registration.room().clone();
     registrations.fetch_add(1, Ordering::SeqCst);
     backoff.connected();
     while let Some(item) = control.next().await {
@@ -292,7 +304,9 @@ pub async fn connect(
     client: &RelayClient,
     link: &RelayLink,
 ) -> Result<NoiseStream<hya_relay::transport::ChunkTransport>, ClientError> {
-    let leg = client.open(link.room_id()).await?;
+    let leg = client
+        .open_with_token(link.room_id(), &link.open_token())
+        .await?;
     timeout(
         WAIT,
         NoiseStream::initiate_link(leg, link, TunnelConfig::default()),

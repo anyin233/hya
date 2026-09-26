@@ -110,8 +110,8 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
     if inner.shutdown.is_cancelled() {
         return fail(&mut opener, shutting_down()).await;
     }
-    let room_id = match first_frame(&inner, &mut opener).await {
-        Ok(chunk::Frame::Open(open)) => open.room_id,
+    let (room_id, open_token) = match first_frame(&inner, &mut opener).await {
+        Ok(chunk::Frame::Open(open)) => (open.room_id, open.open_token),
         Ok(_) => {
             let relay_error = error(
                 RelayErrorCode::InvalidArgument,
@@ -126,7 +126,7 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
         let relay_error = error(RelayErrorCode::InvalidArgument, "malformed room id");
         return fail(&mut opener, relay_error).await;
     }
-    let (slot, mut arrival) = match inner.admit_stream(&room_id, &peer) {
+    let (slot, mut arrival) = match inner.admit_stream(&room_id, &open_token, &peer) {
         Ok(admitted) => admitted,
         Err(relay_error) => return fail(&mut opener, relay_error).await,
     };

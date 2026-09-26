@@ -397,13 +397,15 @@ async fn chunk_leg(target: &Target, binding: Binding, open: bool) -> Leg<Chunk, 
 // ---- relay frames ----
 
 fn register_frame(key: &SigningKey, nonce: &[u8]) -> HostFrame {
+    let hash = hya_relay::keys::open_token_hash(&token_for(&room_of(key)));
     HostFrame {
         frame: Some(host_frame::Frame::Register(Register {
             ed25519_pubkey: key.verifying_key().as_bytes().to_vec(),
             signature: key
-                .sign(&register_signing_message(nonce))
+                .sign(&register_signing_message(nonce, &hash))
                 .to_bytes()
                 .to_vec(),
+            open_token_hash: hash.to_vec(),
         })),
     }
 }
@@ -502,10 +504,29 @@ fn close() -> Chunk {
     }
 }
 
+/// The test PSK of a room: its id bytes, zero-padded.
+fn token_for(room: &str) -> Vec<u8> {
+    let mut psk = [0u8; 32];
+    let len = room.len().min(32);
+    psk[..len].copy_from_slice(&room.as_bytes()[..len]);
+    match hya_relay::link::RoomId::parse(room) {
+        Ok(id) => hya_relay::keys::OpenToken::derive(&hya_relay::keys::Psk::from_bytes(psk), &id)
+            .as_bytes()
+            .to_vec(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// An `open` a link holder of `room` sends.
 fn open(room: &str) -> Chunk {
+    open_with(room, token_for(room))
+}
+
+fn open_with(room: &str, open_token: Vec<u8>) -> Chunk {
     Chunk {
         frame: Some(chunk::Frame::Open(Open {
             room_id: room.to_owned(),
+            open_token,
         })),
     }
 }

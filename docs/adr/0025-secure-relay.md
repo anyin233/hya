@@ -117,6 +117,35 @@ maximum concurrent streams per room, an idle timeout per stream, and a byte
 rate cap per stream. Nothing is persisted; a restarted proxy has no rooms
 until hosts re-register.
 
+Per-client limits key on the client address, with IPv6 bucketed by /64 (one
+host commonly holds a whole /64). Behind a trusted hop the operator names
+exactly one forwarding header (`--trust-forwarded cf-connecting-ip |
+x-real-ip | x-forwarded-for`, the last read at its rightmost entry, the one
+the hop appended), so a client cannot choose a header or an entry that suits
+it. Proxy-wide caps on total streams, pending registrations, and buffered
+early data bound what many addresses can take together.
+
+**Open tokens (security review follow-up).** Room ids are not secret (they
+appear in redacted links, logs, and `status`), so originally anyone with a
+room id could fill a room's stream slots and make the host accept streams
+and start handshakes. Opens are now gated to link holders without giving the
+proxy the PSK: the opener sends `open_token = HMAC-SHA256(psk,
+"hya.relay.v1/open\0" ‖ room_id)`; the host registers only
+`sha256(open_token)`, covered by its registration signature (the signing
+message is versioned, `"hya.relay.v1/register/v2\0" ‖ nonce ‖ hash`, so a
+first-revision signature can never be read as a new one); the proxy compares
+hashes in constant time before allocating anything or notifying the host. A
+wrong token gets the same `NOT_FOUND` "room is offline" as an offline room
+(chosen over `PERMISSION_DENIED` so the answer does not reveal that a room
+is online). After a PSK rotation the host sends the new hash on the same
+control stream (`update_open_token`, signed over that stream's nonce) and
+old tokens are refused once the proxy confirms. The token is not a second
+secret to protect separately: it opens nothing but the proxy's gate, and the
+Noise handshake still needs the PSK. On the host, streams in the Noise
+handshake have their own small budget (16) and a 3 s deadline (the client's
+hello follows `opened` immediately), separate from the serving slots, so
+stalled handshakes never crowd out working streams.
+
 ### D9 — Work through any intermediary
 
 We assume only that the path contains "some HTTPS hop that may speak
@@ -207,8 +236,8 @@ edits), the session contents, and the link secret.
   fails because each proxy nonce is single-use.
 - **Link leak.** A leaked link is full control of the backend, like a leaked
   SSH key without a passphrase. The response is `hya serve relay rotate`,
-  which invalidates every earlier link at the next handshake; open streams
-  from the old link are closed on rotate. The link's secret part is in the URL
+  which invalidates every earlier link — at the proxy (its open token) and at
+  the next handshake; open streams from the old link are closed on rotate. The link's secret part is in the URL
   fragment so it does not end up in hop logs, and the backend never prints it
   except through `hya serve relay link`/`--relay` start output and never
   writes it to the discovery file.
