@@ -1097,6 +1097,39 @@ existing relay streams (`UNAVAILABLE`), and exits **0**.
 Deployment recipes for Cloudflare Tunnel, nginx, Caddy, Tailscale, and direct
 TLS are in [docs/relay.md](relay.md#deployment-recipes).
 
+## `hya bridge`
+
+```sh
+printf '%s\n' "$LINK" | hya bridge -
+hya bridge - --json --exit-with-stdin   # for a parent process (the TUI)
+```
+
+The client side of the [secure relay](relay.md#connecting-from-a-client): a
+loopback HTTP address that reaches the remote backend behind a relay link,
+end to end encrypted. Point a TUI at it with `--server <url> --remote`.
+Dispatched before any runtime composition, like `hya proxy`.
+
+**Readiness contract.** Once listening (after choosing the relay binding and
+checking the link), stdout gets exactly one line:
+`hya bridge listening on http://127.0.0.1:<port>`, or with `--json`
+`{"url":"http://127.0.0.1:<port>","room":"<room_id>","proxy":"<redacted relay>","label":"remote: <relay>/<room_id>"}`.
+Status lines go to stderr (`hya bridge: …`). Source:
+[`bridge.rs`](../crates/hya-backend/src/bridge.rs).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `<LINK>` | `$HYA_RELAY_LINK` | The relay link; `-` reads one line from stdin (recommended: an argument is visible in process listings, and `hya` warns). |
+| `--listen <ADDR>` | `127.0.0.1:0` | Loopback listen address; non-loopback addresses are refused. |
+| `--relay-ca <PEM>` | none | Extra trusted CA certificates. |
+| `--transport auto\|grpc\|ws` | the link's `t=` | Relay binding override. |
+| `--json` | off | JSON readiness line. |
+| `--exit-with-stdin` | off | Exit when stdin reaches end of file. |
+
+**Exit codes:** **0** after SIGINT, SIGTERM, SIGHUP, or (with
+`--exit-with-stdin`) end of stdin; **1** for a bad link or flag, a
+non-loopback `--listen`, a relay no binding reaches, or a link the backend
+rejects.
+
 ## `hya relay doctor`
 
 ```sh
@@ -1122,4 +1155,4 @@ advice table per failure kind.
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` when no server runs. **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` and `bridge` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` when no server runs. **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |
