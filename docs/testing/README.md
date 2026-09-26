@@ -30,16 +30,16 @@ From the workspace root (see also [Development](../development.md)):
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --jobs 1 --exclude hya-e2e
+cargo test --workspace --exclude hya-e2e
 ```
 
 `--exclude hya-e2e` matches CI: Track P spawns real backend processes and is run
-separately below with `--test-threads=1`. CI also uses `--jobs 1` to cap
-concurrent workspace-test resource use; local runs may omit that job cap.
+separately below with `--test-threads=1`.
 
 CI exercises both tracks in different modes, but they are not all separate
 gates: Track P is enforced; Track I remains an index-only classification within
-the Rust suite. Each gate step carries
+the Rust suite. CI runs lint (fmt, matrix check, clippy), the workspace suite,
+Track P, and the TUI suites as four parallel jobs. Each gate step carries
 `if: ${{ !cancelled() }}`, so a failure in one step no longer skips the rest — a
 red `fmt` used to abort the job before the test step ever ran, which hid six
 failing tests for weeks.
