@@ -1007,8 +1007,8 @@ Coding-tool permission order is stable: invocation admission runs first. Read
 and Grep derive the containing lexical `<dir>/*` scope and authorize it before
 metadata/existence/target-kind probing; denied file and directory siblings use
 the same resource. Tool-specific permission follows, then filesystem work.
-Bash checks command permission before process creation and checks
-`ExternalDirectory` for a `cwd` outside the workdir. File-tool paths are absolutized
+Bash checks command permission before process creation and has no path
+boundary: its `cwd` may be anywhere (ADR-0026). File-tool paths are absolutized
 and lexically normalized for the resource, and containment in the workspace
 roots is judged after symlink resolution. A call-scoped invocation grant never
 satisfies the separate external-directory check.

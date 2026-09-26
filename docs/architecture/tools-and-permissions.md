@@ -283,7 +283,7 @@ persistence writes that serde string into the DB `action` column
 | `todowrite` | `TodoWrite` | `todowrite`. |
 | `skill` | `Skill` | `skill`. |
 | `lsp` | `Lsp` | `lsp`. |
-| `externaldirectory` | `ExternalDirectory` | A file tool whose resolved path lies outside every workspace root of the session, or a Bash `cwd` outside the session workdir. |
+| `externaldirectory` | `ExternalDirectory` | A file tool whose resolved path lies outside every workspace root of the session. Bash never raises it. |
 
 ### Resource (nine shapes)
 
@@ -462,7 +462,7 @@ even inside an already-approved tool call. Canonicalization costs a few
 | `grep` | Search root, file or directory, when outside (kind-blind `<parent>/*`). |
 | `find` | Resolved search root directory when outside (`<root>/*`); asserts `Action::Glob` on the pattern first. |
 | `ls` | Resolved directory when outside (`<dir>/*`), then `Action::Read` on the directory. |
-| `bash` (including hidden `shell`) | Optional `cwd` when it resolves outside the session workdir (`<cwd>/*`, lexical). |
+| `bash` (including hidden `shell`) | **Nothing path-based.** Its `cwd` may be any directory and its command's file effects are not inspected; only `Action::Bash` invocation rules apply. Its output artifacts stay under `<workdir>/.hya/tool-output`. |
 
 ### Per-turn external directories
 

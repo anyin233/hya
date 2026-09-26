@@ -342,13 +342,12 @@ impl Tool for ShellTool {
             return Err(ToolError::Cancelled);
         }
 
-        // The command subject is checked before resolving or authorizing cwd so
-        // a denied command cannot probe an external directory.
+        // Bash has no path boundary (ADR-0026): its cwd may be any directory
+        // and only the command's invocation rules apply.
         ctx.permission
             .assert(Action::Bash, Resource::Command(command.clone()))
             .await?;
         let cwd = resolve_cwd(ctx, requested_cwd.as_deref());
-        assert_external_workdir(ctx, &cwd).await?;
 
         let started = Instant::now();
         let artifact_root = normalize(&absolutize(&ctx.workdir)).join(".hya/tool-output");
@@ -1144,18 +1143,4 @@ fn with_cleanup_error(primary: ToolError, cleanup: Result<(), ToolError>) -> Too
 /// Convert an I/O failure into a typed error with operation context.
 fn contextual_io(operation: &str, error: impl std::fmt::Display) -> ToolError {
     ToolError::Io(io::Error::other(format!("{operation}: {error}")))
-}
-
-/// Require external-directory permission for cwd values outside the workdir.
-async fn assert_external_workdir(ctx: &ToolCtx, cwd: &Path) -> Result<(), ToolError> {
-    let base = normalize(&absolutize(&ctx.workdir));
-    let cwd = normalize(&absolutize(cwd));
-    if cwd.starts_with(&base) {
-        return Ok(());
-    }
-    let pattern = display_path(&cwd.join("*"));
-    ctx.permission
-        .assert(Action::ExternalDirectory, Resource::Path(pattern))
-        .await?;
-    Ok(())
 }

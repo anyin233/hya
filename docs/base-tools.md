@@ -126,7 +126,8 @@ as outside.
 
 A path outside every root raises an `ExternalDirectory` ask for a concrete
 `<dir>/*` pattern, before the tool's normal `read`/`edit` check. `apply_patch`
-refuses such a path with an input error instead of asking.
+refuses such a path with an input error instead of asking. `bash` has no path
+boundary: its `cwd` may be anywhere, and only its command rules apply.
 
 For example, with roots `/work/app` and `/work/lib` and workdir `/work/app`,
 `read {"path": "/work/lib/src/mod.rs"}` runs without asking, while
