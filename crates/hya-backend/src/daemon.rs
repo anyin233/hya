@@ -52,8 +52,6 @@ pub(crate) struct DaemonSpec {
     pub(crate) pure: bool,
     /// The `hya` binary to run (`std::env::current_exe()`).
     pub(crate) exe: PathBuf,
-    /// Working directory of the daemon (its default request directory).
-    pub(crate) cwd: PathBuf,
 }
 
 /// A running server of a database, and whether this call started it.
@@ -171,8 +169,39 @@ fn reap(mut child: Child) {
     });
 }
 
-/// `hya serve --bind 127.0.0.1:0 --db <db>` in its own session, output
-/// appended to `log`.
+/// The daemon's working directory: `$HOME` when it is an existing
+/// directory, else `/`. The backend serves every client of the database,
+/// wherever each one runs, so it never works in the starter's directory
+/// (ADR-0024: requests and sessions carry their own directory; the server has
+/// no working directory of its own).
+fn daemon_dir(home: Option<std::ffi::OsString>) -> PathBuf {
+    home.filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// `hya serve --bind 127.0.0.1:0 --db <db>` (plus the spec's `--model`,
+/// `--yolo`, `--pure`) run in `dir`; stdio and the session are the caller's.
+fn serve_command(spec: &DaemonSpec, dir: &std::path::Path) -> Command {
+    let mut command = Command::new(&spec.exe);
+    command
+        .args(["serve", "--bind", "127.0.0.1:0", "--db", &spec.db])
+        .current_dir(dir);
+    if let Some(model) = &spec.model {
+        command.args(["--model", model]);
+    }
+    if spec.yolo {
+        command.arg("--yolo");
+    }
+    if spec.pure {
+        command.arg("--pure");
+    }
+    command
+}
+
+/// [`serve_command`] in [`daemon_dir`], in its own session, output appended
+/// to `log`.
 fn spawn(spec: &DaemonSpec, log: &std::path::Path) -> anyhow::Result<Child> {
     if std::fs::metadata(log).is_ok_and(|meta| meta.len() > LOG_ROTATE_BYTES) {
         let mut rotated = log.as_os_str().to_owned();
@@ -192,22 +221,11 @@ fn spawn(spec: &DaemonSpec, log: &std::path::Path) -> anyhow::Result<Child> {
         unix_ms(),
         spec.db
     );
-    let mut command = Command::new(&spec.exe);
+    let mut command = serve_command(spec, &daemon_dir(std::env::var_os("HOME")));
     command
-        .args(["serve", "--bind", "127.0.0.1:0", "--db", &spec.db])
-        .current_dir(&spec.cwd)
         .stdin(Stdio::null())
         .stdout(file.try_clone().context("share the daemon log")?)
         .stderr(file);
-    if let Some(model) = &spec.model {
-        command.args(["--model", model]);
-    }
-    if spec.yolo {
-        command.arg("--yolo");
-    }
-    if spec.pure {
-        command.arg("--pure");
-    }
     // SAFETY: `setsid` is async-signal-safe and touches no memory of the
     // parent; it detaches the daemon from the starter's session and
     // controlling terminal, so neither a terminal hangup nor the starter's
@@ -418,6 +436,67 @@ mod tests {
         assert!(version_note(&found).unwrap().contains("hya serve restart"));
     }
 
+    #[test]
+    fn the_daemon_runs_in_the_home_directory_never_the_starters() {
+        let home = std::env::temp_dir();
+        assert_eq!(daemon_dir(Some(home.clone().into_os_string())), home);
+        assert_eq!(daemon_dir(Some("".into())), PathBuf::from("/"));
+        assert_eq!(daemon_dir(None), PathBuf::from("/"));
+        // A HOME that does not exist would make the spawn fail.
+        let missing = home.join(format!("hya-no-such-home-{}", std::process::id()));
+        assert_eq!(
+            daemon_dir(Some(missing.into_os_string())),
+            PathBuf::from("/")
+        );
+
+        let spec = DaemonSpec {
+            db: "/state/hya/sessions.db".into(),
+            model: Some("hya/echo".into()),
+            yolo: true,
+            pure: true,
+            exe: PathBuf::from("/bin/hya"),
+        };
+        let command = serve_command(&spec, std::path::Path::new("/home/me"));
+        assert_eq!(command.get_program(), "/bin/hya");
+        assert_eq!(
+            command.get_current_dir(),
+            Some(std::path::Path::new("/home/me"))
+        );
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "serve",
+                "--bind",
+                "127.0.0.1:0",
+                "--db",
+                "/state/hya/sessions.db",
+                "--model",
+                "hya/echo",
+                "--yolo",
+                "--pure"
+            ]
+        );
+        let plain = DaemonSpec {
+            model: None,
+            yolo: false,
+            pure: false,
+            ..spec
+        };
+        let command = serve_command(&plain, std::path::Path::new("/"));
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "serve",
+                "--bind",
+                "127.0.0.1:0",
+                "--db",
+                "/state/hya/sessions.db"
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn an_in_memory_database_cannot_have_a_daemon() {
         let spec = DaemonSpec {
@@ -426,7 +505,6 @@ mod tests {
             yolo: false,
             pure: false,
             exe: PathBuf::from("/nonexistent/hya"),
-            cwd: PathBuf::from("/"),
         };
         let error = start(&spec, Duration::from_millis(10)).await.unwrap_err();
         assert!(error.to_string().contains("--db"), "{error}");

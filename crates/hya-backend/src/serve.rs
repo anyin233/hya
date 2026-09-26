@@ -60,7 +60,6 @@ pub(crate) async fn cmd_serve_action(
             yolo,
             pure,
             exe: std::env::current_exe().context("find the hya binary")?,
-            cwd: std::env::current_dir().context("read the working directory")?,
         })
     };
     let print_ready = |ready: &daemon::Ready, json: bool| {

@@ -4,7 +4,7 @@ import { resolve } from "node:path"
 export interface Options {
   /** Base URL of a running `hya serve`; unset = the TUI finds or starts its database's daemon (src/launch.ts). */
   server?: string
-  /** Workspace directory: `x-hya-directory` of every request, and the started backend's working directory. */
+  /** Workspace directory: `x-hya-directory` of every request (a started daemon runs in the home directory, not here). */
   directory: string
   /** `hya` binary that starts the daemon (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
   hya?: string
@@ -52,7 +52,7 @@ export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
 
 Without --server the TUI uses the backend daemon of --db: the server already
 running on it (its <db>.server.json answers), else a new one it starts with
-\`hya serve start\` (detached, working directory --dir). The daemon keeps
+\`hya serve start\` (detached, in the home directory). The daemon keeps
 running after the TUI exits; \`hya serve stop\` stops it, and the TUI then
 starts nothing until /reconnect. After \`hya serve restart\` it attaches to
 the new daemon; after a crash it finds or starts the next one.

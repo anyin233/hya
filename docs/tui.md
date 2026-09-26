@@ -89,8 +89,9 @@ Without `--server` the TUI uses the backend daemon of its database
    alive and `GET <url>/v1/health` answers `ok`. Any server of the database
    counts: a daemon, a `hya serve --db` you run yourself, another bare `hya`'s.
 2. Otherwise it finds the `hya` binary and runs `hya serve start --json
-   --db <db>` in `--dir` with the TUI's environment. That starts `hya serve`
-   detached (its own session; output to `<db>.server.log`), waits until it
+   --db <db>` in `--dir` (a relative `--db` resolves against it) with the
+   TUI's environment. That starts `hya serve` detached in your home directory
+   (its own session; output to `<db>.server.log`), waits until it
    answers, and prints where it is (see [Backend daemon](cli.md#backend-daemon)).
    Two TUIs that start at the same moment end up on one daemon: the database
    lock lets only one start.
@@ -141,7 +142,7 @@ without `--db`.
 | Flag | Meaning |
 | --- | --- |
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI uses the database's daemon. |
-| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `x-hya-directory` scope of every request and the working directory of a daemon the TUI starts. Default: the TUI's working directory. |
+| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `x-hya-directory` scope of every request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary that starts the daemon (first in the lookup order above). |
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). |

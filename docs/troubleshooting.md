@@ -146,6 +146,11 @@ tail -f ~/.local/state/hya/sessions.db.server.log
   daemon that launch starts; a running daemon keeps its own. `hya serve
   restart --model …` (or `stop`, then start `hya` with the flags) applies
   them.
+- **A project's `.hya/bundles` or `.hya/plugins` are not loaded** — the
+  daemon starts in your home directory, not in the directory of the client
+  that started it, so its project tier is `~/.hya/`. Run `hya serve --db
+  <db>` in the project yourself (and point the TUI at it) to serve that
+  project's bundles and plugins.
 - **A TUI with `--server <url>` does not reconnect** — without `--db` the URL
   is fixed; add `--db <database>` to let it fall back to that database's
   daemon.

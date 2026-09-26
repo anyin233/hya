@@ -303,7 +303,6 @@ pub(crate) fn tui_argv(
 pub(crate) async fn connect(
     request: &LaunchRequest,
     exe: &Path,
-    cwd: &Path,
 ) -> anyhow::Result<(BackendLink, Vec<String>)> {
     if let Some(url) = &request.backend {
         if !db_lock::probe(url, PROBE_TIMEOUT).await {
@@ -324,7 +323,6 @@ pub(crate) async fn connect(
         yolo: request.yolo,
         pure: request.pure,
         exe: exe.to_path_buf(),
-        cwd: cwd.to_path_buf(),
     };
     let ready = daemon::start(&spec, daemon::START_WAIT).await?;
     let found = &ready.discovery;
@@ -424,7 +422,7 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
     // Everything that can fail cheaply fails here, before the terminal is touched.
     let resolved = resolve()?;
     let exe = std::env::current_exe().context("find the hya binary")?;
-    let (backend, notes) = connect(&request, &exe, &resolved.cwd).await?;
+    let (backend, notes) = connect(&request, &exe).await?;
     let log_file = log_path(&request.state_dir);
     let log =
         open_log(&log_file).with_context(|| format!("open the log file {}", log_file.display()))?;
@@ -1036,13 +1034,9 @@ mod tests {
     #[tokio::test]
     async fn an_explicit_backend_is_used_as_is_without_rediscovery() {
         let url = health_server(true).await;
-        let (link, _notes) = connect(
-            &request(Some(url.clone())),
-            Path::new("/bin/hya"),
-            Path::new("/work"),
-        )
-        .await
-        .unwrap();
+        let (link, _notes) = connect(&request(Some(url.clone())), Path::new("/bin/hya"))
+            .await
+            .unwrap();
         assert_eq!(
             link,
             BackendLink {
@@ -1056,14 +1050,10 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_explicit_backend_is_a_clear_error() {
         let url = health_server(false).await;
-        let error = connect(
-            &request(Some(url.clone())),
-            Path::new("/bin/hya"),
-            Path::new("/work"),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
+        let error = connect(&request(Some(url.clone())), Path::new("/bin/hya"))
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(error.contains(&url), "{error}");
         assert!(error.contains("--backend"), "{error}");
     }
