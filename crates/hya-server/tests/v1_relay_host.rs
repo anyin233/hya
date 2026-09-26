@@ -586,6 +586,8 @@ async fn rotating_the_key_closes_streams_and_invalidates_the_old_link() {
         sse_ends(&mut stream, Duration::from_secs(5)).await,
         "the open stream of the old link was closed"
     );
+    // The proxy already refuses the old link's open token: the backend
+    // never even sees the stream.
     let error = tunnel(&old).await.expect_err("the old link is rejected");
     assert!(error.contains("offline"), "{error}");
     let mut api = http(&new).await;
