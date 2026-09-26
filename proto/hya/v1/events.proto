@@ -103,11 +103,17 @@ message StreamGlobalEventsRequest {
   // Skip durable events with `seq` at or below this watermark. Live-only
   // frames (`seq = 0`) are always delivered. No history is replayed.
   uint64 since_seq = 2;
-  // Deliver only the live interaction frames (`permissionRequested`,
-  // `questionRequested`, `interactionResolved`) of every session plus the
-  // process-wide `catalogUpdated` notice; skip every session's engine
-  // events and their `resync` frames. For a client that follows one session
-  // on its session stream and needs only the asks of the others.
+  // Deliver only interaction and session-list frames: the live interaction
+  // frames (`permissionRequested`, `questionRequested`,
+  // `interactionResolved`) of every session, the process-wide
+  // `catalogUpdated` notice, and the session-list frames of root sessions —
+  // durable `sessionStarted` and `sessionUpdated` (title, agent, model,
+  // permission mode, archived), live `sessionUpdated.busy`, and live
+  // `sessionDeleted`. Every other engine event (text, tools, messages, and
+  // any child session's list changes) is skipped. A `resync` frame means
+  // session-list frames were lost: list the sessions again. For a client
+  // that follows one session on its session stream and needs only the asks
+  // of the others and a live session list.
   bool interactions_only = 3;
 }
 
@@ -142,7 +148,8 @@ message StreamEvent {
   oneof payload {
     // A session was created.
     SessionStarted session_started = 4;
-    // Session metadata changed (title, model, agent, background).
+    // Session metadata changed (title, model, agent, background, permission
+    // mode, archived), or — live-only — a root session's busy state.
     SessionUpdated session_updated = 5;
     // A message started (user admitted or assistant round began).
     MessageStarted message_started = 6;
@@ -170,7 +177,7 @@ message StreamEvent {
     TokensRecorded tokens_recorded = 17;
     // A compaction strategy was applied to the context.
     CompactionApplied compaction_applied = 18;
-    // A session was deleted.
+    // A root session was deleted (live-only, global stream).
     SessionDeleted session_deleted = 19;
     // A text or reasoning part's whole text was set (the durable record of
     // a streamed text part, or a plugin rewrite of it).
@@ -268,9 +275,15 @@ message SessionUpdated {
   // New archived flag of a root session when changed: `true` when it was
   // archived, `false` when it was unarchived (explicitly or by a new turn).
   optional bool archived = 6;
+  // New busy state of a root session (`SessionInfo.busy`): `true` when a
+  // turn (or Workflow run) started, `false` when it went idle. Live-only
+  // (`seq` 0), set alone, and only on the global stream (also with
+  // `interactions_only`); never on session streams and never replayed.
+  optional bool busy = 7;
 }
 
-// A session was deleted.
+// A session was deleted: its log is gone. Live-only (`seq` 0), for root
+// sessions only, on the global stream (also with `interactions_only`).
 message SessionDeleted {}
 
 // A message started.

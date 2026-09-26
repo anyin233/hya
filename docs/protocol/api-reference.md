@@ -1338,7 +1338,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope; empty means the process default directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
-| `interactions_only` (3) | `bool` | Deliver only the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session plus the process-wide `catalogUpdated` notice; skip every session's engine events and their `resync` frames. For a client that follows one session on its session stream and needs only the asks of the others. |
+| `interactions_only` (3) | `bool` | Deliver only interaction and session-list frames: the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session, the process-wide `catalogUpdated` notice, and the session-list frames of root sessions — durable `sessionStarted` and `sessionUpdated` (title, agent, model, permission mode, archived), live `sessionUpdated.busy`, and live `sessionDeleted`. Every other engine event (text, tools, messages, and any child session's list changes) is skipped. A `resync` frame means session-list frames were lost: list the sessions again. For a client that follows one session on its session stream and needs only the asks of the others and a live session list. |
 
 ### `StreamFrame`
 
@@ -1367,7 +1367,7 @@ One curated projected event from the event log.
 | `session` (2) | `string` | Owning session identifier. |
 | `time_recorded` (3) | `google.protobuf.Timestamp` | When the event was recorded. |
 | `session_started` (4) | `oneof `payload`: SessionStarted` | Event payload; exactly one kind is set. A session was created. |
-| `session_updated` (5) | `oneof `payload`: SessionUpdated` | Session metadata changed (title, model, agent, background). |
+| `session_updated` (5) | `oneof `payload`: SessionUpdated` | Session metadata changed (title, model, agent, background, permission mode, archived), or — live-only — a root session's busy state. |
 | `message_started` (6) | `oneof `payload`: MessageStarted` | A message started (user admitted or assistant round began). |
 | `message_finished` (7) | `oneof `payload`: MessageFinished` | A message reached a terminal state. |
 | `part_started` (8) | `oneof `payload`: PartStarted` | A part was appended to a message. |
@@ -1381,7 +1381,7 @@ One curated projected event from the event log.
 | `workflow_updated` (16) | `oneof `payload`: WorkflowUpdated` | The workflow projection changed. |
 | `tokens_recorded` (17) | `oneof `payload`: TokensRecorded` | Token usage was recorded for a round. |
 | `compaction_applied` (18) | `oneof `payload`: CompactionApplied` | A compaction strategy was applied to the context. |
-| `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A session was deleted. |
+| `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A root session was deleted (live-only, global stream). |
 | `part_replaced` (20) | `oneof `payload`: PartReplaced` | A text or reasoning part's whole text was set (the durable record of a streamed text part, or a plugin rewrite of it). |
 | `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
 | `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
@@ -1441,10 +1441,12 @@ Session metadata changed.
 | `background` (4) | `optional bool` | New background flag when changed. |
 | `permission_mode` (5) | `optional string` | New permission mode of the session tree when changed (emitted on the root session only). |
 | `archived` (6) | `optional bool` | New archived flag of a root session when changed: `true` when it was archived, `false` when it was unarchived (explicitly or by a new turn). |
+| `busy` (7) | `optional bool` | New busy state of a root session (`SessionInfo.busy`): `true` when a turn (or Workflow run) started, `false` when it went idle. Live-only (`seq` 0), set alone, and only on the global stream (also with `interactions_only`); never on session streams and never replayed. |
 
 ### `MessageStarted`
 
-A session was deleted.
+A session was deleted: its log is gone. Live-only (`seq` 0), for root
+sessions only, on the global stream (also with `interactions_only`).
 A message started.
 
 | Field | Type | Description |
@@ -2493,8 +2495,8 @@ A pending revert of a session.
 
 | Field | Type | Description |
 |---|---|---|
-| `agent` (1) | `string` | Agent name or catalog id to bind as the session's default agent. |
-| `model` (2) | `string` | Model reference the session starts on (`provider/model[#variant]`). |
+| `agent` (1) | `string` | Agent name or catalog id to bind as the session's default agent. Empty: the server's default agent (config `default_agent`, else the built-in agent). |
+| `model` (2) | `string` | Model reference the session starts on (`provider/model[#variant]`). Empty: that agent's effective model. |
 | `workdir` (3) | `string` | Absolute workdir for tools and relative paths in this session. |
 | `parent` (4) | `string` | When set, marks the new session as a child of this parent id. |
 | `initialize` (5) | `bool` | When true, run the directory initialization turn after creation. |

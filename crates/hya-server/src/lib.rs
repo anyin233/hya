@@ -20,6 +20,7 @@ mod mcp_control;
 mod pending;
 mod provider_control;
 mod runs;
+mod session_list;
 mod state;
 mod streams;
 mod support;
@@ -68,6 +69,7 @@ pub use workflow_control::{
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     spawn_background_reclaim_driver(state.clone());
+    session_list::spawn_busy_tracker(state.clone());
     v1::router().with_state(state).layer(cors())
 }
 

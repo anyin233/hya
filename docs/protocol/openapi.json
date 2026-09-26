@@ -2241,12 +2241,15 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "busy": {
+            "type": "boolean"
           }
         }
       },
       "MessageStarted": {
         "type": "object",
-        "description": "A session was deleted. A message started.",
+        "description": "A session was deleted: its log is gone. Live-only (`seq` 0), for root sessions only, on the global stream (also with `interactions_only`). A message started.",
         "properties": {
           "message": {
             "type": "string"

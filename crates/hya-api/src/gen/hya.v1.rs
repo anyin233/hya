@@ -6444,11 +6444,17 @@ pub struct StreamGlobalEventsRequest {
     /// frames (`seq = 0`) are always delivered. No history is replayed.
     #[prost(uint64, tag = "2")]
     pub since_seq: u64,
-    /// Deliver only the live interaction frames (`permissionRequested`,
-    /// `questionRequested`, `interactionResolved`) of every session plus the
-    /// process-wide `catalogUpdated` notice; skip every session's engine
-    /// events and their `resync` frames. For a client that follows one session
-    /// on its session stream and needs only the asks of the others.
+    /// Deliver only interaction and session-list frames: the live interaction
+    /// frames (`permissionRequested`, `questionRequested`,
+    /// `interactionResolved`) of every session, the process-wide
+    /// `catalogUpdated` notice, and the session-list frames of root sessions —
+    /// durable `sessionStarted` and `sessionUpdated` (title, agent, model,
+    /// permission mode, archived), live `sessionUpdated.busy`, and live
+    /// `sessionDeleted`. Every other engine event (text, tools, messages, and
+    /// any child session's list changes) is skipped. A `resync` frame means
+    /// session-list frames were lost: list the sessions again. For a client
+    /// that follows one session on its session stream and needs only the asks
+    /// of the others and a live session list.
     #[prost(bool, tag = "3")]
     pub interactions_only: bool,
 }
@@ -6508,7 +6514,8 @@ pub mod stream_event {
         /// A session was created.
         #[prost(message, tag = "4")]
         SessionStarted(super::SessionStarted),
-        /// Session metadata changed (title, model, agent, background).
+        /// Session metadata changed (title, model, agent, background, permission
+        /// mode, archived), or — live-only — a root session's busy state.
         #[prost(message, tag = "5")]
         SessionUpdated(super::SessionUpdated),
         /// A message started (user admitted or assistant round began).
@@ -6550,7 +6557,7 @@ pub mod stream_event {
         /// A compaction strategy was applied to the context.
         #[prost(message, tag = "18")]
         CompactionApplied(super::CompactionApplied),
-        /// A session was deleted.
+        /// A root session was deleted (live-only, global stream).
         #[prost(message, tag = "19")]
         SessionDeleted(super::SessionDeleted),
         /// A text or reasoning part's whole text was set (the durable record of
@@ -6672,8 +6679,15 @@ pub struct SessionUpdated {
     /// archived, `false` when it was unarchived (explicitly or by a new turn).
     #[prost(bool, optional, tag = "6")]
     pub archived: ::core::option::Option<bool>,
+    /// New busy state of a root session (`SessionInfo.busy`): `true` when a
+    /// turn (or Workflow run) started, `false` when it went idle. Live-only
+    /// (`seq` 0), set alone, and only on the global stream (also with
+    /// `interactions_only`); never on session streams and never replayed.
+    #[prost(bool, optional, tag = "7")]
+    pub busy: ::core::option::Option<bool>,
 }
-/// A session was deleted.
+/// A session was deleted: its log is gone. Live-only (`seq` 0), for root
+/// sessions only, on the global stream (also with `interactions_only`).
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct SessionDeleted {}
 /// A message started.
@@ -12511,9 +12525,12 @@ pub struct SessionRevert {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {
     /// Agent name or catalog id to bind as the session's default agent.
+    /// Empty: the server's default agent (config `default_agent`, else the
+    /// built-in agent).
     #[prost(string, tag = "1")]
     pub agent: ::prost::alloc::string::String,
     /// Model reference the session starts on (`provider/model\[#variant\]`).
+    /// Empty: that agent's effective model.
     #[prost(string, tag = "2")]
     pub model: ::prost::alloc::string::String,
     /// Absolute workdir for tools and relative paths in this session.
