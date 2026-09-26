@@ -16,7 +16,7 @@ use serde_json::Value;
 use tokio_stream::Stream;
 use tonic::{Request as GrpcRequest, Response as GrpcResponse, Status};
 
-use crate::AppState;
+use crate::{AppState, Origin};
 
 /// Shared state + router used by every generated service impl.
 #[derive(Clone)]
@@ -26,14 +26,55 @@ pub struct V1Grpc {
 }
 
 impl V1Grpc {
-    /// Build the binding over the same application state and `/v1` router.
+    /// Build the binding over the application state's one server state
+    /// and its `/v1` router: a router, binding, or [`crate::Server`] made
+    /// from the same `AppState` (or a clone) shares it.
     #[must_use]
     pub fn new(app: AppState) -> Self {
-        let router = crate::router(app.clone());
         Self {
-            state: crate::ServerState::new(app),
-            router,
+            state: app.server_state(),
+            router: crate::router(app),
         }
+    }
+
+    /// Every `hya.v1` gRPC service of this binding (the `CreateTurn`
+    /// message limit included), ready to serve — what [`crate::Server`]
+    /// routes `application/grpc*` requests to.
+    #[must_use]
+    pub fn routes(self) -> tonic::service::Routes {
+        use pb::{
+            agent_models_server::AgentModelsServer, auth_server::AuthServer,
+            bundle_api_server::BundleApiServer, catalog_server::CatalogServer,
+            events_server::EventsServer, files_server::FilesServer,
+            interactions_server::InteractionsServer, logs_server::LogsServer,
+            mcp_server::McpServer, messages_server::MessagesServer, process_server::ProcessServer,
+            project_server::ProjectServer, pty_server::PtyServer,
+            relay_control_server::RelayControlServer, session_server::SessionServer,
+            turn_server::TurnServer, workflow_server::WorkflowServer,
+            worktrees_server::WorktreesServer,
+        };
+        tonic::service::Routes::new(ProcessServer::new(self.clone()))
+            .add_service(CatalogServer::new(self.clone()))
+            .add_service(AgentModelsServer::new(self.clone()))
+            .add_service(AuthServer::new(self.clone()))
+            .add_service(SessionServer::new(self.clone()))
+            .add_service(
+                TurnServer::new(self.clone())
+                    .max_decoding_message_size(crate::MAX_TURN_GRPC_MESSAGE_BYTES),
+            )
+            .add_service(MessagesServer::new(self.clone()))
+            .add_service(EventsServer::new(self.clone()))
+            .add_service(InteractionsServer::new(self.clone()))
+            .add_service(WorkflowServer::new(self.clone()))
+            .add_service(FilesServer::new(self.clone()))
+            .add_service(ProjectServer::new(self.clone()))
+            .add_service(WorktreesServer::new(self.clone()))
+            .add_service(McpServer::new(self.clone()))
+            .add_service(PtyServer::new(self.clone()))
+            .add_service(LogsServer::new(self.clone()))
+            .add_service(BundleApiServer::new(self.clone()))
+            .add_service(RelayControlServer::new(self))
+            .prepare()
     }
 
     fn status_from_error_body(status: StatusCode, body: &[u8]) -> Status {
@@ -70,27 +111,14 @@ impl V1Grpc {
         Status::new(tonic_code, message)
     }
 
+    /// Call the `/v1` router in process with `request` as protojson,
+    /// carrying the gRPC call's context (`ctx`): its origin (a relay-origin
+    /// call stays one, so the relay refusals hold), its peer address, and
+    /// its admitted host and browser headers.
     #[allow(clippy::result_large_err)]
     async fn dispatch<Req, Resp>(
         &self,
-        method: &str,
-        path: &str,
-        query: impl IntoIterator<Item = (String, String)>,
-        request: &Req,
-    ) -> Result<Resp, Status>
-    where
-        Req: Serialize,
-        Resp: DeserializeOwned,
-    {
-        self.dispatch_from(None, method, path, query, request).await
-    }
-
-    /// [`Self::dispatch`] recording the gRPC call's TCP peer (`GrpcPeer`)
-    /// for the loopback-only rpcs.
-    #[allow(clippy::result_large_err)]
-    async fn dispatch_from<Req, Resp>(
-        &self,
-        peer: Option<std::net::SocketAddr>,
+        ctx: &Call,
         method: &str,
         path: &str,
         query: impl IntoIterator<Item = (String, String)>,
@@ -117,11 +145,7 @@ impl V1Grpc {
         let mut http_request = builder
             .body(Body::from(body))
             .map_err(|error| Status::internal(format!("build request: {error}")))?;
-        if let Some(peer) = peer {
-            http_request
-                .extensions_mut()
-                .insert(super::relay::GrpcPeer(peer));
-        }
+        ctx.apply(&mut http_request);
         let mut router = self.router.clone();
         use tower::Service;
         let response = router
@@ -140,24 +164,96 @@ impl V1Grpc {
     }
 
     #[allow(clippy::result_large_err)]
-    async fn get<Req, Resp>(&self, path: &str, request: &Req) -> Result<Resp, Status>
+    async fn get<Req, Resp>(&self, ctx: &Call, path: &str, request: &Req) -> Result<Resp, Status>
     where
         Req: Serialize,
         Resp: DeserializeOwned,
     {
         let query = query_of(request);
-        self.dispatch("GET", path, query, request).await
+        self.dispatch(ctx, "GET", path, query, request).await
     }
 
     #[allow(clippy::result_large_err)]
-    async fn post<Req, Resp>(&self, path: &str, request: &Req) -> Result<Resp, Status>
+    async fn post<Req, Resp>(&self, ctx: &Call, path: &str, request: &Req) -> Result<Resp, Status>
     where
         Req: Serialize,
         Resp: DeserializeOwned,
     {
-        self.dispatch::<Req, Resp>("POST", path, BTreeMap::new(), request)
+        self.dispatch::<Req, Resp>(ctx, "POST", path, BTreeMap::new(), request)
             .await
     }
+}
+
+/// What the in-process dispatch keeps of a gRPC call: tonic hands a
+/// handler the message, metadata, and extensions, but the synthesized
+/// router request starts empty, so the parts the router's guard and
+/// handlers read are carried over explicitly.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Call {
+    /// The call arrived through the relay ([`Origin::Relay`]).
+    relay: bool,
+    /// The TCP peer (`ConnectInfo` or tonic's `TcpConnectInfo`).
+    peer: Option<std::net::SocketAddr>,
+    /// `host` (the admitted `:authority`), `origin`, and `sec-fetch-*`.
+    headers: axum::http::HeaderMap,
+}
+
+/// The headers a gRPC call's dispatch forwards (besides `host`): the
+/// browser markers the relay guard and the relay-control rpcs check.
+const FORWARDED_HEADERS: [&str; 4] = [
+    "origin",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
+];
+
+impl Call {
+    fn of<T>(request: &GrpcRequest<T>) -> Self {
+        let extensions = request.extensions();
+        let peer = extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|axum::extract::ConnectInfo(peer)| *peer)
+            .or_else(|| request.remote_addr());
+        let metadata = request.metadata().clone().into_headers();
+        let mut headers = axum::http::HeaderMap::new();
+        let host = extensions
+            .get::<crate::host::GrpcAuthority>()
+            .map(|authority| authority.0.clone())
+            .or_else(|| metadata.get(axum::http::header::HOST).cloned());
+        if let Some(host) = host {
+            headers.insert(axum::http::header::HOST, host);
+        }
+        for name in FORWARDED_HEADERS {
+            if let Some(value) = metadata.get(name) {
+                headers.insert(name, value.clone());
+            }
+        }
+        Self {
+            relay: Origin::of(extensions) == Origin::Relay,
+            peer,
+            headers,
+        }
+    }
+
+    /// Put this context on the synthesized router request.
+    fn apply(&self, request: &mut axum::http::Request<Body>) {
+        for (name, value) in &self.headers {
+            request.headers_mut().insert(name, value.clone());
+        }
+        if self.relay {
+            request.extensions_mut().insert(Origin::Relay);
+        }
+        if let Some(peer) = self.peer {
+            request
+                .extensions_mut()
+                .insert(super::relay::GrpcPeer(peer));
+        }
+    }
+}
+
+/// Split a gRPC request into its dispatch context and message.
+fn split<T>(request: GrpcRequest<T>) -> (Call, T) {
+    (Call::of(&request), request.into_inner())
 }
 
 fn body_len(body: &[u8]) -> String {
@@ -224,19 +320,21 @@ fn into_response<T>(message: T) -> Result<GrpcResponse<T>, Status> {
 }
 
 macro_rules! unary {
-    ($self:expr, $method:expr, $path:expr, $request:expr) => {
+    ($self:expr, $method:expr, $path:expr, $request:expr) => {{
+        let (ctx, inner) = split($request);
         into_response(
             $self
-                .dispatch::<_, _>($method, $path, BTreeMap::new(), &$request.into_inner())
+                .dispatch::<_, _>(&ctx, $method, $path, BTreeMap::new(), &inner)
                 .await?,
         )
-    };
+    }};
 }
 
 macro_rules! get_rpc {
-    ($self:expr, $path:expr, $request:expr) => {
-        into_response($self.get($path, &$request.into_inner()).await?)
-    };
+    ($self:expr, $path:expr, $request:expr) => {{
+        let (ctx, inner) = split($request);
+        into_response($self.get(&ctx, $path, &inner).await?)
+    }};
 }
 
 // ---------------------------------------------------------------------------
@@ -326,9 +424,11 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetProviderRequest>,
     ) -> Result<GrpcResponse<pb::ProviderInfo>, Status> {
-        let provider_id = encode(&field(&request.into_inner(), "providerId"));
+        let (ctx, inner) = split(request);
+        let provider_id = encode(&field(&inner, "providerId"));
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/providers/{provider_id}"),
                 &pb::GetProviderRequest::default(),
             )
@@ -340,10 +440,11 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::UpsertProviderRequest>,
     ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = encode(&field(&inner, "providerId"));
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "PUT",
                 &format!("/v1/providers/{provider_id}"),
                 BTreeMap::new(),
@@ -357,11 +458,15 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::RefreshProviderRequest>,
     ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = encode(&field(&inner, "providerId"));
         into_response(
-            self.post(&format!("/v1/providers/{provider_id}/refresh"), &inner)
-                .await?,
+            self.post(
+                &ctx,
+                &format!("/v1/providers/{provider_id}/refresh"),
+                &inner,
+            )
+            .await?,
         )
     }
 
@@ -369,10 +474,11 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::SetProviderModelRequest>,
     ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = encode(&field(&inner, "providerId"));
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "PUT",
                 &format!("/v1/providers/{provider_id}/models"),
                 BTreeMap::new(),
@@ -386,11 +492,12 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::RemoveProviderModelRequest>,
     ) -> Result<GrpcResponse<pb::ProviderUpdate>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = encode(&field(&inner, "providerId"));
         let query = BTreeMap::from([("modelId".to_owned(), field(&inner, "modelId"))]);
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/providers/{provider_id}/models"),
                 query,
@@ -404,10 +511,10 @@ impl pb::catalog_server::Catalog for V1Grpc {
         &self,
         request: GrpcRequest<pb::TestProviderModelRequest>,
     ) -> Result<GrpcResponse<pb::TestProviderModelResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = encode(&field(&inner, "providerId"));
         into_response(
-            self.post(&format!("/v1/providers/{provider_id}/test"), &inner)
+            self.post(&ctx, &format!("/v1/providers/{provider_id}/test"), &inner)
                 .await?,
         )
     }
@@ -458,10 +565,11 @@ impl pb::auth_server::Auth for V1Grpc {
         &self,
         request: GrpcRequest<pb::SetProviderAuthRequest>,
     ) -> Result<GrpcResponse<pb::SetProviderAuthResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = encode(&field(&inner, "providerId"));
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "PUT",
                 &format!("/v1/auth/{provider_id}"),
                 BTreeMap::new(),
@@ -475,10 +583,12 @@ impl pb::auth_server::Auth for V1Grpc {
         &self,
         request: GrpcRequest<pb::RemoveProviderAuthRequest>,
     ) -> Result<GrpcResponse<pb::RemoveProviderAuthResponse>, Status> {
-        let provider_id = encode(&field(&request.into_inner(), "providerId"));
+        let (ctx, inner) = split(request);
+        let provider_id = encode(&field(&inner, "providerId"));
         let empty = pb::RemoveProviderAuthRequest::default();
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/auth/{provider_id}"),
                 BTreeMap::new(),
@@ -492,9 +602,11 @@ impl pb::auth_server::Auth for V1Grpc {
         &self,
         request: GrpcRequest<pb::StartOauthRequest>,
     ) -> Result<GrpcResponse<pb::StartOauthResponse>, Status> {
-        let provider_id = field(&request.into_inner(), "providerId");
+        let (ctx, inner) = split(request);
+        let provider_id = field(&inner, "providerId");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/auth/{provider_id}/oauth/start"),
                 &pb::StartOauthRequest::default(),
             )
@@ -506,11 +618,15 @@ impl pb::auth_server::Auth for V1Grpc {
         &self,
         request: GrpcRequest<pb::CompleteOauthRequest>,
     ) -> Result<GrpcResponse<pb::CompleteOauthResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let provider_id = field(&inner, "providerId");
         into_response(
-            self.post(&format!("/v1/auth/{provider_id}/oauth/callback"), &inner)
-                .await?,
+            self.post(
+                &ctx,
+                &format!("/v1/auth/{provider_id}/oauth/callback"),
+                &inner,
+            )
+            .await?,
         )
     }
 }
@@ -532,9 +648,11 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetSessionRequest>,
     ) -> Result<GrpcResponse<pb::SessionInfo>, Status> {
-        let session = field(&request.into_inner(), "session");
+        let (ctx, inner) = split(request);
+        let session = field(&inner, "session");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/sessions/{session}"),
                 &pb::GetSessionRequest::default(),
             )
@@ -553,10 +671,11 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::UpdateSessionRequest>,
     ) -> Result<GrpcResponse<pb::SessionInfo>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "PATCH",
                 &format!("/v1/sessions/{session}"),
                 BTreeMap::new(),
@@ -570,9 +689,11 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::DeleteSessionRequest>,
     ) -> Result<GrpcResponse<pb::DeleteSessionResponse>, Status> {
-        let session = field(&request.into_inner(), "session");
+        let (ctx, inner) = split(request);
+        let session = field(&inner, "session");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/sessions/{session}"),
                 BTreeMap::new(),
@@ -586,10 +707,10 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::ForkSessionRequest>,
     ) -> Result<GrpcResponse<pb::ForkSessionResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.post(&format!("/v1/sessions/{session}/fork"), &inner)
+            self.post(&ctx, &format!("/v1/sessions/{session}/fork"), &inner)
                 .await?,
         )
     }
@@ -598,10 +719,10 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::CompactSessionRequest>,
     ) -> Result<GrpcResponse<pb::CompactSessionResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.post(&format!("/v1/sessions/{session}/compact"), &inner)
+            self.post(&ctx, &format!("/v1/sessions/{session}/compact"), &inner)
                 .await?,
         )
     }
@@ -610,10 +731,10 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::SummarizeSessionRequest>,
     ) -> Result<GrpcResponse<pb::SummarizeSessionResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.post(&format!("/v1/sessions/{session}/summarize"), &inner)
+            self.post(&ctx, &format!("/v1/sessions/{session}/summarize"), &inner)
                 .await?,
         )
     }
@@ -622,10 +743,10 @@ impl pb::session_server::Session for V1Grpc {
         &self,
         request: GrpcRequest<pb::RevertSessionRequest>,
     ) -> Result<GrpcResponse<pb::RevertSessionResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.post(&format!("/v1/sessions/{session}/revert"), &inner)
+            self.post(&ctx, &format!("/v1/sessions/{session}/revert"), &inner)
                 .await?,
         )
     }
@@ -752,10 +873,10 @@ impl pb::turn_server::Turn for V1Grpc {
         &self,
         request: GrpcRequest<pb::CreateTurnRequest>,
     ) -> Result<GrpcResponse<pb::CreateTurnResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.post(&format!("/v1/sessions/{session}/turns"), &inner)
+            self.post(&ctx, &format!("/v1/sessions/{session}/turns"), &inner)
                 .await?,
         )
     }
@@ -764,11 +885,12 @@ impl pb::turn_server::Turn for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetTurnRequest>,
     ) -> Result<GrpcResponse<pb::TurnInfo>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         let turn = field(&inner, "turn");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/sessions/{session}/turns/{turn}"),
                 &pb::GetTurnRequest::default(),
             )
@@ -780,12 +902,13 @@ impl pb::turn_server::Turn for V1Grpc {
         &self,
         request: GrpcRequest<pb::WaitTurnRequest>,
     ) -> Result<GrpcResponse<pb::TurnInfo>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         let turn = field(&inner, "turn");
         let timeout = field(&inner, "timeoutMs");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/sessions/{session}/turns/{turn}/wait?timeoutMs={timeout}"),
                 &pb::WaitTurnRequest::default(),
             )
@@ -797,11 +920,12 @@ impl pb::turn_server::Turn for V1Grpc {
         &self,
         request: GrpcRequest<pb::CancelTurnRequest>,
     ) -> Result<GrpcResponse<pb::TurnInfo>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         let turn = field(&inner, "turn");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/sessions/{session}/turns/{turn}/cancel"),
                 &pb::CancelTurnRequest::default(),
             )
@@ -820,10 +944,10 @@ impl pb::messages_server::Messages for V1Grpc {
         &self,
         request: GrpcRequest<pb::ListMessagesRequest>,
     ) -> Result<GrpcResponse<pb::ListMessagesResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.get(&format!("/v1/sessions/{session}/messages"), &inner)
+            self.get(&ctx, &format!("/v1/sessions/{session}/messages"), &inner)
                 .await?,
         )
     }
@@ -832,11 +956,12 @@ impl pb::messages_server::Messages for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetMessageRequest>,
     ) -> Result<GrpcResponse<pb::MessageInfo>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         let message = field(&inner, "message");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/sessions/{session}/messages/{message}"),
                 &pb::GetMessageRequest::default(),
             )
@@ -848,12 +973,13 @@ impl pb::messages_server::Messages for V1Grpc {
         &self,
         request: GrpcRequest<pb::DeleteMessagePartRequest>,
     ) -> Result<GrpcResponse<pb::DeleteMessagePartResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         let message = field(&inner, "message");
         let part = field(&inner, "part");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/sessions/{session}/messages/{message}/parts/{part}"),
                 BTreeMap::new(),
@@ -867,9 +993,11 @@ impl pb::messages_server::Messages for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetSessionTodoRequest>,
     ) -> Result<GrpcResponse<pb::TodoList>, Status> {
-        let session = field(&request.into_inner(), "session");
+        let (ctx, inner) = split(request);
+        let session = field(&inner, "session");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/sessions/{session}/todo"),
                 &pb::GetSessionTodoRequest::default(),
             )
@@ -888,10 +1016,10 @@ impl pb::events_server::Events for V1Grpc {
         &self,
         request: GrpcRequest<pb::ListEventsRequest>,
     ) -> Result<GrpcResponse<pb::ListEventsResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.get(&format!("/v1/sessions/{session}/events"), &inner)
+            self.get(&ctx, &format!("/v1/sessions/{session}/events"), &inner)
                 .await?,
         )
     }
@@ -957,10 +1085,10 @@ impl pb::interactions_server::Interactions for V1Grpc {
         &self,
         request: GrpcRequest<pb::RespondInteractionRequest>,
     ) -> Result<GrpcResponse<pb::RespondInteractionResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let id = field(&inner, "request");
         into_response(
-            self.post(&format!("/v1/interactions/{id}/respond"), &inner)
+            self.post(&ctx, &format!("/v1/interactions/{id}/respond"), &inner)
                 .await?,
         )
     }
@@ -976,9 +1104,11 @@ impl pb::interactions_server::Interactions for V1Grpc {
         &self,
         request: GrpcRequest<pb::DeleteSavedRuleRequest>,
     ) -> Result<GrpcResponse<pb::DeleteSavedRuleResponse>, Status> {
-        let rule = field(&request.into_inner(), "rule");
+        let (ctx, inner) = split(request);
+        let rule = field(&inner, "rule");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/permissions/rules/{rule}"),
                 BTreeMap::new(),
@@ -1006,9 +1136,11 @@ impl pb::workflow_server::Workflow for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetWorkflowStateRequest>,
     ) -> Result<GrpcResponse<pb::WorkflowState>, Status> {
-        let session = field(&request.into_inner(), "session");
+        let (ctx, inner) = split(request);
+        let session = field(&inner, "session");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/sessions/{session}/workflow"),
                 &pb::GetWorkflowStateRequest::default(),
             )
@@ -1020,10 +1152,10 @@ impl pb::workflow_server::Workflow for V1Grpc {
         &self,
         request: GrpcRequest<pb::SubmitWorkflowCommandRequest>,
     ) -> Result<GrpcResponse<pb::SubmitWorkflowCommandResponse>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let session = field(&inner, "session");
         into_response(
-            self.post(&format!("/v1/sessions/{session}/workflow"), &inner)
+            self.post(&ctx, &format!("/v1/sessions/{session}/workflow"), &inner)
                 .await?,
         )
     }
@@ -1116,9 +1248,11 @@ impl pb::project_server::Project for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetProjectRequest>,
     ) -> Result<GrpcResponse<pb::ProjectInfo>, Status> {
-        let project = field(&request.into_inner(), "project");
+        let (ctx, inner) = split(request);
+        let project = field(&inner, "project");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/projects/{}", encode(&project)),
                 &pb::GetProjectRequest::default(),
             )
@@ -1130,9 +1264,11 @@ impl pb::project_server::Project for V1Grpc {
         &self,
         request: GrpcRequest<pb::DeleteProjectRequest>,
     ) -> Result<GrpcResponse<pb::DeleteProjectResponse>, Status> {
-        let project = field(&request.into_inner(), "project");
+        let (ctx, inner) = split(request);
+        let project = field(&inner, "project");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/projects/{}", encode(&project)),
                 BTreeMap::new(),
@@ -1146,10 +1282,11 @@ impl pb::project_server::Project for V1Grpc {
         &self,
         request: GrpcRequest<pb::UpdateProjectRequest>,
     ) -> Result<GrpcResponse<pb::ProjectInfo>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let project = field(&inner, "project");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "PATCH",
                 &format!("/v1/projects/{project}"),
                 BTreeMap::new(),
@@ -1163,9 +1300,11 @@ impl pb::project_server::Project for V1Grpc {
         &self,
         request: GrpcRequest<pb::ListProjectDirectoriesRequest>,
     ) -> Result<GrpcResponse<pb::ListProjectDirectoriesResponse>, Status> {
-        let project = field(&request.into_inner(), "project");
+        let (ctx, inner) = split(request);
+        let project = field(&inner, "project");
         into_response(
             self.get(
+                &ctx,
                 &format!("/v1/projects/{project}/directories"),
                 &pb::ListProjectDirectoriesRequest::default(),
             )
@@ -1177,9 +1316,11 @@ impl pb::project_server::Project for V1Grpc {
         &self,
         request: GrpcRequest<pb::InitProjectGitRequest>,
     ) -> Result<GrpcResponse<pb::InitProjectGitResponse>, Status> {
-        let project = field(&request.into_inner(), "project");
+        let (ctx, inner) = split(request);
+        let project = field(&inner, "project");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/projects/{project}/init-git"),
                 &pb::InitProjectGitRequest::default(),
             )
@@ -1233,9 +1374,11 @@ impl pb::worktrees_server::Worktrees for V1Grpc {
         &self,
         request: GrpcRequest<pb::DeleteWorktreeRequest>,
     ) -> Result<GrpcResponse<pb::DeleteWorktreeResponse>, Status> {
-        let worktree = field(&request.into_inner(), "worktree");
+        let (ctx, inner) = split(request);
+        let worktree = field(&inner, "worktree");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/worktrees/{worktree}"),
                 BTreeMap::new(),
@@ -1249,9 +1392,11 @@ impl pb::worktrees_server::Worktrees for V1Grpc {
         &self,
         request: GrpcRequest<pb::ResetWorktreeRequest>,
     ) -> Result<GrpcResponse<pb::Worktree>, Status> {
-        let worktree = field(&request.into_inner(), "worktree");
+        let (ctx, inner) = split(request);
+        let worktree = field(&inner, "worktree");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/worktrees/{worktree}/reset"),
                 &pb::ResetWorktreeRequest::default(),
             )
@@ -1284,9 +1429,11 @@ impl pb::mcp_server::Mcp for V1Grpc {
         &self,
         request: GrpcRequest<pb::ConnectMcpRequest>,
     ) -> Result<GrpcResponse<pb::McpServerStatus>, Status> {
-        let name = field(&request.into_inner(), "name");
+        let (ctx, inner) = split(request);
+        let name = field(&inner, "name");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/mcp/{name}/connect"),
                 &pb::ConnectMcpRequest::default(),
             )
@@ -1298,9 +1445,11 @@ impl pb::mcp_server::Mcp for V1Grpc {
         &self,
         request: GrpcRequest<pb::DisconnectMcpRequest>,
     ) -> Result<GrpcResponse<pb::McpServerStatus>, Status> {
-        let name = field(&request.into_inner(), "name");
+        let (ctx, inner) = split(request);
+        let name = field(&inner, "name");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/mcp/{name}/disconnect"),
                 &pb::DisconnectMcpRequest::default(),
             )
@@ -1312,9 +1461,11 @@ impl pb::mcp_server::Mcp for V1Grpc {
         &self,
         request: GrpcRequest<pb::StartMcpAuthRequest>,
     ) -> Result<GrpcResponse<pb::StartMcpAuthResponse>, Status> {
-        let name = field(&request.into_inner(), "name");
+        let (ctx, inner) = split(request);
+        let name = field(&inner, "name");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/mcp/{name}/auth"),
                 &pb::StartMcpAuthRequest::default(),
             )
@@ -1326,10 +1477,10 @@ impl pb::mcp_server::Mcp for V1Grpc {
         &self,
         request: GrpcRequest<pb::CompleteMcpAuthRequest>,
     ) -> Result<GrpcResponse<pb::McpServerStatus>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let name = field(&inner, "name");
         into_response(
-            self.post(&format!("/v1/mcp/{name}/auth/complete"), &inner)
+            self.post(&ctx, &format!("/v1/mcp/{name}/auth/complete"), &inner)
                 .await?,
         )
     }
@@ -1338,9 +1489,11 @@ impl pb::mcp_server::Mcp for V1Grpc {
         &self,
         request: GrpcRequest<pb::RemoveMcpAuthRequest>,
     ) -> Result<GrpcResponse<pb::RemoveMcpAuthResponse>, Status> {
-        let name = field(&request.into_inner(), "name");
+        let (ctx, inner) = split(request);
+        let name = field(&inner, "name");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/mcp/{name}/auth"),
                 BTreeMap::new(),
@@ -1375,10 +1528,15 @@ impl pb::pty_server::Pty for V1Grpc {
         &self,
         request: GrpcRequest<pb::GetPtyRequest>,
     ) -> Result<GrpcResponse<pb::PtySession>, Status> {
-        let id = field(&request.into_inner(), "id");
+        let (ctx, inner) = split(request);
+        let id = field(&inner, "id");
         into_response(
-            self.get(&format!("/v1/pty/{id}"), &pb::GetPtyRequest::default())
-                .await?,
+            self.get(
+                &ctx,
+                &format!("/v1/pty/{id}"),
+                &pb::GetPtyRequest::default(),
+            )
+            .await?,
         )
     }
 
@@ -1386,11 +1544,17 @@ impl pb::pty_server::Pty for V1Grpc {
         &self,
         request: GrpcRequest<pb::UpdatePtyRequest>,
     ) -> Result<GrpcResponse<pb::PtySession>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let id = field(&inner, "id");
         into_response(
-            self.dispatch::<_, _>("PUT", &format!("/v1/pty/{id}"), BTreeMap::new(), &inner)
-                .await?,
+            self.dispatch::<_, _>(
+                &ctx,
+                "PUT",
+                &format!("/v1/pty/{id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
         )
     }
 
@@ -1398,9 +1562,11 @@ impl pb::pty_server::Pty for V1Grpc {
         &self,
         request: GrpcRequest<pb::DeletePtyRequest>,
     ) -> Result<GrpcResponse<pb::DeletePtyResponse>, Status> {
-        let id = field(&request.into_inner(), "id");
+        let (ctx, inner) = split(request);
+        let id = field(&inner, "id");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "DELETE",
                 &format!("/v1/pty/{id}"),
                 BTreeMap::new(),
@@ -1414,9 +1580,11 @@ impl pb::pty_server::Pty for V1Grpc {
         &self,
         request: GrpcRequest<pb::CreateConnectTokenRequest>,
     ) -> Result<GrpcResponse<pb::CreateConnectTokenResponse>, Status> {
-        let id = field(&request.into_inner(), "id");
+        let (ctx, inner) = split(request);
+        let id = field(&inner, "id");
         into_response(
             self.post(
+                &ctx,
                 &format!("/v1/pty/{id}/connect-token"),
                 &pb::CreateConnectTokenRequest::default(),
             )
@@ -1537,10 +1705,11 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
         &self,
         request: GrpcRequest<pb::SetAgentModelRequest>,
     ) -> Result<GrpcResponse<pb::AgentModelState>, Status> {
-        let inner = request.into_inner();
+        let (ctx, inner) = split(request);
         let agent_id = field(&inner, "agentId");
         into_response(
             self.dispatch::<_, _>(
+                &ctx,
                 "PUT",
                 &format!("/v1/agent-models/{agent_id}"),
                 BTreeMap::new(),
@@ -1552,17 +1721,23 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
 }
 
 // ---------------------------------------------------------------------------
-// RelayControl (loopback-only: a non-loopback or unknown gRPC peer is
-// refused here; the in-process dispatch carries the peer as `GrpcPeer`, so
-// the router's check sees it too, and no relay origin)
+// RelayControl (loopback-only: a relay-origin, non-loopback, or unknown
+// gRPC peer is refused here; the in-process dispatch carries the origin and
+// the peer, so the router's check sees them too)
 // ---------------------------------------------------------------------------
 
-/// The loopback peer of a relay-control call; fails closed (an unknown
-/// peer is refused).
+/// Refuse a relay-control call that did not come from the local owner:
+/// through the relay, from a non-loopback peer, or from an unknown one
+/// (fails closed).
 #[allow(clippy::result_large_err)]
-fn require_loopback_peer<T>(request: &GrpcRequest<T>) -> Result<std::net::SocketAddr, Status> {
-    match request.remote_addr() {
-        Some(peer) if peer.ip().is_loopback() => Ok(peer),
+fn require_loopback_peer(ctx: &Call) -> Result<(), Status> {
+    if ctx.relay {
+        return Err(Status::permission_denied(
+            "relay control is loopback-only: refused for a request that arrived through the relay",
+        ));
+    }
+    match ctx.peer {
+        Some(peer) if peer.ip().is_loopback() => Ok(()),
         Some(_) => Err(Status::permission_denied(
             "relay control is loopback-only: refused for a non-loopback client",
         )),
@@ -1583,12 +1758,9 @@ impl V1Grpc {
         Req: Serialize,
         Resp: DeserializeOwned,
     {
-        let peer = require_loopback_peer(&request)?;
-        let inner = request.into_inner();
-        into_response(
-            self.dispatch_from(Some(peer), "POST", path, BTreeMap::new(), &inner)
-                .await?,
-        )
+        let (ctx, inner) = split(request);
+        require_loopback_peer(&ctx)?;
+        into_response(self.post(&ctx, path, &inner).await?)
     }
 
     #[allow(clippy::result_large_err)]
@@ -1601,13 +1773,9 @@ impl V1Grpc {
         Req: Serialize,
         Resp: DeserializeOwned,
     {
-        let peer = require_loopback_peer(&request)?;
-        let inner = request.into_inner();
-        let query = query_of(&inner);
-        into_response(
-            self.dispatch_from(Some(peer), "GET", path, query, &inner)
-                .await?,
-        )
+        let (ctx, inner) = split(request);
+        require_loopback_peer(&ctx)?;
+        into_response(self.get(&ctx, path, &inner).await?)
     }
 }
 

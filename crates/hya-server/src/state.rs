@@ -53,6 +53,14 @@ pub struct AppState {
     hosts: Arc<HostPolicy>,
     ephemeral_grace: crate::EphemeralGrace,
     watchers: crate::ephemeral::SessionWatchers,
+    /// The one server state of this configuration: built by the first
+    /// router or gRPC binding made from this state (or any clone of it),
+    /// shared by every later one, so the background drivers start once. A
+    /// builder call (`with_*`) starts a new, unbuilt configuration.
+    server: Arc<std::sync::OnceLock<ServerState>>,
+    /// How many server states (each with its own background drivers) were
+    /// built from this state's lineage.
+    server_builds: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppState {
@@ -87,7 +95,41 @@ impl AppState {
             hosts: Arc::new(HostPolicy::loopback()),
             ephemeral_grace: crate::EphemeralGrace::default(),
             watchers: crate::ephemeral::SessionWatchers::default(),
+            server: Arc::default(),
+            server_builds: Arc::default(),
         }
+    }
+
+    /// The server state of this configuration, built (and its background
+    /// drivers started) on first use. Every router, gRPC binding, and
+    /// combined [`crate::Server`] made from this state or a clone of it
+    /// shares the result.
+    pub(crate) fn server_state(&self) -> ServerState {
+        self.server
+            .get_or_init(|| {
+                self.server_builds
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let state = ServerState::new(self.clone());
+                crate::spawn_background_drivers(&state);
+                state
+            })
+            .clone()
+    }
+
+    /// How many server states — each with its own background drivers
+    /// (reclaim driver, Project busy watcher, session-list tracker,
+    /// ephemeral reaper) — were built from this state and its clones. A
+    /// server that serves HTTP and gRPC from one state reports 1.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn server_builds(&self) -> usize {
+        self.server_builds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Detach a reconfigured state from an already built server state.
+    fn reconfigured(mut self) -> Self {
+        self.server = Arc::default();
+        self
     }
 
     /// The Host names the router accepts besides loopback (`--allow-host`,
@@ -97,7 +139,7 @@ impl AppState {
     #[must_use]
     pub fn with_allowed_hosts(mut self, hosts: HostPolicy) -> Self {
         self.hosts = Arc::new(hosts);
-        self
+        self.reconfigured()
     }
 
     /// The Host allowlist of routers built from this state.
@@ -113,7 +155,7 @@ impl AppState {
     #[must_use]
     pub fn with_relay_host(mut self, relay: RelayHost) -> Self {
         self.relay = relay;
-        self
+        self.reconfigured()
     }
 
     /// The relay host connector shared by every router built from this
@@ -130,7 +172,7 @@ impl AppState {
     #[must_use]
     pub fn with_scratch_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.scratch_root = Some(root.into());
-        self
+        self.reconfigured()
     }
 
     /// Publish a Project-list change: the v1 global event stream (SSE and
@@ -144,7 +186,7 @@ impl AppState {
     #[must_use]
     pub fn with_ephemeral_grace(mut self, grace: crate::EphemeralGrace) -> Self {
         self.ephemeral_grace = grace;
-        self
+        self.reconfigured()
     }
 
     /// Title root sessions automatically: the first prompt turn of a root
@@ -155,7 +197,7 @@ impl AppState {
     #[must_use]
     pub fn with_auto_title(mut self, enabled: bool) -> Self {
         self.auto_title = enabled;
-        self
+        self.reconfigured()
     }
 
     /// Whether prompt turns title their root session automatically.
@@ -168,14 +210,14 @@ impl AppState {
     #[must_use]
     pub fn with_pure_guidance(mut self, pure: bool) -> Self {
         self.pure_guidance = pure;
-        self
+        self.reconfigured()
     }
 
     /// Set the agent selected by default when a workdir does not configure one.
     #[must_use]
     pub fn with_default_agent(mut self, agent: Option<String>) -> Self {
         self.default_agent = agent;
-        self
+        self.reconfigured()
     }
 
     /// Attach the permission-ask receiver and start the pending-request bridge.
@@ -183,7 +225,7 @@ impl AppState {
     pub fn with_permission_requests(mut self, rx: mpsc::UnboundedReceiver<AskRequest>) -> Self {
         self.permission_requests =
             pending::PermissionRequests::spawn(rx, self.engine.store().clone());
-        self
+        self.reconfigured()
     }
 
     /// Reload saved "allow always" grants from the store into the engine's
@@ -203,21 +245,21 @@ impl AppState {
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
         self.question_requests = pending::QuestionRequests::spawn(rx);
-        self
+        self.reconfigured()
     }
 
     /// Install the app-owned MCP control handle for Compat MCP routes.
     #[must_use]
     pub fn with_mcp_control(mut self, control: Arc<dyn McpControl>) -> Self {
         self.mcp_control = control;
-        self
+        self.reconfigured()
     }
 
     /// Install the app-owned Agent model preference control for TUI routes.
     #[must_use]
     pub fn with_agent_model_control(mut self, control: Arc<dyn AgentModelControl>) -> Self {
         self.agent_model_control = control;
-        self
+        self.reconfigured()
     }
 
     /// Install the app-owned provider control (keys, provider upsert, model
@@ -225,28 +267,28 @@ impl AppState {
     #[must_use]
     pub fn with_provider_control(mut self, control: Arc<dyn ProviderControl>) -> Self {
         self.provider_control = control;
-        self
+        self.reconfigured()
     }
 
     /// Install the app-owned Workflow control handle for native and Compat routes.
     #[must_use]
     pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
         self.workflow_control = control;
-        self
+        self.reconfigured()
     }
 
     /// Register plugin workspace adapters for experimental workspace routes.
     #[must_use]
     pub fn with_workspace_adapters(mut self, adapters: Vec<WorkspaceAdapterInfo>) -> Self {
         self.workspace_adapters = adapters;
-        self
+        self.reconfigured()
     }
 
     /// Publish formatter status rows for Compat formatter endpoints.
     #[must_use]
     pub fn with_formatter_status(mut self, status: Vec<FormatterStatus>) -> Self {
         self.formatter_status = status;
-        self
+        self.reconfigured()
     }
 
     /// Publish a provider-catalog change: every v1 event stream (global and

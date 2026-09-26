@@ -1,7 +1,9 @@
 //! Serving one relay stream: the decrypted tunnel is an ordinary byte
-//! stream, so `hyper` serves the `/v1` router over it exactly as over a TCP
-//! connection (HTTP/1.1 with upgrades for the PTY WebSocket, or HTTP/2),
-//! with the [`Origin::Relay`] extension on every request.
+//! stream, so `hyper` serves the same [`Server`] over it as over a TCP
+//! connection — the `/v1` router, and the gRPC services for
+//! `application/grpc*` requests (HTTP/1.1 with upgrades for the PTY
+//! WebSocket, or HTTP/2) — with the [`Origin::Relay`] extension on every
+//! request, gRPC included.
 
 use std::future::Future as _;
 use std::pin::Pin;
@@ -10,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use axum::Router;
+use crate::{Origin, Server};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -18,15 +20,12 @@ use hyper_util::server::conn::auto;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
-use tower::ServiceExt as _;
-
-use crate::Origin;
 
 /// Serve HTTP over `io` until the client is done, `graceful` asks for a
 /// graceful end (then at most `grace` more), or `hard` fires.
 pub(crate) async fn serve<T>(
     io: T,
-    router: Router,
+    server: Server,
     graceful: CancellationToken,
     hard: CancellationToken,
     grace: Duration,
@@ -35,8 +34,8 @@ pub(crate) async fn serve<T>(
 {
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         request.extensions_mut().insert(Origin::Relay);
-        let router = router.clone();
-        async move { router.oneshot(request).await }
+        let server = server.clone();
+        async move { Ok::<_, std::convert::Infallible>(server.handle(request).await) }
     });
     let builder = auto::Builder::new(TokioExecutor::new());
     let connection = builder.serve_connection_with_upgrades(TokioIo::new(io), service);

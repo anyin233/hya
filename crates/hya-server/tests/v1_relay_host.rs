@@ -24,7 +24,7 @@ use hya_relay::server::{RelayServer, RelayServerConfig};
 use hya_relay::transport::ChunkTransport;
 use hya_relay::tunnel::{NoiseStream, TunnelConfig};
 use hya_server::relay_host::RelayState;
-use hya_server::{AppState, RelayHost, RelayHostConfig, RelaySettings, ShutdownReason, router};
+use hya_server::{AppState, RelayHost, RelayHostConfig, RelaySettings, ShutdownReason};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use hyper::body::Bytes;
@@ -128,16 +128,13 @@ async fn backend(config: RelayHostConfig) -> Backend {
         }),
     )
     .with_relay_host(relay.clone());
-    let app = router(state.clone());
-    relay.set_service(app.clone());
+    // One server (HTTP and gRPC) on the loopback listener and the relay.
+    let server = hya_server::build(state.clone());
+    relay.set_service(server.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await;
+        server.serve(listener, std::future::pending()).await;
     });
     Backend {
         state,
@@ -224,6 +221,22 @@ async fn call(sender: &mut Sender, method: &str, uri: &str, body: Option<Value>)
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
+}
+
+/// A gRPC channel (HTTP/2) through one tunnel stream.
+async fn grpc(link: &RelayLink) -> tonic::transport::Channel {
+    let io = tunnel(link).await.unwrap();
+    let slot = Arc::new(std::sync::Mutex::new(Some(io)));
+    tonic::transport::Endpoint::from_static("http://127.0.0.1:1")
+        .connect_with_connector(tower::service_fn(move |_uri| {
+            let io = slot.lock().unwrap().take();
+            async move {
+                io.map(TokioIo::new)
+                    .ok_or_else(|| std::io::Error::other("the tunnel stream was used"))
+            }
+        }))
+        .await
+        .unwrap()
 }
 
 /// A plain loopback request to the backend's TCP listener.
@@ -469,6 +482,135 @@ async fn relay_control_and_process_stop_are_loopback_only() {
         .insert("origin", "https://evil.example".parse().unwrap());
     let response = sender.send_request(browser).await.unwrap();
     assert_eq!(response.status(), 403);
+    relay.stop().await;
+}
+
+/// gRPC reaches the same server through the tunnel, and every call keeps
+/// the relay origin: `RelayControl` and process stop/upgrade are refused
+/// with `PERMISSION_DENIED` (also in the in-process dispatch), browser
+/// markers are refused, and the same rpcs over loopback work.
+#[tokio::test]
+async fn grpc_over_the_relay_keeps_the_relay_origin() {
+    use hya_api::v1 as pb;
+    use pb::process_client::ProcessClient;
+    use pb::relay_control_client::RelayControlClient;
+
+    let relay = Relay::start().await;
+    let backend = backend(host_config(None)).await;
+    let link = connected(&backend, &relay).await;
+    let channel = grpc(&link).await;
+
+    let health = ProcessClient::new(channel.clone())
+        .get_health(pb::GetHealthRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(health.ok);
+    let created = pb::session_client::SessionClient::new(channel.clone())
+        .create_session(pb::CreateSessionRequest {
+            agent: "build".to_owned(),
+            model: "fake".to_owned(),
+            workdir: Some(backend.dir.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(created.session.is_some());
+
+    let denied = |result: Result<(), tonic::Status>, what: &str| {
+        let status = result.expect_err(what);
+        assert_eq!(
+            status.code(),
+            tonic::Code::PermissionDenied,
+            "{what}: {status:?}"
+        );
+        assert!(status.message().contains("relay"), "{what}: {status:?}");
+    };
+    let mut control = RelayControlClient::new(channel.clone());
+    denied(
+        control
+            .get_relay_status(pb::GetRelayStatusRequest::default())
+            .await
+            .map(drop),
+        "status",
+    );
+    denied(
+        control
+            .get_relay_link(pb::GetRelayLinkRequest::default())
+            .await
+            .map(drop),
+        "link",
+    );
+    denied(
+        control
+            .rotate_relay_key(pb::RotateRelayKeyRequest::default())
+            .await
+            .map(drop),
+        "rotate",
+    );
+    denied(
+        control
+            .disconnect_relay(pb::DisconnectRelayRequest::default())
+            .await
+            .map(drop),
+        "disconnect",
+    );
+    denied(
+        control
+            .connect_relay(pb::ConnectRelayRequest {
+                proxy_url: relay.url(),
+                ..Default::default()
+            })
+            .await
+            .map(drop),
+        "connect",
+    );
+    // Process stop/upgrade reach the router's relay check through the
+    // in-process dispatch.
+    let mut process = ProcessClient::new(channel.clone());
+    denied(
+        process
+            .dispose_process(pb::DisposeProcessRequest::default())
+            .await
+            .map(drop),
+        "dispose",
+    );
+    denied(
+        process
+            .upgrade_process(pb::UpgradeProcessRequest::default())
+            .await
+            .map(drop),
+        "upgrade",
+    );
+    // A browser marker over the relay is refused for gRPC too.
+    let mut browser = tonic::Request::new(pb::GetHealthRequest::default());
+    browser
+        .metadata_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    let refused = process.get_health(browser).await.unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::PermissionDenied, "{refused:?}");
+    assert!(refused.message().contains("browser"), "{refused:?}");
+    assert_eq!(backend.relay.status().state, RelayState::Connected);
+
+    // Over loopback the same rpcs work.
+    let local = tonic::transport::Channel::from_shared(backend.local.clone())
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let status = RelayControlClient::new(local.clone())
+        .get_relay_status(pb::GetRelayStatusRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(status.room_id, link.room_id().as_str());
+    let got = RelayControlClient::new(local)
+        .get_relay_link(pb::GetRelayLinkRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(got.link, link.to_secret_string());
     relay.stop().await;
 }
 

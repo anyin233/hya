@@ -245,9 +245,11 @@ pub(crate) async fn guard(policy: Arc<HostPolicy>, request: Request, next: Next)
     next.run(request).await
 }
 
-/// A tower layer applying the Host allowlist to a gRPC listener (tonic
-/// `Server::layer`): a request whose `:authority` / `Host` is not allowed
-/// gets a trailers-only `PERMISSION_DENIED` answer.
+/// A tower layer applying the request admission rules to gRPC calls (the
+/// gRPC side of [`crate::Server`], or a tonic `Server::layer`): a call
+/// whose `:authority` / `Host` is missing or not allowed, or a
+/// relay-origin call carrying browser headers, gets a trailers-only
+/// `PERMISSION_DENIED` answer.
 #[derive(Clone, Debug)]
 pub struct GrpcHostLayer {
     policy: Arc<HostPolicy>,
@@ -296,17 +298,24 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, request: axum::http::Request<B>) -> Self::Future {
-        // The gRPC listener never carries the relay origin; a peer without
-        // any Host name is refused like on the HTTP listener.
-        let names = named_hosts(request.headers(), request.uri());
-        let refusal = match names {
+    fn call(&mut self, mut request: axum::http::Request<B>) -> Self::Future {
+        // A gRPC call without any Host name is refused whatever carried it
+        // (HTTP/2 always sends `:authority`); a relay-origin call from a
+        // browser is refused like on the HTTP router.
+        let relay = Origin::of(request.extensions()) == Origin::Relay;
+        let names = named_hosts(request.headers(), request.uri())
+            .map(|names| names.into_iter().map(str::to_owned).collect::<Vec<_>>());
+        let refusal = match &names {
             Err(()) => Some("request refused: the Host header is not valid text".to_owned()),
             Ok(names) if names.is_empty() => {
                 Some("request refused: it names no :authority / Host".to_owned())
             }
+            Ok(_) if relay && is_browser(request.headers()) => Some(
+                "browser requests are not accepted over the relay (a request with Origin or Sec-Fetch-* headers arrived through the relay)"
+                    .to_owned(),
+            ),
             Ok(names) => names
-                .into_iter()
+                .iter()
                 .find(|name| !self.policy.allows(name))
                 .map(|name| {
                     format!(
@@ -326,9 +335,25 @@ where
             }
             return Box::pin(async move { Ok(response) });
         }
+        // tonic hands handlers the metadata but not the URI: keep the
+        // admitted `:authority` so the binding's in-process dispatch names
+        // the same host (the router's guard checks it again).
+        if let Some(value) = names
+            .ok()
+            .and_then(|names| names.into_iter().next())
+            .and_then(|name| HeaderValue::from_str(&name).ok())
+        {
+            request.extensions_mut().insert(GrpcAuthority(value));
+        }
         Box::pin(self.inner.call(request))
     }
 }
+
+/// The admitted `:authority` / `Host` of a gRPC call, recorded by
+/// [`GrpcHostGuard`] for the binding's in-process dispatch. The server sets
+/// it; it is never parsed from the wire.
+#[derive(Clone, Debug)]
+pub(crate) struct GrpcAuthority(pub(crate) HeaderValue);
 
 /// `grpc-message` percent-encoding (bytes outside printable ASCII and `%`).
 fn percent_encode(text: &str) -> String {
