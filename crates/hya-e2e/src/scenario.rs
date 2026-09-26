@@ -51,6 +51,7 @@ pub struct E2eEnvBuilder {
     preinstall_bundles: Vec<PathBuf>,
     additional_models: Vec<String>,
     extra_env: Vec<(String, String)>,
+    serve_args: Vec<String>,
 }
 
 impl Default for E2eEnvBuilder {
@@ -68,6 +69,7 @@ impl Default for E2eEnvBuilder {
             preinstall_bundles: Vec::new(),
             additional_models: Vec::new(),
             extra_env: Vec::new(),
+            serve_args: Vec::new(),
         }
     }
 }
@@ -129,6 +131,14 @@ impl E2eEnvBuilder {
     #[must_use]
     pub fn backend_env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.extra_env.push((name.into(), value.into()));
+        self
+    }
+
+    /// Append an extra argument to `hya serve` (after `--bind 127.0.0.1:0`),
+    /// e.g. `--relay <url>`.
+    #[must_use]
+    pub fn serve_arg(mut self, arg: impl Into<String>) -> Self {
+        self.serve_args.push(arg.into());
         self
     }
 
@@ -197,6 +207,7 @@ impl E2eEnvBuilder {
         spec.project_files = self.project_files;
         spec.preinstall_bundles = self.preinstall_bundles;
         spec.env = self.extra_env;
+        spec.serve_args = self.serve_args;
         let backend = tokio::task::spawn_blocking(move || BackendProcess::start(&spec))
             .await
             .map_err(|e| E2eError::Other(format!("join backend spawn: {e}")))??;

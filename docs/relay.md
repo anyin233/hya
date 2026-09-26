@@ -759,6 +759,14 @@ Which cases stand for each first-class deployment:
 | Tailscale, plain tailnet | (i) |
 | `tailscale serve` / `funnel` | (b) + (h) |
 
+The process-level golden path lives in the Track P suite:
+`crates/hya-e2e/tests/p38_relay.rs` runs a real `hya proxy`,
+`hya serve --relay` (with the FakeLlm provider), and `hya bridge` over each
+pinned binding and once over TLS, drives the API (Projects, tool reads with a permission ask,
+SSE, PTY, rotation, shutdown) through the bridge only, and asserts that a
+capture hop in front of the proxy never sees a prompt, file contents, shell
+output, or the link's PSK ([process-e2e.md](testing/process-e2e.md#relay-scenarios-p38_relay)).
+
 ### The transport abstraction
 
 `hya_relay::transport::RelayTransport<Tx, Rx>` is any

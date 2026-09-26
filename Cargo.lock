@@ -1493,17 +1493,21 @@ name = "hya-e2e"
 version = "0.41.0"
 dependencies = [
  "axum 0.7.9",
+ "base64 0.22.1",
+ "futures",
  "hya-api",
  "hya-bundle",
  "hya-client",
  "hya-core",
  "hya-proto",
  "libc",
+ "rcgen",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
 ]
 
