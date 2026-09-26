@@ -293,6 +293,19 @@ hya serve --bind 127.0.0.1:8080 --db hya.db
 Use `127.0.0.1:0` only when you want the OS to choose an ephemeral port; hya
 prints the actual listening address on startup.
 
+## Relay: `hya proxy`/`hya relay doctor` Cannot Reach Each Other
+
+The secure relay (`hya proxy`, `hya relay doctor`) works through nginx,
+Cloudflare Tunnel, Caddy, Tailscale, and direct TLS, but an intermediary can
+still be misconfigured. Run `hya relay doctor <proxy-url-or-link>` first —
+its report names the failing binding, the probe failure kind, and the
+recommended `t=` value. See [docs/relay.md](relay.md#hya-relay-doctor) for
+the full report shape, [docs/relay.md#troubleshooting](relay.md#troubleshooting)
+for the table keyed by doctor output, and
+[docs/relay.md#deployment-recipes](relay.md#deployment-recipes) for
+complete, known-good configs (Cloudflare Tunnel, nginx, Caddy, Tailscale,
+direct TLS).
+
 ## Process Agent E2E (`hya-e2e`) Fails
 
 Track P tests spawn a real `hya` against a local FakeLlm. Common failures:

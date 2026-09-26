@@ -4,6 +4,7 @@ use crate::agent_cmd::AgentCommand;
 use crate::auth_cmd::{AuthCommand, OauthCommand};
 use crate::bundle_cmd::BundleCommand;
 use crate::proxy_cmd::ProxyArgs;
+use crate::relay_doctor::RelayCommand;
 
 #[derive(Parser)]
 #[command(
@@ -180,6 +181,11 @@ pub(crate) enum Command {
     Proxy {
         #[command(flatten)]
         args: ProxyArgs,
+    },
+    /// Relay diagnostics.
+    Relay {
+        #[command(subcommand)]
+        command: RelayCommand,
     },
     /// Loop mode: iterate the agent toward `--target` until the deterministic
     /// `--while`/`--until` condition, the `loop.should_stop` hook, or the

@@ -17,9 +17,11 @@ implemented yet.
 
 The proxy server library (`hya_relay::server`, see [Bindings](#bindings)),
 the client library (`hya_relay::client`, see
-[Client transport](#client-transport)), and the `hya proxy` command exist.
-*Coming in later steps:* `hya relay doctor`, `hya serve --relay`, `hya serve
-relay …`, `hya bridge`, `hya --connect <link>`, and `/connect-remote`.
+[Client transport](#client-transport)), the `hya proxy` command, and
+`hya relay doctor` exist. *Coming in a later step:* `hya serve --relay`,
+`hya serve relay …`, `hya bridge`, `hya --connect <link>`, and
+`/connect-remote` (Phase 6 — the host connector and client bridge that put a
+backend or client on the other end of a link).
 
 ### `hya proxy`
 
@@ -68,7 +70,45 @@ stops accepting, drains every stream (`RelayServer`'s graceful shutdown, see
 
 Every limit flag mirrors a [`ProxyLimits`](#proxy-behavior) field one for
 one; durations are given in whole seconds (nothing else in `hya` parses
-`10s`-style durations yet).
+`10s`-style durations yet). See [Deployment recipes](#deployment-recipes)
+for complete configs in front of `hya proxy`.
+
+### `hya relay doctor`
+
+```sh
+hya relay doctor https://relay.example.com/hya
+hya relay doctor 'hya://relay.example.com/hya/<room_id>#<key>.<psk>'
+```
+
+Probes a relay path end to end and recommends a `t=` value (ADR-0025 D9).
+The target is either a proxy URL (`https://…`/`http://…`, the same origin
+you'd pass to `--relay`) or a full `hya://`/`hya+insecure://` link — **the
+link's secret is never printed**, only its redacted form
+(`hya[+insecure]://host[:port][/prefix]/<room_id>`).
+
+| Flag | Meaning |
+| --- | --- |
+| `--relay-ca <PEM>` | Extra trusted CA certificates, for a private CA. |
+| `--timeout <SECS>` | Deadline for each probe (default 5s). |
+| `--measure-idle` | Also measure how long an idle stream survives on this path (bounded at 130s). Needs a link with a room that currently has a host registered — a bare proxy URL cannot be measured. |
+| `--json` | Emit the report as JSON instead of text. |
+
+The report covers reachability/TLS, the gRPC probe result and reason, the
+WebSocket probe result and reason, whether the path prefix routes correctly,
+the optional idle measurement, and the recommended `t=` value with one-line
+advice:
+
+| `ProbeFailureKind` | Advice |
+| --- | --- |
+| `NoHttp2`, `TrailersStripped`, `HopRejected`, `Timeout` | This hop does not carry gRPC end to end; pin or let `auto` pick `t=ws`. |
+| `WrongPath` | The path prefix does not match the proxy's `--path-prefix`. |
+| `Tls` | Check `--relay-ca` (private CA) or the host name. |
+| `Connect` | Cannot reach the host/port; check the address and firewall. |
+
+Exit status: **0** when at least one binding works, **1** when neither does.
+See each [deployment recipe](#deployment-recipes) for the matching `hya
+relay doctor` command and expected recommendation, and the
+[troubleshooting table](#troubleshooting) keyed by doctor output.
 
 ## Interfaces
 
