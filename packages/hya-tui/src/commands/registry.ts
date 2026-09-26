@@ -60,6 +60,14 @@ export interface AppActions {
   fork(): void
   /** `/reconnect`: find or start the database's backend now (app/reconnect.ts). */
   reconnect(): Promise<void>
+  /**
+   * Delete a session (`/sessions` Ctrl+D). Goes through this, not
+   * `client.deleteSession` directly: it marks the id so the global stream's
+   * echo of this same delete (`docs/protocol/README.md` "Session list push")
+   * does not also show the "deleted elsewhere" notice and open a second new
+   * session — the picker's own delete flow already navigates.
+   */
+  deleteSession(id: string): Promise<void>
 }
 
 export interface CommandContext {

@@ -326,6 +326,21 @@ export function createController({ client, store, directory, registry = createCo
     catalogRefreshLater.schedule()
   }
 
+  /**
+   * `sessionStarted` (a creation this client missed) or a `sessionUpdated`
+   * for a session it has not listed yet: debounced so a burst of several
+   * (a script creating many sessions, a fork tree) is one re-read, matching
+   * `catalogRefreshLater`'s reasoning. The default listing hides archived,
+   * matching the sidebar's own (`docs/protocol/README.md` "Session list push").
+   */
+  const sessionListRefreshLater = createDebounce(() => {
+    void client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
+  }, { wait: refreshWaitMs, maxWait: refreshMaxWaitMs })
+
+  function scheduleSessionListRefresh(): void {
+    sessionListRefreshLater.schedule()
+  }
+
   /** Publish the overlay at most once per `flushMs`, however many deltas arrived. */
   function scheduleFlush(): void {
     if (flushTimer) return
@@ -487,15 +502,20 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   /**
-   * One frame of the global stream: asks and resolves only. The open tree's
-   * are also on its session stream (applied there; kept by id here too). An
-   * ask of another session is shown in the pending block with its session,
-   * announced on the status line, and notified while unfocused.
+   * One frame of the global stream: asks and resolves, plus (for root
+   * sessions) `sessionStarted`/`sessionUpdated`/`sessionDeleted`
+   * (`docs/protocol/README.md` "Session list push") that keep the sidebar
+   * and open `/sessions` / `/resume` pickers current without polling. The
+   * open tree's asks are also on its session stream (applied there; kept by
+   * id here too). An ask of another session is shown in the pending block
+   * with its session, announced on the status line, and notified while
+   * unfocused.
    */
   async function onGlobalFrame(frame: StreamFrame): Promise<void> {
     if (onStopping(frame.event)) return
     if (frame.resync) {
-      // Ask frames in the gap are lost: list the pending asks again.
+      // Session-list and ask frames in the gap are both lost: list both again.
+      await client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
       await refreshInteractions().catch(() => undefined)
       return
     }
@@ -508,14 +528,43 @@ export function createController({ client, store, directory, registry = createCo
       scheduleCatalogRefresh()
       return
     }
-    // Another client archived or unarchived a session: drop or mark its sidebar row.
-    const archived = event.sessionUpdated?.archived
-    if (archived !== undefined && event.session) {
-      const id = event.session
-      store.applyArchived(id, archived)
-      if (!archived && !store.state.sessions.some((row) => row.id === id)) {
-        await client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
+    const sessionId = event.session
+    // A session created elsewhere (another client, a headless writer, a fork): not enough here
+    // (agent/model/workdir, no title yet) to build a row cheaply, so re-list, debounced.
+    if (sessionId && event.sessionStarted) {
+      if (!store.state.sessions.some((row) => row.id === sessionId)) scheduleSessionListRefresh()
+      return
+    }
+    // Deleted elsewhere: drop the row; if it was the open one, never leave the
+    // TUI stuck on a session with no log behind it — show a notice and open a fresh one.
+    if (sessionId && event.sessionDeleted) {
+      // This client's own delete (`deleteSession` above): its own flow already
+      // dropped the row and navigated (native.ts's `/sessions` Ctrl+D) — this
+      // echo just confirms it, so only the `selfDeleting` mark is consumed.
+      const own = selfDeleting.delete(sessionId)
+      const wasOpen = store.state.selected?.id === sessionId
+      store.dropSessionRow(sessionId)
+      if (wasOpen && !own) {
+        // `newSession()` ends with its own `status("Created …")`: set this client's
+        // notice after it settles, not before, so the notice is what is left on
+        // screen (both calls are sequential, never concurrent — no race to lose).
+        await newSession().catch((error: unknown) => status(`Session ${sessionId} was deleted elsewhere · new session failed: ${String(error)}`))
+        if (store.state.selected?.id !== sessionId) status(`Session ${sessionId} was deleted elsewhere; opened a new session`)
       }
+      return
+    }
+    const updated = event.sessionUpdated
+    if (sessionId && updated) {
+      // Another client archived or unarchived a session: drop or mark its sidebar row.
+      if (updated.archived !== undefined) {
+        store.applyArchived(sessionId, updated.archived)
+        if (!updated.archived && !store.state.sessions.some((row) => row.id === sessionId)) scheduleSessionListRefresh()
+        return
+      }
+      // title/agent/model/permissionMode/busy: patch the row (idempotent with the
+      // open session's own-stream copy, `patchSessionRow`'s doc comment); an id not
+      // listed yet (this frame outran the initial listing) is a reason to re-list.
+      if (!store.patchSessionRow(sessionId, updated)) scheduleSessionListRefresh()
       return
     }
     const route = globalAskRoute(event, store.state)
@@ -610,6 +659,16 @@ export function createController({ client, store, directory, registry = createCo
     status(`Created ${session.id}`)
     // A mode chosen before any session existed applies before the first prompt is admitted.
     await modes.applyPending()
+  }
+
+  /** Ids this client is deleting itself (`deleteSession` below): `onGlobalFrame`'s `sessionDeleted` echo of one of these is not "deleted elsewhere". */
+  const selfDeleting = new Set<string>()
+
+  /** `AppActions.deleteSession` (see its doc comment): marks `id` self-deleted for up to 20 s (well past the global stream's delivery), then deletes it. */
+  async function deleteSession(id: string): Promise<void> {
+    selfDeleting.add(id)
+    setTimeout(() => selfDeleting.delete(id), 20_000)
+    await client.deleteSession(id)
   }
 
   /** Open the modal picker; keys go to it (components/Composer.tsx) until a row is chosen, a row action commits, or Esc closes it. */
@@ -749,6 +808,7 @@ export function createController({ client, store, directory, registry = createCo
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
     savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
+    deleteSession,
   }
 
   /**

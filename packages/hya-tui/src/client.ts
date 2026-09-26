@@ -382,8 +382,12 @@ export interface StreamEvent {
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }
   workflowUpdated?: unknown
-  /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. */
-  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string; archived?: boolean }
+  /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. `busy` (live-only, seq 0) mirrors `SessionInfo.busy` and is carried on root sessions' global-stream frames only (`docs/protocol/README.md` "Session list push"). */
+  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string; archived?: boolean; busy?: boolean }
+  /** A root session was created (also a fork); global-stream only, durable (`docs/protocol/README.md` "Session list push"). */
+  sessionStarted?: { agent?: string; model?: string; workdir?: string }
+  /** A root session was deleted; global-stream only, live-only (the log is gone, so it is never replayed). `event.session` names the deleted session. */
+  sessionDeleted?: Record<string, never>
   /**
    * Part of the context was folded behind a summary (`docs/tui.md` "Notices"):
    * `message` is the summary system message (the divider sits right before

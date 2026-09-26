@@ -224,6 +224,44 @@ test("a sessionUpdated title/agent/model frame updates the open session and its 
   expect(store.state.sessions.find((row) => row.id === "hysec_2")?.title).toBe("Renamed elsewhere")
 })
 
+test("patchSessionRow folds a global-stream sessionUpdated into a listed row, never `selected`; an unlisted id is reported unknown (U10)", () => {
+  const store = createAppStore()
+  store.openSession(session("hysec_1", { title: "old", permissionMode: "manual" }))
+  store.setSessions([session("hysec_1", { title: "old", permissionMode: "manual" }), session("hysec_2")])
+  expect(store.patchSessionRow("hysec_2", { title: "Renamed", agent: "review", model: "anthropic/claude#thinking", permissionMode: "yolo", busy: true }))
+    .toBe(true)
+  expect(store.state.sessions.find((row) => row.id === "hysec_2")).toMatchObject({
+    title: "Renamed", agent: "review", model: { providerId: "anthropic", modelId: "claude", variant: "thinking" }, permissionMode: "yolo", busy: true,
+  })
+  // The row it names is the open session, but `selected` (and its notice-worthy
+  // permissionMode) is the own-stream's job (`applyPermissionMode`): unaffected here.
+  expect(store.patchSessionRow("hysec_1", { permissionMode: "yolo", busy: true })).toBe(true)
+  expect(store.state.sessions.find((row) => row.id === "hysec_1")).toMatchObject({ permissionMode: "yolo", busy: true })
+  expect(store.state.selected).toMatchObject({ permissionMode: "manual", title: "old" })
+  // A frame for a session not in the listing yet: reported unknown so the caller re-lists.
+  expect(store.patchSessionRow("hysec_3", { title: "New" })).toBe(false)
+  expect(store.state.sessions.some((row) => row.id === "hysec_3")).toBe(false)
+})
+
+test("patchSessionRow is idempotent: the same values applied twice (own stream + global stream) is a no-op mutation the second time", () => {
+  const store = createAppStore()
+  store.setSessions([session("hysec_1", { busy: false })])
+  store.patchSessionRow("hysec_1", { busy: true, title: "Busy now" })
+  const after = store.state.sessions
+  store.patchSessionRow("hysec_1", { busy: true, title: "Busy now" })
+  expect(store.state.sessions).toEqual(after)
+})
+
+test("dropSessionRow removes a sessionDeleted frame's row; dropping an id not listed is a no-op", () => {
+  const store = createAppStore()
+  store.setSessions([session("hysec_1"), session("hysec_2")])
+  store.dropSessionRow("hysec_1")
+  expect(store.state.sessions.map((row) => row.id)).toEqual(["hysec_2"])
+  const before = store.state.sessions
+  store.dropSessionRow("hysec_9")
+  expect(store.state.sessions).toBe(before)
+})
+
 test("notifications default on and focused defaults true; both are settable", () => {
   const store = createAppStore()
   expect(store.state.notifications).toBe(true)

@@ -1,5 +1,11 @@
 # 0.41.0
 
+## TUI sidebar follows other clients live
+
+- The sidebar's session list now changes as soon as any client creates, renames, archives, deletes, or runs a session. It also follows another client's agent, model, and permission-mode switches. The TUI re-lists after a `resync`.
+- If another client deletes the session you have open, the TUI shows `Session <id> was deleted elsewhere; opened a new session` and opens a new one.
+- `/sessions` and `/resume` show the list as it was when you opened them; reopen them to see changes. The `/sessions` hint now fits at 80 columns. See [TUI](docs/tui.md).
+
 ## Quit and archive, or quit and keep running; `--resume`
 
 - Ctrl+C twice, `/exit`, or `/quit` quits the TUI and archives its session at once (from a subagent's view, the root session). A running turn still finishes on the backend.

@@ -65,7 +65,10 @@ async function openSessionsPicker(context: CommandContext, showArchived = false)
   actions.openPicker({
     title: showArchived ? "Sessions · archived included" : "Sessions",
     rows: sessionRows(sessions, store.state.selected?.id),
-    hint: `Enter opens · F2 renames · Ctrl+D deletes · Ctrl+A ${showArchived ? "hides" : "shows"} archived · Esc closes · type to filter`,
+    // Kept at 72 columns or less (docs/tui.md "Sidebar"): the picker box's content
+    // width is `min(96, terminalWidth - 4) - 4` (border + `paddingX`), and 80-column
+    // terminals are common (`min(96, 80 - 4) - 4 = 72`).
+    hint: `Enter open · F2 rename · Ctrl+D del · Ctrl+A ${showArchived ? "hides" : "shows"} archived · Esc closes`,
     actions: sessionPickerActions,
     onSelect: async (row) => {
       if (row.id === "__new__") { await actions.newSession(); return }
@@ -86,7 +89,7 @@ async function openSessionsPicker(context: CommandContext, showArchived = false)
         store.setStatus(`Renamed to ${title}`)
         await openSessionsPicker(context, showArchived)
       } else if (id === "delete") {
-        await client.deleteSession(row.id)
+        await actions.deleteSession(row.id)
         const wasOpen = store.state.selected?.id === row.id
         await actions.refresh()
         if (wasOpen) {
