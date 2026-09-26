@@ -82,6 +82,101 @@ other frame.
 `hya_relay::proto::relay_error_code_to_grpc` / `relay_error_code_from_grpc`
 convert between them.
 
+### Proxy behavior
+
+`hya_relay::proxy::ProxyCore` is the proxy's state machine, written once
+against the transport abstraction. A binding adapts each incoming stream and
+calls `serve_host(ProxyControlTransport, PeerInfo)`,
+`serve_open(ChunkTransport, PeerInfo)`, or
+`serve_accept(ChunkTransport, PeerInfo)`; each returns a `'static` future the
+binding spawns. `PeerInfo::new(id)` is an opaque client identity (normally the
+client IP) used only for per-client limits. `ProxyCore::stats()` returns
+`ProxyStats{rooms, streams, pending_streams}`; `ProxyCore::shutdown()` ends
+every stream with `UNAVAILABLE`, refuses new ones, and waits until all served
+streams have finished. The proxy keeps no state on disk.
+
+**Registration.** On a `Host` stream the proxy sends `challenge{nonce}` (32
+fresh random bytes, single use). The first host frame must be
+`register{ed25519_pubkey, signature}` within the handshake timeout. The
+signature must verify (Ed25519 `verify_strict`) over
+`"hya.relay.v1/register\0" ‖ nonce`; the room id is derived from the key and
+returned in `registered{room_id}`. The room is online while the control
+stream stays open. Afterwards the proxy sends `incoming{stream_id}` per
+opener and answers heartbeat probes with a pong; it does not probe itself.
+A control stream that delivers no frame for the idle timeout is closed, so a
+host must send heartbeats (default every 15 s).
+
+**Room replacement.** A new valid registration for a room that is already
+online **replaces** the current host rather than being refused: the old
+control stream ends with `ALREADY_EXISTS` ("room was registered by a newer
+control stream"), every stream of the old registration (waiting or spliced)
+ends with `UNAVAILABLE`, and new opens reach the new host. This lets a host
+whose control stream was cut re-register at once, before the proxy has
+noticed the old stream is dead; only the key holder can do it. A host
+connector that receives `ALREADY_EXISTS` should not reconnect in a tight
+loop: another process holds the same identity.
+
+**Eviction.** When a control stream ends (clean close, error, idle timeout),
+its room is removed and every stream of that room ends with `UNAVAILABLE`.
+
+**Open and accept.** The first frame of an `Open` stream must be
+`open{room_id}` within the handshake timeout. A malformed room id is
+`INVALID_ARGUMENT`; an offline room is `NOT_FOUND`. Otherwise the proxy
+allocates a stream id (128 random bits, 32 lowercase hex characters), sends
+`incoming{stream_id}` to the host, and waits for an `Accept` stream whose
+first frame is `accept{stream_id}`. Each id can be accepted once; an
+unknown, expired, or already accepted id is `NOT_FOUND`. If no accept arrives
+within the accept timeout the opener gets `UNAVAILABLE`. On accept the proxy
+sends `opened{}` to the opener — before any frame relayed from the host — and
+splices the two streams. While waiting, the proxy buffers up to the
+early-data limit of opener `data` and then stops reading the opener
+(backpressure); the buffer is delivered to the host first, in order.
+
+**Splice.** Once spliced:
+
+- `data` is forwarded unchanged; the proxy never inspects or rewrites it.
+- `close{}` is forwarded and ends that direction only (half-close); the
+  other direction keeps flowing until it closes too. A stream that ends
+  without `close` counts as a close.
+- Heartbeats are **per leg**: the proxy answers a probe on the leg it
+  arrived on and never forwards heartbeats, because each leg may cross
+  different intermediaries with different idle cuts. Pongs are dropped.
+  Heartbeats count as activity for the idle timeout.
+- An `error` frame from one side is forwarded to the other and ends the
+  stream; a transport failure on one side ends the other with
+  `UNAVAILABLE`. A handshake frame (`open`, `accept`, `opened`) after the
+  splice is `INVALID_ARGUMENT` to both sides.
+
+**Errors.** Every failure the proxy reports is a final `RelayError` frame
+followed by the end of its sending direction; the gRPC binding reports that
+final frame as the stream status instead.
+
+| Code | When |
+| --- | --- |
+| `INVALID_ARGUMENT` | Wrong or empty first frame; malformed room id; handshake frame after the splice. |
+| `DEADLINE_EXCEEDED` | No first frame (registration, `open`, `accept`) within the handshake timeout; a leg or control stream idle past the idle timeout; a peer that stops reading for that long. |
+| `NOT_FOUND` | `open` to an offline room; `accept` with an unknown, expired, or already accepted stream id. |
+| `ALREADY_EXISTS` | Sent to a host whose room was taken over by a newer registration. |
+| `RESOURCE_EXHAUSTED` | A room, stream, or per-client limit is reached; a `data` payload over the chunk limit (sent to both sides). |
+| `FAILED_PRECONDITION` | A second `register` on a registered control stream. |
+| `UNAVAILABLE` | The host did not accept in time; the room went offline or was replaced; the other side went away; the proxy is shutting down. |
+| `UNAUTHENTICATED` | Registration key or signature is malformed or does not verify. |
+
+**Limits** (`hya_relay::proxy::ProxyLimits`, ADR-0025 D8):
+
+| Field | Default | Effect |
+| --- | --- | --- |
+| `max_rooms` | 1024 | Registered rooms; a replacement needs no new slot. Over: `RESOURCE_EXHAUSTED`. |
+| `max_streams_per_room` | 64 | Concurrent streams (waiting or spliced) per room. Over: `RESOURCE_EXHAUSTED`. |
+| `max_streams_per_peer` | 256 | Concurrent streams opened by one `PeerInfo`. Over: `RESOURCE_EXHAUSTED`. |
+| `idle_timeout` | 120 s | A leg or control stream with no frame at all (heartbeats count), or a peer not taking a frame, for this long: `DEADLINE_EXCEEDED`. |
+| `stream_rate_bytes_per_sec` | 8 MiB/s | Token-bucket cap on `data` bytes per stream and direction; excess is delayed, not dropped. `0` = unlimited. |
+| `stream_rate_burst_bytes` | 1 MiB | Burst of that bucket. |
+| `max_chunk_data` | 256 KiB | Largest `data` payload. Over: `RESOURCE_EXHAUSTED` to both sides. |
+| `early_data_limit` | 64 KiB | Opener `data` buffered before the accept; beyond it the proxy stops reading. |
+| `accept_timeout` | 10 s | Wait for the host's `Accept`; then `UNAVAILABLE` to the opener. |
+| `handshake_timeout` | 10 s | Deadline for the first frame of every stream (the registration timeout for hosts). |
+
 ### The transport abstraction
 
 `hya_relay::transport::RelayTransport<Tx, Rx>` is any

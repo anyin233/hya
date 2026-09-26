@@ -1606,6 +1606,7 @@ version = "0.41.0"
 dependencies = [
  "base64 0.22.1",
  "data-encoding",
+ "ed25519-dalek",
  "futures",
  "prost",
  "rand_core 0.9.5",
@@ -1613,6 +1614,7 @@ dependencies = [
  "snow",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tonic",
  "zeroize",
 ]

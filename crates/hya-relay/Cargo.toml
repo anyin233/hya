@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 data-encoding = { workspace = true }
+ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
 rand_core = { workspace = true }
@@ -19,6 +20,7 @@ sha2 = { workspace = true }
 snow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 zeroize = { workspace = true }
 
