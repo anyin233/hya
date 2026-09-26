@@ -645,6 +645,24 @@ bounded tail readable via `ChildGuard::stderr_tail()`.
 - `stderr` piped into the bounded tail
 - Strict transport: any timeout **permanently taints** the connection closed
 
+### Plugins spawned in a Project root — `PluginClient::spawn_in` /
+### `PluginHost::connect_all_observed_in`
+
+`PluginClient::spawn_in(command, cwd, env)` spawns a plugin with the same
+environment handling as `PluginClient::spawn` (the host's environment,
+overlaid with any explicit config `env`) but with `cwd` as the child's
+current directory instead of the host process's own working directory.
+`PluginHost::connect_all_observed_in(specs, cwd, host)` mirrors
+`connect_all_observed`, connecting every spec in parallel with that `cwd`.
+
+This lets a plugin declare a relative `command` (for example a script under
+`<project root>/.hya/plugins/<id>/`) that resolves against the Project root
+holding it, rather than requiring an absolute path or the server's cwd. It
+does not change `spawn`/`spawn_bundle`/`connect_all`/`connect_all_observed`,
+which keep spawning in the host's own working directory; per-Project plugin
+loading is not yet wired to call the `_in` variants (tracked in the secure
+relay F1/F2 design) — this documents their contract for when it is.
+
 ---
 
 ## Supervision and restart budget

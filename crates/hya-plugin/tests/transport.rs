@@ -102,6 +102,24 @@ for line in sys.stdin:
 
 const STDERR_TAIL_SENTINEL: &str = "STDERR_TAIL_SENTINEL";
 
+const SPAWN_IN_FIXTURE: &str = r#"
+import json, os, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    method = req.get("method")
+    if method == "initialize":
+        result = {
+            "protocol_version": 1,
+            "plugin": {"id": "spawn-in-fixture", "version": "0.1.0", "kind": "rust"},
+            "hooks": [],
+            "tools": [],
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+    elif method == "fixture/info":
+        result = {"cwd": os.getcwd(), "home": os.environ.get("HOME")}
+        print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+"#;
+
 #[tokio::test]
 async fn demuxes_responses_by_id() {
     let (client_io, server_io) = duplex(4096);
@@ -463,6 +481,55 @@ async fn bundle_process_uses_activation_cwd_and_shutdown_reaps_with_bounded_stde
     assert!(tail.ends_with(STDERR_TAIL_SENTINEL.as_bytes()));
 
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn spawn_in_uses_given_cwd_for_a_relative_command_with_inherited_env() {
+    let plugin_dir = std::env::temp_dir().join(format!(
+        "hya-plugin-spawn-in-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    // Mirror a real layout: the plugin script lives under `<project root>/.hya/plugins/x/`.
+    let script_dir = plugin_dir.join(".hya/plugins/x");
+    std::fs::create_dir_all(&script_dir).unwrap();
+    std::fs::write(script_dir.join("script.py"), SPAWN_IN_FIXTURE).unwrap();
+
+    // A relative command: it only resolves to the fixture script when the
+    // child's current directory is `script_dir`.
+    let command = vec!["python3".to_string(), "script.py".to_string()];
+    let (client, mut guard) = PluginClient::spawn_in(&command, &script_dir, None).unwrap();
+
+    client
+        .initialize(HostInfo {
+            name: "hya".to_string(),
+            version: "0.0.0".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let info = client
+        .call("fixture/info", json!({}), DEFAULT_CALL_TIMEOUT)
+        .await
+        .unwrap();
+    let expected_cwd = std::fs::canonicalize(&script_dir).unwrap();
+    assert_eq!(
+        info["cwd"].as_str(),
+        Some(expected_cwd.to_string_lossy().as_ref()),
+        "child process cwd must be the given directory"
+    );
+    let expected_home = std::env::var("HOME").ok();
+    assert_eq!(
+        info["home"].as_str().map(str::to_string),
+        expected_home,
+        "the standard environment (HOME) must be inherited, not cleared"
+    );
+
+    let _ = guard.terminate().await;
+    let _ = std::fs::remove_dir_all(plugin_dir);
 }
 
 #[cfg(unix)]
