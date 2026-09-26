@@ -7,8 +7,18 @@ over two transports with identical functionality:
 - **HTTP/JSON + SSE + WebSocket** (documented here; see
   [`openapi.json`](./openapi.json) and the generated
   [`api-reference.md`](./api-reference.md) for the full surface).
-- **gRPC** (`hya.v1` package, server reflection enabled; the proto files
-  under `proto/hya/v1` are the source of truth).
+- **gRPC** (`hya.v1` package; the proto files under `proto/hya/v1` are the
+  source of truth), on the **same port** as HTTP: a request whose
+  `content-type` starts with `application/grpc` goes to the gRPC services,
+  anything else to the HTTP routes. Point a gRPC client (HTTP/2 without TLS,
+  "h2c" with prior knowledge) at the URL of the `hya server listening on`
+  line. `HYA_GRPC_BIND=<host:port>` optionally adds an extra listener that
+  serves the same server (both protocols, the same state); it is kept for
+  older setups and no longer needed.
+
+Both protocols share one server state: a session, PTY, or busy flag made
+through one is visible through the other at once, and both see the same
+live events and the same `serverStopping` frame at shutdown.
 
 ## Base URL and scoping
 
@@ -46,8 +56,9 @@ HTTP 403
 ```
 
 including CORS preflights, which are answered only after the check. A network
-request that names no host is refused the same way; the gRPC listener checks
-`:authority` and answers `PERMISSION_DENIED`. Requests through the secure
+request that names no host is refused the same way; a gRPC call is checked
+by its `:authority` and refused with `PERMISSION_DENIED` (a call naming no
+host at all is refused too). Requests through the secure
 relay pass the same check (a bridge's client names `127.0.0.1:<port>`).
 Relay-origin requests with browser headers are refused as well — see
 [Relay control](#relay-control-loopback-only).
@@ -1222,6 +1233,12 @@ unknown (fail-closed), and to a browser request (an `Origin` or
 fetch or preflight, or a browser WebSocket handshake — is refused with `403
 permission_denied` ("browser requests are not accepted over the relay")
 before any route runs.
+
+**gRPC over the relay.** A relay stream serves the same port as the TCP
+listener, so gRPC works through the relay too, with the same rules: every
+gRPC call through the relay carries `Origin::Relay` into its handler, so
+`RelayControl` and `DisposeProcess` / `UpgradeProcess` answer
+`PERMISSION_DENIED`, and a call with browser headers is refused.
 
 `RelayStatus.lastError` holds no terminal escape sequences or control
 characters (it may carry the relay's text).

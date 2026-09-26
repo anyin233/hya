@@ -143,8 +143,7 @@ The server serves the consolidated `hya.v1` contract under `/v1`
 (HTTP/JSON + SSE + WebSocket): process/catalog/auth, sessions and event-driven
 turns, messages/todo, event replay and streams, unified
 permission/question interactions, Workflow, files, project/VCS/worktrees, MCP,
-PTY, and logs. Setting `HYA_GRPC_BIND=<host:port>` additionally serves the same
-contract over gRPC. See the [Protocol guide](protocol/README.md) and the
+PTY, and logs. The same port also serves the contract over gRPC (h2c). See the [Protocol guide](protocol/README.md) and the
 generated [API reference](protocol/api-reference.md).
 
 ## Run the TUI

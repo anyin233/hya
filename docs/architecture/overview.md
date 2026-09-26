@@ -86,7 +86,7 @@ The event log is the source of truth. This gives hya a few useful properties:
 - `hya run` is the headless prompt entry point.
 - `hya -p` runs goal mode with an independent model-backed evaluator.
 - `hya serve` exposes the `hya.v1` contract over HTTP/JSON+SSE+WebSocket
-  on `/v1` and, with `HYA_GRPC_BIND`, over gRPC (see
+  on `/v1` and, on the same port, over gRPC (see
   [Server and Client](server-client.md)).
   `hya serve --relay <url>` (or `hya serve relay connect` on a running one)
   also offers it through a relay; `hya proxy` runs the relay and

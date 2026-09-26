@@ -104,10 +104,12 @@ daemon (found or auto-started; it outlives its clients, ADR-0023).
 backend.
 
 The server exposes exactly one contract — `hya.v1` (18 services / 99 rpcs in
-`proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
-`HYA_GRPC_BIND` is set, over gRPC through `hya_server::V1Grpc`, which dispatches
-through the same router. The legacy Compat `/api/*`, bare native routes, and
-old `/sessions/*` surface are deleted.
+`proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and over gRPC
+through `hya_server::V1Grpc`, which dispatches through the same router. Both
+are served on the same port from one server state (`hya_server::build`,
+routed by `content-type: application/grpc*`), also through the relay;
+`HYA_GRPC_BIND` only adds an optional extra listener. The legacy Compat
+`/api/*`, bare native routes, and old `/sessions/*` surface are deleted.
 
 The main runtime path is:
 

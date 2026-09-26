@@ -249,7 +249,7 @@ event folds and `last_seq` advances.
 ## `hya-server`, `hya-api`, and `hya-client`
 
 `hya-server` exposes the engine over exactly one contract — `hya.v1` — served
-over HTTP/JSON+SSE+WebSocket under `/v1` and, with `HYA_GRPC_BIND`, over gRPC
+over HTTP/JSON+SSE+WebSocket under `/v1` and, on the same port, over gRPC
 through `V1Grpc`. Representative routes:
 
 | Route | Behavior |

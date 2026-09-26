@@ -10,7 +10,7 @@ runtime: it normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and
 Google provider routes into one canonical event stream and executes tools behind
 a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
-(`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. The
+on the same port; the legacy Compat and native HTTP routes are gone. The
 interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`: running
 `hya` in a terminal starts it together with the WebUI, the same TUI rendered
 in a browser through `packages/hya-tui-web`, both connected to a backend
@@ -120,7 +120,7 @@ sample config.
 - Headless single-turn execution (`hya exec` / `hya run`) and iterative goal
   mode (`hya -p "<goal>"`).
 - HTTP/SSE/WebSocket server (`hya serve`) exposing the consolidated
-  `hya.v1` contract under `/v1`, plus optional gRPC via `HYA_GRPC_BIND`; see the
+  `hya.v1` contract under `/v1`, plus gRPC on the same port; see the
   [protocol guide](docs/protocol/README.md) and generated
   [API reference](docs/protocol/api-reference.md). Typed clients:
   `hya-sdk-v1` and `hya-client` (crates), or any generated `hya.v1` stub.

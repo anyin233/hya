@@ -366,7 +366,7 @@ The server answers only requests whose `Host` (or HTTP/2 `:authority`) names
 `--bind`, or an `--allow-host` name. This stops DNS-rebinding web pages from
 driving the backend (or reading `GET /v1/relay/link`) through your browser.
 A request with no `Host` at all (an HTTP/1.0 client) gets `403 … names no
-Host`. On the gRPC listener (`HYA_GRPC_BIND`) the same check answers
+Host`. A gRPC call gets the same check on its `:authority` and answers
 `PERMISSION_DENIED`.
 
 You see this when you reach the server by another name on purpose — a LAN
