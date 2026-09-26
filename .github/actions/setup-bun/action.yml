@@ -1,0 +1,24 @@
+name: setup-bun
+description: Install the pinned Bun, retrying transient download failures.
+inputs:
+  version:
+    description: Bun version to install (same pin as the release workflow).
+    default: "1.4.2"
+runs:
+  using: composite
+  steps:
+    - name: Install Bun ${{ inputs.version }}
+      shell: bash
+      env:
+        BUN_VERSION: ${{ inputs.version }}
+      run: |
+        for attempt in 1 2 3 4; do
+          if curl -fsSL --retry 3 https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; then
+            break
+          fi
+          (( attempt == 4 )) && exit 1
+          echo "Bun install attempt ${attempt} failed; retrying in $(( attempt * 10 ))s"
+          sleep $(( attempt * 10 ))
+        done
+        test "$("$HOME/.bun/bin/bun" --version)" = "${BUN_VERSION}"
+        echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
