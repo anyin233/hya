@@ -49,7 +49,8 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
   `script`, or terminal scraping to check TUI output. To look at the TUI, serve
   it and open the printed URL, for example:
   `HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- bun packages/hya-tui/src/main.ts --dir "$PWD"`
-  (the TUI starts and stops its own `hya serve`), or add
+  (the TUI attaches to the database's backend daemon, starting one if none
+  runs; stop it with `target/debug/hya serve stop --db <db>` when done), or add
   `--server http://127.0.0.1:8080` to the TUI command to use a
   `hya serve --bind 127.0.0.1:8080` you run yourself. To preview bare `hya`
   itself (TUI + WebUI), make it the host command:
@@ -97,7 +98,8 @@ session lifecycle changes are appended as `Event`s, then replayed into a
 projection for the HTTP API and client surfaces. The interactive
 frontend is the Bun/OpenTUI TUI in `packages/hya-tui` (v1 HTTP/JSON+SSE
 client); `packages/hya-tui-web` renders the same TUI in a browser as the
-WebUI. Bare `hya` on a terminal starts both against an in-process server.
+WebUI. Bare `hya` on a terminal starts both against the database's backend
+daemon (found or auto-started; it outlives its clients, ADR-0023).
 `hya-sdk-v1`, `hya-client`, and gRPC are the other supported ways to drive a
 backend.
 
@@ -130,7 +132,7 @@ or verifiers; workers do not decide that their own objective is done.
 
 | Component | Feature |
 | --- | --- |
-| `crates/hya-backend` | Package for the unified `hya` executable — the only shipped binary and the single terminal entry point; subcommands select the controlled area. Bare `hya` on a terminal runs the v1 server in-process and starts the Bun TUI and the WebUI host as child processes (`src/frontend.rs`: asset/Bun resolution, lifecycle, log file; `--port`, default 3250; see `docs/cli.md` "Bare `hya`", ADR-0020); without a terminal it prints a guidance banner. Subcommands cover `exec`/`run`, `-p/--prompt` goal mode, `loop`, `serve`, `tail-session`, `sessions`, `rpc`, `login`/`oauth`/`auth`, `agent`, `bundle`, `workflow`, `models`, and `update` (the self-update TCB from `hya-updater`, dispatched before any runtime composition). Runtime commands **compose** through `hya-app`. Build with `cargo build -p hya-backend --bin hya`. |
+| `crates/hya-backend` | Package for the unified `hya` executable — the only shipped binary and the single terminal entry point; subcommands select the controlled area. Bare `hya` on a terminal finds or starts the database's detached backend daemon (`src/daemon.rs`, `hya serve start|status|stop|restart`; `--backend <url>` to use a given one) and starts the Bun TUI and the WebUI host as child processes (`src/frontend.rs`: asset/Bun resolution, lifecycle, log file; `--port`, default 3250; see `docs/cli.md` "Bare `hya`" and "Backend daemon", ADR-0020, ADR-0023); without a terminal it prints a guidance banner. Subcommands cover `exec`/`run`, `-p/--prompt` goal mode, `loop`, `serve`, `tail-session`, `sessions`, `rpc`, `login`/`oauth`/`auth`, `agent`, `bundle`, `workflow`, `models`, and `update` (the self-update TCB from `hya-updater`, dispatched before any runtime composition). Runtime commands **compose** through `hya-app`. Build with `cargo build -p hya-backend --bin hya`. |
 | `crates/hya-app` | Runtime composition library (not a binary). Config load, provider/auth resolution, MCP and plugin wiring, permission policy construction, session engine build, `WorkflowControl` admission/list/info/select/run/state, and installed-bundle catalog refresh. Prefer this crate over `hya-backend` when changing composition or Workflow control, not CLI surface. |
 | `crates/hya-bundle` | `AgentBundle` and `WorkflowBundle` prepare/validate/catalog types and package fixtures. Catalog builders and resource/agent/Workflow resolution used by install CLI and process E2E. Also the runtime loader for the twelve trusted first-party bundles (`first_party_bundle`; see `docs/bundle-runtime.md`). Prefer this crate for bundle authoring contracts and prepare semantics. |
 | `crates/hya-workflow` | Workflow source parsing, normalization, validation, and immutable compiled plans. Prefer this crate for authoring/compile contracts; execution belongs to `hya-core`. |

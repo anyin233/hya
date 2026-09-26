@@ -1390,7 +1390,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
-| `interactions_only` (3) | `bool` | Deliver only the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session plus the process-wide `catalogUpdated` and `projectsUpdated` notices; skip every session's engine events and their `resync` frames. For a client that follows one session on its session stream and needs only the asks of the others. |
+| `interactions_only` (3) | `bool` | Deliver only interaction and session-list frames: the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session, the process-wide `catalogUpdated` and `projectsUpdated` notices, and the session-list frames of root sessions — durable `sessionStarted` and `sessionUpdated` (title, agent, model, permission mode, archived), live `sessionUpdated.busy`, and live `sessionDeleted`. Every other engine event (text, tools, messages, and any child session's list changes) is skipped. A `resync` frame means session-list frames were lost: list the sessions again. For a client that follows one session on its session stream and needs only the asks of the others and live session and Project lists. |
 
 ### `StreamFrame`
 
@@ -1419,7 +1419,7 @@ One curated projected event from the event log.
 | `session` (2) | `string` | Owning session identifier. |
 | `time_recorded` (3) | `google.protobuf.Timestamp` | When the event was recorded. |
 | `session_started` (4) | `oneof `payload`: SessionStarted` | Event payload; exactly one kind is set. A session was created. |
-| `session_updated` (5) | `oneof `payload`: SessionUpdated` | Session metadata changed (title, model, agent, background). |
+| `session_updated` (5) | `oneof `payload`: SessionUpdated` | Session metadata changed (title, model, agent, background, permission mode, archived), or — live-only — a root session's busy state. |
 | `message_started` (6) | `oneof `payload`: MessageStarted` | A message started (user admitted or assistant round began). |
 | `message_finished` (7) | `oneof `payload`: MessageFinished` | A message reached a terminal state. |
 | `part_started` (8) | `oneof `payload`: PartStarted` | A part was appended to a message. |
@@ -1433,19 +1433,28 @@ One curated projected event from the event log.
 | `workflow_updated` (16) | `oneof `payload`: WorkflowUpdated` | The workflow projection changed. |
 | `tokens_recorded` (17) | `oneof `payload`: TokensRecorded` | Token usage was recorded for a round. |
 | `compaction_applied` (18) | `oneof `payload`: CompactionApplied` | A compaction strategy was applied to the context. |
-| `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A session was deleted. |
+| `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A root session was deleted (live-only, global stream). |
 | `part_replaced` (20) | `oneof `payload`: PartReplaced` | A text or reasoning part's whole text was set (the durable record of a streamed text part, or a plugin rewrite of it). |
 | `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
 | `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
 | `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
 | `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
 | `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | The provider/model catalog changed (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`. |
-| `projects_updated` (26) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
+| `server_stopping` (26) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
+| `projects_updated` (27) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
 
-### `PartsAdded`
+### `ServerStopping`
 
 The provider/model catalog changed; carries no fields.
 The Project list changed; carries no fields.
+Why the server is going away.
+
+| Field | Type | Description |
+|---|---|---|
+| `reason` (1) | `string` | `stop`: stopped on purpose (`hya serve stop`); do not start another. `restart`: `hya serve restart`; a new server of the same database follows, attach to it. `signal`: SIGTERM/SIGINT/SIGHUP from anything else (a foreground `hya serve` interrupted, a supervisor); treat like `stop`. A stream that ends without this frame lost its server unexpectedly (crash, kill, network). |
+
+### `PartsAdded`
+
 Complete parts added to a message in one step.
 
 | Field | Type | Description |
@@ -1486,10 +1495,12 @@ Session metadata changed.
 | `background` (4) | `optional bool` | New background flag when changed. |
 | `permission_mode` (5) | `optional string` | New permission mode of the session tree when changed (emitted on the root session only). |
 | `archived` (6) | `optional bool` | New archived flag of a root session when changed: `true` when it was archived, `false` when it was unarchived (explicitly or by a new turn). |
+| `busy` (7) | `optional bool` | New busy state of a root session (`SessionInfo.busy`): `true` when a turn (or Workflow run) started, `false` when it went idle. Live-only (`seq` 0), set alone, and only on the global stream (also with `interactions_only`); never on session streams and never replayed. |
 
 ### `MessageStarted`
 
-A session was deleted.
+A session was deleted: its log is gone. Live-only (`seq` 0), for root
+sessions only, on the global stream (also with `interactions_only`).
 A message started.
 
 | Field | Type | Description |
@@ -2623,8 +2634,8 @@ components.
 
 | Field | Type | Description |
 |---|---|---|
-| `agent` (1) | `string` | Agent name or catalog id to bind as the session's default agent. |
-| `model` (2) | `string` | Model reference the session starts on (`provider/model[#variant]`). |
+| `agent` (1) | `string` | Agent name or catalog id to bind as the session's default agent. Empty: the server's default agent (config `default_agent`, else the built-in agent). |
+| `model` (2) | `string` | Model reference the session starts on (`provider/model[#variant]`). Empty: that agent's effective model. |
 | `workdir` (3) | `optional string` | Absolute workdir for tools and relative paths in this session; see the rules above. |
 | `parent` (4) | `string` | When set, marks the new session as a child of this parent id. |
 | `initialize` (5) | `bool` | When true, run the directory initialization turn after creation. |

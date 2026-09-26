@@ -86,7 +86,7 @@ export function Sidebar(props: { width: number }) {
         <TodoList items={store.state.todos} width={inner()} />
       </SideBox>
       <SideBox title="Context">
-        <text width="100%" wrapMode="none" fg={colors.fg}>{contextText(store.state, server, inner())}</text>
+        <text width="100%" wrapMode="none" fg={colors.fg}>{contextText(store.state, store.state.serverUrl || server, inner())}</text>
       </SideBox>
     </box>
   )

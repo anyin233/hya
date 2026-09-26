@@ -671,7 +671,8 @@ async fn grpc_session_stream_delivers_descendant_questions_on_opt_in() {
 }
 
 /// `interactionsOnly` on the global stream drops every session's engine
-/// events and keeps the live interaction frames (and process notices such as
+/// events except root-session list frames (`sessionStarted` here), and keeps
+/// the live interaction frames (and process notices such as
 /// `catalogUpdated`), over HTTP and gRPC.
 #[tokio::test]
 async fn global_stream_interactions_only_skips_session_events() {
@@ -749,6 +750,7 @@ async fn global_stream_interactions_only_skips_session_events() {
     assert_eq!(
         kinds,
         vec![
+            "sessionStarted".to_owned(),
             "catalogUpdated".to_owned(),
             "permissionRequested".to_owned()
         ],
@@ -763,6 +765,9 @@ async fn global_stream_interactions_only_skips_session_events() {
                 continue;
             };
             match event.payload {
+                Some(pb::stream_event::Payload::SessionStarted(_)) => {
+                    grpc_kinds.push("sessionStarted");
+                }
                 Some(pb::stream_event::Payload::CatalogUpdated(_)) => {
                     grpc_kinds.push("catalogUpdated");
                 }
@@ -777,7 +782,10 @@ async fn global_stream_interactions_only_skips_session_events() {
     })
     .await
     .expect("gRPC ask frame");
-    assert_eq!(grpc_kinds, vec!["catalogUpdated", "permissionRequested"]);
+    assert_eq!(
+        grpc_kinds,
+        vec!["sessionStarted", "catalogUpdated", "permissionRequested"]
+    );
 }
 
 /// A provider catalog change reaches v1 session streams too, as a live-only

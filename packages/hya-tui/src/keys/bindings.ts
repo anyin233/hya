@@ -102,13 +102,13 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "quit",
     label: "Ctrl+C",
-    description: "Clear the input; press again within 2 s to quit",
+    description: "Clear the input; press again within 2 s to quit and archive the session (like /exit; /resume brings it back)",
     matches: (key) => key.ctrl && !key.meta && key.name === "c",
   },
   {
     action: "eof",
     label: "Ctrl+D",
-    description: "Quit when the input is empty (otherwise delete the character under the cursor)",
+    description: "On an empty input: quit and leave the session running on the backend (like /to-background); in a WebUI tab, close the tab instead. Otherwise delete the character under the cursor",
     matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "d" && context.composerEmpty === true,
   },
   {

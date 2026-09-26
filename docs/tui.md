@@ -1,9 +1,10 @@
 # OpenTUI frontend
 
 The `packages/hya-tui` frontend is the terminal client of hya. Running
-`hya` in a terminal starts it together with an in-process server and the
-WebUI (see [Start it](#start-it)); from a source checkout it can also start its
-own `hya serve` or connect to a running one with `--server`. It uses OpenTUI for
+`hya` in a terminal starts it together with the WebUI, both connected to the
+database's backend daemon, which `hya` starts when none runs (see
+[Start it](#start-it)); from a source checkout it can also be run directly, or
+connect to a server you name with `--server`. It uses OpenTUI for
 display and input while the backend remains the owner of sessions, event
 history, tool execution, and permissions. The screen is one main column (the transcript of the open
 session, pending interactions, the status line, and the input) plus a
@@ -32,18 +33,23 @@ command (see [Key help](#key-help)).
 
 ## Start it
 
-Run `hya` in a terminal. It starts a server inside the `hya` process, the
-WebUI on `http://127.0.0.1:3250` (`hya --port <N>` picks another port, `0` a
-free one), and this TUI attached to the terminal. The TUI and every WebUI tab
-share the same server and sessions. Quitting the TUI stops the WebUI and the
-server. Bare `hya` needs Bun and finds the TUI under `lib/hya/tui` next to the
-binary (a release archive or `install.sh` puts it there) or in the source
-checkout it was built from. See [Bare `hya`](cli.md#bare-hya) for the lookup
-order, the log file, and signals.
+Run `hya` in a terminal. It connects to the **backend daemon** of the
+database (starting one when none runs), then starts the WebUI on
+`http://127.0.0.1:3250` (`hya --port <N>` picks another port, `0` a free one)
+and this TUI attached to the terminal. The TUI and every WebUI tab use the
+same daemon, database, and workspace directory, so each sees, and can
+resume, the sessions the other started. Quitting the TUI stops the WebUI; the
+daemon keeps running for the next start (`hya serve stop` stops it,
+[ADR-0023](adr/0023-persistent-backend-daemon.md)). Bare `hya` needs Bun and
+finds the TUI under `lib/hya/tui` next to the binary (a release archive or
+`install.sh` puts it there) or in the source checkout it was built from. See
+[Bare `hya`](cli.md#bare-hya) for the lookup order, the log files, `--backend`,
+and signals.
 
 ```sh
 hya                   # TUI + WebUI on http://127.0.0.1:3250
 hya --port 8000       # WebUI on another port
+hya serve status      # the daemon both use
 ```
 
 With a WebUI, the status bar shows `WebUI http://127.0.0.1:3250`, the
@@ -52,11 +58,8 @@ sidebar's `Context` box shows `WebUI    127.0.0.1:3250`, and `/status` shows a
 taken), the TUI still works: the status line shows
 `WebUI unavailable: port 3250 is in use · hya --port <N>`, the status bar
 shows `WebUI unavailable` in the warning color, and `/status` repeats the
-reason. `/status` shows `Backend     in the hya process (bare hya)`. If
-another process already serves the database, bare `hya` attaches to that
-server instead of starting its own, and `/status` shows
-`Backend     attached to a running server · pid <pid>` (see [Bare
-`hya`](cli.md#bare-hya), "Attaching to a running server").
+reason. `/status` shows the daemon as
+`Backend     daemon · pid <pid> · db <db> · started <N>m ago`.
 
 ### Run it with Bun (development)
 
@@ -69,42 +72,37 @@ cd packages/hya-tui
 bun install --frozen-lockfile
 ```
 
-Then, from the repository root, one command starts the TUI and its backend:
+Then, from the repository root, one command starts the TUI (and, if none
+runs, the backend daemon):
 
 ```sh
 cargo build -p hya-backend --bin hya        # once; or put a released hya on PATH
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
 ```
 
-Without `--server` the TUI first looks for a server that already runs on its
-database ([ADR-0022](adr/0022-one-writer-per-database.md)). It reads
-`<db>.server.json` next to the database (`{url, pid, version, startedAt}`,
-written by that server) and attaches when the pid is alive and
-`GET <url>/v1/health` answers `ok`. It then starts nothing and stops
-nothing, and `/status` shows
-`Backend     attached to a running server · pid <pid> · db <db>`. So a second
-TUI on the same database shares the first one's sessions and live events
-(streamed turns, renames, asks) instead of writing the file as a second
-server. The attached TUI depends on that server: if its owner quits, the
-attached TUI loses the connection (restart it to start a new server).
+Without `--server` the TUI uses the backend daemon of its database
+([ADR-0022](adr/0022-one-writer-per-database.md),
+[ADR-0023](adr/0023-persistent-backend-daemon.md)):
 
-Otherwise the TUI starts its own backend: it finds the `hya`
-binary, runs `hya serve --bind 127.0.0.1:0 --db <db>` in `--dir` with the
-TUI's environment, reads the URL from the server's readiness line
-(`hya server listening on <url>`, see [`hya serve`](cli.md#hya-serve)),
-connects, and stops the server when the TUI exits — Ctrl+C twice, Ctrl+D,
-`/exit`, or a signal (SIGINT, SIGTERM, SIGHUP, which is also what the WebUI
-host sends when its browser tab closes). Stopping sends SIGTERM (the server
-drains running turns for up to 5 s) and SIGKILL after 6 s, and the TUI
-waits for the process to exit, so no `hya serve` is left behind. The
-server's stdout and stderr never reach the screen; `/status` shows the
-started backend's pid, binary, and database
-(`Backend     started by this TUI · pid <pid> · <bin> · db <db>`). If that
-`hya serve` exits with status 75 because another process holds the database
-(two TUIs started at the same moment, or the holder is still starting), the
-TUI waits up to 20 s for the holder's discovery file and attaches. If none
-appears it fails with
-`database <db> is in use by another hya process that serves no reachable server`.
+1. It reads `<db>.server.json` next to the database (`{url, pid, version,
+   startedAt}`, written by the server) and uses that server when the pid is
+   alive and `GET <url>/v1/health` answers `ok`. Any server of the database
+   counts: a daemon, a `hya serve --db` you run yourself, another bare `hya`'s.
+2. Otherwise it finds the `hya` binary and runs `hya serve start --json
+   --db <db>` in `--dir` with the TUI's environment. That starts `hya serve`
+   detached (its own session; output to `<db>.server.log`), waits until it
+   answers, and prints where it is (see [Backend daemon](cli.md#backend-daemon)).
+   Two TUIs that start at the same moment end up on one daemon: the database
+   lock lets only one start.
+
+The TUI never stops the daemon: Ctrl+C twice, Ctrl+D, `/exit`,
+`/to-background`, and a signal (SIGINT, SIGTERM, SIGHUP, which is also what
+the WebUI host sends when its browser tab closes) quit only the TUI (what
+each does with the open session: [Quit and keep running, or
+archive](#quit-and-keep-running-or-archive)). So a second TUI on the same database
+shares the first one's sessions and live events (streamed turns, renames,
+asks), and the next start is instant. `/status` shows
+`Backend     daemon · pid <pid> · db <db> · started <N>s ago`.
 
 The binary is looked up in this order:
 
@@ -113,59 +111,198 @@ The binary is looked up in this order:
 3. `hya` on `PATH`
 
 A path given by `--hya` or `HYA_BIN` must exist; the TUI does not fall back
-to the next source then. If no binary is found, or the server exits (or
-prints no readiness line within 60 s) before it is ready, the TUI prints the
-reason and the last lines of the server's output, and exits with status 1
+to the next source then. If no binary is found, or the daemon cannot be
+started (it exits with an error, or does not answer within 60 s), the TUI
+prints the reason and the last lines of the output, and exits with status 1
 before it takes over the terminal, for example:
 
 ```text
-hya-tui: could not start the backend: hya serve exited with code 1 before it was ready
---- hya serve output (last lines) ---
-Error: invalid config: ...
+hya-tui: could not reach or start the hya server: hya serve start exited with code 1
+--- hya serve start output (last lines) ---
+Error: hya serve (daemon) exited with exit status: 1 before it was ready; see /home/me/.local/state/hya/sessions.db.server.log
 ```
 
 To use a backend you run yourself (another machine, a shared server, or a
-custom `hya serve` command line), pass its URL; the TUI then starts nothing
-and stops nothing:
+custom `hya serve` command line), pass its URL:
 
 ```sh
 cargo run --locked -p hya-backend --bin hya -- serve --bind 127.0.0.1:8080 --db "$HOME/hya-sessions.db"
 bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 ```
 
+Add `--db` (the database behind that URL) to let the TUI fall back to that
+database's daemon: at start when the URL does not answer, and later when the
+server goes away. Bare `hya` passes `--server <daemon url> --db <db> --hya
+<hya>` to every TUI it starts, WebUI tabs included, so a new tab still
+connects after the daemon was restarted on another port. `/status` shows
+`Backend     daemon · pid <pid> · via --backend/--server` for a `--server`
+without `--db`.
+
 | Flag | Meaning |
 | --- | --- |
-| `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI starts its own backend. |
-| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the started backend's working directory. Default: the TUI's working directory. |
-| `--hya <path>` | `hya` binary to start (first in the lookup order above). Only without `--server`. |
-| `--db <path>` | SQLite database of the backend, relative to `--dir`: the TUI attaches to the server already running on it, else starts one. Default: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. Only without `--server`. |
-| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir`, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
-| `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project. The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
+| `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI uses the database's daemon. |
+| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `x-hya-directory` scope of every request and the working directory of a daemon the TUI starts. Default: the TUI's working directory. |
+| `--hya <path>` | `hya` binary that starts the daemon (first in the lookup order above). |
+| `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
+| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
+| `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
+| `--resume [id]` | Open that session and unarchive it (`PATCH {archived:false}`). Without an id (the next argument starts with `-`, or there is none), open a picker of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first; Enter resumes (and unarchives) the highlighted one, Esc starts a new session instead. Cannot be combined with `--continue` or `--session`. |
+| `--web-tab` | This TUI runs in a WebUI tab: `/to-background` is not offered and Ctrl+D only shows `Close the tab to leave this session running` (closing the tab already leaves the session running). Bare `hya` adds it to its web host's tab command; pass it yourself in the command of a web host you start by hand (see [tui-web.md](tui-web.md#usage)). |
 | `--web-url <url>` | Show this WebUI address (status bar `WebUI <url>`, sidebar `Context` row, `/status`). Bare `hya` passes it; an HTTP(S) URL. |
 | `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in the status line and `/status`, and `WebUI unavailable` in the status bar. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
-| `--attached-pid <pid>` | With `--server` only: the server belongs to another process (pid) that bare `hya` attached to; `/status` shows `attached to a running server · pid <pid>`. Bare `hya` passes it. |
 | `-h`, `--help` | Print the flags and the binary lookup order. |
 
-Without `--continue` or `--session` no session is open at start; the first
-prompt (or `/new`) creates one, and `/sessions` (or the sidebar) reaches the
-earlier ones. Two TUIs on the same database share one server, so they see
-the same sessions live; give one `--db` for a separate store. The
-backend's offline echo model is sufficient for a first run; configure a
-provider in the backend for live model calls.
+### Sessions on start and exit
 
-Type a plain prompt and press Enter. The frontend creates a session when none
-is open, admits the prompt as a turn, and streams the reply into the
-transcript as it arrives (see [Streaming, queued prompts, and turn
-status](#streaming-queued-prompts-and-turn-status)). For example, type `summarize this repository`,
-then `/models` to inspect available routes, and `/open 1` to return to the
-first session. Press Ctrl+C twice (or Ctrl+D on an empty input, or type
-`/exit`) to exit and restore the terminal; a backend the TUI started stops
-with it. Next time, `--continue` picks the conversation up again:
+Without `--continue`, `--session`, or `--resume`, the TUI creates a new session as soon as
+it connects, in the active Project (with the default agent and model; without
+any model the first prompt creates it instead), so the header names it before
+you type. A `--remote` start without an active Project creates none: it opens
+the [Project view](#project-view) instead.
+`/sessions` (or the sidebar) reaches the earlier ones. Empty sessions do not
+pile up: a session this TUI created and never used is deleted when the TUI
+leaves it — `/new`, `/open`, `/sessions`, a `/fork` switch, or the TUI
+exiting (a WebUI tab closing too; the delete waits at most 2 s). Right before
+the delete the TUI re-reads the session from the server and keeps it if it
+has any message, a running turn, a title (a `/rename`, or the automatic title
+after a first prompt), or a parent. Sessions other clients created are never
+deleted. The re-check and the delete are two requests, so a prompt another
+client sends into that empty session in between is lost with it.
+
+Two TUIs on the same database share one daemon, so they see the same
+sessions live; give one `--db` for a separate store. The backend's offline
+echo model is sufficient for a first run; configure a provider in the backend
+for live model calls.
+
+Type a plain prompt and press Enter. The prompt is admitted as a turn of the
+open session and the reply streams into the transcript as it arrives (see
+[Streaming, queued prompts, and turn status](#streaming-queued-prompts-and-turn-status)).
+For example, type `summarize this repository`, then `/models` to inspect
+available routes, and `/open 1` to return to the first session. Press Ctrl+C
+twice (or type `/exit`) to quit and archive the session, or Ctrl+D on an
+empty input (`/to-background`) to quit and leave it running. Next time,
+`--resume` offers the conversation again (archived or not), and
+`--continue` picks up the newest one that is not archived:
 
 ```sh
-HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --continue
+HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --resume
 ```
+
+### Quit and keep running, or archive
+
+How you leave a TUI decides what happens to its open session on the
+backend daemon (ADR-0023). Archiving is only a flag
+([Archived sessions](protocol/README.md#archived-sessions)): it hides the
+session from the default list, the sidebar, and `--continue`, and never
+cancels a running turn, which finishes on the daemon.
+
+| Way out | Open session |
+| --- | --- |
+| Ctrl+C twice, `/exit`, `/quit` (graceful) | Archived at once (`PATCH /v1/sessions/{id} {"archived": true}`); in a subagent's read-only view, its root session is archived. |
+| Ctrl+D on an empty input, `/to-background` (terminal only) | Left as is: it keeps running on the daemon, not archived. |
+| Closing a WebUI tab, SIGTERM/SIGHUP/SIGINT, a kill or crash | Left as is: it keeps running on the daemon, not archived. |
+| Switching sessions (`/new`, `/open`, `/sessions`, `/resume`, a `/fork` switch) | Not an exit: the previous session keeps running. |
+
+In every case an empty session this TUI created and never used is deleted
+instead (the rule above). The exit waits at most 2 s for the archive or the
+delete.
+
+In a WebUI tab (`--web-tab`) `/to-background` is not offered (it is left
+out of the command menu, completion, and `/help`); typing it, or Ctrl+D on
+an empty input, shows `Close the tab to leave this session running` and
+does not quit. Closing the tab already does that.
+
+To come back to a session, archived or not: `--resume [id]` at start, or
+`/resume [id]` in a running TUI (the same picker; this is how a WebUI tab,
+which cannot pass flags, resumes). Both unarchive the session and open it,
+and say `Resumed <title>`. The terminal TUI and WebUI tabs of one database
+share its daemon, so each resumes the other's sessions. The `/sessions`
+picker shows archived sessions too after Ctrl+A (see
+[Row actions](#row-actions)). Sending a prompt into an archived session
+(for example one another client archived while it was open here) unarchives
+it on the backend as well.
+
+### Sidebar live updates
+
+The sidebar's `Sessions` box (and an open `/sessions` picker, see
+[Pickers](#pickers)) stays current without polling: every root session's
+list-affecting change reaches every TUI over the global stream (unfiltered
+or `interactionsOnly`), following the protocol guide's
+[Session list push](protocol/README.md#session-list-push). At global-stream
+open the TUI lists sessions (respecting the sidebar's own default, which
+hides archived ones), then folds frames by `event.session`:
+
+| Frame | Effect |
+| --- | --- |
+| `sessionStarted {agent, model, workdir}` | A session this TUI has not listed (another client's, a fork, a headless writer): the frame carries too little to build a row cheaply (no title yet), so the list is re-read, debounced with the same 120 ms/400 ms rule as the projection re-read. |
+| `sessionUpdated {title\|agent\|model\|permissionMode}` | Patches the row in place (`state/store.ts` `patchSessionRow`); an id not listed yet re-lists instead. |
+| `sessionUpdated {archived}` | An archived session leaves the list, except the open one, which stays with `· archived` after its agent (`applyArchived`); an unarchived one is marked back, or re-listed if it was missing. |
+| `sessionUpdated {busy}` (live-only) | Patches `busy` on the row (`· running`), independent of any turn this client admitted. |
+| `sessionDeleted {}` (live-only) | Drops the row. If it was the *open* session — deleted by another client, not by this TUI's own `/sessions` Ctrl+D (`deleteSession` marks its own deletes so this echo is not mistaken for one) — a status notice (`Session <id> was deleted elsewhere; opened a new session`) is shown and a fresh session opens, like `/new`: the TUI is never left pointed at a session with no log behind it. |
+
+A `resync` on the global stream means these frames were lost: sessions (and
+pending interactions, as before) are listed again. This complements
+[Session titles](#session-titles) (title/agent/model on the *open*
+session's own stream) and the archived-marking above: `patchSessionRow`
+never touches `state.selected` — the open session's header and its
+`permissionMode` notice stay the own stream's job — so a frame that reaches
+both streams (a root session's own change, echoed on the global stream too)
+is applied twice, harmlessly (each setter is an idempotent "set to this
+value", not a counter).
+
+Open `/model`/`/agent`/`/permissions` pickers already read live state
+(`store.state`) each time they render. `/sessions` and `/resume` snapshot
+their rows when they open (`sessionRows`/`resumeRows` over `store.state` or
+a fresh `ListSessions`) and do not repaint while held open; re-opening them
+(closing with Esc and pressing `/sessions` or `/resume` again) picks up
+every change made meanwhile. The row is small enough, and reopening cheap
+enough, that this was chosen over patching an open picker's rows in place.
+
+### When the server goes away
+
+The daemon can stop under a running TUI: `hya serve stop` or `restart`, a
+signal, a crash, or a machine sleep that killed it. A stopping server ends
+every event stream and answers `GET /v1/health` with `503 unavailable`; the
+last frame of each stream says why (`serverStopping {reason}`, see
+[Server shutdown](protocol/README.md#server-shutdown)). When a stream ends or
+fails, the TUI probes the server twice, 500 ms apart; a server that still
+answers was a blip, and the stream just reconnects (with the usual backoff).
+A TUI that knows its database (started without `--server`, or with `--db`)
+then acts on the reason:
+
+| Reason | What the TUI does | Status line |
+| --- | --- | --- |
+| `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the status bar shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
+| `signal` (SIGTERM/SIGINT/SIGHUP from anything but `hya serve stop`, for example Ctrl+C on a foreground `hya serve`), or an unknown reason | As `stop`. | `Backend stopped (signal) · /reconnect starts it again` |
+| `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
+| none (the stream ended without the frame: a crash, `kill -9`, a lost connection) | Runs the same find-or-start as at launch. | `Server stopped · reconnecting…`, then `Started a new server · pid <pid>` when it started the daemon, or `Server moved · now pid <pid>` when it found one |
+
+`/reconnect` runs find-or-start at once, from any state, and says `Started a
+new server · pid <pid>`, `Server moved · now pid <pid>`, or `Connected · pid
+<pid>` (the current server is the live one); a failure says `Reconnect
+failed: <reason> · /reconnect to try again`.
+
+Whenever it moves to another server the TUI:
+
+1. switches every later request to the new server's URL (header, sidebar,
+   and `/status` show it),
+2. resubscribes the session stream and the global ask stream,
+3. reloads the catalogs, the pending asks, and the open session's transcript
+   from the database.
+
+Several TUIs that lose the server together end up on one new daemon: one
+starts it (after a crash, or on `/reconnect`), the others find it. Example:
+`hya serve stop` with a terminal TUI and two WebUI tabs open leaves all three
+showing `Backend stopped`; `/reconnect` in the terminal starts the daemon and
+the tabs move to it by themselves. A turn that was running on the old server
+ends with it (the transcript shows how far it got; the server's shutdown
+closes it as cancelled). Prompts queued in the TUI are dropped. If no server
+can be found or started after a crash, the status line says `Server lost:
+<reason> · retrying`, and the next stream retry tries again. A TUI whose
+stream was down at the moment of a stop never gets the reason and treats the
+stop as a crash. A TUI with a fixed `--server` and no `--db` never moves; it
+keeps retrying that URL.
 
 To add a provider or set its API key, type `/key`: the full-screen
 [Provider View](#provider-view) lists the providers, adds one through a short
@@ -269,11 +406,13 @@ A second, narrower sidebar on the left lists every Project live
 | `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
 | `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
 | Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
-| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
-| Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
-| `/exit`, `/quit` | Quit. |
+| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
+| Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
+| `/exit`, `/quit` | Quit and archive the session (an empty one is deleted). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
+| `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
+| `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
 | `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
-| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
+| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
@@ -293,6 +432,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
+| `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db` it only resubscribes to that URL. |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
@@ -308,7 +448,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/redo`, Ctrl+X R | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Ctrl+X U is `/undo` and Ctrl+X F is `/fork`; the chord works whatever the input holds. |
 | `/fork` | Pick where to fork the session (the latest message, or before one of its prompts); Enter creates the fork, switches to it, and puts the picked prompt in the input. |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
-| `/status` | Show the server URL, backend version, directory, session (and `Forked from <title>` for a fork), agent, model, permission mode, and the backend (started by this TUI with its pid, binary, and database, in the `hya` process under bare `hya`, or external with `--server`); under bare `hya` also the WebUI address or why it is unavailable. |
+| `/status` | Show the server URL, backend version, directory, session (and `Forked from <title>` for a fork), agent, model, permission mode, and the backend daemon (`daemon · pid <pid> · db <db> · started <N>m ago`, or `via --backend/--server` for a fixed URL); under bare `hya` also the WebUI address or why it is unavailable. |
 | `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
 | `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
 | `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
@@ -429,7 +569,9 @@ the bordered input, and the instruction line. The permission mode picker
   session syncs its row to the fresh `GetSession` read, so a stale `running`
   from before it was opened does not linger, and its own stream's turn-end
   frame clears it live if the turn was already running when it was opened;
-  `state/store.ts` `openSession()` / `setSessionBusy()`), `Todos` (the
+  `state/store.ts` `openSession()` / `setSessionBusy()`; every root
+  session's row also stays current live from another client's changes —
+  see [Sidebar live updates](#sidebar-live-updates)), `Todos` (the
   live todo list — see
   [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
   and `Context` (session, agent, model, the merged transcript's message
@@ -618,7 +760,8 @@ directory is not a repository), the WebUI that bare `hya` serves
 see [Start it](#start-it)), a compact todo count (`Todos <completed>/
 <total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
 box already lists them), and `reconnecting` (warning color) while the
-session event stream is down. Segments with no data are omitted rather than
+session event stream is down, or `backend stopped` (error color) after
+`hya serve stop` (see [When the server goes away](#when-the-server-goes-away)). Segments with no data are omitted rather than
 shown empty; on a narrow terminal the least essential segments (from the
 end) drop first, then the whole line clips, so it always fits the terminal
 width. The header line above it already carries agent, model, session, and
@@ -969,10 +1112,14 @@ Esc in normal mode has the meanings above.
 
 **Quitting.** The renderer does not quit on Ctrl+C by itself. The first
 Ctrl+C clears the input (on an empty input it only arms) and shows
-`Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. Any other key
-in between disarms it. Ctrl+D on an empty input quits; with text it deletes
-the character under the cursor. `/exit` and `/quit` quit. Quitting destroys
-the renderer, which restores the terminal, and exits with code 0.
+`Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives
+the session. Any other key in between disarms it. Ctrl+D on an empty input
+quits and leaves the session running (in a WebUI tab it only shows a
+notice); with text it deletes the character under the cursor. `/exit` and
+`/quit` quit and archive; `/to-background` quits and leaves the session
+running (see [Quit and keep running, or
+archive](#quit-and-keep-running-or-archive)). Quitting destroys the
+renderer, which restores the terminal, and exits with code 0.
 
 Example:
 
@@ -1780,13 +1927,13 @@ at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
 │ ▸   New session          [new]       Create a session with the curr… │
 │   ● Fix the flaky test              build · fake/model · 3m           │
 │       ↳ Explore the auth code [subagent]  explore · fake/model · 1m  │
-│ Enter opens · F2 renames · Ctrl+D deletes · Esc closes · type to fil… │
+│ Enter open · F2 rename · Ctrl+D del · Ctrl+A shows archived · Esc clo… │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Row actions
 
-The `/sessions` picker's highlighted row also takes two keys the plain
+The `/sessions` picker's highlighted row also takes keys the plain
 filter never sees (never Ctrl+R, which means refresh):
 
 - **F2** renames it: the picker switches to a one-line editable field seeded
@@ -1802,9 +1949,14 @@ filter never sees (never Ctrl+R, which means refresh):
   session (or shows no session, if none is left); the confirmation applies
   the same way whether or not the row is the open session, so the open
   session is never deleted without it.
+- **Ctrl+A** shows archived sessions too (it re-reads the list with
+  `GET /v1/sessions?includeArchived=true`; the title becomes `Sessions ·
+  archived included` and archived rows are tagged `[archived]`), and hides
+  them again. Enter on an archived row resumes it like `/resume <id>`: it is
+  unarchived, then opened. The sidebar never lists archived sessions.
 
 `state/picker.ts`'s `PickerAction` (`{id, key, ctrl?, label, prompt: "value"
-| "confirm", confirmText?}`) and the `"rename"`/`"confirm"` picker modes are
+| "confirm" | "none", confirmText?}`; `"none"` commits at once, a toggle) and the `"rename"`/`"confirm"` picker modes are
 a small, backward-compatible extension of the picker used by `/permissions`:
 a picker with no `actions` behaves exactly as before. See
 [Code layout — The picker](#code-layout) for the API.
@@ -2131,6 +2283,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
+| `GET /v1/sessions?includeArchived=true` | No body | Archived root sessions too (`SessionInfo.archived`, `archivedAt`): the `/resume` picker and the `/sessions` picker after Ctrl+A. |
+| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); `--resume`, `/resume`, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |

@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mkdir, realpath } from "node:fs/promises"
-import { BackendError, connectOrStart, databasePaths, defaultDatabase, exitDatabaseInUse, findRunningServer, initialSessionId, parseDiscovery, parseReadyLine, probeHealth, resolveHyaBinary, startBackend, type Backend } from "../src/launch"
+import { BackendError, connectOrStart, databasePaths, defaultDatabase, findRunningServer, initialSessionId, parseDiscovery, probeHealth, resolveHyaBinary, startDaemon, type DaemonInfo } from "../src/launch"
 
 const exists = (paths: string[]) => (path: string) => paths.includes(path)
 
@@ -32,13 +32,6 @@ test("a named binary that does not exist is an error, not a silent fallback", ()
   expect(error).toBeInstanceOf(BackendError)
   expect(String((error as Error).message)).toContain("hya binary not found")
   expect(String((error as Error).message)).toContain("--server")
-})
-
-test("parses the hya serve readiness line", () => {
-  expect(parseReadyLine("hya server listening on http://127.0.0.1:53211\n")).toBe("http://127.0.0.1:53211")
-  expect(parseReadyLine("noise\nhya server listening on http://127.0.0.1:1/\nmore")).toBe("http://127.0.0.1:1/")
-  expect(parseReadyLine("hya server listening on")).toBeUndefined()
-  expect(parseReadyLine("starting…")).toBeUndefined()
 })
 
 test("the default database is the durable sessions.db that `hya sessions` reads", () => {
@@ -88,53 +81,32 @@ const alive = (pid: number): boolean => {
   }
 }
 
-test("starts `hya serve --bind 127.0.0.1:0 --db <db>` in the directory, reads the URL, and stops it", async () => {
-  const { bin, dir } = await fakeHya(`echo "starting" >&2\necho "hya server listening on http://127.0.0.1:4321"\nexec sleep 30`)
-  const backend = await startBackend({ bin, directory: dir, db: join(dir, "s.db") })
-  expect(backend.url).toBe("http://127.0.0.1:4321")
-  expect((await readFile(join(dir, "argv"), "utf8")).trim()).toBe(`serve --bind 127.0.0.1:0 --db ${join(dir, "s.db")}`)
+// --- The backend daemon (ADR-0023): `hya serve start --json` starts or finds it.
+
+const daemonJson = (pid: number, started: boolean, url = "http://127.0.0.1:4321") =>
+  JSON.stringify({ url, pid, version: "0.41.0", startedAt: 1_700_000_000_000, db: "/s/sessions.db", log: "/s/sessions.db.server.log", started })
+
+test("starts the daemon with `hya serve start --json --db <db>` in the directory and reads what it reports", async () => {
+  const { bin, dir } = await fakeHya(`echo "note: noise" >&2\necho '${daemonJson(4242, true)}'`)
+  const info = await startDaemon({ bin, directory: dir, db: join(dir, "s.db") })
+  expect(info).toEqual({ url: "http://127.0.0.1:4321", pid: 4242, version: "0.41.0", startedAt: 1_700_000_000_000, db: "/s/sessions.db", started: true } satisfies DaemonInfo)
+  expect((await readFile(join(dir, "argv"), "utf8")).trim()).toBe(`serve start --json --db ${join(dir, "s.db")}`)
   expect(await Bun.file(join(dir, "cwd")).text()).toContain(dir.split("/").at(-1)!)
-  expect(alive(backend.pid)).toBe(true)
-  await backend.stop()
-  expect(alive(backend.pid)).toBe(false)
-  // Idempotent.
-  await backend.stop()
 })
 
-test("a child that ignores SIGTERM is killed after the grace period", async () => {
-  const { bin, dir } = await fakeHya(`trap '' TERM\necho "hya server listening on http://127.0.0.1:1"\nwhile true; do sleep 0.1; done`)
-  const backend = await startBackend({ bin, directory: dir, db: ":memory:", graceMs: 300 })
-  const started = Date.now()
-  await backend.stop()
-  expect(alive(backend.pid)).toBe(false)
-  expect(Date.now() - started).toBeLessThan(3_000)
-})
-
-test("a server that exits before it is ready fails with its exit code and stderr tail", async () => {
-  const { bin, dir } = await fakeHya(`echo "error: address in use" >&2\nexit 3`)
-  const failure = await startBackend({ bin, directory: dir, db: ":memory:" }).then(() => undefined, (error: unknown) => error)
+test("a failed daemon start is an error carrying its exit code and output", async () => {
+  const { bin, dir } = await fakeHya(`echo "Error: the hya server daemon did not answer within 60 s" >&2\nexit 1`)
+  const failure = await startDaemon({ bin, directory: dir, db: join(dir, "s.db") }).then(() => undefined, (error: unknown) => error)
   expect(failure).toBeInstanceOf(BackendError)
-  expect((failure as BackendError).message).toContain("exited with code 3 before it was ready")
-  expect((failure as BackendError).detail).toContain("error: address in use")
+  expect((failure as BackendError).message).toContain("hya serve start exited with code 1")
+  expect((failure as BackendError).detail).toContain("did not answer within 60 s")
+  expect((failure as BackendError).exitCode).toBe(1)
 })
 
-test("a server that never prints the readiness line times out and is stopped", async () => {
-  const { bin, dir } = await fakeHya(`echo "still booting" >&2\nexec sleep 30`)
-  const failure = await startBackend({ bin, directory: dir, db: ":memory:", readyTimeoutMs: 300 }).then(() => undefined, (error: unknown) => error)
-  expect((failure as BackendError).message).toContain("did not print its readiness line")
-  expect((failure as BackendError).detail).toContain("still booting")
-  const pid = Number((await readFile(join(dir, "pid"), "utf8")).trim())
-  expect(alive(pid)).toBe(false)
-})
-
-test("keeps draining the child's output after it is ready (a full pipe would block the server)", async () => {
-  const { bin, dir } = await fakeHya(`echo "hya server listening on http://127.0.0.1:1"\ni=0; while [ $i -lt 2000 ]; do echo "log line $i with padding padding padding padding" >&2; i=$((i+1)); done\necho done > "$(dirname "$0")/drained"\nexec sleep 30`)
-  const backend = await startBackend({ bin, directory: dir, db: ":memory:" })
-  const deadline = Date.now() + 5_000
-  while (!(await Bun.file(join(dir, "drained")).exists()) && Date.now() < deadline) await Bun.sleep(20)
-  expect(await Bun.file(join(dir, "drained")).exists()).toBe(true)
-  expect(backend.outputTail()).toContain("log line 1999")
-  await backend.stop()
+test("output that is not the daemon JSON is an error, not a guess", async () => {
+  const { bin, dir } = await fakeHya(`echo "started hya server pid 1"`)
+  const failure = await startDaemon({ bin, directory: dir, db: join(dir, "s.db") }).then(() => undefined, (error: unknown) => error)
+  expect((failure as BackendError).message).toContain("unexpected output")
 })
 
 // --- One writer per database (ADR-0022): attach to a running server or start one.
@@ -191,78 +163,44 @@ test("a running server is found only with a readable discovery file, a live pid,
   expect(await findRunningServer(db, "/w", deps(true, refused))).toBeUndefined()
 })
 
-function fakeBackend(url: string): Backend & { stopped: boolean } {
-  const backend = { url, pid: 77, bin: "/b/hya", db: "/s/sessions.db", stopped: false, outputTail: () => "", exited: new Promise<number | null>(() => {}), stop: async () => { backend.stopped = true } }
-  return backend
-}
+const daemon = (pid: number, started: boolean, url: string): DaemonInfo => ({ url, pid, version: "0.41.0", startedAt: 5, db: "/s/sessions.db", started })
 
-test("attaches to the live server of the database instead of starting one", async () => {
+test("attaches to the live daemon of the database instead of starting one", async () => {
   const db = "/s/sessions.db"
   let starts = 0
   const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, {
     readText: (path) => (path === databasePaths(db, "/w")!.discovery ? discovery(42, "http://127.0.0.1:9") : undefined),
     alive: () => true,
     fetcher: healthy,
-    start: async () => { starts++; return fakeBackend("http://x") },
+    start: async () => { starts++; return daemon(1, true, "http://x") },
   })
-  expect(connection).toEqual({ kind: "attached", url: "http://127.0.0.1:9", pid: 42, db, version: "0.41.0" })
+  expect(connection).toEqual({ url: "http://127.0.0.1:9", pid: 42, db, version: "0.41.0", startedAt: 1, started: false })
   expect(starts).toBe(0)
 })
 
-test("with no live server (none published, or stale) it starts hya serve", async () => {
+test("with no live server (none published, stale, or shutting down) it starts the daemon", async () => {
   const db = "/s/sessions.db"
-  for (const readText of [() => undefined, () => discovery(42)]) {
-    const started = fakeBackend("http://127.0.0.1:7")
-    const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, { readText, alive: () => false, fetcher: refused, start: async () => started })
-    expect(connection).toEqual({ kind: "started", backend: started })
+  const unavailable = (async () => new Response(JSON.stringify({ error: { code: "unavailable" } }), { status: 503 })) as unknown as typeof fetch
+  for (const [readText, fetcher, alive] of [[() => undefined, refused, false], [() => discovery(42), refused, false], [() => discovery(42), unavailable, true]] as const) {
+    const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, { readText, alive: () => alive, fetcher, start: async () => daemon(77, true, "http://127.0.0.1:7") })
+    expect(connection).toEqual({ url: "http://127.0.0.1:7", pid: 77, db, version: "0.41.0", startedAt: 5, started: true })
   }
 })
 
-test("losing the start race (hya serve exits 75) attaches to the winner once it publishes", async () => {
-  const db = "/s/sessions.db"
-  let published = false
-  let starts = 0
-  const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db }, {
-    readText: () => (published ? discovery(43, "http://127.0.0.1:8") : undefined),
-    alive: () => true,
-    fetcher: healthy,
-    sleep: async () => { published = true },
-    start: async () => { starts++; throw new BackendError("hya serve exited with code 75 before it was ready", "hya serve: database is already in use", exitDatabaseInUse) },
+test("a daemon another client started in the meantime is attached, not reported as started", async () => {
+  const connection = await connectOrStart({ bin: "/b/hya", directory: "/w", db: "/s/sessions.db" }, {
+    readText: () => undefined, alive: () => false, fetcher: refused,
+    start: async () => daemon(43, false, "http://127.0.0.1:8"),
   })
-  expect(starts).toBe(1)
-  expect(connection).toMatchObject({ kind: "attached", pid: 43, url: "http://127.0.0.1:8" })
+  expect(connection).toMatchObject({ pid: 43, started: false })
 })
 
-test("a database held by a process that never answers is a clear error", async () => {
-  const db = "/s/sessions.db"
-  let now = 0
-  const error = await connectOrStart({ bin: "/b/hya", directory: "/w", db, attachWaitMs: 1_000 }, {
-    readText: () => undefined,
-    alive: () => true,
-    fetcher: refused,
-    now: () => now,
-    sleep: async (ms) => { now += ms },
-    start: async () => { throw new BackendError("hya serve exited with code 75 before it was ready", "hya serve: database /s/sessions.db is already in use by pid 9", exitDatabaseInUse) },
-  }).catch((caught: unknown) => caught)
-  expect(error).toBeInstanceOf(BackendError)
-  expect((error as BackendError).message).toContain("database /s/sessions.db is in use by another hya process")
-  expect((error as BackendError).message).toContain("--db")
-  expect((error as BackendError).detail).toContain("already in use by pid 9")
-})
-
-test("other start failures are not retried", async () => {
+test("a failed start is reported, not retried", async () => {
   let starts = 0
   const error = await connectOrStart({ bin: "/b/hya", directory: "/w", db: "/s/sessions.db" }, {
     readText: () => undefined, alive: () => false, fetcher: refused,
-    start: async () => { starts++; throw new BackendError("hya serve exited with code 2 before it was ready", "", 2) },
+    start: async () => { starts++; throw new BackendError("hya serve start exited with code 1", "database is held", 1) },
   }).catch((caught: unknown) => caught)
   expect(starts).toBe(1)
-  expect((error as Error).message).toContain("code 2")
-})
-
-test("a server that exits before it is ready reports its exit code on the error", async () => {
-  const { bin, dir } = await fakeHya(`echo "hya serve: database x is already in use" >&2\nexit 75`)
-  const error = await startBackend({ bin, directory: dir, db: join(dir, "s.db") }).catch((caught: unknown) => caught)
-  expect(error).toBeInstanceOf(BackendError)
-  expect((error as BackendError).exitCode).toBe(75)
+  expect((error as Error).message).toContain("code 1")
 })

@@ -16,6 +16,8 @@ export interface CompletionContext {
   apiOperations: string[]
   /** Permission mode ids (`/permissions <mode>`). */
   permissionModes?: string[]
+  /** In a WebUI tab (`--web-tab`) terminal-only commands (`/to-background`) are not offered. */
+  webTab?: boolean
 }
 
 const defaultRegistry = createCommandRegistry()
@@ -29,7 +31,7 @@ export function completeCommand(input: string, context: CompletionContext, regis
   if (!input.startsWith("/")) return []
   if (input.indexOf(" ") < 0) {
     return matchValues("", input, [
-      ...registry.names(),
+      ...registry.list().filter((spec) => !(context.webTab && spec.terminalOnly)).map((spec) => spec.name),
       ...context.backendCommands.map((name) => `/${name}`),
     ])
   }

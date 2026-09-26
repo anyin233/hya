@@ -4,17 +4,32 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use hya_proto::SessionId;
 use serde::Serialize;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+/// Process-local registry of server-started runs, one per session. Every
+/// router and gRPC binding built from one `AppState` shares it.
 #[derive(Clone, Default)]
 pub(crate) struct RunRegistry {
     inner: Arc<RunRegistryInner>,
 }
 
-#[derive(Default)]
 struct RunRegistryInner {
     next: AtomicU64,
     runs: Mutex<HashMap<SessionId, ActiveRun>>,
+    /// The session of every run that started or ended (busy re-check signal).
+    changes: broadcast::Sender<SessionId>,
+}
+
+impl Default for RunRegistryInner {
+    fn default() -> Self {
+        let (changes, _) = broadcast::channel(256);
+        Self {
+            next: AtomicU64::default(),
+            runs: Mutex::default(),
+            changes,
+        }
+    }
 }
 
 struct ActiveRun {
@@ -52,6 +67,8 @@ impl RunRegistry {
                 token: token.clone(),
             },
         );
+        drop(runs);
+        let _ = self.inner.changes.send(session);
         Some(RunGuard {
             registry: self.clone(),
             session,
@@ -72,6 +89,11 @@ impl RunRegistry {
         } else {
             false
         }
+    }
+
+    /// Subscribe to the sessions whose run started or ended.
+    pub(crate) fn subscribe_changes(&self) -> broadcast::Receiver<SessionId> {
+        self.inner.changes.subscribe()
     }
 
     #[allow(dead_code)]
@@ -111,9 +133,17 @@ impl RunGuard {
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
-        let mut runs = self.registry.lock_runs();
-        if matches!(runs.get(&self.session), Some(active) if active.id == self.id) {
-            runs.remove(&self.session);
+        let removed = {
+            let mut runs = self.registry.lock_runs();
+            if matches!(runs.get(&self.session), Some(active) if active.id == self.id) {
+                runs.remove(&self.session);
+                true
+            } else {
+                false
+            }
+        };
+        if removed {
+            let _ = self.registry.inner.changes.send(self.session);
         }
     }
 }

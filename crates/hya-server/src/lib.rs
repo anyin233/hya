@@ -20,7 +20,9 @@ mod mcp_control;
 mod pending;
 mod provider_control;
 mod runs;
+mod session_list;
 mod state;
+mod streams;
 mod support;
 mod v1;
 mod workflow;
@@ -43,6 +45,7 @@ pub use provider_control::{
 };
 pub use state::AppState;
 pub(crate) use state::ServerState;
+pub use streams::{ShutdownReason, StreamShutdown};
 pub use v1::V1Grpc;
 
 /// Largest `CreateTurn` HTTP JSON body the server reads: room for the 20 MiB
@@ -67,6 +70,7 @@ pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     spawn_background_reclaim_driver(state.clone());
     spawn_project_busy_watcher(state.clone());
+    session_list::spawn_busy_tracker(state.clone());
     v1::router().with_state(state).layer(cors())
 }
 

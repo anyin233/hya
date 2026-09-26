@@ -30,6 +30,23 @@ async function newSession(term: Tui, previousId?: string): Promise<string> {
   return /hya · (hysec_\w+)/.exec(await term.text())![1]!
 }
 
+/** The session the TUI opened on connect (a plain start creates one). */
+async function connected(term: Tui): Promise<string> {
+  await term.waitForText("Connected to hya")
+  await term.waitForText(/hya · hysec_\w+/)
+  return /hya · (hysec_\w+)/.exec(await term.text())![1]!
+}
+
+/**
+ * `/rename` the open session, so it is kept when the TUI moves on (an empty
+ * session this TUI created is deleted when it is left, docs/tui.md
+ * "Sessions on start and exit").
+ */
+async function keep(term: Tui, title: string): Promise<void> {
+  await prompt(term, `/rename ${title}`)
+  await term.waitForText(new RegExp(`hya · ${title} ·`))
+}
+
 async function at(term: Tui, needle: string) {
   const found = await term.find(needle)
   expect(found, `screen shows ${needle}`).not.toBeNull()
@@ -45,29 +62,40 @@ async function escape(term: Tui, goneText: string): Promise<void> {
 
 test("lists a New session row first, then the tree with the open session marked; Enter opens another", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya")
-  const first = await newSession(term)
+  const first = await connected(term)
+  await keep(term, "First session")
   const second = await newSession(term, first)
 
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   await term.waitForText("New session")
   await term.waitForText(new RegExp(`▸ ● ${second}`))
-  await term.waitForText(new RegExp(first))
-  await term.waitForText("F2 renames")
+  await term.waitForText("First session")
+  await term.waitForText("F2 rename")
   await term.attach(testInfo, "sessions-picker")
 
   // Filtering narrows to the other session; Enter opens it.
-  await term.type(first.slice(0, 10))
+  await term.type("First sess")
   await term.press("ArrowUp")
   await term.press("Enter")
-  await term.waitForText(new RegExp(`hya · ${first}`))
+  await term.waitForText(/hya · First session/)
+})
+
+test("an empty session this TUI created is deleted when it opens another; a used one is kept", async ({ tui, backend }) => {
+  const term = await tui(hyaTui(backend))
+  const empty = await connected(term)
+  const kept = await newSession(term, empty)
+  await prompt(term, "hello")
+  await term.waitForText("First.", 20_000)
+  await newSession(term, kept)
+  const listed = async () => ((await (await fetch(`${backend.url}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
+  await expect.poll(listed).not.toContain(empty)
+  expect(await listed()).toContain(kept)
 })
 
 test("F2 renames the highlighted row; the title shows live in the header, the sidebar, and a reopened picker", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya")
-  const session = await newSession(term)
+  const session = await connected(term)
 
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
@@ -94,8 +122,8 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
 
 test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes and opens another session", async ({ tui, backend }) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya")
-  const first = await newSession(term)
+  const first = await connected(term)
+  await keep(term, "First session")
   const second = await newSession(term, first)
 
   await prompt(term, "/sessions")
@@ -116,7 +144,7 @@ test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes an
   await term.press("Enter")
   await term.waitForText(`Deleted session ${second}`)
   // The open session was deleted: the other top-level session opens instead.
-  await term.waitForText(new RegExp(`hya · ${first}`))
+  await term.waitForText(/hya · First session/)
 
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")

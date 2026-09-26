@@ -47,7 +47,8 @@ test.describe("/model picker", () => {
   })
 
   test("before a session exists the choice is remembered and applied to the next session", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    // --continue with no earlier session: none is open (a plain start creates one).
+    const term = await tui([...hyaTui(backend), "--continue"])
     await term.waitForText("Connected to hya")
     await prompt(term, "/model")
     await term.waitForText("Model")
@@ -87,7 +88,8 @@ test.describe("/agent picker", () => {
   })
 
   test("before a session exists the choice is remembered and applied to the next session", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    // --continue with no earlier session: none is open (a plain start creates one).
+    const term = await tui([...hyaTui(backend), "--continue"])
     await term.waitForText("Connected to hya")
     await prompt(term, "/agent")
     await term.waitForText("Agent")

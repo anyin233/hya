@@ -2,18 +2,34 @@
 import { resolve } from "node:path"
 
 export interface Options {
-  /** Base URL of a running `hya serve`; unset = the TUI starts its own backend (src/launch.ts). */
+  /** Base URL of a running `hya serve`; unset = the TUI finds or starts its database's daemon (src/launch.ts). */
   server?: string
   /** Workspace directory: `x-hya-directory` of every request, and the started backend's working directory. */
   directory: string
-  /** `hya` binary for the started backend (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
+  /** `hya` binary that starts the daemon (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
   hya?: string
-  /** SQLite database of the started backend (`--db`); default `$XDG_STATE_HOME/hya/sessions.db`. */
+  /**
+   * The database whose daemon the TUI uses (`--db`); default
+   * `$XDG_STATE_HOME/hya/sessions.db` without `--server`. With `--server` it
+   * names the database behind that URL, so the TUI can find or restart its
+   * daemon when the server goes away; without it, `--server` is fixed.
+   */
   db?: string
   /** Open the most recent top-level session of `directory` (`--continue`). */
   continue: boolean
   /** Open this session (`--session <id>`). */
   session?: string
+  /**
+   * `--resume [id]`: open that session and clear its archived state; without
+   * an id, pick one of the active Project's sessions (archived ones included).
+   */
+  resume?: { id?: string }
+  /**
+   * `--web-tab`: this TUI runs in a WebUI tab (bare `hya` adds it to its web
+   * host's tab command). Closing the tab already leaves the session running,
+   * so `/to-background` is not offered and Ctrl+D only says so.
+   */
+  webTab?: boolean
   /** The WebUI bare `hya` serves next to this TUI (`--web-url`), or why it could not (`--web-error`). */
   web?: WebInfo
   /**
@@ -22,8 +38,6 @@ export interface Options {
    * and let the user choose a Project or a temporary session.
    */
   remote?: boolean
-  /** `--attached-pid`: bare `hya` attached to this running server instead of starting one (shown in `/status`). */
-  attachedPid?: number
 }
 
 /** The WebUI state bare `hya` passes to its terminal TUI: exactly one of the two is set. */
@@ -36,30 +50,39 @@ export interface WebInfo {
 
 export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
 
-Without --server the TUI attaches to the server already running on --db
-(its <db>.server.json answers), else starts its own backend (hya serve on a
-free local port, working directory --dir) and stops it when the TUI exits.
+Without --server the TUI uses the backend daemon of --db: the server already
+running on it (its <db>.server.json answers), else a new one it starts with
+\`hya serve start\` (detached, working directory --dir). The daemon keeps
+running after the TUI exits; \`hya serve stop\` stops it, and the TUI then
+starts nothing until /reconnect. After \`hya serve restart\` it attaches to
+the new daemon; after a crash it finds or starts the next one.
 
 Options:
-  --server URL      Connect to a running hya serve instead of starting one
+  --server URL      Connect to this hya server instead of the database's
+                    daemon; with --db, a lost server is replaced by the
+                    database's daemon
   --dir PATH        Workspace directory (default: the current directory)
-  --hya PATH        hya binary to start; lookup order: --hya, then HYA_BIN,
-                    then hya on PATH
-  --db PATH         SQLite database of the started backend
-                    (default: $XDG_STATE_HOME/hya/sessions.db, else
-                    ~/.local/state/hya/sessions.db)
+  --hya PATH        hya binary that starts the daemon; lookup order: --hya,
+                    then HYA_BIN, then hya on PATH
+  --db PATH         SQLite database whose daemon to use
+                    (default without --server: $XDG_STATE_HOME/hya/sessions.db,
+                    else ~/.local/state/hya/sessions.db)
   -c, --continue    Open the most recent top-level session of the Project
-                    that contains --dir
+                    that contains --dir (not archived)
   --remote          The backend runs on another machine: start without a
                     Project for --dir; choose a Project (or a temporary
                     session) before the first prompt
   -s, --session ID  Open the session with this id
+  --resume [ID]     Open this session and unarchive it; without an id, pick
+                    one of the active Project's sessions, archived ones
+                    included
+  --web-tab         This TUI runs in a WebUI tab (set by bare hya's web host
+                    command; pass it yourself to a standalone tui-web host):
+                    /to-background is not offered and Ctrl+D does not quit
   --web-url URL     Show this WebUI address (set by bare hya, which serves
                     the WebUI next to this TUI)
   --web-error TEXT  Show "WebUI unavailable: TEXT" (set by bare hya when the
                     WebUI could not start)
-  --attached-pid N  With --server: the server is another process's (pid N)
-                    that bare hya attached to; shown in /status
   -h, --help        Show this help
 
 Environment:
@@ -76,15 +99,22 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let session: string | undefined
   let webUrl: string | undefined
   let webError: string | undefined
-  let attachedPid: string | undefined
   let resume = false
   let remote = false
+  let reopen: { id?: string } | undefined
+  let webTab = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
     const value = argv[index + 1]
     if (arg === "--help" || arg === "-h") return null
     if (arg === "--continue" || arg === "-c") resume = true
     else if (arg === "--remote") remote = true
+    else if (arg === "--web-tab") webTab = true
+    else if (arg === "--resume") {
+      // The id is optional: a following flag is not one.
+      if (value !== undefined && !value.startsWith("-")) reopen = { id: argv[++index]! }
+      else reopen = {}
+    }
     else if (value === undefined) throw new Error(`Unknown or incomplete option: ${arg}`)
     else if (arg === "--server") server = argv[++index]!
     else if (arg === "--dir") directory = argv[++index]!
@@ -93,11 +123,10 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     else if (arg === "--session" || arg === "-s") session = argv[++index]!
     else if (arg === "--web-url") webUrl = argv[++index]!
     else if (arg === "--web-error") webError = argv[++index]!
-    else if (arg === "--attached-pid") attachedPid = argv[++index]!
     else throw new Error(`Unknown or incomplete option: ${arg}`)
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
-  if (server !== undefined && (hya !== undefined || db !== undefined)) throw new Error("--hya and --db only apply without --server")
+  if (reopen && (resume || session)) throw new Error("--resume cannot be combined with --continue or --session")
   const options: Options = { directory: resolve(directory), continue: resume }
   if (server !== undefined) {
     const url = new URL(server)
@@ -108,6 +137,8 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   if (hya !== undefined) options.hya = hya
   if (db !== undefined) options.db = db
   if (session !== undefined) options.session = session
+  if (reopen) options.resume = reopen
+  if (webTab) options.webTab = true
   if (webUrl !== undefined && webError !== undefined) throw new Error("--web-url and --web-error cannot be combined")
   if (webUrl !== undefined) {
     const url = new URL(webUrl)
@@ -115,11 +146,5 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     options.web = { url: url.toString() }
   }
   if (webError !== undefined) options.web = { error: webError }
-  if (attachedPid !== undefined) {
-    if (server === undefined) throw new Error("--attached-pid only applies with --server")
-    const pid = Number(attachedPid)
-    if (!Number.isInteger(pid) || pid <= 0) throw new Error("--attached-pid needs a process id")
-    options.attachedPid = pid
-  }
   return options
 }

@@ -157,6 +157,10 @@ export interface AppState {
   readonly commandDisplay: ReadonlyMap<string, string>
   /** Backend version from bootstrap (`/status`). */
   readonly serverVersion: string
+  /** Backend pid from bootstrap (`/status`, when nothing else names it). */
+  readonly serverPid: number | undefined
+  /** The server's base URL (header, sidebar); switches when the TUI moves to another server (app/reconnect.ts). */
+  readonly serverUrl: string
   /** The open session's todo list (`/todos`, `GetSessionTodo`). */
   readonly todos: TodoItem[]
   /** Text of the `/status` view. */
@@ -169,6 +173,8 @@ export interface AppState {
   readonly gitBranch: string
   /** The session event stream is connected (status bar "connection state"). */
   readonly connected: boolean
+  /** The backend was stopped on purpose (`hya serve stop`, app/reconnect.ts): no server is started until `/reconnect`, and prompts are refused. */
+  readonly backendStopped: boolean
   /** Live `CompactionApplied` events and permission mode switches rendered as transcript notices, oldest first (compactions from before the session was opened are derived from their summary messages at render: state/messages.ts `withDividers`). */
   readonly dividers: readonly Divider[]
   /** Selectable permission modes (`GET /v1/permission-modes`); empty until read or on an older backend. */
@@ -185,7 +191,7 @@ export interface AppState {
   readonly picker: ActivePicker | undefined
   /** The open session's newest billed round with a message (`tokensRecorded`), for live context occupancy (E22). */
   readonly liveRound: LiveRound | undefined
-  /** The backend this TUI started (one-command launch), for `/status`; `undefined` with `--server`. */
+  /** The backend daemon this TUI uses, for `/status`; `undefined` until known. */
   readonly backend: BackendInfo | undefined
   /** The WebUI bare `hya` serves next to this TUI (`--web-url` / `--web-error`); `undefined` otherwise. */
   readonly web: WebInfo | undefined
@@ -209,6 +215,8 @@ export interface AppState {
   readonly projectView: ProjectViewState | undefined
   /** The `/sessions` picker's "all projects" toggle (F3): shows every session instead of only the active Project's. */
   readonly sessionsPickerAllProjects: boolean
+  /** This TUI runs in a WebUI tab (`--web-tab`): `/to-background` is not offered and Ctrl+D only shows a notice. */
+  readonly webTab: boolean
 }
 
 /** One billed provider round (`tokensRecorded` with a non-empty `message`). */
@@ -219,15 +227,15 @@ export interface LiveRound {
   usage: TokenUsage
 }
 
-/** A backend started by this TUI (src/launch.ts). */
+/** The backend daemon the TUI uses (src/launch.ts, app/reconnect.ts; `/status`). */
 export interface BackendInfo {
-  pid: number
-  /** The `hya` binary this TUI started (absent when attached). */
-  bin?: string
-  /** The database (absent when bare `hya` attached and did not say). */
+  pid?: number
+  /** The database it serves (the TUI's `--db`, or the default). */
   db?: string
-  /** The server is another process's that this TUI (or bare `hya`) attached to; quitting does not stop it. */
-  attached?: boolean
+  /** Unix ms when it started listening (its discovery file). */
+  startedAt?: number
+  /** The URL came from `--server` (bare `hya --backend`), not from the database's discovery file. */
+  explicit?: boolean
 }
 
 /**
@@ -311,12 +319,15 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     pendingShell: undefined,
     commandDisplay: new Map(),
     serverVersion: "",
+    serverPid: undefined,
+    serverUrl: "",
     todos: [],
     statusText: "",
     promptSelection: undefined,
     draft: false,
     gitBranch: "",
     connected: true,
+    backendStopped: false,
     dividers: [],
     permissionModes: [],
     pendingMode: undefined,
@@ -335,6 +346,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     projectSidebarHighlight: undefined,
     projectView: undefined,
     sessionsPickerAllProjects: false,
+    webTab: false,
   }
 }
 
@@ -408,6 +420,60 @@ export function createAppStore() {
       if (state.selected?.id === sessionId) set("selected", { ...state.selected, ...changes })
     })
   }
+  /**
+   * A `sessionUpdated {archived}` frame (another client archived or
+   * unarchived a session): an archived row leaves the list (the default
+   * listing hides archived sessions) unless it is the open one, which stays
+   * marked; an unarchived row is marked back.
+   */
+  const applyArchived = (sessionId: string, archived: boolean): void => {
+    batch(() => {
+      const open = state.selected?.id === sessionId
+      if (archived && !open) set("sessions", state.sessions.filter((row) => row.id !== sessionId))
+      else if (state.sessions.some((row) => row.id === sessionId)) {
+        set("sessions", state.sessions.map((row) => row.id === sessionId ? { ...row, archived } : row))
+      }
+      if (open) set("selected", { ...state.selected!, archived })
+    })
+  }
+  /**
+   * A `sessionUpdated` frame from the **global** stream (`docs/protocol/README.md`
+   * "Session list push"): patch a session's sidebar/`/sessions`-picker row —
+   * title, agent, model, permission mode, or busy — for any row already
+   * listed, root or not the open one included. It never touches `selected`:
+   * the open session's own stream keeps that current (`applySessionMeta`,
+   * `applyPermissionMode`), so running this twice for the open session (the
+   * same change arrives on both streams) is a harmless idempotent re-set of
+   * the same row values, not a double-apply.
+   *
+   * Returns whether the row was known (present in `sessions`); the caller
+   * re-lists on `false` (an id it has not listed yet: a creation it missed,
+   * or this frame outran the initial `ListSessions`).
+   */
+  const patchSessionRow = (sessionId: string, patch: { title?: string; agent?: string; model?: string; permissionMode?: string; busy?: boolean }): boolean => {
+    if (!state.sessions.some((row) => row.id === sessionId)) return false
+    const changes: Partial<SessionInfo> = {}
+    if (patch.title !== undefined) changes.title = patch.title
+    if (patch.agent !== undefined) changes.agent = patch.agent
+    if (patch.model !== undefined) {
+      const model = parseModelRef(patch.model)
+      if (model) changes.model = model
+    }
+    if (patch.permissionMode !== undefined) changes.permissionMode = patch.permissionMode
+    if (patch.busy !== undefined) changes.busy = patch.busy
+    if (Object.keys(changes).length) {
+      set("sessions", state.sessions.map((row) => row.id === sessionId ? { ...row, ...changes } : row))
+    }
+    return true
+  }
+  /**
+   * A `sessionDeleted` frame (live-only, global stream): drop the row. The
+   * caller decides what to do when it was the open session (never reached
+   * here — this store never re-picks or creates a session on its own).
+   */
+  const dropSessionRow = (sessionId: string): void => {
+    if (state.sessions.some((row) => row.id === sessionId)) set("sessions", state.sessions.filter((row) => row.id !== sessionId))
+  }
   const dropAsk = (id: string): void => {
     liveAsks.delete(id)
     if (state.interactions.some((row) => row.id === id)) set("interactions", state.interactions.filter((row) => row.id !== id))
@@ -430,6 +496,7 @@ export function createAppStore() {
         set("models", bootstrap.models ?? [])
         set("interactions", mergeInteractions(bootstrap.interactions ?? [], liveAsks, answered))
         set("serverVersion", bootstrap.location?.version ?? "")
+        set("serverPid", bootstrap.location?.pid || undefined)
       })
     },
 
@@ -597,6 +664,7 @@ export function createAppStore() {
       if (updated && event.session && (updated.title !== undefined || updated.agent !== undefined || updated.model !== undefined)) {
         applySessionMeta(event.session, updated)
       }
+      if (updated?.archived !== undefined && event.session) applyArchived(event.session, updated.archived)
       return effect
     },
 
@@ -608,8 +676,17 @@ export function createAppStore() {
     applyAsk,
     /** The backend this TUI started (`/status`). */
     setBackend(info: BackendInfo | undefined): void { set("backend", info) },
+    setServerUrl(url: string): void { set("serverUrl", url) },
     /** The WebUI state from bare `hya` (status bar, sidebar, `/status`). */
     setWeb(info: WebInfo | undefined): void { set("web", info) },
+    /** `--web-tab` (src/cli.ts). */
+    setWebTab(on: boolean): void { set("webTab", on) },
+    /** A `sessionUpdated {archived}` frame from the global stream (another session than the open one). */
+    applyArchived,
+    /** A `sessionUpdated {title|agent|model|permissionMode|busy}` frame from the global stream, for any row. */
+    patchSessionRow,
+    /** A `sessionDeleted` frame from the global stream. */
+    dropSessionRow,
 
     /** Replace the member rows (a fresh `SessionInfo.members` read). */
     setMembers(rows: MemberInfo[]): void { set("members", rows) },
@@ -736,6 +813,10 @@ export function createAppStore() {
     setConnected(value: boolean): void {
       if (value !== state.connected) set("connected", value)
     },
+    /** Entered or left the stopped state (app/reconnect.ts `onStopped`). */
+    setBackendStopped(value: boolean): void {
+      if (value !== state.backendStopped) set("backendStopped", value)
+    },
 
     /** Ask the transcript to jump to its newest line. */
     followTranscript(): void { set("followTick", state.followTick + 1) },
@@ -813,6 +894,7 @@ export function createAppStore() {
         agents: state.agents.map((agent) => agent.name),
         apiOperations: apiOperationNames,
         permissionModes: modeCycle(state.permissionModes),
+        webTab: state.webTab,
       }
     },
   }

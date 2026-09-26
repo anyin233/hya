@@ -2204,14 +2204,26 @@
           "catalog_updated": {
             "$ref": "#/components/schemas/CatalogUpdated"
           },
+          "server_stopping": {
+            "$ref": "#/components/schemas/ServerStopping"
+          },
           "projects_updated": {
             "$ref": "#/components/schemas/ProjectsUpdated"
           }
         }
       },
+      "ServerStopping": {
+        "type": "object",
+        "description": "The provider/model catalog changed; carries no fields. The Project list changed; carries no fields. Why the server is going away.",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "PartsAdded": {
         "type": "object",
-        "description": "The provider/model catalog changed; carries no fields. The Project list changed; carries no fields. Complete parts added to a message in one step.",
+        "description": "Complete parts added to a message in one step.",
         "properties": {
           "message": {
             "type": "string"
@@ -2281,12 +2293,15 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "busy": {
+            "type": "boolean"
           }
         }
       },
       "MessageStarted": {
         "type": "object",
-        "description": "A session was deleted. A message started.",
+        "description": "A session was deleted: its log is gone. Live-only (`seq` 0), for root sessions only, on the global stream (also with `interactions_only`). A message started.",
         "properties": {
           "message": {
             "type": "string"

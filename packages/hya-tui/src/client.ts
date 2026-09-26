@@ -27,6 +27,10 @@ export interface SessionInfo {
   projectId?: string
   /** `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`. */
   kind?: SessionKind
+  /** Archived (docs/protocol/README.md "Archived sessions"): hidden from the default list; a graceful TUI exit archives, `--resume`/`/resume` unarchives. */
+  archived?: boolean
+  /** When it was archived (RFC 3339); unset when not archived. */
+  archivedAt?: string
 }
 
 /** `hya.v1.SessionKind`. */
@@ -386,7 +390,7 @@ export interface VcsStatus {
 }
 
 export interface Bootstrap {
-  location?: { version?: string; directory?: string }
+  location?: { version?: string; directory?: string; pid?: number }
   agents?: AgentSummary[]
   models?: ModelSummary[]
   interactions?: Interaction[]
@@ -413,8 +417,12 @@ export interface StreamEvent {
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }
   workflowUpdated?: unknown
-  /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. */
-  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string }
+  /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. `busy` (live-only, seq 0) mirrors `SessionInfo.busy` and is carried on root sessions' global-stream frames only (`docs/protocol/README.md` "Session list push"). */
+  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string; archived?: boolean; busy?: boolean }
+  /** A root session was created (also a fork); global-stream only, durable (`docs/protocol/README.md` "Session list push"). */
+  sessionStarted?: { agent?: string; model?: string; workdir?: string }
+  /** A root session was deleted; global-stream only, live-only (the log is gone, so it is never replayed). `event.session` names the deleted session. */
+  sessionDeleted?: Record<string, never>
   /**
    * Part of the context was folded behind a summary (`docs/tui.md` "Notices"):
    * `message` is the summary system message (the divider sits right before
@@ -442,6 +450,14 @@ export interface StreamEvent {
    * Project's `busy` flag flipped). Re-read `GET /v1/projects`.
    */
   projectsUpdated?: Record<string, never>
+  /**
+   * Live-only, empty `session`: the server is shutting down; the last frame
+   * of every stream. `reason` is `stop` (`hya serve stop`: do not start
+   * another), `restart` (wait for the next one), or `signal` (treat like
+   * stop). A stream that ends without it lost its server unexpectedly
+   * (`docs/protocol/README.md` "Server shutdown").
+   */
+  serverStopping?: { reason?: string }
 }
 
 export interface StreamFrame {
@@ -504,7 +520,7 @@ export function parseApiCommand(input: string): ApiCommand {
 }
 
 export class HyaClient {
-  private readonly base: string
+  private base: string
   private scope: string
 
   constructor(
@@ -528,6 +544,11 @@ export class HyaClient {
 
   /** The server's base URL (`/status`). */
   get baseUrl(): string { return this.base }
+
+  /** Move every later call to another server (the database's next daemon, app/reconnect.ts). */
+  setBaseUrl(baseUrl: string): void {
+    this.base = baseUrl.replace(/\/+$/, "")
+  }
 
   /** One v1 call; `signal` aborts it (the Provider View's Esc on a running call). */
   async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -642,9 +663,14 @@ export class HyaClient {
     throw new Error("Too many result pages")
   }
 
-  /** `ListSessions`; `projectId` restricts it to that Project's sessions (root and subagent). */
-  async listSessions(filter: { projectId?: string } = {}): Promise<SessionInfo[]> {
-    return this.listAll("/v1/sessions", "sessions", filter.projectId ? `&projectId=${encodeURIComponent(filter.projectId)}` : "")
+  /**
+   * `ListSessions`; `projectId` restricts it to that Project's sessions (root
+   * and subagent); archived root sessions only with `includeArchived` (the
+   * server leaves them out by default).
+   */
+  async listSessions(filter: { projectId?: string; includeArchived?: boolean } = {}): Promise<SessionInfo[]> {
+    const query = (filter.projectId ? `&projectId=${encodeURIComponent(filter.projectId)}` : "") + (filter.includeArchived ? "&includeArchived=true" : "")
+    return this.listAll("/v1/sessions", "sessions", query)
   }
 
   /** `ListProjects` (`GET /v1/projects`): every non-archived Project, most recently updated first. */
@@ -833,6 +859,11 @@ export class HyaClient {
   }
 
   /** `DeleteSession` (`DELETE /v1/sessions/:id`): the `/sessions` picker's delete row action (Ctrl+D). */
+  /** Archive or unarchive a root session (`PATCH {archived}`; idempotent; a subagent session cannot be archived). */
+  async setArchived(session: string, archived: boolean): Promise<SessionInfo> {
+    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, { archived })
+  }
+
   async deleteSession(session: string): Promise<void> {
     await this.request("DELETE", `/v1/sessions/${encodeURIComponent(session)}`)
   }

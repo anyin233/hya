@@ -100,9 +100,8 @@ async fn set_archived(db: &str, id: &str, archived: bool) -> anyhow::Result<()> 
         Claim::Busy(busy) => {
             let Some(server) = busy.discovery else {
                 eprintln!(
-                    "hya sessions: database {db} is in use by pid {} and it does not serve HTTP yet; try again or stop it",
-                    busy.holder_pid
-                        .map_or_else(|| "unknown".to_string(), |pid| pid.to_string())
+                    "{}",
+                    crate::db_writer::starting_message("sessions", db, busy.holder_pid)
                 );
                 std::process::exit(db_lock::EXIT_DB_IN_USE);
             };

@@ -1,5 +1,54 @@
 # 0.41.0
 
+## TUI sidebar follows other clients live
+
+- The sidebar's session list now changes as soon as any client creates, renames, archives, deletes, or runs a session. It also follows another client's agent, model, and permission-mode switches. The TUI re-lists after a `resync`.
+- If another client deletes the session you have open, the TUI shows `Session <id> was deleted elsewhere; opened a new session` and opens a new one.
+- `/sessions` and `/resume` show the list as it was when you opened them; reopen them to see changes. The `/sessions` hint now fits at 80 columns. See [TUI](docs/tui.md).
+
+## Quit and archive, or quit and keep running; `--resume`
+
+- Ctrl+C twice, `/exit`, or `/quit` quits the TUI and archives its session at once (from a subagent's view, the root session). A running turn still finishes on the backend.
+- Ctrl+D on an empty input, or `/to-background`, quits without archiving, and the session keeps running on the backend. In a WebUI tab both only show `Close the tab to leave this session running`; closing the tab leaves the session running.
+- A killed or signalled TUI, including a closed tab, never archives. Switching sessions isn't quitting. Whichever way you leave, an empty session you never used is deleted.
+- `--resume [id]` (TUI) and `hya --resume [id]` open a session and unarchive it. Without an id, they show a picker of the directory's sessions, archived ones marked `[archived]`. `/resume` does the same inside the TUI, so the terminal and the WebUI can resume each other's sessions. `--continue` skips archived sessions.
+- In `/sessions`, Ctrl+A shows or hides archived sessions, and opening an archived one resumes it. When another client archives or unarchives the open session, the TUI updates right away.
+- Bare `hya` starts WebUI tabs with the new TUI flag `--web-tab`; add it yourself when you run the WebUI host by hand. See [TUI](docs/tui.md).
+
+## Session list changes reach every client
+
+- The global stream now reports every change to a root session:
+  - creation: `sessionStarted`;
+  - rename, agent or model switch, permission mode, archive state: `sessionUpdated`;
+  - busy/idle: `sessionUpdated {busy}`, live-only, one frame per transition;
+  - deletion: `sessionDeleted`, live-only.
+- These frames also reach `interactionsOnly=true` subscribers; a `resync` there means you should re-list sessions. Subagent sessions produce none of these frames. See [Protocol guide](docs/protocol/README.md).
+- The HTTP router and gRPC now share one run registry, so a run started over HTTP counts as busy over gRPC too.
+- `CreateSession`'s docs now say that an empty agent or model uses the server default.
+
+## `hya serve stop` really stops the backend
+
+- Before ending its streams, the server sends a last live frame, `serverStopping {reason}`, where `reason` is `stop`, `restart`, or `signal`. `hya serve stop` and `restart` set the reason: they write `<db>.server.stop`, then send SIGTERM.
+- After `stop` (or a plain signal), TUIs don't start a new backend. They show `Backend stopped (hya serve stop) · /reconnect starts it again`, and prompts are refused until you reconnect. After `restart`, they wait up to 60 s for the new backend and attach (`Server moved · now pid N`). After a crash, they still find or start a backend as before.
+- New `/reconnect` finds or starts a backend at once.
+
+## Headless commands respect the database lock
+
+- `hya exec`, `hya run`, and `hya workflow use|state|run` with a durable `--db` now run through the backend that holds the database. The session shows up there, and the output and exit codes match a local run. Options that can't be sent to the backend (`--pure`, `workflow run --revision`/`--yolo`) exit 75 with a message naming the backend.
+- With no backend running, these commands hold `<db>.lock` while they run, so no server becomes a second writer. Listing sessions and `tail-session` only read. `-p`, `loop`, and `rpc` use a private database and are unaffected.
+- `CreateSession` with an empty agent or model now uses the server's default agent and that agent's model, instead of returning `invalid_argument`. See [CLI](docs/cli.md).
+
+## The backend runs as a daemon that outlives its clients
+
+- Quitting the TUI or the WebUI no longer stops the backend. On start, a client looks for the backend of its database. If none runs, it starts `hya serve` as a detached daemon (its own session, output in `<db>.server.log`), and every later client attaches to it. Bare `hya` no longer runs a server inside its own process.
+- `hya serve start|status|stop|restart` (with `--db`) control the daemon; plain `hya serve` still runs in the foreground. `stop` ends open event streams and waits until the database is released; add `--force` to kill it after `--timeout`.
+- `hya --backend <url>` connects bare `hya` to a given backend, with no discovery and no auto-start.
+- The terminal TUI and every WebUI tab use the same daemon, database, and directory, so each sees and opens the sessions the other started.
+- When the backend goes away, a TUI finds or starts one again, then reconnects and reloads the open session. The status line shows `Server stopped · reconnecting…`, then `Started a new server` or `Server moved`. A turn that was running on the old backend is lost.
+- A TUI started without `--session` or `--continue` creates a session as soon as it connects. A session it created and never used is deleted when you leave it or quit.
+- A client that finds a daemon of another hya version suggests `hya serve restart`.
+- `/status` shows `daemon · pid N · db D · started …`. The TUI flag `--attached-pid` is removed. While shutting down, `/v1/health` answers 503. See [CLI](docs/cli.md#backend-daemon) and [ADR-0023](docs/adr/0023-persistent-backend-daemon.md).
+
 ## Archived sessions
 
 - Root sessions can be archived and unarchived with `PATCH /v1/sessions/{id} {"archived": true|false}`. Archiving never cancels a running turn. A new prompt, command, or shell turn unarchives the session.

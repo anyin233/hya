@@ -12,9 +12,11 @@ use crate::relay_doctor::RelayCommand;
     version,
     about = "hya — a multi-agent coding agent",
     long_about = "hya — a multi-agent coding agent.\n\n\
-        Run bare `hya` in a terminal to start the TUI and the WebUI: an in-process \
-        server, the terminal TUI, and the WebUI on http://127.0.0.1:3250 (`--port` \
-        to change). Needs Bun. Subcommands select headless, server, and admin areas."
+        Run bare `hya` in a terminal to start the TUI and the WebUI: it connects to \
+        the backend daemon of the database (starting one if none runs), then runs \
+        the terminal TUI and the WebUI on http://127.0.0.1:3250 (`--port` to change). \
+        The daemon keeps running after you quit; `hya serve status|stop|restart` \
+        control it. Needs Bun. Subcommands select headless, server, and admin areas."
 )]
 pub(crate) struct Cli {
     /// Headless goal mode: iterate the agent until an independent evaluator
@@ -33,6 +35,16 @@ pub(crate) struct Cli {
     /// terminal TUI (default 3250; 0 picks a free port). Only for bare `hya`.
     #[arg(long, value_name = "PORT")]
     pub(crate) port: Option<u16>,
+    /// Connect bare `hya` to this running backend (`http://host:port`)
+    /// instead of the database's daemon: no discovery, no auto-start; an
+    /// unreachable URL is an error. Only for bare `hya`.
+    #[arg(long, value_name = "URL")]
+    pub(crate) backend: Option<String>,
+    /// Open this session in the terminal TUI and unarchive it; without an
+    /// id, pick one of the directory's sessions (archived ones included).
+    /// Only for bare `hya`.
+    #[arg(long, value_name = "ID", num_args = 0..=1, default_missing_value = "")]
+    pub(crate) resume: Option<String>,
     /// Model id to use (overrides config `default_model` + `HYA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     pub(crate) model: Option<String>,
@@ -53,6 +65,49 @@ pub(crate) struct Cli {
     pub(crate) db: String,
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
+}
+
+/// `hya serve start|status|stop|restart`: the backend daemon of a database
+/// (ADR-0023; docs/cli.md "Backend daemon").
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ServeAction {
+    /// Start the backend daemon for `--db` unless one is running, then print
+    /// its URL and pid. The daemon runs detached (its own session, output to
+    /// `<db>.server.log`) and outlives this command and every client.
+    Start {
+        /// Print `{url, pid, version, startedAt, db, log, started}` as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the running backend of `--db` (url, pid, version, db, uptime);
+    /// exit 1 when none is running.
+    Status {
+        /// Print the status as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop the backend of `--db` gracefully (SIGTERM, then wait until it
+    /// released the database). Stopping nothing is not an error.
+    Stop {
+        /// Kill it (SIGKILL) when it has not stopped within `--timeout`.
+        #[arg(long)]
+        force: bool,
+        /// Seconds to wait for a graceful stop.
+        #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+        timeout: u64,
+    },
+    /// Stop the backend of `--db` (if one runs), then start a new daemon.
+    Restart {
+        /// Print the new daemon as JSON (like `start --json`).
+        #[arg(long)]
+        json: bool,
+        /// Kill the old backend when it has not stopped within `--timeout`.
+        #[arg(long)]
+        force: bool,
+        /// Seconds to wait for the old backend to stop.
+        #[arg(long, default_value_t = 30, value_name = "SECONDS")]
+        timeout: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -96,9 +151,14 @@ pub(crate) enum Command {
         /// Accepted for Compat CLI compatibility; hya mirrors CORS origins globally.
         #[arg(long)]
         cors: Vec<String>,
-        /// Override global SQLite database path for this server.
-        #[arg(long)]
+        /// Override global SQLite database path for this server (also after
+        /// `start`, `status`, `stop`, `restart`).
+        #[arg(long, global = true)]
         db: Option<String>,
+        /// Control the backend daemon of `--db` instead of serving in the
+        /// foreground (default database: `$XDG_STATE_HOME/hya/sessions.db`).
+        #[command(subcommand)]
+        action: Option<ServeAction>,
     },
     /// Replay a session's event log from a database as JSON lines.
     TailSession {
@@ -270,6 +330,42 @@ pub(crate) fn bare_web_port(cli: &Cli) -> anyhow::Result<u16> {
         );
     }
     Ok(cli.port.unwrap_or(DEFAULT_WEB_PORT))
+}
+
+/// Bare `hya`'s `--backend <URL>`, validated: an `http(s)://` URL, and only
+/// without a subcommand or `-p`.
+pub(crate) fn bare_backend(cli: &Cli) -> anyhow::Result<Option<String>> {
+    let Some(url) = &cli.backend else {
+        return Ok(None);
+    };
+    if cli.command.is_some() || cli.prompt.is_some() {
+        anyhow::bail!("--backend only applies to bare `hya`");
+    }
+    let trimmed = url.trim().trim_end_matches('/');
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        || trimmed.contains(char::is_whitespace)
+    {
+        anyhow::bail!("--backend needs an http:// or https:// URL, got {url:?}");
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+/// Bare `hya`'s `--resume [ID]` for the terminal TUI: a session id, or the
+/// picker without one. Only without a subcommand or `-p`.
+pub(crate) fn bare_resume(cli: &Cli) -> anyhow::Result<Option<crate::frontend::Resume>> {
+    use crate::frontend::Resume;
+    let Some(id) = &cli.resume else {
+        return Ok(None);
+    };
+    if cli.command.is_some() || cli.prompt.is_some() {
+        anyhow::bail!("--resume only applies to bare `hya` (the terminal TUI)");
+    }
+    let id = id.trim();
+    Ok(Some(if id.is_empty() {
+        Resume::Pick
+    } else {
+        Resume::Session(id.to_string())
+    }))
 }
 
 pub(crate) fn serve_bind(
@@ -457,14 +553,29 @@ mod tests {
     }
 
     #[test]
-    fn rejects_resume_as_unknown_argument() {
-        let err = match Cli::try_parse_from(["hya", "--resume", "hysec_abcdefghijklmnopqrst"]) {
-            Ok(_) => panic!("--resume should be rejected once the interactive TUI is removed"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-        assert!(err.to_string().contains("--resume"));
+    fn bare_hya_takes_resume_with_or_without_a_session_id() {
+        use crate::frontend::Resume;
+        let cli = parse(["hya", "--resume", "hysec_abcdefghijklmnopqrst"]);
+        assert_eq!(
+            super::bare_resume(&cli).unwrap(),
+            Some(Resume::Session("hysec_abcdefghijklmnopqrst".into()))
+        );
+        assert_eq!(
+            super::bare_resume(&parse(["hya", "--resume"])).unwrap(),
+            Some(Resume::Pick)
+        );
+        // Before another flag it takes no id.
+        let cli = parse(["hya", "--resume", "--port", "0"]);
+        assert_eq!(super::bare_resume(&cli).unwrap(), Some(Resume::Pick));
+        assert_eq!(cli.port, Some(0));
+        assert_eq!(super::bare_resume(&parse(["hya"])).unwrap(), None);
+        let error = super::bare_resume(&parse(["hya", "--resume", "x", "sessions"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("--resume only applies to bare `hya`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -679,6 +790,67 @@ mod tests {
         assert!(help.contains("--port <PORT>"), "{help}");
         assert!(help.contains("3250"), "{help}");
         assert!(help.contains("WebUI"), "{help}");
+    }
+
+    #[test]
+    fn parses_serve_daemon_actions_with_db_anywhere() {
+        use super::ServeAction;
+        let action = |cli: Cli| match cli.command {
+            Some(super::Command::Serve { action, db, .. }) => (action, db.or(Some(cli.db))),
+            _ => panic!("expected serve command"),
+        };
+        assert_eq!(
+            action(parse(["hya", "serve", "start", "--json", "--db", "/s.db"])),
+            (
+                Some(ServeAction::Start { json: true }),
+                Some("/s.db".into())
+            )
+        );
+        assert_eq!(
+            action(parse(["hya", "serve", "--db", "/s.db", "status"])),
+            (
+                Some(ServeAction::Status { json: false }),
+                Some("/s.db".into())
+            )
+        );
+        assert_eq!(
+            action(parse(["hya", "serve", "stop", "--force", "--timeout", "5"])).0,
+            Some(ServeAction::Stop {
+                force: true,
+                timeout: 5
+            })
+        );
+        assert_eq!(
+            action(parse(["hya", "serve", "restart"])).0,
+            Some(ServeAction::Restart {
+                json: false,
+                force: false,
+                timeout: 30
+            })
+        );
+        // Plain `hya serve` still serves in the foreground.
+        assert_eq!(
+            action(parse(["hya", "serve", "--bind", "127.0.0.1:0"])).0,
+            None
+        );
+    }
+
+    #[test]
+    fn backend_is_a_bare_hya_url() {
+        let cli = parse(["hya", "--backend", "http://127.0.0.1:4096/"]);
+        assert_eq!(
+            super::bare_backend(&cli).unwrap().as_deref(),
+            Some("http://127.0.0.1:4096")
+        );
+        assert_eq!(super::bare_backend(&parse(["hya"])).unwrap(), None);
+        let error = super::bare_backend(&parse(["hya", "--backend", "localhost:4096"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("http://"), "{error}");
+        let error = super::bare_backend(&parse(["hya", "--backend", "http://x", "sessions"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("only applies to bare"), "{error}");
     }
 
     #[test]
