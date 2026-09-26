@@ -1,10 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use hya_bundle::{BundleCatalog, BundleError, ExportKind, ResourceView};
 
 use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
+use crate::catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};
 use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
 use hya_tool::{
     DuplicateName, NamedTool, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
@@ -68,14 +69,34 @@ struct RuntimeSnapshot {
 /// Candidate construction is serialized but never holds the active pointer
 /// lock. Publication is one `Arc` replacement; bound-turn dispatch reads no
 /// registry lock.
+///
+/// Besides the base snapshot the registry keeps one lazily composed snapshot
+/// per published [`ScopeOverlay`] (see [`crate::catalog_scope`]). Base and
+/// scope snapshots draw from one registry-wide generation counter, so every
+/// published snapshot has a unique, increasing [`ConfigGeneration`].
 pub struct RuntimeRegistry {
-    publication: Mutex<()>,
+    /// Serializes every publication and holds the last allocated
+    /// registry-wide generation (base and scopes).
+    publication: Mutex<ConfigGeneration>,
     active: RwLock<Arc<RuntimeSnapshot>>,
+    /// Published scope overlays and their composed snapshots. Locked only
+    /// while `publication` is held.
+    scopes: Mutex<HashMap<ScopeKey, ScopeEntry>>,
     agent_model_preferences: AgentModelPreferences,
     agent_model_configuration: AgentModelConfigurations,
     /// `--pure`: bind_turn keeps the embedded builtin skills only and never
     /// reads external skill directories.
     pure_skills: bool,
+}
+
+/// One published scope overlay and its composed snapshot.
+struct ScopeEntry {
+    overlay: Arc<ScopeOverlay>,
+    project_bundle_dirs: Arc<BTreeMap<String, PathBuf>>,
+    /// Base generation `snapshot` was composed from; a different active base
+    /// generation makes the next scoped bind recompose.
+    base_generation: ConfigGeneration,
+    snapshot: Arc<RuntimeSnapshot>,
 }
 
 /// Offline mutable candidate. Its contents cannot become effective except
@@ -212,13 +233,35 @@ pub struct RuntimeEffectiveSchemes {
 }
 
 /// One admitted turn's immutable runtime binding.
+///
+/// Keep every field behind an `Arc` (place data goes in [`BindingPlace`]):
+/// bindings are moved by value through deep async state machines, and a
+/// larger binding has overflowed the stack before.
 #[derive(Clone)]
 pub struct TurnBinding {
     snapshot: Arc<RuntimeSnapshot>,
     agent_model_preferences: AgentModelPreferenceSnapshot,
     agent_model_configuration: AgentModelConfigurationSnapshot,
     session_agent_models: AgentModelPreferenceSnapshot,
+    place: Arc<BindingPlace>,
+}
+
+/// Where a [`TurnBinding`] was bound: one `Arc` keeps the binding small.
+struct BindingPlace {
     workdir: PathBuf,
+    scope: CatalogScope,
+    project_bundle_dirs: Arc<BTreeMap<String, PathBuf>>,
+}
+
+#[cfg(test)]
+impl BindingPlace {
+    fn new(workdir: PathBuf, scope: CatalogScope) -> Arc<Self> {
+        Arc::new(Self {
+            workdir,
+            scope,
+            project_bundle_dirs: Arc::new(BTreeMap::new()),
+        })
+    }
 }
 
 /// Which Harness-owned resources a bound agent may see.
@@ -354,6 +397,17 @@ pub enum RuntimeRefreshError {
     /// Candidate failed structural validation.
     #[error("invalid runtime candidate: {0}")]
     InvalidCandidate(String),
+    /// A scope overlay did not compose over the base snapshot. The base and
+    /// the scope's previous snapshot are unchanged.
+    #[error("catalog scope {scope} did not compose: {source}")]
+    ScopeCompose {
+        /// The scope key, rendered (`global`, `directory:<path>`,
+        /// `project:<id>`).
+        scope: String,
+        /// Why the composed candidate was rejected.
+        #[source]
+        source: Box<RuntimeRefreshError>,
+    },
 }
 
 impl RuntimeRegistry {
@@ -374,7 +428,8 @@ impl RuntimeRegistry {
     #[must_use]
     pub fn from_snapshot(tools: ToolRegistrySnapshot, catalog: Arc<AgentCatalog>) -> Self {
         Self {
-            publication: Mutex::new(()),
+            publication: Mutex::new(ConfigGeneration::INITIAL),
+            scopes: Mutex::new(HashMap::new()),
             active: RwLock::new(Arc::new(RuntimeSnapshot {
                 generation: ConfigGeneration::INITIAL,
                 catalog,
@@ -395,8 +450,11 @@ impl RuntimeRegistry {
 
     /// Capture the complete view for one admitted turn. Skill discovery is
     /// performed once before capture; a logically unchanged result is a no-op.
+    ///
+    /// Same as [`Self::bind_scoped`] with [`CatalogScope::Directory`] of
+    /// `workdir`.
     pub fn bind_turn(&self, workdir: &Path) -> Result<TurnBinding, RuntimeRefreshError> {
-        self.bind_with_skills(workdir, || discover_skills_with_builtins(workdir))
+        self.bind_scoped(&CatalogScope::Directory(workdir.to_path_buf()), workdir)
     }
 
     /// Capture a view with no project: user skills and builtins only.
@@ -404,52 +462,198 @@ impl RuntimeRegistry {
     /// For catalog listings whose request names no directory (`hya serve`
     /// has no working directory, ADR-0024). The binding's workdir is the
     /// empty path; it keys the project-less skill set and is never a turn's
-    /// workdir.
+    /// workdir. Same as [`Self::bind_scoped`] with [`CatalogScope::Global`].
     pub fn bind_global(&self) -> Result<TurnBinding, RuntimeRefreshError> {
-        self.bind_with_skills(Path::new(""), hya_tool::discover_user_skills_with_builtins)
+        self.bind_scoped(&CatalogScope::Global, Path::new(""))
     }
 
-    fn bind_with_skills(
+    /// Capture the view of `scope` for one turn in `workdir`.
+    ///
+    /// Skills are discovered for `workdir` (user skills only when `workdir`
+    /// is empty) and published into the base keyed by `workdir`, as
+    /// [`Self::bind_turn`] does. When `scope`'s key has a published
+    /// [`ScopeOverlay`], the binding retains that scope's composed snapshot,
+    /// recomposed first when the base generation moved since it was built;
+    /// otherwise the binding retains the base snapshot.
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeRefreshError::ScopeCompose`] when the overlay no longer
+    /// composes over the current base (the scope keeps its previous
+    /// snapshot for retained bindings), or a base skill publication error.
+    pub fn bind_scoped(
         &self,
+        scope: &CatalogScope,
+        workdir: &Path,
+    ) -> Result<TurnBinding, RuntimeRefreshError> {
+        if workdir.as_os_str().is_empty() {
+            self.bind_scoped_with_skills(
+                scope,
+                workdir,
+                hya_tool::discover_user_skills_with_builtins,
+            )
+        } else {
+            self.bind_scoped_with_skills(scope, workdir, || discover_skills_with_builtins(workdir))
+        }
+    }
+
+    /// [`Self::bind_scoped`] with caller-supplied skill discovery for
+    /// `workdir` (for example a multi-root Project discovery). `discover` is
+    /// not called in `--pure` mode.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::bind_scoped`].
+    pub fn bind_scoped_with_skills(
+        &self,
+        scope: &CatalogScope,
         workdir: &Path,
         discover: impl FnOnce() -> Vec<SkillCatalogEntry>,
     ) -> Result<TurnBinding, RuntimeRefreshError> {
-        let _publication = self
+        let mut last_generation = self
             .publication
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let current = self.active();
+        let mut base = self.active();
         let agent_model_preferences = self.agent_model_preferences.borrow().clone();
-        let agent_model_configuration = self.agent_model_configuration.borrow().clone();
+        let mut agent_model_configuration = self.agent_model_configuration.borrow().clone();
         let discovered = if self.pure_skills {
             hya_tool::merge_skill_catalog(Vec::new())
         } else {
             discover()
         };
-        let existing = current
+        let existing = base
             .skills
             .get(workdir)
             .map_or(&[][..], |skills| skills.as_slice());
-        if existing == discovered {
-            return Ok(TurnBinding {
-                snapshot: current,
-                agent_model_preferences,
-                agent_model_configuration,
-                session_agent_models: Arc::new(BTreeMap::new()),
-                workdir: workdir.to_path_buf(),
-            });
+        if existing != discovered {
+            let mut candidate = RuntimeCandidate::from_snapshot(&base);
+            candidate.replace_skills(workdir, discovered);
+            base = self.publish_candidate(&mut last_generation, &base, candidate)?;
         }
 
-        let mut candidate = RuntimeCandidate::from_snapshot(&current);
-        candidate.replace_skills(workdir, discovered);
-        let published = self.publish_candidate(current, candidate)?;
+        let key = scope.key();
+        let mut scopes = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut replaced = None;
+        let (snapshot, project_bundle_dirs) = match scopes.get_mut(&key) {
+            None => (base, Arc::new(BTreeMap::new())),
+            Some(entry) => {
+                if entry.base_generation != base.generation {
+                    let composed =
+                        compose_scope(&mut last_generation, &base, &entry.overlay, &key)?;
+                    replaced = Some(std::mem::replace(&mut entry.snapshot, composed));
+                    entry.base_generation = base.generation;
+                }
+                agent_model_configuration =
+                    overlay_agent_model_configuration(agent_model_configuration, &entry.overlay);
+                (
+                    Arc::clone(&entry.snapshot),
+                    Arc::clone(&entry.project_bundle_dirs),
+                )
+            }
+        };
+        drop(scopes);
+        // Release a superseded scope snapshot's sources outside the lock.
+        drop(replaced);
         Ok(TurnBinding {
-            snapshot: published,
+            snapshot,
             agent_model_preferences,
             agent_model_configuration,
             session_agent_models: Arc::new(BTreeMap::new()),
-            workdir: workdir.to_path_buf(),
+            place: Arc::new(BindingPlace {
+                workdir: workdir.to_path_buf(),
+                scope: scope.clone(),
+                project_bundle_dirs,
+            }),
         })
+    }
+
+    /// Publish (or replace) the overlay of scope `key` and compose its
+    /// snapshot over the current base.
+    ///
+    /// Always replaces a previous overlay of `key`; compare
+    /// [`ScopeOverlay::fingerprint`] through [`Self::scope_overlay`] first
+    /// to skip an unchanged rebuild. Existing bindings keep their snapshot.
+    ///
+    /// # Returns
+    ///
+    /// The composed scope snapshot's generation (registry-wide unique).
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeRefreshError::ScopeCompose`] when the overlay fails the
+    /// publication validation over the base; the base and the scope's
+    /// previous overlay and snapshot stay unchanged and no generation is
+    /// consumed.
+    pub fn publish_scope(
+        &self,
+        key: ScopeKey,
+        overlay: ScopeOverlay,
+    ) -> Result<ConfigGeneration, RuntimeRefreshError> {
+        let mut last_generation = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let base = self.active();
+        let snapshot = compose_scope(&mut last_generation, &base, &overlay, &key)?;
+        let generation = snapshot.generation;
+        let entry = ScopeEntry {
+            project_bundle_dirs: Arc::new(overlay.project_bundle_dirs.clone()),
+            overlay: Arc::new(overlay),
+            base_generation: base.generation,
+            snapshot,
+        };
+        let previous = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, entry);
+        // Release the replaced scope's sources outside the scope lock.
+        drop(previous);
+        Ok(generation)
+    }
+
+    /// Forget the overlay of scope `key`. Later binds of that scope retain
+    /// the base; existing bindings keep their snapshot (and its source
+    /// owners) until they drop.
+    pub fn drop_scope(&self, key: &ScopeKey) {
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let removed = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(key);
+        drop(removed);
+    }
+
+    /// The published overlay of scope `key`, if any.
+    #[must_use]
+    pub fn scope_overlay(&self, key: &ScopeKey) -> Option<Arc<ScopeOverlay>> {
+        self.scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .map(|entry| Arc::clone(&entry.overlay))
+    }
+
+    /// Keys of every published scope overlay, sorted.
+    #[must_use]
+    pub fn scope_keys(&self) -> Vec<ScopeKey> {
+        let mut keys = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
     }
 
     /// Publish a replacement map of remembered Agent model preferences.
@@ -488,7 +692,7 @@ impl RuntimeRegistry {
         &self,
         build: impl FnOnce(&mut RuntimeCandidate) -> Result<(), RuntimeRefreshError>,
     ) -> Result<ConfigGeneration, RuntimeRefreshError> {
-        let _publication = self
+        let mut last_generation = self
             .publication
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -498,7 +702,9 @@ impl RuntimeRegistry {
         if candidate.logically_matches(&current) {
             return Ok(current.generation);
         }
-        Ok(self.publish_candidate(current, candidate)?.generation)
+        Ok(self
+            .publish_candidate(&mut last_generation, &current, candidate)?
+            .generation)
     }
 
     /// Atomically publish a complete agent catalog while preserving the
@@ -507,7 +713,7 @@ impl RuntimeRegistry {
         &self,
         catalog: Arc<AgentCatalog>,
     ) -> Result<ConfigGeneration, RuntimeRefreshError> {
-        let _publication = self
+        let mut last_generation = self
             .publication
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -515,10 +721,7 @@ impl RuntimeRegistry {
         if current.catalog.bundles().bundles() == catalog.bundles().bundles() {
             return Ok(current.generation);
         }
-        let generation = current
-            .generation
-            .checked_next()
-            .ok_or(RuntimeRefreshError::GenerationExhausted)?;
+        let generation = allocate_generation(&mut last_generation)?;
         let published = Arc::new(RuntimeSnapshot {
             generation,
             catalog,
@@ -675,32 +878,14 @@ impl RuntimeRegistry {
 
     fn publish_candidate(
         &self,
-        current: Arc<RuntimeSnapshot>,
+        last_generation: &mut ConfigGeneration,
+        current: &RuntimeSnapshot,
         candidate: RuntimeCandidate,
     ) -> Result<Arc<RuntimeSnapshot>, RuntimeRefreshError> {
-        let RuntimeCandidate {
-            catalog,
-            tools,
-            skills,
-            sources,
-            masks,
-            schemes,
-        } = candidate;
-        let tools = tools.snapshot();
-        let generation = current
-            .generation
-            .checked_next()
-            .ok_or(RuntimeRefreshError::GenerationExhausted)?;
-        let published = Arc::new(RuntimeSnapshot {
-            generation,
-            catalog,
-            basic_tools: current.basic_tools.clone(),
-            tools,
-            skills,
-            sources,
-            masks: Arc::new(masks),
-            schemes: Arc::new(schemes),
-        });
+        let published = Arc::new(candidate.into_snapshot(
+            allocate_generation(last_generation)?,
+            current.basic_tools.clone(),
+        ));
         *self
             .active
             .write()
@@ -709,7 +894,119 @@ impl RuntimeRegistry {
     }
 }
 
+/// Allocate the next registry-wide generation. Callers hold the publication
+/// lock, which owns `last`.
+fn allocate_generation(
+    last: &mut ConfigGeneration,
+) -> Result<ConfigGeneration, RuntimeRefreshError> {
+    let next = last
+        .checked_next()
+        .ok_or(RuntimeRefreshError::GenerationExhausted)?;
+    *last = next;
+    Ok(next)
+}
+
+/// Compose `overlay` over `base` into a new scope snapshot: the overlay's
+/// catalog, its Bundle sources in place of the base's, and its Plugin sources
+/// the base does not already publish. Validation is the base publication's;
+/// a failure consumes no generation.
+fn compose_scope(
+    last_generation: &mut ConfigGeneration,
+    base: &RuntimeSnapshot,
+    overlay: &ScopeOverlay,
+    key: &ScopeKey,
+) -> Result<Arc<RuntimeSnapshot>, RuntimeRefreshError> {
+    let failed = |source: RuntimeRefreshError| RuntimeRefreshError::ScopeCompose {
+        scope: key.to_string(),
+        source: Box::new(source),
+    };
+    if let Some(source) = overlay
+        .plugin_sources
+        .iter()
+        .find(|source| source.id.kind() != RuntimeSourceKind::Plugin)
+    {
+        return Err(failed(RuntimeRefreshError::InvalidCandidate(format!(
+            "scope plugin source {} is not a Plugin source",
+            source.id
+        ))));
+    }
+    let mut candidate = RuntimeCandidate::from_snapshot(base);
+    candidate.replace_catalog(Arc::clone(&overlay.catalog));
+    candidate
+        .replace_sources_of_kind(RuntimeSourceKind::Bundle, overlay.bundle_sources.clone())
+        .map_err(failed)?;
+    let plugins = overlay
+        .plugin_sources
+        .iter()
+        .filter(|source| !base.sources.contains_key(&source.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !plugins.is_empty() {
+        candidate.upsert_sources(plugins).map_err(failed)?;
+    }
+    let generation = allocate_generation(last_generation).map_err(failed)?;
+    Ok(Arc::new(
+        candidate.into_snapshot(generation, base.basic_tools.clone()),
+    ))
+}
+
+/// The base model configuration as seen by one scope: scope bundle ids drop
+/// their user-scope leaves (the project bundle shadows that install) and the
+/// overlay's own leaves apply.
+fn overlay_agent_model_configuration(
+    base: AgentModelConfigurationSnapshot,
+    overlay: &ScopeOverlay,
+) -> AgentModelConfigurationSnapshot {
+    let shadows = overlay
+        .project_bundle_dirs
+        .keys()
+        .chain(overlay.bundle_models.keys())
+        .any(|bundle_id| base.bundles.contains_key(bundle_id));
+    if !shadows && overlay.bundle_models.is_empty() {
+        return base;
+    }
+    let mut configuration = base.as_ref().clone();
+    for bundle_id in overlay.project_bundle_dirs.keys() {
+        configuration.bundles.remove(bundle_id);
+    }
+    for (bundle_id, models) in &overlay.bundle_models {
+        if models.is_empty() {
+            configuration.bundles.remove(bundle_id);
+        } else {
+            configuration
+                .bundles
+                .insert(bundle_id.clone(), models.clone());
+        }
+    }
+    Arc::new(configuration)
+}
+
 impl RuntimeCandidate {
+    fn into_snapshot(
+        self,
+        generation: ConfigGeneration,
+        basic_tools: ToolRegistrySnapshot,
+    ) -> RuntimeSnapshot {
+        let Self {
+            catalog,
+            tools,
+            skills,
+            sources,
+            masks,
+            schemes,
+        } = self;
+        RuntimeSnapshot {
+            generation,
+            catalog,
+            basic_tools,
+            tools: tools.snapshot(),
+            skills,
+            sources,
+            masks: Arc::new(masks),
+            schemes: Arc::new(schemes),
+        }
+    }
+
     fn from_snapshot(snapshot: &RuntimeSnapshot) -> Self {
         Self {
             catalog: Arc::clone(&snapshot.catalog),
@@ -1660,8 +1957,9 @@ impl TurnBinding {
 
     /// Hooks bound to one agent, in dispatch order.
     ///
-    /// Every agent gets every installed Plugin-kind bundle's hooks, in stable
-    /// ascending source-id order. A bundle agent (AgentBundle, AgentSetBundle,
+    /// Every agent gets every installed Plugin-kind bundle's hooks and every
+    /// hook-carrying Plugin source's hooks (a scope's project plugins), in
+    /// stable ascending source-id order. A bundle agent (AgentBundle, AgentSetBundle,
     /// WorkflowBundle) additionally gets its own bundle's process hooks,
     /// filtered to the agent's `hook_refs`, after the Plugin hooks. An unknown
     /// agent gets none. Plugin entries are the retained source dispatchers
@@ -1690,9 +1988,10 @@ impl TurnBinding {
         hooks
     }
 
-    /// Every installed Plugin-kind bundle's hooks in stable ascending
-    /// source-id order, excluding `exclude` so an owner is never dispatched
-    /// twice.
+    /// Every installed Plugin-kind bundle's hooks, then every Plugin-kind
+    /// source's hooks (a scope's project plugins), in stable ascending
+    /// source-id order, excluding bundle `exclude` so an owner is never
+    /// dispatched twice.
     fn plugin_bundle_hooks(
         &self,
         exclude: Option<&str>,
@@ -1701,18 +2000,19 @@ impl TurnBinding {
             .sources
             .values()
             .filter(|source| {
-                source.id.kind() == RuntimeSourceKind::Bundle
-                    && exclude != Some(source.id.configured_id())
-                    && self
-                        .snapshot
-                        .catalog
-                        .bundles()
-                        .bundles()
-                        .iter()
-                        .any(|bundle| {
-                            bundle.identity().id == source.id.configured_id()
-                                && bundle.plugin_bundle().is_some()
-                        })
+                source.id.kind() == RuntimeSourceKind::Plugin
+                    || (source.id.kind() == RuntimeSourceKind::Bundle
+                        && exclude != Some(source.id.configured_id())
+                        && self
+                            .snapshot
+                            .catalog
+                            .bundles()
+                            .bundles()
+                            .iter()
+                            .any(|bundle| {
+                                bundle.identity().id == source.id.configured_id()
+                                    && bundle.plugin_bundle().is_some()
+                            }))
             })
             .filter_map(|source| source.hooks.clone())
             .collect()
@@ -1749,7 +2049,7 @@ impl TurnBinding {
         let skills = self
             .snapshot
             .skills
-            .get(&self.workdir)
+            .get(&self.place.workdir)
             .map_or(&[][..], |skills| skills.as_slice());
         append_skill_view_identity(&mut bytes, skills)?;
 
@@ -1862,7 +2162,20 @@ impl TurnBinding {
     #[must_use]
     /// Working directory this turn was bound to.
     pub fn workdir(&self) -> &Path {
-        &self.workdir
+        &self.place.workdir
+    }
+
+    /// Catalog scope this binding was bound in.
+    #[must_use]
+    pub fn scope(&self) -> &CatalogScope {
+        &self.place.scope
+    }
+
+    /// Scope bundle id to source directory for this binding's scope (empty
+    /// without a scope overlay).
+    #[must_use]
+    pub fn project_bundle_dirs(&self) -> &BTreeMap<String, PathBuf> {
+        &self.place.project_bundle_dirs
     }
 
     #[must_use]
@@ -2620,7 +2933,7 @@ impl TurnBinding {
     pub fn skills(&self) -> &[SkillCatalogEntry] {
         self.snapshot
             .skills
-            .get(&self.workdir)
+            .get(&self.place.workdir)
             .map_or(&[], |skills| skills.as_slice())
     }
 
@@ -2630,7 +2943,7 @@ impl TurnBinding {
         let skills = self
             .snapshot
             .skills
-            .get(&self.workdir)
+            .get(&self.place.workdir)
             .cloned()
             .unwrap_or_default();
         SkillPlane::from_snapshot(skills)
@@ -5221,7 +5534,10 @@ agent:
                     agent_model_preferences: Arc::new(BTreeMap::new()),
                     agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
                     session_agent_models: Arc::new(BTreeMap::new()),
-                    workdir: PathBuf::from("/tmp/runtime-fingerprint"),
+                    place: BindingPlace::new(
+                        PathBuf::from("/tmp/runtime-fingerprint"),
+                        CatalogScope::Global,
+                    ),
                 },
                 permission,
             )
@@ -5405,7 +5721,7 @@ agent:
                     agent_model_preferences: Arc::new(BTreeMap::new()),
                     agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
                     session_agent_models: Arc::new(BTreeMap::new()),
-                    workdir,
+                    place: BindingPlace::new(workdir, CatalogScope::Global),
                 },
                 permission,
             )
@@ -5622,7 +5938,10 @@ agent:
                     session_agent_models: Arc::new(BTreeMap::new()),
                     snapshot: tools,
                     agent_model_preferences: Arc::new(BTreeMap::new()),
-                    workdir: PathBuf::from("/tmp/runtime-fingerprint-sources"),
+                    place: BindingPlace::new(
+                        PathBuf::from("/tmp/runtime-fingerprint-sources"),
+                        CatalogScope::Global,
+                    ),
                 },
                 permission,
             )

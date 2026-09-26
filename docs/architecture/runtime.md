@@ -484,6 +484,62 @@ published snapshot, while in-flight turns continue on their retained snapshot
 without a dispatch-path registry lock. Direct shell turns use the same binding
 and audit event.
 
+#### Catalog scopes (internal)
+
+`RuntimeRegistry` keeps one base snapshot plus, per published overlay, one
+scope snapshot (`hya_core::catalog_scope`). A `CatalogScope` names what a
+turn binds:
+
+| Scope | Key (`ScopeKey`) | Binds |
+| --- | --- | --- |
+| `Global` | `Global` | the base (user skills only, empty workdir) |
+| `Directory(path)` | `Directory(path)` | the base; skills keyed by the workdir |
+| `Project { id, roots }` | `Project(id)` (roots are not part of the key) | the base plus the Project's overlay |
+
+A `ScopeOverlay` carries the scope's complete `AgentCatalog`, every
+Bundle-kind source (installed plus scope bundles), extra Plugin-kind sources
+(project plugins, which may carry hooks), the scope bundles' model leaves
+(`bundle_models`), `project_bundle_dirs` (bundle id to source directory), and
+a caller-defined `fingerprint` the registry never interprets.
+
+- `publish_scope(key, overlay) -> Result<ConfigGeneration>` composes the
+  overlay over the current base at once: `RuntimeCandidate::from_snapshot(base)`,
+  `replace_catalog`, `replace_sources_of_kind(Bundle)`, then an upsert of the
+  overlay's Plugin sources that the base does not already publish (configured
+  plugins beat project manifests). Validation is the base publication's. On
+  failure it returns `RuntimeRefreshError::ScopeCompose { scope, source }`,
+  consumes no generation, and leaves the base and the scope's previous overlay
+  and snapshot unchanged. A publish always replaces the previous overlay;
+  callers compare `scope_overlay(key)?.fingerprint` to skip a rebuild.
+- `bind_scoped(scope, workdir)` (and `bind_scoped_with_skills` for a
+  caller-supplied discovery) first publishes the workdir's skills into the
+  base exactly as `bind_turn` does, then retains the scope snapshot. The scope
+  snapshot is recomposed lazily at bind when the base generation moved since
+  it was built (an MCP reconcile, a skill change, a base catalog publish); a
+  failing recompose returns `ScopeCompose` and keeps the previous snapshot. A
+  scope without an overlay binds the base. `bind_turn(workdir)` is
+  `bind_scoped(Directory(workdir), workdir)`; `bind_global()` is
+  `bind_scoped(Global, "")`.
+- `drop_scope(key)` forgets the overlay; `scope_keys()` lists the published
+  ones. Source owners (plugin and bundle processes) live as long as the
+  overlay or any binding retaining the scope snapshot.
+- Base and scope publications share one registry-wide generation counter
+  (held by the publication lock), so every snapshot's `ConfigGeneration` is
+  unique and increasing across scopes. Base-only use numbers generations
+  exactly as before.
+- `TurnBinding::scope()` and `TurnBinding::project_bundle_dirs()` expose the
+  bound scope. They share one `Arc` with the workdir: bindings move by value
+  through deep async frames, and a larger binding has overflowed the stack.
+  In a scope binding, scope bundle ids drop their user-scope model leaves and
+  the overlay's `bundle_models` apply, so `configured_agent_model` reads the
+  project bundle's own `config.yml`.
+- `bundle_hooks_for_agent` dispatches Plugin-kind bundle hooks and then every
+  hook-carrying Plugin source's hooks in source-id order, so a scope's project
+  plugin hooks reach only bindings of that scope.
+
+Which scope a session binds, and the overlay builders for project bundles and
+plugins, sit above this mechanism in `SessionEngine` and `hya-app`.
+
 #### `ToolRegistrySnapshot` and dispatch identity
 
 A turn takes an immutable, lock-free `ToolRegistrySnapshot` of the tool
