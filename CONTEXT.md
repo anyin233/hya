@@ -359,6 +359,13 @@ remote or explicitly created Project sessions; a local session keeps its cwd as 
 is inside a root.
 _Avoid_: workdir (that is the session's cwd), mount, scope
 
+**Catalog scope**:
+The `Global`/`Directory(path)`/`Project{id, roots}` key a session, directory, or unscoped request
+resolves to for its bundle, plugin, command, skill, and AGENTS.md catalogs (ADR-0027). Only a
+`Project` scope loads bundle or plugin code, from every one of its roots, first root wins; a
+`Directory` scope (no containing Project) or `Global` gets the inert tiers only.
+_Avoid_: catalog tier (that is one layer within a scope), runtime scope
+
 **Temporary session**:
 A Session that belongs to no Project. Its workdir and only root is a fresh scratch directory
 `$XDG_CACHE_HOME/hya/scratch/<session_id>`, which hya never deletes.

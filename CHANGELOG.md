@@ -31,6 +31,7 @@
 - `/sessions` lists the active Project's sessions and temporary ones; F3 shows every Project.
 - `/new --temp` starts a temporary session in its own scratch directory, `$XDG_CACHE_HOME/hya/scratch/<session id>` (else `~/.cache/hya/scratch/…`). hya never deletes scratch directories, not even with the session.
 - A remote start (`--remote`, `hya --connect`, `/connect-remote`) creates no session: the Project view opens so you choose where to work. See [ADR-0024](docs/adr/0024-project-model-and-client-chosen-workspace.md).
+- Project bundles (`.hya/bundles`) and project plugins (`.hya/plugins`) are a per-Project catalog tier: they load from every root of the session's registered Project, in root order (first wins on an id or namespace clash), not from wherever `hya serve` started. Commands, skills, and Workflows are discovered across every Project root the same way. A directory with no registered Project, and a temporary session, never run bundle or plugin code — only their inert catalog tiers (commands, skills, AGENTS.md). Editing a Project bundle or plugin's manifest hot-respawns only that Project's process. `exec`/`run`, `-p` goal mode, `loop`, and standalone Workflow runs now ensure a Project for their working directory before binding, so this tier loads for them too. See [ADR-0027](docs/adr/0027-per-project-catalog-tier.md).
 
 ## Permissions follow the Project's roots
 
@@ -48,6 +49,8 @@
 - The server accepts only known Host names: `localhost`, `127.0.0.1`, `[::1]`, a non-wildcard `--bind` host, and each `--allow-host <name>` (on `hya serve`, `serve start|restart`, and bare `hya`). Any other Host gets `403`, which blocks DNS rebinding. Reaching a backend by a LAN name or address now needs `--allow-host`.
 - Requests that arrive through the relay and look like they come from a browser (`Origin`, `Sec-Fetch-*`) are refused.
 - A bridge requires its token on every new connection (`x-hya-bridge-token`; the TUI and WebUI get it through `HYA_SERVER_TOKEN`). Without it the bridge answers `401` and opens nothing.
+- The process-start-directory catalog tier is removed: `hya serve` no longer loads `./.hya/bundles` or `./.hya/plugins` from wherever it happened to start (including a daemon's `$HOME`). A directory needs a registered Project for its `.hya/bundles` and `.hya/plugins` to load. See [ADR-0027](docs/adr/0027-per-project-catalog-tier.md).
+- `CatalogUpdated` gains an additive `project_id` field (empty for the base provider/model catalog, set for one Project's catalog tier). `ListPermissionModesRequest` and `ListBundleApisRequest` gain optional `directory`/`session` scope fields.
 - The projection reducer version is 9: cached projections are rebuilt once from the event log.
 
 ## Security notes

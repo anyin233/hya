@@ -401,10 +401,12 @@ into the isolated backend: `Record<string, BundleFiles>` (an object, not an
 array, for the same fixture-option reason), mapping a directory name to the
 bundle's files (`BundleFiles = Record<string, string>`, path relative to the
 bundle root → content). The `backend` fixture writes each one to
-`<backend.dir>/.hya/bundles/<name>/` before `hya serve` starts; the server
-runs in `backend.dir`, so it loads them as project bundles (the same place
-`hya bundle install --project` puts a bundle). Leaving it unset writes
-nothing, so existing specs are unaffected.
+`<backend.dir>/.hya/bundles/<name>/` before `hya serve` starts. `hya serve`
+itself has no working directory (ADR-0024); these load as project bundles
+because every session the TUI creates is given `workdir: backend.dir`, which
+ensures (or reuses) a Project rooted there (ADR-0027) — the same place `hya
+bundle install --project` puts a bundle. Leaving it unset writes nothing, so
+existing specs are unaffected.
 
 `approverBundle({ id, modes, approve })` (`e2e/hya.ts`) builds such a
 bundle for [permission modes](tui.md#permission-modes): a `kind: Plugin`
