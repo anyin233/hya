@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { HyaClient, ProjectInfo, SessionInfo, SessionPlacement, StreamFrame } from "../src/client"
 import { createController } from "../src/app/controller"
-import { activeProject, newestTopLevelSession, noProjectStatus, pathInside, projectBusy, projectScope, sessionPlacement } from "../src/state/projects"
+import { activeProject, newestTopLevelSession, noProjectStatus, pathInside, projectBusy, projectScope, sessionPlacement, sessionsInScope } from "../src/state/projects"
 import { createAppStore } from "../src/state/store"
 
 const work: ProjectInfo = { id: "prj_work", name: "work", roots: ["/work", "/docs"], busy: false }
@@ -43,6 +43,19 @@ test("newestTopLevelSession picks the Project's most recently updated root sessi
   expect(newestTopLevelSession(sessions, "prj_none")).toBeUndefined()
 })
 
+test("sessionsInScope keeps only the active Project's root sessions plus every temporary root session, with their subagents", () => {
+  const sessions: SessionInfo[] = [
+    { id: "w1", agent: "b", workdir: "/work", projectId: "prj_work" },
+    { id: "w1-kid", agent: "b", workdir: "/work", projectId: "prj_work", parent: "w1" },
+    { id: "o1", agent: "b", workdir: "/other", projectId: "prj_other" },
+    { id: "t1", agent: "b", workdir: "/scratch", kind: "SESSION_KIND_TEMPORARY" },
+    { id: "t1-kid", agent: "b", workdir: "/scratch", kind: "SESSION_KIND_TEMPORARY", parent: "t1" },
+  ]
+  expect(sessionsInScope(sessions, "prj_work", false).map((s) => s.id)).toEqual(["w1", "w1-kid", "t1", "t1-kid"])
+  expect(sessionsInScope(sessions, "prj_work", true).map((s) => s.id)).toEqual(sessions.map((s) => s.id))
+  expect(sessionsInScope(sessions, undefined, false).map((s) => s.id)).toEqual(sessions.map((s) => s.id))
+})
+
 test("the store keeps the Project list, the active Project, and per-Project busy flags", () => {
   const store = createAppStore()
   expect(store.state.projects).toEqual([])
@@ -76,6 +89,22 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
     },
     listProjects: async () => { calls.push(["listProjects"]); return projects },
     getProject: async (id: string) => projects.find((row) => row.id === id)!,
+    createProject: async (body: { name: string; roots: string[] }) => {
+      calls.push(["createProject", body])
+      const project: ProjectInfo = { id: `prj_new_${projects.length + 1}`, name: body.name, roots: body.roots, sessionCount: 0 }
+      projects = [...projects, project]
+      return project
+    },
+    updateProject: async (id: string, patch: { name?: string; roots?: string[] }) => {
+      calls.push(["updateProject", id, patch])
+      projects = projects.map((row) => (row.id === id ? { ...row, ...patch } : row))
+      return projects.find((row) => row.id === id)!
+    },
+    deleteProject: async (id: string) => {
+      calls.push(["deleteProject", id])
+      projects = projects.filter((row) => row.id !== id)
+    },
+    findFiles: async (pattern: string) => { calls.push(["findFiles", pattern]); return [] },
     listSessions: async (filter?: { projectId?: string }) => sessions.filter((row) => !filter?.projectId || row.projectId === filter.projectId),
     listInteractions: async () => [],
     listModels: async () => [{ id: "hya/echo", providerId: "hya", modelId: "echo" }],
@@ -236,5 +265,54 @@ test("--remote starts without ensuring a Project and refuses a new session until
   await h.controller.switchProject("prj_work")
   expect(h.directory).toBe("/work")
   expect(h.named("createSession").at(-1)).toEqual(["createSession", { projectId: "prj_work" }])
+  h.controller.dispose()
+})
+
+test("--remote with no active Project opens the Project view at start", async () => {
+  const h = harness({ remote: true })
+  await h.controller.start()
+  expect(h.store.state.projectView).toBeDefined()
+  h.controller.dispose()
+})
+
+test("a new-session attempt without an active Project opens the Project view instead of only a status", async () => {
+  const h = harness({ remote: true })
+  await h.controller.start()
+  h.controller.closeProjectView()
+  expect(h.store.state.projectView).toBeUndefined()
+  await expect(h.controller.newSession()).rejects.toThrow()
+  expect(h.store.state.projectView).toBeDefined()
+  h.controller.dispose()
+})
+
+test("the Project view creates, renames, edits roots of, and deletes a Project", async () => {
+  const h = harness()
+  await h.controller.start()
+  h.controller.openProjectView()
+  expect(h.store.state.projectView).toBeDefined()
+
+  // Create: name then one root, Enter on an empty root finishes.
+  h.controller.projectViewKey({ name: "n", ctrl: false, meta: false, shift: false, sequence: "n" })
+  for (const ch of "New Project") h.controller.projectViewKey({ name: ch, ctrl: false, meta: false, shift: false, sequence: ch })
+  h.controller.projectViewKey({ name: "return", ctrl: false, meta: false, shift: false, sequence: "" })
+  for (const ch of "/new/root") h.controller.projectViewKey({ name: ch, ctrl: false, meta: false, shift: false, sequence: ch })
+  h.controller.projectViewKey({ name: "return", ctrl: false, meta: false, shift: false, sequence: "" })
+  h.controller.projectViewKey({ name: "return", ctrl: false, meta: false, shift: false, sequence: "" })
+  await Bun.sleep(0)
+  expect(h.named("createProject")).toEqual([["createProject", { name: "New Project", roots: ["/new/root"] }]])
+
+  // Rename the highlighted (newest) Project.
+  h.controller.projectViewKey({ name: "r", ctrl: false, meta: false, shift: false, sequence: "r" })
+  for (const _ of "New Project") h.controller.projectViewKey({ name: "backspace", ctrl: false, meta: false, shift: false, sequence: "" })
+  for (const ch of "Renamed") h.controller.projectViewKey({ name: ch, ctrl: false, meta: false, shift: false, sequence: ch })
+  h.controller.projectViewKey({ name: "return", ctrl: false, meta: false, shift: false, sequence: "" })
+  await Bun.sleep(0)
+  expect(h.named("updateProject").at(-1)?.[2]).toMatchObject({ name: "Renamed" })
+
+  // Delete it: `d` asks, Enter confirms.
+  h.controller.projectViewKey({ name: "d", ctrl: false, meta: false, shift: false, sequence: "d" })
+  h.controller.projectViewKey({ name: "return", ctrl: false, meta: false, shift: false, sequence: "" })
+  await Bun.sleep(0)
+  expect(h.named("deleteProject").length).toBe(1)
   h.controller.dispose()
 })

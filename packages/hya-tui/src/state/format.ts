@@ -5,6 +5,7 @@ import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
 import { promptQueue, waitingKind } from "./prompts"
+import { sessionsInScope } from "./projects"
 import { forkSourceText } from "./revert"
 import type { AppState } from "./store"
 
@@ -71,19 +72,28 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
 }
 
 /**
- * The sidebar's session list; `width` cuts each line to the sidebar. A
- * top-level session is two lines (title, agent) with a blank line between
- * groups; a subagent session is one indented `↳ N. agent` line under it.
+ * The sidebar's session list; `width` cuts each line to the sidebar. Scoped
+ * to the active Project (state/projects.ts `sessionsInScope`): temporary
+ * sessions have no Project, so they always show, under their own
+ * `— Temporary —` heading after the Project's sessions. A top-level session
+ * is two lines (title, agent) with a blank line between groups; a subagent
+ * session is one indented `↳ N. agent` line under it.
  */
 export function sessionListText(state: AppState, width?: number): string {
   if (!state.ready) return "Loading…"
-  if (!state.sessions.length) return "No sessions. Type a prompt or /new."
+  const sessions = sessionsInScope(state.sessions, state.activeProjectId, false)
+  if (!sessions.length) return "No sessions. Type a prompt or /new."
   const groups: string[][] = []
-  sessionTree(state.sessions).forEach(({ session, depth }, index) => {
+  let announcedTemporary = false
+  sessionTree(sessions).forEach(({ session, depth }, index) => {
     const mark = session.id === state.selected?.id ? "▸" : " "
     // A pending ask outranks `running`: the session is blocked on the user.
     const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
     if (depth === 0) {
+      if (session.kind === "SESSION_KIND_TEMPORARY" && !announcedTemporary) {
+        announcedTemporary = true
+        groups.push([truncate("— Temporary —", width)])
+      }
       groups.push([
         truncate(`${mark} ${index + 1}. ${session.title || session.id}`, width),
         truncate(`   ${session.agent}${running}`, width),

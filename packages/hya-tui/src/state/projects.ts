@@ -60,6 +60,22 @@ export function sessionPlacement(input: { project: ProjectInfo | undefined; dire
   return remote ? undefined : { workdir: directory }
 }
 
+/**
+ * Sessions in scope for a session list: with an active Project and
+ * `allProjects` false, only its root sessions (plus their subagents) and
+ * every temporary root session (it has no Project); `allProjects` (the
+ * `/sessions` picker's toggle) or no active Project shows every session.
+ */
+export function sessionsInScope(sessions: readonly SessionInfo[], activeProjectId: string | undefined, allProjects: boolean): SessionInfo[] {
+  if (allProjects || !activeProjectId) return [...sessions]
+  const kept = new Set(
+    sessions
+      .filter((session) => !session.parent && (session.kind === "SESSION_KIND_TEMPORARY" || session.projectId === activeProjectId))
+      .map((session) => session.id),
+  )
+  return sessions.filter((session) => (session.parent ? kept.has(session.parent) : kept.has(session.id)))
+}
+
 /** The Project's most recently updated top-level session (list order breaks ties). */
 export function newestTopLevelSession(sessions: readonly SessionInfo[], projectId: string): SessionInfo | undefined {
   const time = (session: SessionInfo): number => Date.parse(session.timeUpdated ?? "") || 0

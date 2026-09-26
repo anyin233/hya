@@ -8,6 +8,7 @@
  */
 import type { AgentSummary, ModelSummary, SessionInfo } from "../client"
 import { modelReference, sessionTree } from "./format"
+import { sessionsInScope } from "./projects"
 import type { PickerRow } from "./picker"
 
 /** `/model` picker rows: one per model, tagged with its provider id; `current` is the session's `provider/model`. */
@@ -50,10 +51,21 @@ export function relativeTime(time: string | undefined, now: number = Date.now())
   return `${Math.floor(seconds / day)}d`
 }
 
-/** `/sessions` picker rows: a `New session` row first, then the tree (subagents indented and tagged `subagent`, busy noted in the detail). */
-export function sessionRows(sessions: readonly SessionInfo[], current: string | undefined, now: number = Date.now()): PickerRow[] {
+/**
+ * `/sessions` picker rows: a `New session` row first, then the tree
+ * (subagents indented and tagged `subagent`, busy noted in the detail).
+ * Scoped to `activeProjectId` (state/projects.ts `sessionsInScope`) unless
+ * `allProjects` (the picker's toggle, `Ctrl+A`) is set.
+ */
+export function sessionRows(
+  sessions: readonly SessionInfo[],
+  current: string | undefined,
+  now: number = Date.now(),
+  scope: { activeProjectId?: string; allProjects?: boolean } = {},
+): PickerRow[] {
   const newRow: PickerRow = { id: "__new__", label: "New session", tag: "new", detail: "Create a session with the current agent and model" }
-  const rows = sessionTree(sessions).map(({ session, depth }): PickerRow => {
+  const scoped = sessionsInScope(sessions, scope.activeProjectId, scope.allProjects ?? false)
+  const rows = sessionTree(scoped).map(({ session, depth }): PickerRow => {
     const detail = [
       session.agent,
       modelReference(session) || "default",
