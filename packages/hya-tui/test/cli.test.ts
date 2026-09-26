@@ -61,3 +61,9 @@ test("--attached-pid names the running server bare hya attached to", () => {
   expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "x"], "/cwd")).toThrow("--attached-pid needs a process id")
   expect(usage).toContain("--attached-pid")
 })
+
+test("--remote starts without a Project for the working directory", () => {
+  expect(parseArguments(["--server", "http://h:1", "--remote"], "/cwd")).toEqual({ server: "http://h:1/", directory: "/cwd", continue: false, remote: true })
+  expect(parseArguments([], "/cwd")).not.toHaveProperty("remote")
+  expect(usage).toContain("--remote")
+})

@@ -17,7 +17,14 @@ export interface AppActions {
   refresh(): Promise<void>
   refreshMessages(): Promise<void>
   openSession(sessionId: string): Promise<void>
+  /** Create a session in the active Project (state/projects.ts `sessionPlacement`) and open it; without one on a `--remote` start it sets `noProjectStatus` and throws `NoProjectError`. */
   newSession(agent?: string, model?: string): Promise<void>
+  /** Create a temporary session (no Project; the server's scratch workdir) and open it. */
+  newTemporarySession(agent?: string, model?: string): Promise<void>
+  /** Make a Project active: scope the client to it, open its newest root session or create one there. */
+  switchProject(projectId: string): Promise<void>
+  /** Re-read `ListProjects` into `state.projects` (also done on every `projectsUpdated` frame). */
+  refreshProjects(): Promise<void>
   /** Open the full-screen Provider View (`/key`; state/providers.ts, app/providers.ts). */
   openProviders(): void
   /** Open the full-screen Diff View (`/diff`; state/diff.ts, app/diff.ts). */

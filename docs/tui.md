@@ -136,10 +136,11 @@ bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 | Flag | Meaning |
 | --- | --- |
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI starts its own backend. |
-| `--dir <path>` | Workspace directory: the `x-hya-directory` scope of every request and the started backend's working directory. Default: the TUI's working directory. |
+| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the started backend's working directory. Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary to start (first in the lookup order above). Only without `--server`. |
 | `--db <path>` | SQLite database of the backend, relative to `--dir`: the TUI attaches to the server already running on it, else starts one. Default: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. Only without `--server`. |
-| `-c`, `--continue` | Open the most recently updated top-level session of `--dir` (subagent sessions are opened from their parent). |
+| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir`, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
+| `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project. The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
 | `--web-url <url>` | Show this WebUI address (status bar `WebUI <url>`, sidebar `Context` row, `/status`). Bare `hya` passes it; an HTTP(S) URL. |
 | `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in the status line and `/status`, and `WebUI unavailable` in the status bar. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
@@ -171,6 +172,64 @@ To add a provider or set its API key, type `/key`: the full-screen
 pop-up (name, protocol, base URL, key), and fetches and tests its models.
 Changes apply to the running backend at once; no restart is needed.
 
+## Projects
+
+A Project (ADR-0024) is a named list of root directories on the backend
+machine; the first root is the primary root. Every non-temporary session
+belongs to one, and the TUI always has at most one **active Project**: the
+one new sessions go to and the directory scope (`x-hya-directory`, the
+`directory` of VCS, MCP, rule, and agent-model calls) follows.
+
+- **Local start.** At start the TUI calls `EnsureProjectForPath(--dir)`: the
+  Project whose root contains `--dir` (the longest matching root wins), else
+  a new Project named after `--dir` with `--dir` as its only root. That
+  Project becomes active and the scope stays `--dir`. If the call fails (an
+  older backend), no Project is active and new sessions send `--dir` alone;
+  the server then places them the same way.
+- **New sessions.** `/new` (and the first prompt) creates a Project session
+  in the active Project: with `workdir = --dir` when `--dir` lies inside one
+  of its roots, else without a workdir, so the server uses the primary root.
+  A temporary session has no Project; the server creates a scratch workdir
+  for it (`$XDG_CACHE_HOME/hya/scratch/<session>`), and the active Project
+  stays for the next `/new`.
+- **Switching.** Switching to a Project makes it active, sets the scope to
+  `--dir` when it lies inside the Project, else to its primary root, and
+  opens the Project's most recently updated top-level session — or creates
+  one when it has none. Opening a top-level session of another Project (for
+  example from `/sessions`) makes that Project active too; opening a
+  temporary session scopes requests to its scratch workdir.
+- **`--continue`** opens the newest top-level session of the ensured
+  Project, so a session started in a subdirectory of the same Project is
+  found too.
+- **`--remote`.** No Project is ensured and none is active. A prompt or
+  `/new` without one is refused with `No project is open · choose a project
+  or start a temporary session` on the status line.
+- **Live list.** The Project list (`ListProjects`, with each Project's
+  `busy` flag: a session of it runs a turn) is read with the catalogs and
+  re-read on every `projectsUpdated {}` frame of the global stream (live
+  only, no seq, empty `session`), debounced like `catalogUpdated` (120 ms,
+  at most 400 ms), so a burst is one re-read.
+
+Interface (`src/client.ts`, `src/state/projects.ts`, `src/app/controller.ts`):
+
+| Call | Route |
+| --- | --- |
+| `listProjects()` | `GET /v1/projects` (all pages) |
+| `getProject(id)` | `GET /v1/projects/{id}` |
+| `createProject({name, roots})` | `POST /v1/projects` |
+| `updateProject(id, {name?, roots?})` | `PATCH /v1/projects/{id}` |
+| `deleteProject(id)` | `DELETE /v1/projects/{id}` |
+| `resolveProject(path)` | `GET /v1/projects/resolve?path=` (`undefined` when no Project contains it) |
+| `ensureProjectForPath(path)` | `POST /v1/projects/ensure` `{path}` → `{project, created}` |
+| `listSessions({projectId?})` | `GET /v1/sessions?projectId=` |
+| `createSession(agent, model, placement)` | `POST /v1/sessions` with `kind` `SESSION_KIND_PROJECT` plus `projectId`/`workdir`, or `SESSION_KIND_TEMPORARY` alone |
+| `setDirectory(path)` | changes the scope of every later request and stream |
+
+Store fields: `projects` (`ProjectInfo[]`), `activeProjectId`, `remote`.
+Controller actions: `newSession(agent?, model?)`,
+`newTemporarySession(agent?, model?)`, `switchProject(id)`,
+`refreshProjects()`.
+
 ## Commands and keys
 
 | Input | Effect |
@@ -186,7 +245,7 @@ Changes apply to the running backend at once; no restart is needed.
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
-| `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |
+| `/new [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default. |
 | `/sessions` | Open the sessions picker: a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation (see [Pickers](#pickers)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. With no session yet, a picker or direct choice is remembered for the next one (see [Pickers](#pickers)). |
