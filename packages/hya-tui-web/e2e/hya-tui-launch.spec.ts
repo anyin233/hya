@@ -3,8 +3,8 @@
 // of its database: the one already running, else one it starts with
 // `hya serve start` (detached, in `--dir`). The daemon outlives the TUI.
 // `--continue` reopens the most recent session that is not archived; a plain
-// start opens a new session that is deleted again when the TUI exits with it
-// still empty. A
+// start opens a new ephemeral session that the daemon drops again once it is
+// still empty and no TUI shows it (after `/exit`, or a `kill -9`). A
 // missing binary or a daemon that fails to start is reported with its
 // output tail.
 
@@ -38,6 +38,19 @@ async function backendPid(term: Tui): Promise<number> {
   expect(alive(pid)).toBe(true)
   expect(execFileSync("ps", ["-o", "command=", "-p", String(pid)]).toString()).toContain("serve --bind 127.0.0.1:0")
   return pid
+}
+
+/** Ids of the root sessions the daemon at `url` lists. */
+async function listed(url: string): Promise<string[]> {
+  return ((await (await fetch(`${url}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
+}
+
+/** Pids of the TUIs (`bun <tui main> --dir <dir> …`) running for `dir`. */
+function tuiPids(dir: string): number[] {
+  return execFileSync("ps", ["-axo", "pid=,command="]).toString().split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter((argv) => argv[2] === tuiMain && argv.join(" ").includes(`--dir ${dir}`))
+    .map((argv) => Number(argv[0]))
 }
 
 async function healthy(url: string): Promise<boolean> {
@@ -78,7 +91,7 @@ test.describe("one-command launch", () => {
     expect(await next.waitForExit()).toBe(0)
   })
 
-  test("a plain start opens a new session; an empty one is deleted on exit, one with messages kept; --continue reopens it", async ({ tui, workspace }) => {
+  test("a plain start opens a new session; an empty one is dropped by the daemon after exit, one with messages kept; --continue reopens it", async ({ tui, workspace }) => {
     // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
@@ -97,18 +110,33 @@ test.describe("one-command launch", () => {
     await fresh.waitForText("No messages yet")
     const empty = /hya · (hysec_\w+)/.exec(await fresh.text())![1]!
     const url = (await daemonStatus(workspace))!.url
-    const listed = async () => ((await (await fetch(`${url}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
-    expect(await listed()).toContain(empty)
+    expect(await listed(url)).toContain(empty)
     await prompt(fresh, "/exit")
-    await fresh.waitForExit()
-    // …which is gone once it exits: only the session with messages is left.
-    expect(await listed()).not.toContain(empty)
-    expect(await listed()).toHaveLength(1)
+    expect(await fresh.waitForExit()).toBe(0)
+    // …which the daemon drops once no client shows it (after a short grace):
+    // only the session with messages is left.
+    await expect.poll(() => listed(url), { timeout: 20_000 }).not.toContain(empty)
+    expect(await listed(url)).toHaveLength(1)
 
     const resumed = await tui(...selfLaunch(workspace, ["--continue"]))
     await resumed.waitForText("Connected to hya", 30_000)
     await resumed.waitForText("remember this")
     await resumed.waitForText("Launched and replying.")
+  })
+
+  test("a killed TUI's empty session is dropped by the daemon too", async ({ tui, workspace }) => {
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("No messages yet")
+    const empty = /hya · (hysec_\w+)/.exec(await term.text())![1]!
+    const url = (await daemonStatus(workspace))!.url
+    expect(await listed(url)).toContain(empty)
+    // No exit handler runs: only its closed session stream tells the daemon.
+    const pids = tuiPids(workspace.dir)
+    expect(pids).toHaveLength(1)
+    process.kill(pids[0]!, "SIGKILL")
+    await expect.poll(() => tuiPids(workspace.dir).length, { timeout: 10_000 }).toBe(0)
+    await expect.poll(() => listed(url), { timeout: 20_000 }).not.toContain(empty)
   })
 
   test("closing the browser tab (SIGHUP) leaves the daemon running", async ({ tui, workspace, page }) => {

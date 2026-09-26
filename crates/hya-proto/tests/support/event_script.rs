@@ -3,8 +3,9 @@
 //! `script(seed, ...)` produces a plausible single-session event log mixing
 //! transcript streaming, usage records (per-round and legacy), message/part
 //! deletion (revert, compaction), file changes, transcript revert/unrevert/
-//! commit, archive/unarchive (including legacy zero stamps), Project and
-//! temporary session kinds (and legacy sessions with neither), compaction
+//! commit, archive/unarchive (including legacy zero stamps), ephemeral
+//! marks, Project and temporary session kinds (and legacy sessions with
+//! neither), compaction
 //! markers, todo lists, forks, Workflow runs
 //! (including a re-emitted `WorkflowRunStarted` for an already-seen run, which
 //! only replay-only reducer state can deduplicate), and team roster/mail
@@ -105,7 +106,7 @@ impl Script {
 
     fn step(&mut self) -> Event {
         let session = self.session;
-        match self.rng.below(28) {
+        match self.rng.below(29) {
             0 | 1 => {
                 let message = MessageId::from_uuid(self.uuid());
                 self.messages.push((message, Vec::new()));
@@ -428,6 +429,10 @@ impl Script {
                     Event::SessionUnarchived { session }
                 }
             }
+            28 => Event::SessionEphemeralSet {
+                session,
+                ephemeral: self.rng.chance(50),
+            },
             _ => self.title(),
         }
     }

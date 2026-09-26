@@ -4199,6 +4199,9 @@ impl serde::Serialize for CreateSessionRequest {
         if !self.title.is_empty() {
             len += 1;
         }
+        if self.ephemeral {
+            len += 1;
+        }
         if !self.project_id.is_empty() {
             len += 1;
         }
@@ -4224,6 +4227,9 @@ impl serde::Serialize for CreateSessionRequest {
         if !self.title.is_empty() {
             struct_ser.serialize_field("title", &self.title)?;
         }
+        if self.ephemeral {
+            struct_ser.serialize_field("ephemeral", &self.ephemeral)?;
+        }
         if !self.project_id.is_empty() {
             struct_ser.serialize_field("projectId", &self.project_id)?;
         }
@@ -4248,6 +4254,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
             "parent",
             "initialize",
             "title",
+            "ephemeral",
             "project_id",
             "projectId",
             "kind",
@@ -4261,6 +4268,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
             Parent,
             Initialize,
             Title,
+            Ephemeral,
             ProjectId,
             Kind,
         }
@@ -4290,6 +4298,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                             "parent" => Ok(GeneratedField::Parent),
                             "initialize" => Ok(GeneratedField::Initialize),
                             "title" => Ok(GeneratedField::Title),
+                            "ephemeral" => Ok(GeneratedField::Ephemeral),
                             "projectId" | "project_id" => Ok(GeneratedField::ProjectId),
                             "kind" => Ok(GeneratedField::Kind),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -4317,6 +4326,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                 let mut parent__ = None;
                 let mut initialize__ = None;
                 let mut title__ = None;
+                let mut ephemeral__ = None;
                 let mut project_id__ = None;
                 let mut kind__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -4357,6 +4367,12 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                             }
                             title__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Ephemeral => {
+                            if ephemeral__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ephemeral"));
+                            }
+                            ephemeral__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::ProjectId => {
                             if project_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projectId"));
@@ -4378,6 +4394,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                     parent: parent__.unwrap_or_default(),
                     initialize: initialize__.unwrap_or_default(),
                     title: title__.unwrap_or_default(),
+                    ephemeral: ephemeral__.unwrap_or_default(),
                     project_id: project_id__.unwrap_or_default(),
                     kind: kind__.unwrap_or_default(),
                 })
@@ -23984,6 +24001,9 @@ impl serde::Serialize for SessionInfo {
         if self.archived_at.is_some() {
             len += 1;
         }
+        if self.ephemeral {
+            len += 1;
+        }
         if !self.project_id.is_empty() {
             len += 1;
         }
@@ -24047,6 +24067,9 @@ impl serde::Serialize for SessionInfo {
         if let Some(v) = self.archived_at.as_ref() {
             struct_ser.serialize_field("archivedAt", v)?;
         }
+        if self.ephemeral {
+            struct_ser.serialize_field("ephemeral", &self.ephemeral)?;
+        }
         if !self.project_id.is_empty() {
             struct_ser.serialize_field("projectId", &self.project_id)?;
         }
@@ -24089,6 +24112,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "archived",
             "archived_at",
             "archivedAt",
+            "ephemeral",
             "project_id",
             "projectId",
             "kind",
@@ -24114,6 +24138,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             Revert,
             Archived,
             ArchivedAt,
+            Ephemeral,
             ProjectId,
             Kind,
         }
@@ -24155,6 +24180,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "revert" => Ok(GeneratedField::Revert),
                             "archived" => Ok(GeneratedField::Archived),
                             "archivedAt" | "archived_at" => Ok(GeneratedField::ArchivedAt),
+                            "ephemeral" => Ok(GeneratedField::Ephemeral),
                             "projectId" | "project_id" => Ok(GeneratedField::ProjectId),
                             "kind" => Ok(GeneratedField::Kind),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -24194,6 +24220,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut revert__ = None;
                 let mut archived__ = None;
                 let mut archived_at__ = None;
+                let mut ephemeral__ = None;
                 let mut project_id__ = None;
                 let mut kind__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -24308,6 +24335,12 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             archived_at__ = map_.next_value()?;
                         }
+                        GeneratedField::Ephemeral => {
+                            if ephemeral__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ephemeral"));
+                            }
+                            ephemeral__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::ProjectId => {
                             if project_id__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("projectId"));
@@ -24341,6 +24374,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     revert: revert__,
                     archived: archived__.unwrap_or_default(),
                     archived_at: archived_at__,
+                    ephemeral: ephemeral__.unwrap_or_default(),
                     project_id: project_id__.unwrap_or_default(),
                     kind: kind__.unwrap_or_default(),
                 })

@@ -31,6 +31,8 @@ export interface SessionInfo {
   archived?: boolean
   /** When it was archived (RFC 3339); unset when not archived. */
   archivedAt?: string
+  /** Created ephemeral and still unused: the daemon deletes it once no client watches it (docs/protocol/README.md "Ephemeral sessions"). */
+  ephemeral?: boolean
 }
 
 /** `hya.v1.SessionKind`. */
@@ -638,8 +640,13 @@ export class HyaClient {
     return payload as T
   }
 
-  /** `CreateSession` for a new root session placed as `placement` says (`SessionPlacement`). */
-  async createSession(agent: string, model: string, placement: SessionPlacement): Promise<SessionInfo> {
+  /**
+   * `CreateSession` for a new root session placed as `placement` says
+   * (`SessionPlacement`). `ephemeral`: the daemon deletes the session while
+   * it is still unused once no client watches it (the TUI's sessions on
+   * connect and `/new`; docs/protocol/README.md "Ephemeral sessions").
+   */
+  async createSession(agent: string, model: string, placement: SessionPlacement, options: { ephemeral?: boolean } = {}): Promise<SessionInfo> {
     const where = placement.temporary
       ? { kind: "SESSION_KIND_TEMPORARY" }
       : {
@@ -647,7 +654,12 @@ export class HyaClient {
           ...(placement.projectId ? { projectId: placement.projectId } : {}),
           ...(placement.workdir ? { workdir: placement.workdir } : {}),
         }
-    const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", { agent, model, ...where })
+    const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", {
+      agent,
+      model,
+      ...where,
+      ...(options.ephemeral ? { ephemeral: true } : {}),
+    })
     return result.session
   }
 

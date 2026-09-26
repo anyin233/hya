@@ -4279,6 +4279,9 @@
             "type": "string",
             "format": "date-time"
           },
+          "ephemeral": {
+            "type": "boolean"
+          },
           "project_id": {
             "type": "string"
           },
@@ -4342,6 +4345,9 @@
           },
           "title": {
             "type": "string"
+          },
+          "ephemeral": {
+            "type": "boolean"
           },
           "project_id": {
             "type": "string"

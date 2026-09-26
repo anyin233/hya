@@ -301,6 +301,62 @@ curl 'localhost:3250/v1/sessions?archivedOnly=true'
 { "event": { "seq": "88", "session": "hysec_...", "sessionUpdated": { "archived": true } } }
 ```
 
+## Ephemeral sessions
+
+A client that opens a session before the user asked for one (the TUI
+creates one on connect, so it is ready to type into) creates it
+**ephemeral**: the server deletes it again once it is still unused and no
+client watches it. Clients never delete such a session themselves, so a
+client that quits, crashes, or is killed leaves nothing behind, and a
+session another client still shows is never deleted under it (ADR-0023
+amendment "The daemon drops unused sessions").
+
+- **Create:** `POST /v1/sessions` (`CreateSession`) with `"ephemeral": true`.
+  Ignored for a child session (`parent` set) and when `title` is set (a named
+  session is used).
+- **Read:** `SessionInfo.ephemeral` (`bool`) is `true` while the session is
+  ephemeral and unused.
+- **Used:** the mark goes for good with the session's first message (a
+  prompt, command, or shell turn, whoever sends it), a title (`/rename`,
+  `UpdateSession.title`, the automatic title), archiving it, or a fork taken
+  from it. A session that is used is never deleted by the server.
+- **Watching:** a client watches a session while it has a
+  `StreamSessionEvents` stream (SSE or gRPC, with or without
+  `includeDescendants`) open on it. The global stream does not count.
+- **Delete:** 5 s after the last stream on an unused ephemeral session
+  closes (so a client that reconnects or reopens it keeps it), the server
+  deletes it if it is still unused, idle, and unwatched, and publishes the
+  live `sessionDeleted` frame on the global streams (see
+  [Session list push](#session-list-push)). A session nobody ever watched is
+  checked 30 s after it was created. When a server starts, every unused
+  ephemeral session left over (a server crash, a kill, a stop while it was
+  unused) is checked 30 s after the start.
+- **Races:** the re-check and the delete hold the session's admission slot
+  (a prompt, command, shell turn, or Workflow run admitted first keeps the
+  session; one that arrives during the delete fails with `session_busy`,
+  after it with `session_not_found`), and the log is deleted only if it did
+  not grow since the re-check (a rename or any other write that lands
+  first keeps the session).
+- **Projects and temporary sessions:** the delete of a Project's session
+  also publishes `projectsUpdated` (its session count changed). A temporary
+  session's scratch directory stays on disk after the delete: hya never
+  deletes scratch directories (ADR-0024).
+- **Durable event:** `session_ephemeral_set {ephemeral}`; see
+  [event-model.md](../architecture/event-model.md#session-lifecycle).
+
+```sh
+curl -X POST localhost:3250/v1/sessions \
+  -d '{"agent": "", "model": "", "workdir": "/work", "ephemeral": true}'
+```
+
+```json
+{ "session": { "id": "hysec_...", "agent": "build", "workdir": "/work", "ephemeral": true, "projectId": "prj_...", "kind": "SESSION_KIND_PROJECT" } }
+```
+
+```json
+{ "event": { "seq": "0", "session": "hysec_...", "sessionDeleted": {} } }
+```
+
 ## Session list push
 
 A client that shows the session list (a sidebar, a session picker) keeps it
@@ -331,7 +387,8 @@ server) made it. Child (subagent) sessions never produce these frames.
   within about a second.
 - **Deleted.** `sessionDeleted` is live-only because deletion removes the
   session's log: there is nothing to replay. Its `session` names the deleted
-  session; drop the row.
+  session; drop the row. It follows a `DeleteSession` and the server's own
+  drop of an unused [ephemeral session](#ephemeral-sessions).
 - **Recovering.** None of these frames is replayed (`sinceSeq` only skips
   durable ones), so list sessions (`GET /v1/sessions`, with
   `includeArchived=true` if the client shows archived ones) once the stream
@@ -1009,6 +1066,21 @@ reconnect. `POST /v1/mcp/{name}/connect` enables and connects a stored
 server (a failure is again a `FAILED` status; an unknown name is
 `404 not_found`), `POST /v1/mcp/{name}/disconnect` disables it, and
 `GET /v1/mcp` lists every server's status.
+
+`tools` lists the model-facing names (`mcp__<server>__<tool>`) a
+`MCP_SERVER_STATE_CONNECTED` server publishes in the effective runtime, in
+the order of its `tools/list` answer; a tool the server lists without an
+object input schema, or whose name is not a valid namespace token, is not
+published and so not listed. Every other state reports no tools (the JSON
+omits the empty array). The list is read when the connection is made: hya
+does not follow `notifications/tools/list_changed`, so a server whose tool
+set changes shows the new set after a disconnect and connect. For example,
+the `echo` server of the process e2e suite answers
+
+```json
+{"servers": [{"name": "echo", "state": "MCP_SERVER_STATE_CONNECTED",
+  "tools": ["mcp__echo__ping", "mcp__echo__slow"]}]}
+```
 
 ## Bundle API endpoints
 

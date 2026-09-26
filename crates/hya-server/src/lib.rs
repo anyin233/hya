@@ -18,6 +18,7 @@ use axum::{Json, Router};
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod agent_model_control;
+mod ephemeral;
 mod host;
 mod mcp_control;
 mod origin;
@@ -40,6 +41,7 @@ pub use agent_model_control::{
     AgentModelControl, AgentModelControlError, AgentModelControlFuture, AgentModelEffective,
     AgentModelIdentity, AgentModelSource, AgentModelState,
 };
+pub use ephemeral::EphemeralGrace;
 pub use host::{GrpcHostGuard, GrpcHostLayer, HostPolicy, LOOPBACK_HOSTS};
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
@@ -84,6 +86,7 @@ pub fn router(state: AppState) -> Router {
     spawn_background_reclaim_driver(state.clone());
     spawn_project_busy_watcher(state.clone());
     session_list::spawn_busy_tracker(state.clone());
+    ephemeral::spawn_reaper(state.clone());
     v1::router()
         .with_state(state)
         .layer(cors())

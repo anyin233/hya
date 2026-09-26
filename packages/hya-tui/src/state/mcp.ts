@@ -8,10 +8,17 @@
  * needs a login starts its OAuth flow: the authorization URL is shown and
  * copied (OSC 52) at once, then a one-line pop-up (`auth`) takes the
  * callback code; Enter completes the flow, Esc cancels the pop-up only.
+ *
+ * On the `detail` screen, Up/Down/PgUp/PgDn/Home/End move a highlight
+ * (`toolIndex`) over the server's tool list instead of switching servers;
+ * `mcpToolWindow` windows the tool list around that highlight the same way
+ * `pickerWindow` windows the server list, so a server with more tools than
+ * fit never overflows past the view.
  */
 import type { McpServerStatus } from "../client"
 import type { KeyLike } from "../keys/bindings"
 import { truncate } from "./format"
+import { pickerWindow } from "./picker"
 
 export type McpScreen = "list" | "detail"
 
@@ -39,6 +46,8 @@ export interface McpViewState {
   server: string | undefined
   filter: string
   filtering: boolean
+  /** Highlighted tool on the `detail` screen (index into the server's `tools`); `undefined` means 0. */
+  toolIndex?: number
   busy?: McpBusy
   notice?: McpNotice
   auth?: McpAuthPopup
@@ -67,6 +76,7 @@ export interface McpKeyRow {
 
 export const mcpKeyRows: readonly McpKeyRow[] = [
   { keys: "Up / Down", description: "Move the highlight over servers", hint: "↑↓ move", screens: ["list"] },
+  { keys: "Up / Down, PgUp / PgDn, Home / End", description: "Move the highlight over the server's tools", hint: "↑↓ move", screens: ["detail"] },
   { keys: "Enter", description: "Show the highlighted server's tools", hint: "Enter tools", screens: ["list"] },
   { keys: "c", description: "Connect the highlighted server now", hint: "c connect", screens: ["list", "detail"] },
   { keys: "x", description: "Disconnect the highlighted server", hint: "x disconnect", screens: ["list", "detail"] },
@@ -100,6 +110,16 @@ export function serverLine(server: McpServerStatus, width: number): string {
   return truncate(line.trimEnd(), width)
 }
 
+/**
+ * A tool's label on the detail screen: `GET /v1/mcp` reports the
+ * model-facing `mcp__<server>__<tool>` names; under `MCP › <server>` the
+ * server's own tool name is enough.
+ */
+export function mcpToolLabel(server: string, tool: string): string {
+  const prefix = `mcp__${server}__`
+  return tool.startsWith(prefix) && tool.length > prefix.length ? tool.slice(prefix.length) : tool
+}
+
 export function serverHeaderLine(width: number): string {
   return truncate(`${cell("SERVER", 20)} ${cell("STATE", 14)} ${cell("TOOLS", 10)} ${cell("AUTH", 14)} ERROR`, width)
 }
@@ -117,12 +137,49 @@ export function shownServers(view: Pick<McpViewState, "screen" | "filter">, serv
 }
 
 export function initialMcpView(servers: readonly McpServerStatus[]): McpViewState {
-  return { screen: "list", server: shownServers({ screen: "list", filter: "" }, servers)[0]?.name, filter: "", filtering: false }
+  return { screen: "list", server: shownServers({ screen: "list", filter: "" }, servers)[0]?.name, filter: "", filtering: false, toolIndex: 0 }
+}
+
+/** `view.toolIndex`, defaulted to 0. */
+export function mcpToolIndex(view: Pick<McpViewState, "toolIndex">): number {
+  return view.toolIndex ?? 0
+}
+
+/** Rows moved by PgUp/PgDn over the tool list. */
+export const mcpToolPageSize = 10
+
+function moveToolIndex(view: McpViewState, toolCount: number, step: number): McpViewState {
+  if (!toolCount) return view
+  const next = Math.max(0, Math.min(toolCount - 1, mcpToolIndex(view) + step))
+  return { ...view, toolIndex: next }
+}
+
+export interface McpToolWindow {
+  start: number
+  end: number
+  /** Tools hidden above the window (0 when the window starts at the top). */
+  moreAbove: number
+  /** Tools hidden below the window (0 when the window reaches the last tool). */
+  moreBelow: number
+}
+
+/**
+ * The slice of a server's `toolCount` tools to show around `index`, plus how
+ * many are hidden on each side (a `N more` indicator; components/McpView.tsx
+ * renders it). A server with more tools than fit would otherwise overflow
+ * the detail screen with no way to see the rest.
+ */
+export function mcpToolWindow(toolCount: number, index: number, visible: number): McpToolWindow {
+  const at = Math.max(0, Math.min(index, Math.max(0, toolCount - 1)))
+  const { start, end } = pickerWindow(toolCount, at, Math.max(1, visible))
+  return { start, end, moreAbove: start, moreBelow: toolCount - end }
 }
 
 function settle(view: McpViewState, servers: readonly McpServerStatus[]): McpViewState {
   const rows = shownServers(view, servers)
-  return rows.some((row) => row.name === view.server) || !rows.length ? view : { ...view, server: rows[0]!.name }
+  const next = rows.some((row) => row.name === view.server) || !rows.length ? view : { ...view, server: rows[0]!.name }
+  const toolCount = servers.find((row) => row.name === next.server)?.tools?.length ?? 0
+  return { ...next, toolIndex: Math.min(mcpToolIndex(next), Math.max(0, toolCount - 1)) }
 }
 
 /** Keep the highlight on its row after a reload. */
@@ -153,8 +210,19 @@ function authKey(auth: McpAuthPopup, key: KeyLike): McpViewOutcome {
 export function mcpViewKey(view: McpViewState, key: KeyLike, servers: readonly McpServerStatus[]): McpViewOutcome {
   if (view.auth) return authKey(view.auth, key)
   if (view.busy) return key.name === "escape" ? { type: "cancelBusy" } : { type: "none" }
-  if (key.name === "up") return { type: "update", view: move(view, servers, -1) }
-  if (key.name === "down") return { type: "update", view: move(view, servers, 1) }
+  if (view.screen === "detail" && !view.filtering) {
+    const toolCount = servers.find((row) => row.name === view.server)?.tools?.length ?? 0
+    if (key.name === "up") return { type: "update", view: moveToolIndex(view, toolCount, -1) }
+    if (key.name === "down") return { type: "update", view: moveToolIndex(view, toolCount, 1) }
+    if (key.name === "pageup") return { type: "update", view: moveToolIndex(view, toolCount, -mcpToolPageSize) }
+    if (key.name === "pagedown") return { type: "update", view: moveToolIndex(view, toolCount, mcpToolPageSize) }
+    if (key.name === "home") return { type: "update", view: { ...view, toolIndex: 0 } }
+    if (key.name === "end") return { type: "update", view: { ...view, toolIndex: Math.max(0, toolCount - 1) } }
+  }
+  if (view.screen === "list") {
+    if (key.name === "up") return { type: "update", view: move(view, servers, -1) }
+    if (key.name === "down") return { type: "update", view: move(view, servers, 1) }
+  }
   if (view.filtering) {
     if (key.name === "escape") return { type: "update", view: settle({ ...view, filtering: false, filter: "" }, servers) }
     if (isEnter(key)) return { type: "update", view: { ...view, filtering: false } }
@@ -171,7 +239,7 @@ export function mcpViewKey(view: McpViewState, key: KeyLike, servers: readonly M
   if (key.sequence === "/" && view.screen === "list") return { type: "update", view: { ...view, filtering: true } }
   const server = servers.find((row) => row.name === view.server)
   if ((isEnter(key) || key.name === "right") && view.screen === "list") {
-    return server ? { type: "update", view: { ...view, screen: "detail" } } : { type: "none" }
+    return server ? { type: "update", view: { ...view, screen: "detail", toolIndex: 0 } } : { type: "none" }
   }
   if (!"cxar".includes(key.sequence) || key.sequence.length !== 1) return { type: "none" }
   if (key.sequence === "r") return { type: "refresh" }

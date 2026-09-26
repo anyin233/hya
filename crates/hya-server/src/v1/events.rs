@@ -187,6 +187,10 @@ pub(crate) fn frame_stream(
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
     let closed = st.streams.closed();
     let session = scope.session_id();
+    // A session stream watches its session while it lives: an unused
+    // ephemeral session is dropped only once nobody watches it
+    // (`crate::ephemeral`).
+    let watching = session.map(|session| st.watchers.watch(session));
     let lineage = st.engine.clone();
     let engine =
         BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| async move {
@@ -280,9 +284,16 @@ pub(crate) fn frame_stream(
             .map(|reason| Ok(server_stopping_frame(reason)))
     })
     .filter_map(futures::future::ready);
-    futures::stream::select_all(feeds)
+    // Holds the watch until the stream is dropped (the item type as above).
+    #[allow(clippy::result_large_err)]
+    let frames = futures::stream::select_all(feeds)
         .take_until(closed)
         .chain(stopping)
+        .map(move |frame| {
+            let _watching = &watching;
+            frame
+        });
+    frames
 }
 
 /// The durable session-list frames of root sessions from the engine bus

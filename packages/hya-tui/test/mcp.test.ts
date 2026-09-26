@@ -2,7 +2,10 @@ import { expect, test } from "bun:test"
 import type { McpServerStatus } from "../src/client"
 import type { KeyLike } from "../src/keys/bindings"
 import {
+  mcpToolLabel,
   initialMcpView,
+  mcpToolIndex,
+  mcpToolWindow,
   mcpViewHint,
   mcpViewKey,
   serverHeaderLine,
@@ -59,7 +62,7 @@ test("settleMcpView keeps the highlight when the row still exists", () => {
 test("Enter opens detail, Esc/Left backs out to the list", () => {
   const view: McpViewState = { screen: "list", server: "alpha", filter: "", filtering: false }
   const opened = mcpViewKey(view, key("return"), servers)
-  expect(opened).toEqual({ type: "update", view: { ...view, screen: "detail" } })
+  expect(opened).toEqual({ type: "update", view: { ...view, screen: "detail", toolIndex: 0 } })
   const detail: McpViewState = { ...view, screen: "detail" }
   expect(mcpViewKey(detail, key("escape"), servers)).toEqual({ type: "update", view: { ...detail, screen: "list" } })
 })
@@ -97,6 +100,41 @@ test("r refreshes, Esc on the list closes the view", () => {
 test("r refreshes even with no server selected (empty list)", () => {
   const view: McpViewState = { screen: "list", server: undefined, filter: "", filtering: false }
   expect(mcpViewKey(view, key("r", { sequence: "r" }), [])).toEqual({ type: "refresh" })
+})
+
+test("mcpToolLabel shows a tool under the server's own name, dropping the mcp__<server>__ namespace", () => {
+  expect(mcpToolLabel("many", "mcp__many__tool_01")).toBe("tool_01")
+  expect(mcpToolLabel("many", "mcp__many__")).toBe("mcp__many__")
+  expect(mcpToolLabel("many", "mcp__other__ping")).toBe("mcp__other__ping")
+  expect(mcpToolLabel("many", "search")).toBe("search")
+})
+
+test("mcpToolWindow keeps the highlighted tool in view and reports the more-above/below counts", () => {
+  expect(mcpToolWindow(20, 0, 5)).toEqual({ start: 0, end: 5, moreAbove: 0, moreBelow: 15 })
+  expect(mcpToolWindow(20, 19, 5)).toEqual({ start: 15, end: 20, moreAbove: 15, moreBelow: 0 })
+  expect(mcpToolWindow(20, 10, 5)).toEqual({ start: 6, end: 11, moreAbove: 6, moreBelow: 9 })
+  expect(mcpToolWindow(3, 1, 5)).toEqual({ start: 0, end: 3, moreAbove: 0, moreBelow: 0 })
+})
+
+test("Up/Down/PgUp/PgDn/Home/End move the tool highlight on the detail screen instead of switching servers", () => {
+  const many = { name: "gamma", state: "MCP_SERVER_STATE_CONNECTED", tools: Array.from({ length: 20 }, (_, i) => `tool${i}`) }
+  const all = [...servers, many]
+  const view: McpViewState = { screen: "detail", server: "gamma", filter: "", filtering: false, toolIndex: 0 }
+  const down = mcpViewKey(view, key("down"), all)
+  expect(down).toEqual({ type: "update", view: { ...view, toolIndex: 1 } })
+  expect(mcpToolIndex((down as { view: McpViewState }).view)).toBe(1)
+  expect(mcpViewKey(view, key("pagedown"), all)).toEqual({ type: "update", view: { ...view, toolIndex: 10 } })
+  expect(mcpViewKey({ ...view, toolIndex: 15 }, key("pageup"), all)).toEqual({ type: "update", view: { ...view, toolIndex: 5 } })
+  expect(mcpViewKey(view, key("end"), all)).toEqual({ type: "update", view: { ...view, toolIndex: 19 } })
+  expect(mcpViewKey({ ...view, toolIndex: 19 }, key("home"), all)).toEqual({ type: "update", view: { ...view, toolIndex: 0 } })
+  // The list screen keeps switching servers on Up/Down.
+  const listView: McpViewState = { screen: "list", server: "alpha", filter: "", filtering: false }
+  expect(mcpViewKey(listView, key("down"), servers)).toEqual({ type: "update", view: { ...listView, server: "beta" } })
+})
+
+test("Enter into detail resets the tool highlight to 0", () => {
+  const view: McpViewState = { screen: "list", server: "alpha", filter: "", filtering: false, toolIndex: 7 }
+  expect(mcpViewKey(view, key("return"), servers)).toEqual({ type: "update", view: { ...view, screen: "detail", toolIndex: 0 } })
 })
 
 test("mcpViewHint reflects auth, busy, filtering, and screen defaults", () => {

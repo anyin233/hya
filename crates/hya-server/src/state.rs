@@ -51,6 +51,8 @@ pub struct AppState {
     session_list: SessionListHub,
     relay: RelayHost,
     hosts: Arc<HostPolicy>,
+    ephemeral_grace: crate::EphemeralGrace,
+    watchers: crate::ephemeral::SessionWatchers,
 }
 
 impl AppState {
@@ -83,6 +85,8 @@ impl AppState {
             session_list: SessionListHub::default(),
             relay: RelayHost::default(),
             hosts: Arc::new(HostPolicy::loopback()),
+            ephemeral_grace: crate::EphemeralGrace::default(),
+            watchers: crate::ephemeral::SessionWatchers::default(),
         }
     }
 
@@ -133,6 +137,14 @@ impl AppState {
     /// gRPC) delivers it as a live `projectsUpdated` frame.
     pub fn notify_projects_updated(&self) {
         let _ = self.projects_updates.send(());
+    }
+
+    /// How long the server waits before it drops an unused ephemeral
+    /// session (tests shorten it).
+    #[must_use]
+    pub fn with_ephemeral_grace(mut self, grace: crate::EphemeralGrace) -> Self {
+        self.ephemeral_grace = grace;
+        self
     }
 
     /// Title root sessions automatically: the first prompt turn of a root
@@ -304,6 +316,8 @@ pub(crate) struct ServerState {
     pub(crate) auto_title: bool,
     pub(crate) session_list: SessionListHub,
     pub(crate) relay: RelayHost,
+    pub(crate) ephemeral_grace: crate::EphemeralGrace,
+    pub(crate) watchers: crate::ephemeral::SessionWatchers,
 }
 
 impl ServerState {
@@ -333,6 +347,8 @@ impl ServerState {
             auto_title: app.auto_title,
             session_list: app.session_list,
             relay: app.relay,
+            ephemeral_grace: app.ephemeral_grace,
+            watchers: app.watchers,
         }
     }
 
@@ -357,6 +373,15 @@ impl ServerState {
         session: hya_proto::SessionId,
     ) -> Option<runs::RunGuard> {
         self.reserve_run(session)
+    }
+
+    /// Reserve the Session's admission slot without a busy notice (the
+    /// drop of an unused ephemeral session, `crate::ephemeral`).
+    pub(crate) fn reserve_quiet(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
+        if self.workflow_control.active_run(session).is_some() {
+            return None;
+        }
+        self.runs.start_quiet(session)
     }
 
     fn reserve_run(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {

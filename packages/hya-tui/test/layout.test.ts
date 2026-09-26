@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import {
   layoutBreakpoints, parseSwitch,
   projectsSidebarVisible, projectsSidebarWidth, toggledProjectsSidebar,
-  sidebarVisible, sidebarWidth, toggledSidebar,
+  sidebarVisible, sidebarWidth, toggledSidebar, wrapLineCount,
 } from "../src/state/layout"
 import { createAppStore } from "../src/state/store"
 
@@ -38,6 +38,17 @@ test("on/off arguments set a switch; no argument toggles it", () => {
   expect(parseSwitch("show", false)).toBe(true)
   expect(parseSwitch("hide", true)).toBe(false)
   expect(() => parseSwitch("maybe", true)).toThrow("Usage")
+})
+
+test("wrapLineCount counts the rows word-wrapped text takes at a width", () => {
+  expect(wrapLineCount("↑↓ move · Esc back", 76)).toBe(1)
+  expect(wrapLineCount("", 76)).toBe(1)
+  expect(wrapLineCount("one two three", 0)).toBe(1)
+  // "one two three" is 13 chars; at width 7 "one two" fits (7), "three" wraps.
+  expect(wrapLineCount("one two three", 7)).toBe(2)
+  // A run of short hint segments that together exceed a narrow width wraps
+  // more than once, never merging words across the break.
+  expect(wrapLineCount("aaaa bbbb cccc dddd", 9)).toBe(2)
 })
 
 test("the store tracks the sidebar mode and the terminal width", () => {

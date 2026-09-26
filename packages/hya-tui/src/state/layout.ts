@@ -55,6 +55,34 @@ export function projectsSidebarWidth(columns: number): number {
   return Math.max(projectsSidebarMin, Math.min(projectsSidebarMax, Math.floor(columns * 0.3)))
 }
 
+/**
+ * How many rows `text` takes when word-wrapped (`wrapMode="word"`) at
+ * `width` columns: greedy packing, breaking only between words. Used to size
+ * windowed lists around fixed-height sibling lines whose text can wrap (a
+ * hint or notice), so the window neither leaves a blank band nor overflows
+ * past the lines below it.
+ */
+export function wrapLineCount(text: string, width: number): number {
+  if (width <= 0) return 1
+  const words = text.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return 1
+  let lines = 1
+  let column = 0
+  for (const word of words) {
+    if (column === 0) {
+      column = word.length
+      continue
+    }
+    if (column + 1 + word.length > width) {
+      lines += 1
+      column = word.length
+    } else {
+      column += 1 + word.length
+    }
+  }
+  return lines
+}
+
 /** `on`/`show` → true, `off`/`hide` → false, no argument → the opposite of `current`. */
 export function parseSwitch(argument: string | undefined, current: boolean, usage = "Usage: [on|off]"): boolean {
   switch ((argument ?? "").toLowerCase()) {

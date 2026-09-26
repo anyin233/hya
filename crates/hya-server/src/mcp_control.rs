@@ -27,6 +27,13 @@ pub trait McpControl: Send + Sync {
 
     /// MCP resources keyed for Compat resource listing routes.
     fn resources(&self) -> BoxFuture<'_, BTreeMap<String, Value>>;
+
+    /// Namespaced tool names (`mcp__server__tool`) each server currently
+    /// publishes, keyed by server name, in the server's `tools/list` order.
+    /// `GET /v1/mcp` reports them for `CONNECTED` servers only.
+    fn tools(&self) -> BoxFuture<'_, BTreeMap<String, Vec<String>>> {
+        Box::pin(async { BTreeMap::new() })
+    }
 }
 
 pub(crate) struct EmptyMcpControl;

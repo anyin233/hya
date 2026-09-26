@@ -4910,6 +4910,10 @@ You are the installed resident agent.
             control.status().await.get("dynamic"),
             Some(&hya_mcp::McpStatus::Connected)
         );
+        assert_eq!(
+            control.tools().await.get("dynamic"),
+            Some(&vec!["mcp__dynamic__ping".to_string()])
+        );
 
         assert!(
             control
@@ -4924,6 +4928,7 @@ You are the installed resident agent.
             control.status().await.get("dynamic"),
             Some(&hya_mcp::McpStatus::Disabled)
         );
+        assert_eq!(control.tools().await.get("dynamic"), None);
     }
 
     #[tokio::test]

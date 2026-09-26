@@ -13835,13 +13835,18 @@ pub struct SessionInfo {
     /// When the session was archived; unset when it is not archived.
     #[prost(message, optional, tag = "18")]
     pub archived_at: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// Whether this root session was created `ephemeral` and is still unused
+    /// (no message, title, archive, or fork from it yet): the server deletes
+    /// it once no client has a `StreamSessionEvents` stream open on it.
+    #[prost(bool, tag = "19")]
+    pub ephemeral: bool,
     /// Project the session belongs to (a subagent session carries its root's);
     /// empty for a temporary session or one created before Projects existed.
     /// The id may name a Project that was deleted since.
-    #[prost(string, tag = "19")]
+    #[prost(string, tag = "20")]
     pub project_id: ::prost::alloc::string::String,
     /// Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
-    #[prost(enumeration = "SessionKind", tag = "20")]
+    #[prost(enumeration = "SessionKind", tag = "21")]
     pub kind: i32,
 }
 /// Where a forked session came from.
@@ -13912,11 +13917,18 @@ pub struct CreateSessionRequest {
     /// Initial title; empty lets the backend derive one.
     #[prost(string, tag = "6")]
     pub title: ::prost::alloc::string::String,
+    /// Create the session ephemeral: the server deletes it while it is still
+    /// unused (no message, title, archive, or fork from it) once no client has
+    /// a `StreamSessionEvents` stream open on it, after a short grace. For
+    /// sessions a client opens before the user asked for one (the TUI's
+    /// session on connect). Ignored with `parent` or `title` set.
+    #[prost(bool, tag = "7")]
+    pub ephemeral: bool,
     /// Project of the new root session.
-    #[prost(string, tag = "7")]
+    #[prost(string, tag = "8")]
     pub project_id: ::prost::alloc::string::String,
     /// Kind of the new root session; unset means `SESSION_KIND_PROJECT`.
-    #[prost(enumeration = "SessionKind", tag = "8")]
+    #[prost(enumeration = "SessionKind", tag = "9")]
     pub kind: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
