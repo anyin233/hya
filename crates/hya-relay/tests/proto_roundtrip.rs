@@ -3,8 +3,8 @@
 //! the gRPC and WebSocket bindings.
 
 use hya_relay::proto::{
-    Accept, Challenge, Chunk, Close, Heartbeat, HostFrame, Incoming, Open, ProxyToHost, Register,
-    Registered, RelayError, RelayErrorCode, chunk, host_frame, proxy_to_host,
+    Accept, Challenge, Chunk, Close, Heartbeat, HostFrame, Incoming, Open, Opened, ProxyToHost,
+    Register, Registered, RelayError, RelayErrorCode, chunk, host_frame, proxy_to_host,
 };
 use prost::Message;
 
@@ -69,9 +69,20 @@ fn chunk_frames_round_trip() {
             code: RelayErrorCode::NotFound as i32,
             message: "room offline".into(),
         }),
+        chunk::Frame::Opened(Opened {}),
     ] {
         round_trip(Chunk { frame: Some(frame) });
     }
+}
+
+#[test]
+fn opened_ack_uses_a_new_field_number() {
+    // `opened` is field 7 of `Chunk`: tag byte (7 << 3) | 2 = 0x3a, length 0.
+    let bytes = Chunk {
+        frame: Some(chunk::Frame::Opened(Opened {})),
+    }
+    .encode_to_vec();
+    assert_eq!(bytes, vec![0x3a, 0x00]);
 }
 
 #[test]

@@ -110,11 +110,15 @@ pub struct Accept {
 /// Orderly end of the sender's data direction.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Close {}
+/// Open acknowledgement (proxy to client on an `Open` stream): the host
+/// accepted the stream and both directions are now spliced.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct Opened {}
 /// One frame on a data stream (`Accept` or `Open`).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Chunk {
     /// The frame kind.
-    #[prost(oneof = "chunk::Frame", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "chunk::Frame", tags = "1, 2, 3, 4, 5, 6, 7")]
     pub frame: ::core::option::Option<chunk::Frame>,
 }
 /// Nested message and enum types in `Chunk`.
@@ -140,6 +144,10 @@ pub mod chunk {
         /// Terminal failure (WebSocket binding); the sender closes after it.
         #[prost(message, tag = "6")]
         Error(super::RelayError),
+        /// Open acknowledgement (proxy to client, once per `Open` stream, before
+        /// any spliced host frame). Openers should send `data` only after it.
+        #[prost(message, tag = "7")]
+        Opened(super::Opened),
     }
 }
 /// Terminal relay failure (the WebSocket substitute for a gRPC status).
@@ -372,7 +380,12 @@ pub mod relay_client {
         }
         /// Client side of one data stream. The first client frame must be `open`
         /// naming the room; afterwards both directions carry `data`, `heartbeat`,
-        /// and a final `close`. An offline room fails with `NOT_FOUND`.
+        /// and a final `close`. An offline room fails with `NOT_FOUND`. Once the
+        /// host has accepted the stream the proxy sends `opened`; openers should
+        /// wait for it before sending `data` (the proxy buffers only a small,
+        /// bounded amount of early data and otherwise stops reading until the
+        /// stream is spliced). If the host does not accept in time the stream
+        /// fails with `UNAVAILABLE`.
         pub async fn open(
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::Chunk>,
@@ -445,7 +458,12 @@ pub mod relay_server {
             + 'static;
         /// Client side of one data stream. The first client frame must be `open`
         /// naming the room; afterwards both directions carry `data`, `heartbeat`,
-        /// and a final `close`. An offline room fails with `NOT_FOUND`.
+        /// and a final `close`. An offline room fails with `NOT_FOUND`. Once the
+        /// host has accepted the stream the proxy sends `opened`; openers should
+        /// wait for it before sending `data` (the proxy buffers only a small,
+        /// bounded amount of early data and otherwise stops reading until the
+        /// stream is spliced). If the host does not accept in time the stream
+        /// fails with `UNAVAILABLE`.
         async fn open(
             &self,
             request: tonic::Request<tonic::Streaming<super::Chunk>>,

@@ -47,7 +47,7 @@ Streams:
 | --- | --- | --- | --- |
 | `Host` / `ws/host` | `HostFrame` | `ProxyToHost` | Host control stream: registration, heartbeats, `Incoming` notices. The room is online while it is open. |
 | `Accept` / `ws/accept` | `Chunk` | `Chunk` | Host side of one data stream; first frame `accept{stream_id}`. |
-| `Open` / `ws/open` | `Chunk` | `Chunk` | Client side of one data stream; first frame `open{room_id}`. An offline room fails with `NOT_FOUND`. |
+| `Open` / `ws/open` | `Chunk` | `Chunk` | Client side of one data stream; first frame `open{room_id}`. An offline room fails with `NOT_FOUND`. The proxy sends `opened{}` once the host accepted the stream. |
 
 Messages:
 
@@ -60,8 +60,19 @@ Messages:
 | `Registered` | `room_id: string` | Registration accepted. |
 | `Heartbeat` | `seq: uint64`, `pong: bool` | Liveness probe (`pong=false`) or reply echoing `seq` (`pong=true`); valid in both directions on every stream. |
 | `Incoming` | `stream_id: string` | A client opened a stream; the host calls `Accept` with this id. Proxy-generated and unguessable. |
-| `Chunk` | oneof `open{room_id}` \| `accept{stream_id}` \| `data: bytes` \| `close{}` \| `heartbeat` \| `error` | One data-stream frame. `data` is opaque end-to-end ciphertext; `close` ends the sender's direction. |
+| `Chunk` | oneof `open{room_id}` \| `accept{stream_id}` \| `data: bytes` \| `close{}` \| `heartbeat` \| `error` \| `opened{}` | One data-stream frame. `data` is opaque end-to-end ciphertext; `close` ends the sender's direction; `opened` (field 7) is the proxy's open acknowledgement. |
 | `RelayError` | `code: RelayErrorCode`, `message: string` | Terminal failure; the WebSocket stand-in for a gRPC status. |
+
+**Open acknowledgement.** On an `Open` stream the proxy sends exactly one
+`opened{}` frame once the host's `Accept` for that stream has been spliced;
+it precedes every frame relayed from the host. Openers should wait for
+`opened` before sending `data`. Data sent earlier is not lost, but the
+proxy buffers at most a small bounded amount of it (64 KiB by default) and
+otherwise stops reading the opener's stream (backpressure) until the splice
+is up. If the host does not accept within the accept timeout (10 s by
+default), the opener's stream fails with `UNAVAILABLE`. `opened` is a new
+field of the `Chunk` oneof, so older peers that ignore it still decode every
+other frame.
 
 `RelayErrorCode` values equal the gRPC status codes they mirror
 (`CANCELLED`=1, `UNKNOWN`=2, `INVALID_ARGUMENT`=3, `DEADLINE_EXCEEDED`=4,
