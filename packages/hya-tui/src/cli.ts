@@ -4,7 +4,7 @@ import { resolve } from "node:path"
 export interface Options {
   /** Base URL of a running `hya serve`; unset = the TUI finds or starts its database's daemon (src/launch.ts). */
   server?: string
-  /** Workspace directory: `x-hya-directory` of every request (a started daemon runs in the home directory, not here). */
+  /** Workspace directory: the `directory` scope of every scoped request (a started daemon runs in the home directory, not here). */
   directory: string
   /** `hya` binary that starts the daemon (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
   hya?: string

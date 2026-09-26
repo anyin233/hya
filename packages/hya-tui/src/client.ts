@@ -571,13 +571,17 @@ export class HyaClient {
   }
 
   /**
-   * The directory scope: `x-hya-directory` of every request and the
-   * `directory` of scoped calls (VCS, MCP, rules, agent models). It follows
-   * the active Project (app/controller.ts `switchProject`).
+   * The directory scope: the `directory` field of every scoped call (a query
+   * parameter on GETs, a body field otherwise: files, VCS, catalogs,
+   * bootstrap, agent models). Empty sends no scope (a remote start before a
+   * Project is chosen: the local `--dir` means nothing on the remote
+   * backend). It follows the active Project (app/controller.ts
+   * `switchProject`). The server refuses the removed `x-hya-directory`
+   * header, so no call sends it.
    */
   get directory(): string { return this.scope }
 
-  /** Change the directory scope of every later request and stream. */
+  /** Change the directory scope of every later scoped call. */
   setDirectory(directory: string): void { this.scope = directory }
 
   /** The server's base URL (`/status`). */
@@ -597,12 +601,19 @@ export class HyaClient {
   }
 
   /**
-   * One v1 call; `signal` aborts it (the Provider View's Esc on a running
-   * call). `scope` overrides the directory scope for this call only; an
-   * empty scope sends no `x-hya-directory` (a remote start before a Project
-   * is chosen: the local `--dir` means nothing on the remote backend).
+   * `path` with the `directory` query parameter of a scoped GET: `scope`
+   * (default: the client's scope); unchanged for an empty scope.
    */
-  async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, scope: string = this.directory): Promise<T> {
+  private scoped(path: string, scope: string = this.directory): string {
+    if (!scope) return path
+    return `${path}${path.includes("?") ? "&" : "?"}directory=${encodeURIComponent(scope)}`
+  }
+
+  /**
+   * One v1 call; `signal` aborts it (the Provider View's Esc on a running
+   * call). A scoped rpc names its scope in `path` or `body` (`directory`).
+   */
+  async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     if (!path.startsWith("/v1/") || path.startsWith("//")) {
       throw new Error("API path must start with /v1/")
     }
@@ -610,7 +621,6 @@ export class HyaClient {
       method,
       headers: {
         ...bridgeTokenHeaders(this.bridgeToken),
-        ...(scope ? { "x-hya-directory": scope } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -692,7 +702,7 @@ export class HyaClient {
   async findFiles(pattern: string, limit: number): Promise<string[]> {
     const result = await this.request<{ paths?: string[] }>(
       "GET",
-      `/v1/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`,
+      this.scoped(`/v1/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`),
     )
     return result.paths ?? []
   }
@@ -706,7 +716,7 @@ export class HyaClient {
   async readFile(path: string, options: { directory?: string; maxBytes?: number; signal?: AbortSignal } = {}): Promise<ReadFileResult> {
     const scope = options.directory ?? this.directory
     const query = `path=${encodeURIComponent(path)}${options.maxBytes ? `&maxBytes=${options.maxBytes}` : ""}`
-    const result = await this.request<{ content?: string; text?: boolean; mime?: string }>("GET", `/v1/fs/read?${query}`, undefined, options.signal, scope)
+    const result = await this.request<{ content?: string; text?: boolean; mime?: string }>("GET", this.scoped(`/v1/fs/read?${query}`, scope), undefined, options.signal)
     const data = result.content ?? ""
     return { data, size: Buffer.from(data, "base64").byteLength, text: result.text === true, ...(result.mime ? { mime: result.mime } : {}) }
   }
@@ -721,15 +731,16 @@ export class HyaClient {
   }
 
   bootstrap(): Promise<Bootstrap> {
-    return this.request("GET", "/v1/bootstrap")
+    return this.request("GET", this.scoped("/v1/bootstrap"))
   }
 
-  private async listAll<T>(path: string, field: string, extraQuery = ""): Promise<T[]> {
+  /** Every page of a list rpc; `scoped`: name the client's scope (`directory`). */
+  private async listAll<T>(path: string, field: string, extraQuery = "", scoped = false): Promise<T[]> {
     const rows: T[] = []
     let cursor = ""
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
       const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}${extraQuery}`
-      const result = await this.request<Record<string, unknown> & { page?: PageInfo }>("GET", `${path}?${query}`)
+      const result = await this.request<Record<string, unknown> & { page?: PageInfo }>("GET", scoped ? this.scoped(`${path}?${query}`) : `${path}?${query}`)
       const pageRows = result[field]
       if (Array.isArray(pageRows)) rows.push(...pageRows as T[])
       if (!result.page?.hasMore) return rows
@@ -800,7 +811,7 @@ export class HyaClient {
 
   /** `ListAgents` (`GET /v1/agents`): the `/agent` picker's rows (state/catalog.ts `agentRows`). */
   async listAgents(): Promise<AgentSummary[]> {
-    return this.listAll("/v1/agents", "agents")
+    return this.listAll("/v1/agents", "agents", "", true)
   }
 
   async listProviders(): Promise<ProviderSummary[]> {
@@ -808,7 +819,7 @@ export class HyaClient {
   }
 
   async listCommands(): Promise<CommandSummary[]> {
-    return this.listAll("/v1/commands", "commands")
+    return this.listAll("/v1/commands", "commands", "", true)
   }
 
   /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */
@@ -848,7 +859,7 @@ export class HyaClient {
 
   /** `GetVcsDiff` (`GET /v1/vcs/diff`): `git diff HEAD` plus untracked files, as one unified-diff text; `""` outside a git repo. */
   async getVcsDiff(): Promise<string> {
-    const result = await this.request<{ diff?: string }>("GET", `/v1/vcs/diff?directory=${encodeURIComponent(this.directory)}`)
+    const result = await this.request<{ diff?: string }>("GET", this.scoped("/v1/vcs/diff"))
     return result.diff ?? ""
   }
 
@@ -895,22 +906,22 @@ export class HyaClient {
 
   /** `ListAgentModels` (`GET /v1/agent-models`): effective base model of every catalog agent. */
   async listAgentModels(session?: string): Promise<AgentModelState[]> {
-    const query = session ? `&session=${encodeURIComponent(session)}` : ""
-    const result = await this.request<{ agents?: AgentModelState[] }>("GET", `/v1/agent-models?directory=${encodeURIComponent(this.directory)}${query}`)
+    const query = session ? `?session=${encodeURIComponent(session)}` : ""
+    const result = await this.request<{ agents?: AgentModelState[] }>("GET", this.scoped(`/v1/agent-models${query}`))
     return result.agents ?? []
   }
 
   /** `SetAgentModel` (`PUT /v1/agent-models/{agentId}`); an absent `preference` clears it. */
   async setAgentModel(agentId: string, preference: AgentModelSelection | undefined, session?: string, signal?: AbortSignal): Promise<AgentModelState> {
     return this.request("PUT", `/v1/agent-models/${encodeURIComponent(agentId)}`, {
-      directory: this.directory,
+      ...(this.directory ? { directory: this.directory } : {}),
       ...(session ? { session } : {}),
       ...(preference ? { preference } : {}),
     }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {
-    return this.listAll("/v1/workflows", "workflows")
+    return this.listAll("/v1/workflows", "workflows", "", true)
   }
 
   async getWorkflowState(session: string): Promise<Record<string, unknown>> {
@@ -947,7 +958,7 @@ export class HyaClient {
   /** `ListPermissionModes` (`GET /v1/permission-modes`): built-ins first, then bundle modes; `[]` on a backend without the route. */
   async listPermissionModes(): Promise<PermissionModeInfo[]> {
     try {
-      const result = await this.request<{ modes?: PermissionModeInfo[] }>("GET", "/v1/permission-modes")
+      const result = await this.request<{ modes?: PermissionModeInfo[] }>("GET", this.scoped("/v1/permission-modes"))
       return result.modes ?? []
     } catch (error) {
       if (error instanceof HttpError && error.status === 404) return []
@@ -993,7 +1004,7 @@ export class HyaClient {
 
   /** `GetVcsStatus` (`GET /v1/vcs`) scoped to the client's `--dir`; status bar git branch. */
   async getVcsStatus(): Promise<VcsStatus> {
-    return this.request("GET", `/v1/vcs?directory=${encodeURIComponent(this.directory)}`)
+    return this.request("GET", this.scoped("/v1/vcs"))
   }
 
   async cancelTurn(session: string, turn: string): Promise<unknown> {
@@ -1087,7 +1098,7 @@ export class HyaClient {
     onOpen?: () => void | Promise<void>,
   ): Promise<void> {
     const response = await this.fetcher(`${this.base}${path}`, {
-      headers: { ...bridgeTokenHeaders(this.bridgeToken), ...(this.directory ? { "x-hya-directory": this.directory } : {}), accept: "text/event-stream" },
+      headers: { ...bridgeTokenHeaders(this.bridgeToken), accept: "text/event-stream" },
       signal,
     })
     if (!response.ok || !response.body) throw new Error(`Event stream: HTTP ${response.status}`)

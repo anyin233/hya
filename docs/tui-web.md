@@ -440,8 +440,10 @@ The bundle process needs `bun` on `PATH` (the same Bun that runs the
 specs). See `e2e/hya-tui-permission-modes.spec.ts`.
 
 A spec that only needs to assert on the v1 HTTP API (no TUI rendering) can
-skip `tui()` and use `fetch` directly against `backend.url` with the
-`x-hya-directory: <backend.dir>` header; see `e2e/fake-model.spec.ts`.
+skip `tui()` and use `fetch` directly against `backend.url`; a scoped rpc
+names `backend.dir` in its `directory` field (query parameter on GET, body
+field otherwise; the server refuses the removed `x-hya-directory` header);
+see `e2e/fake-model.spec.ts`.
 
 ## Interfaces
 

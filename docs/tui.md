@@ -142,7 +142,7 @@ without `--db`.
 | Flag | Meaning |
 | --- | --- |
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI uses the database's daemon. |
-| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `x-hya-directory` scope of every request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
+| `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `directory` scope of every scoped request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary that starts the daemon and that `/connect-remote` runs `hya bridge` with (first in the lookup order above). |
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
@@ -427,8 +427,8 @@ Changes apply to the running backend at once; no restart is needed.
 A Project (ADR-0024) is a named list of root directories on the backend
 machine; the first root is the primary root. Every non-temporary session
 belongs to one, and the TUI always has at most one **active Project**: the
-one new sessions go to and the directory scope (`x-hya-directory`, the
-`directory` of VCS, MCP, rule, and agent-model calls) follows.
+one new sessions go to and the directory scope (the `directory` field of
+every scoped call: files, VCS, catalogs, bootstrap, agent models) follows.
 
 - **Local start.** At start the TUI calls `EnsureProjectForPath(--dir)`: the
   Project whose root contains `--dir` (the longest matching root wins), else
@@ -454,7 +454,7 @@ one new sessions go to and the directory scope (`x-hya-directory`, the
 - **`--remote`.** No Project is ensured and none is active. A prompt or
   `/new` without one is refused with `No project is open · choose a project
   or start a temporary session` on the status line. Until a Project is
-  chosen the client sends no directory scope at all (no `x-hya-directory`:
+  chosen the client sends no directory scope at all (no `directory` field:
   `--dir` names nothing on the remote; the global catalogs work unscoped);
   choosing one sets the scope to its primary root. The same holds after
   `/connect-remote`; `/disconnect-remote` restores `--dir`.
@@ -582,7 +582,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
 | `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
 | `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
-| `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
+| `/api METHOD /v1/path [JSON]` | Send an HTTP/JSON request and show its JSON response. It is sent as typed: a scoped rpc needs its `directory` (for example `/api GET /v1/fs/list?directory=/abs/dir`). |
 | `/help`, `?` | Open the key and command help overlay (`?` only on an empty input; with text it types `?`). See [Key help](#key-help). |
 | Tab | Complete a slash command name (or, in the command menu, the highlighted entry) or a supported argument; repeat Tab to cycle argument matches. |
 | PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
@@ -2439,14 +2439,17 @@ meaning. The help overlay (`?`, group `agentmodels`) lists the same keys.
 
 ## Interface definitions
 
-The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
-`x-hya-directory: <absolute --dir path>`; JSON uses protojson lower camel case,
+The frontend uses the existing HTTP/JSON+SSE transport. Every scoped call
+names the directory scope (the absolute `--dir` path, or the active Project's
+directory) in its `directory` field: a query parameter on GETs, a body field
+otherwise. No request sends the removed `x-hya-directory` header (the server
+refuses it). JSON uses protojson lower camel case,
 string encoded 64-bit values, and the error envelope documented in the
 [protocol guide](protocol/README.md). These are the first-class calls:
 
 | Method and route | Request | Response read by the TUI |
 | --- | --- | --- |
-| `GET /v1/bootstrap` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
+| `GET /v1/bootstrap?directory=<dir>` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
@@ -2454,8 +2457,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); `--resume`, `/resume`, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
-| `GET /v1/agents` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
-| `GET /v1/permission-modes` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
+| `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
+| `GET /v1/permission-modes?directory=<dir>` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
@@ -2467,7 +2470,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `TurnInfo`. Esc and `/cancel` send the admitted turn id (the user message id). The server cancels whatever runs in the session, so a shell turn whose id is not known yet is sent as `current`. |
-| `GET /v1/fs/find?pattern=**/*<text>*&limit=50` | No body (`FindFiles`, scoped by `x-hya-directory`) | `FindFilesResponse.paths: string[]` (relative paths) for `@file` suggestions. |
+| `GET /v1/fs/find?pattern=**/*<text>*&limit=50&directory=<dir>` | No body (`FindFiles`) | `FindFilesResponse.paths: string[]` (relative paths) for `@file` suggestions. |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N&includeDescendants=true` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. `includeDescendants=true` adds the ask frames of every subagent session below (see [Subagent asks](#subagent-asks)). |
 | `GET /v1/events/stream?sinceSeq=18446744073709551615` | SSE | `StreamFrame`s of every session, live-only (no durable event passes the watermark); the TUI reads only ask/resolve frames (see [Asks of other sessions](#asks-of-other-sessions)). |
@@ -2567,8 +2570,8 @@ rules follow the protocol guide's
 
 List requests follow the server's `page.nextCursor` using the
 `page.cursor` and `page.limit` query keys. `GET /v1/auth` is an unpaginated
-names-only list. The generic `/api` command sends the supplied JSON unchanged to
-the named `/v1` route; its full request and response schemas are in the
+names-only list. The generic `/api` command sends the supplied path and JSON
+unchanged to the named `/v1` route (it adds no `directory` scope); its full request and response schemas are in the
 [generated API reference](protocol/api-reference.md).
 For non-2xx responses with an empty or invalid JSON body, the frontend reports
 `METHOD /v1/path: HTTP <status> <status text>`; a structured error envelope

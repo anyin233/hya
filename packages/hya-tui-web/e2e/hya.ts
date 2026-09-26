@@ -367,14 +367,11 @@ export function backendConfigDir(backend: Backend): string {
   return join(dirname(backend.dir), "config", "hya")
 }
 
-/** One v1 HTTP/JSON call against `backend`, scoped to its workspace directory (a second client next to the TUI). */
+/** One v1 HTTP/JSON call against `backend` (a second client next to the TUI); a scoped rpc names `backend.dir` in its `directory` field. */
 export async function api<T>(backend: Backend, method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${backend.url}${path}`, {
     method,
-    headers: {
-      "x-hya-directory": backend.dir,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
+    headers: body === undefined ? {} : { "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const text = await response.text()
