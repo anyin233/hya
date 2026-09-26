@@ -1369,6 +1369,7 @@ dependencies = [
  "hya-plugin-claude",
  "hya-proto",
  "hya-provider",
+ "hya-relay",
  "hya-server",
  "hya-store",
  "hya-updater",

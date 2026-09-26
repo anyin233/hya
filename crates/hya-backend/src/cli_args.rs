@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use crate::agent_cmd::AgentCommand;
 use crate::auth_cmd::{AuthCommand, OauthCommand};
 use crate::bundle_cmd::BundleCommand;
+use crate::proxy_cmd::ProxyArgs;
 
 #[derive(Parser)]
 #[command(
@@ -173,6 +174,12 @@ pub(crate) enum Command {
     Update {
         #[command(subcommand)]
         command: hya_updater::cli::UpdateCommand,
+    },
+    /// Run the relay proxy: a blind Noise rendezvous between a backend and a
+    /// client (docs/relay.md). No config, providers, or database.
+    Proxy {
+        #[command(flatten)]
+        args: ProxyArgs,
     },
     /// Loop mode: iterate the agent toward `--target` until the deterministic
     /// `--while`/`--until` condition, the `loop.should_stop` hook, or the

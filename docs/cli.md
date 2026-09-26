@@ -15,6 +15,7 @@ standalone `hya-updater` binary are gone.
 | Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
 | Self-update TCB | `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
+| Secure relay | `proxy` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
 cargo build -p hya-backend --bin hya   # ./target/debug/hya
@@ -903,8 +904,46 @@ requires `--path` and at least one `--root KEY_ID=HEX32` (repeatable).
 `apply --trust-roots` overrides `<root>/trust_roots.json`. The complete
 flag list is in [Secure self-update](self-update.md).
 
+## `hya proxy`
+
+```sh
+hya proxy --port 8766
+```
+
+Runs the relay proxy (docs/relay.md): a blind Noise rendezvous a backend and
+a client reach each other through. Dispatched before any runtime
+composition — no config, providers, plugins, MCP, or session store — like
+`hya update`.
+
+**Readiness contract.** After the listener is bound, the process prints
+exactly:
+
+```text
+hya proxy listening on <scheme>://<addr><prefix>
+```
+
+`<scheme>` is `https` with `--tls-cert`/`--tls-key`, else `http`; `<addr>` is
+the bound socket address; `<prefix>` is the normalized `--path-prefix`, or
+empty. Source: [`proxy_cmd.rs`](../crates/hya-backend/src/proxy_cmd.rs).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--host <HOST>` | `0.0.0.0` | Bind host. |
+| `--port <PORT>` | `8766` | Bind port; `0` picks a free port. |
+| `--tls-cert <PEM>` / `--tls-key <PEM>` | none | TLS certificate/key; both or neither. |
+| `--path-prefix <PREFIX>` | none | Serve both bindings under a path prefix. |
+| `--trust-forwarded` | off | Identify clients by forwarding headers instead of the socket address. |
+| `--max-rooms`, `--max-streams-per-room`, `--max-streams-per-peer`, `--max-rooms-per-peer`, `--max-pending-registrations-per-peer`, `--idle-timeout-secs`, `--stream-rate-bytes-per-sec`, `--stream-rate-burst-bytes`, `--max-chunk-data`, `--early-data-limit`, `--accept-timeout-secs`, `--handshake-timeout-secs` | library defaults | One flag per `ProxyLimits` field (durations in whole seconds); see [docs/relay.md](relay.md#hya-proxy) for the full table. |
+| `--drain-timeout-secs <N>` | `10` | How long shutdown waits for streams and connections to drain. |
+
+**Shutdown.** SIGINT or SIGTERM stops accepting new connections, drains
+existing relay streams (`UNAVAILABLE`), and exits **0**.
+
+Deployment recipes for Cloudflare Tunnel, nginx, Caddy, Tailscale, and direct
+TLS are in [docs/relay.md](relay.md).
+
 ## Exit Codes
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `proxy` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
