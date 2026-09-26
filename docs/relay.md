@@ -15,7 +15,8 @@ implemented yet.
 
 ## Usage
 
-*Coming in later steps:* `hya proxy`, `hya serve --relay`, `hya serve relay
+The proxy server library exists (`hya_relay::server`, see
+[Bindings](#bindings)). *Coming in later steps:* `hya proxy`, `hya serve --relay`, `hya serve relay
 …`, `hya bridge`, `hya --connect <link>`, `/connect-remote`, `hya relay
 doctor`, and deployment recipes (Cloudflare Tunnel, nginx, Caddy, Tailscale,
 direct TLS).
@@ -169,6 +170,8 @@ final frame as the stream status instead.
 | `max_rooms` | 1024 | Registered rooms; a replacement needs no new slot. Over: `RESOURCE_EXHAUSTED`. |
 | `max_streams_per_room` | 64 | Concurrent streams (waiting or spliced) per room. Over: `RESOURCE_EXHAUSTED`. |
 | `max_streams_per_peer` | 256 | Concurrent streams opened by one `PeerInfo`. Over: `RESOURCE_EXHAUSTED`. |
+| `max_rooms_per_peer` | 16 | Rooms registered by one `PeerInfo`. Replacing a room the same client holds needs no new slot; a room taken over by another client frees the old owner's slot. Over: `RESOURCE_EXHAUSTED`. |
+| `max_pending_registrations_per_peer` | 8 | Host control streams of one `PeerInfo` that have not finished registration (challenge sent, no valid `register` yet). Over: the new control stream gets `RESOURCE_EXHAUSTED` instead of a challenge. |
 | `idle_timeout` | 120 s | A leg or control stream with no frame at all (heartbeats count), or a peer not taking a frame, for this long: `DEADLINE_EXCEEDED`. |
 | `stream_rate_bytes_per_sec` | 8 MiB/s | Token-bucket cap on `data` bytes per stream and direction; excess is delayed, not dropped. `0` = unlimited. |
 | `stream_rate_burst_bytes` | 1 MiB | Burst of that bucket. |
@@ -176,6 +179,103 @@ final frame as the stream status instead.
 | `early_data_limit` | 64 KiB | Opener `data` buffered before the accept; beyond it the proxy stops reading. |
 | `accept_timeout` | 10 s | Wait for the host's `Accept`; then `UNAVAILABLE` to the opener. |
 | `handshake_timeout` | 10 s | Deadline for the first frame of every stream (the registration timeout for hosts). |
+
+### Bindings
+
+`hya_relay::server::RelayServer` serves both bindings of `hya.relay.v1` on
+**one port** in front of one `ProxyCore`. `hya proxy` (coming in a later
+step) is a thin CLI around it.
+
+```rust
+use hya_relay::server::{RelayServer, RelayServerConfig, TlsFiles};
+
+let config = RelayServerConfig::new("0.0.0.0:8766".parse()?)
+    .path_prefix("/relay")?                      // optional
+    .tls(TlsFiles { cert: "cert.pem".into(), key: "key.pem".into() }) // optional
+    .trust_forwarded(true)                       // only behind a hop that sets the headers
+    .limits(hya_relay::proxy::ProxyLimits::default());
+let (addr, serve) = RelayServer::bind(config, async { let _ = tokio::signal::ctrl_c().await; }).await?;
+println!("listening on {addr}");
+serve.await; // returns after the shutdown signal and the drain
+```
+
+`RelayServerConfig` (builder; all optional except the address):
+
+| Method | Default | Meaning |
+| --- | --- | --- |
+| `new(bind: SocketAddr)` | — | Listen address (`127.0.0.1:0` picks a free port; `bind` returns the real one). |
+| `path_prefix(&str) -> Result<_, RelayServerError>` | none | Serve both bindings under a prefix. Segments of `A-Za-z0-9-._~`, no `.`/`..`; leading and one trailing `/` are optional (`"relay"`, `"/relay/"`, `"/a/b"`). |
+| `tls(TlsFiles { cert, key })` | plaintext | Terminate TLS with PEM files (certificate chain, then a PKCS#8, PKCS#1, or SEC1 key). rustls with the ring provider, TLS 1.2 and 1.3, ALPN `h2` and `http/1.1`. |
+| `trust_forwarded(bool)` | `false` | Identify clients by forwarding headers (below). |
+| `limits(ProxyLimits)` | defaults | The proxy core limits (see Limits). |
+| `drain_timeout(Duration)` | 10 s | Upper bound of the shutdown drain. |
+
+`RelayServer::bind(config, shutdown)` loads TLS, binds the listener, and
+returns `(SocketAddr, RelayServe)`; `RelayServe` is the `Send` serve future.
+Errors (`RelayServerError`): `InvalidPathPrefix`, `Bind{addr, source}`,
+`Tls(message)`.
+
+**Single-port routing.** Every connection is served as HTTP/1.1 or HTTP/2
+(h2c prior knowledge in plaintext, ALPN `h2` under TLS), detected per
+connection. A request whose `content-type` starts with `application/grpc`
+goes to the gRPC binding; any other request goes to the WebSocket routes.
+Anything that is not a relay route answers `404` with `content-type:
+text/plain` and the body `hya relay`, so `hya relay doctor` can recognize the
+proxy behind an intermediary. A gRPC request outside the prefix gets the
+gRPC status `UNIMPLEMENTED`. HTTP/2 connections get keepalive pings every
+30 s (20 s ack timeout).
+
+**gRPC binding.** The tonic service `hya.relay.v1.Relay` at
+`<prefix>/hya.relay.v1.Relay/{Host,Accept,Open}`; the prefix is stripped
+before tonic routing. Each stream item is one message. The proxy's final
+`error` frame is **not** sent as a message: it ends the call with the
+matching gRPC status (`RelayErrorCode` = gRPC code, message = the error
+message). A stream that ends without an error ends with status `OK`. The
+response stays open until the proxy is done with both directions, so a
+half-closed stream (`close{}` sent) keeps receiving. A cancelled call, reset
+stream, or cut connection is a transport failure for the proxy (the other
+side gets `UNAVAILABLE`); a client that just ends its request stream has
+closed its direction.
+
+**WebSocket binding.** `GET <prefix>/hya.relay.v1/ws/{host,accept,open}`
+upgraded over HTTP/1.1 (WebSocket over HTTP/2 is not offered; a TLS client
+should offer ALPN `http/1.1` for it). Every relay message is one **binary**
+frame holding the protobuf encoding of the route's message:
+
+| Route | Client → proxy | Proxy → client |
+| --- | --- | --- |
+| `ws/host` | `HostFrame` | `ProxyToHost` |
+| `ws/accept` | `Chunk` | `Chunk` |
+| `ws/open` | `Chunk` | `Chunk` |
+
+A message is at most `max_chunk_data` + 1 KiB. WebSocket ping/pong is
+answered but not required; the relay heartbeats are the liveness contract.
+The proxy ends a stream with a close frame:
+
+| Close code | When |
+| --- | --- |
+| `1000` | The stream ended without an error. |
+| `4000 + code` | After a final binary frame carrying the `RelayError`; `code` is the `RelayErrorCode` (`4005` `NOT_FOUND`, `4008` `RESOURCE_EXHAUSTED`, `4014` `UNAVAILABLE`, …). The close reason repeats the error message (at most 123 bytes). |
+| `1003` | The client sent a text frame (binary frames only). |
+
+A client close frame ends the client's stream; a connection lost without a
+closing handshake is a transport failure (the other side gets
+`UNAVAILABLE`). A non-upgrade request to a WebSocket route is refused by the
+upgrade check (`400`, `405`, or `426`).
+
+**Client identity** (`PeerInfo`, used only for the per-client limits). By
+default it is the socket's remote IP (IPv4-mapped IPv6 shown as IPv4). With
+`trust_forwarded(true)` it is the first valid IP from, in order,
+`CF-Connecting-IP` (first entry), `X-Real-IP` (first entry), and the leftmost
+`X-Forwarded-For` entry; the socket IP when none parses. Enable it only when
+every request reaches the proxy through a hop that overwrites these headers,
+otherwise clients can pick their own identity.
+
+**Graceful shutdown.** When the shutdown future completes the server stops
+accepting (the port closes), ends every relay stream with `UNAVAILABLE`
+(gRPC status, or error frame plus close `4014`), asks every connection to
+finish (HTTP/2 `GOAWAY`, HTTP/1.1 close after the response), and waits up to
+the drain timeout before cutting what is left.
 
 ### The transport abstraction
 
