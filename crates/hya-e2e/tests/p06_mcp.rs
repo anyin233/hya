@@ -57,3 +57,43 @@ async fn t1_10_mcp_echo_ping_tool_roundtrip() {
         env.diagnostics()
     );
 }
+
+#[tokio::test]
+async fn get_v1_mcp_lists_a_connected_servers_tools() {
+    let env = E2eEnvBuilder::new()
+        .with_mcp_echo()
+        .scripts(vec![text_step("UNUSED")])
+        .build()
+        .await
+        .expect("e2e env");
+    env.wait_mcp_connected("echo", Duration::from_secs(20))
+        .await
+        .expect("mcp echo connected");
+
+    let status = env.get_json("/v1/mcp").await.expect("mcp status");
+    let echo = status["servers"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["name"] == "echo"))
+        .unwrap_or_else(|| panic!("echo row missing: {status}"));
+    assert_eq!(
+        echo["tools"],
+        json!(["mcp__echo__ping", "mcp__echo__slow"]),
+        "a CONNECTED server reports its namespaced tools; status={status}"
+    );
+
+    env.post_json("/v1/mcp/echo/disconnect", &Value::Null)
+        .await
+        .expect("disconnect");
+    let status = env.get_json("/v1/mcp").await.expect("disabled status");
+    assert_eq!(
+        status["servers"][0]["state"], "MCP_SERVER_STATE_DISCONNECTED",
+        "{status}"
+    );
+    assert!(
+        status["servers"][0]
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "a disconnected server reports no tools; status={status}"
+    );
+}

@@ -110,6 +110,16 @@ export function serverLine(server: McpServerStatus, width: number): string {
   return truncate(line.trimEnd(), width)
 }
 
+/**
+ * A tool's label on the detail screen: `GET /v1/mcp` reports the
+ * model-facing `mcp__<server>__<tool>` names; under `MCP › <server>` the
+ * server's own tool name is enough.
+ */
+export function mcpToolLabel(server: string, tool: string): string {
+  const prefix = `mcp__${server}__`
+  return tool.startsWith(prefix) && tool.length > prefix.length ? tool.slice(prefix.length) : tool
+}
+
 export function serverHeaderLine(width: number): string {
   return truncate(`${cell("SERVER", 20)} ${cell("STATE", 14)} ${cell("TOOLS", 10)} ${cell("AUTH", 14)} ERROR`, width)
 }

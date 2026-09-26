@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import type { McpServerStatus } from "../src/client"
 import type { KeyLike } from "../src/keys/bindings"
 import {
+  mcpToolLabel,
   initialMcpView,
   mcpToolIndex,
   mcpToolWindow,
@@ -99,6 +100,13 @@ test("r refreshes, Esc on the list closes the view", () => {
 test("r refreshes even with no server selected (empty list)", () => {
   const view: McpViewState = { screen: "list", server: undefined, filter: "", filtering: false }
   expect(mcpViewKey(view, key("r", { sequence: "r" }), [])).toEqual({ type: "refresh" })
+})
+
+test("mcpToolLabel shows a tool under the server's own name, dropping the mcp__<server>__ namespace", () => {
+  expect(mcpToolLabel("many", "mcp__many__tool_01")).toBe("tool_01")
+  expect(mcpToolLabel("many", "mcp__many__")).toBe("mcp__many__")
+  expect(mcpToolLabel("many", "mcp__other__ping")).toBe("mcp__other__ping")
+  expect(mcpToolLabel("many", "search")).toBe("search")
 })
 
 test("mcpToolWindow keeps the highlighted tool in view and reports the more-above/below counts", () => {

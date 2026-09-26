@@ -380,6 +380,9 @@ engine.refresh_runtime(|candidate| {
   This is not plugin hot reload; hooks and `PermissionPlane` remain unchanged.
 - Server routes receive only a dependency-inverted MCP control trait. They own
   no manager, desired map, status map, or effective registry.
+- `McpControl::tools` reads each MCP source's canonical exports from the
+  effective manifest; `GET /v1/mcp` reports them only for a `Connected`
+  status, so a stale or failed observation never shows tools it cannot call.
 
 ### 3. Required tests
 
@@ -391,6 +394,8 @@ engine.refresh_runtime(|candidate| {
   before publication and consume no generation.
 - Mixed MCP/plugin startup publishes one complete snapshot exactly once.
 - v1 MCP add/connect/disconnect changes callability through the same registry.
+- `GET /v1/mcp` lists a connected server's namespaced tools and none after
+  disconnect (`hya-e2e` `p06_mcp`).
 - Reordered equivalent plugin initialize declarations compare equal; changing
   tool, command/permission hook, or workspace declarations detects drift.
 - Cargo manifests and `Cargo.lock` add no dependency for declaration hashing.

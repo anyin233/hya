@@ -2079,7 +2079,9 @@ connection state, tool count, and (when failed) its error.
 ### Keys
 
 Up/Down move the highlight over the server list; Enter opens the
-highlighted server's tool list (`MCP › <name>`). On that detail screen,
+highlighted server's tool list (`MCP › <name>`), each tool under the
+server's own name (`tool_01` for the model-facing `mcp__many__tool_01`;
+"No tools" while the server is not connected). On that detail screen,
 Up/Down/PgUp/PgDn/Home/End move a highlight over the server's tools instead
 — the tool list windows around it (a `N more` marker above/below when a
 server has more tools than fit), so a server with many tools never draws
@@ -2097,7 +2099,7 @@ group `mcp`) lists the same keys.
 
 | Action | Call | Reads |
 | --- | --- | --- |
-| Open, `r` refresh | `GET /v1/mcp?directory=<dir>` | `McpServerStatus[]` (`name`, `state`, `tools`, `error`, `authRequired`) |
+| Open, `r` refresh | `GET /v1/mcp?directory=<dir>` | `McpServerStatus[]` (`name`, `state`, `tools` — `mcp__<server>__<tool>` names, set while `CONNECTED` — `error`, `authRequired`) |
 | `c` connect | `POST /v1/mcp/{name}/connect` | `McpServerStatus` |
 | `x` disconnect | `POST /v1/mcp/{name}/disconnect` | `McpServerStatus` |
 | `a` start login | `POST /v1/mcp/{name}/auth` | `{authorizationUrl}` |

@@ -23,7 +23,13 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/mcp/:name/auth/complete", post(complete_auth))
 }
 
-fn server_status(name: &str, status: &McpStatus) -> pb::McpServerStatus {
+/// One server's wire status; `tools` (the server's namespaced tool names)
+/// is reported only while it is `CONNECTED`.
+fn server_status(
+    name: &str,
+    status: &McpStatus,
+    tools: Option<&Vec<String>>,
+) -> pb::McpServerStatus {
     let (state, error, auth_required) = match status {
         McpStatus::Connecting => (pb::McpServerState::Desired as i32, String::new(), false),
         McpStatus::Connected => (pb::McpServerState::Connected as i32, String::new(), false),
@@ -38,22 +44,32 @@ fn server_status(name: &str, status: &McpStatus) -> pb::McpServerStatus {
             (pb::McpServerState::Failed as i32, error.clone(), true)
         }
     };
+    let tools = match status {
+        McpStatus::Connected => tools.cloned().unwrap_or_default(),
+        _ => Vec::new(),
+    };
     pb::McpServerStatus {
         name: name.to_owned(),
         state,
-        tools: Vec::new(),
+        tools,
         error,
         auth_required,
     }
+}
+
+async fn named_status(st: &ServerState, name: &str, status: McpStatus) -> pb::McpServerStatus {
+    let tools = st.mcp_control.tools().await;
+    server_status(name, &status, tools.get(name))
 }
 
 async fn get_status(
     State(st): State<ServerState>,
 ) -> Result<Json<pb::GetMcpStatusResponse>, V1Error> {
     let statuses = st.mcp_control.status().await;
+    let tools = st.mcp_control.tools().await;
     let servers = statuses
         .iter()
-        .map(|(name, status)| server_status(name, status))
+        .map(|(name, status)| server_status(name, status, tools.get(name)))
         .collect();
     Ok(Json(pb::GetMcpStatusResponse { servers }))
 }
@@ -106,7 +122,7 @@ async fn add_server(
         .get(&request.name)
         .cloned()
         .unwrap_or(McpStatus::Disabled);
-    Ok(Json(server_status(&request.name, &status)))
+    Ok(Json(named_status(&st, &request.name, status).await))
 }
 
 async fn connect(
@@ -126,7 +142,7 @@ async fn connect(
     }
     let statuses = st.mcp_control.status().await;
     let status = statuses.get(&name).cloned().unwrap_or(McpStatus::Disabled);
-    Ok(Json(server_status(&name, &status)))
+    Ok(Json(named_status(&st, &name, status).await))
 }
 
 async fn disconnect(
@@ -146,7 +162,7 @@ async fn disconnect(
     }
     let statuses = st.mcp_control.status().await;
     let status = statuses.get(&name).cloned().unwrap_or(McpStatus::Disabled);
-    Ok(Json(server_status(&name, &status)))
+    Ok(Json(named_status(&st, &name, status).await))
 }
 
 async fn start_auth(

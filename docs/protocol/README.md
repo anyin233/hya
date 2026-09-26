@@ -889,6 +889,21 @@ server (a failure is again a `FAILED` status; an unknown name is
 `404 not_found`), `POST /v1/mcp/{name}/disconnect` disables it, and
 `GET /v1/mcp` lists every server's status.
 
+`tools` lists the model-facing names (`mcp__<server>__<tool>`) a
+`MCP_SERVER_STATE_CONNECTED` server publishes in the effective runtime, in
+the order of its `tools/list` answer; a tool the server lists without an
+object input schema, or whose name is not a valid namespace token, is not
+published and so not listed. Every other state reports no tools (the JSON
+omits the empty array). The list is read when the connection is made: hya
+does not follow `notifications/tools/list_changed`, so a server whose tool
+set changes shows the new set after a disconnect and connect. For example,
+the `echo` server of the process e2e suite answers
+
+```json
+{"servers": [{"name": "echo", "state": "MCP_SERVER_STATE_CONNECTED",
+  "tools": ["mcp__echo__ping", "mcp__echo__slow"]}]}
+```
+
 ## Bundle API endpoints
 
 Installed bundles with an `extensions.process` may register their own HTTP
