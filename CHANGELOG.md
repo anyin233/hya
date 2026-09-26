@@ -1,5 +1,15 @@
 # 0.41.0
 
+## Provider View in the TUI
+
+- `/key` (no arguments) opens a full-screen Provider View. The list shows each provider's protocol, key source, status, and model count. Open a provider to see its models with their display name, source (`remote`, `config`, `override`), limits, and reasoning. Changes apply at once, with no restart.
+  - `a` adds a provider through a pop-up that asks for the name, then the protocol (`openai`, `openai-response`, `anthropic`, `google`), the base URL, and the key. It then fetches the provider's models. A failed fetch still adds the provider and shows the reason.
+  - `k` sets or replaces a key (the input is hidden), `x` removes it, and `r` re-fetches the model list.
+  - `t` tests the highlighted model by sending `hi` with a 1-token limit and shows whether it replied, the finish reason, and the latency. Esc cancels a running test.
+  - `m` adds a model and `e` edits a model's display name, limits, or reasoning; both are written to `config.yaml`, and only the fields you change are saved. `d` removes a model's config override.
+  - If the session would still run on the offline model after you add a provider, the `/model` picker opens with the new provider's models.
+- Removed: `/keys`, `/login <provider>`, and `/key set|remove <provider>`. See [TUI](docs/tui.md#provider-view).
+
 ## TUI: dividers for earlier compactions, and live prompts from other sessions
 
 - An opened session now shows a `context compacted` divider before every compaction summary, including compactions that happened before the TUI opened it (`--session`, `--continue`, `/open`, `/sessions`, and subagent views).

@@ -65,7 +65,7 @@ function matchScore(name: string, query: string): number | undefined {
 /**
  * A `[bracketed]` argument hint (`/new [agent] [model]`) is optional — the
  * command menu's Enter runs the command as is. Any other hint (`/open
- * <id|number>`, `/key set|remove <provider>`) names a required first
+ * <id|number>`, `/answer <interaction id> <text>`) names a required first
  * argument — Enter only completes the name and waits, the same as Tab.
  */
 export function requiresArgument(hint: string | undefined): boolean {

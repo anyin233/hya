@@ -315,7 +315,12 @@ export const test = withOptions.extend<Fixtures>({
 })
 
 export { expect } from "./harness"
-export { hangStep, httpErrorStep, reasoningStep, textStep, toolStep, toolsStep, type FakeModel, type Protocol, type Step } from "./fake-model"
+export { hangStep, httpErrorStep, reasoningStep, startFakeModel, textStep, toolStep, toolsStep, type FakeModel, type Protocol, type Step } from "./fake-model"
+
+/** The isolated backend's hya config directory (`$XDG_CONFIG_HOME/hya`: config.yaml, auth/). */
+export function backendConfigDir(backend: Backend): string {
+  return join(dirname(backend.dir), "config", "hya")
+}
 
 /** One v1 HTTP/JSON call against `backend`, scoped to its workspace directory (a second client next to the TUI). */
 export async function api<T>(backend: Backend, method: string, path: string, body?: unknown): Promise<T> {

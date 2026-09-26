@@ -90,7 +90,7 @@ test("queued prompts are dim user views tagged queued", () => {
 
 test("the transcript merges the overlay and appends only waiting queued prompts", () => {
   const store = createAppStore()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
   store.setMessages("hysec_1", [{ id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: "hi" } }] }])
   store.applyEvent({ seq: "5", session: "hysec_1", messageStarted: { message: "m_a", role: "ROLE_ASSISTANT" } })

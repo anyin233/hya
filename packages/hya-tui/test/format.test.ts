@@ -18,7 +18,7 @@ test("renders the header, the sidebar session list, and pending lines", () => {
   store.applyCatalog({
     sessions: [selected, { id: "hysec_2", agent: "plan", workdir: "/w", title: "Second", busy: true }],
     interactions: [{ id: "req_1", type: "INTERACTION_TYPE_QUESTION", title: "Pick one" }],
-    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(selected)
   expect(headerText(store.state, server)).toBe(`hya · hysec_1 · build hya/offline · ${server}`)
@@ -31,13 +31,10 @@ test("renders the header, the sidebar session list, and pending lines", () => {
 
 test("renders empty panels and per-view titles", () => {
   const store = createAppStore()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   expect(headerText(store.state, server)).toBe(`hya · no session · ${server}`)
   expect(sessionListText(store.state)).toBe("No sessions. Type a prompt or /new.")
-  expect(mainTitle("keys")).toBe("Saved provider keys")
   expect(mainTitle("api")).toBe("API commands")
-  store.setView("keys")
-  expect(mainContent(store.state)).toBe("No providers or saved keys. Use /key set <provider> to add one.")
   store.setView("models")
   expect(mainContent(store.state)).toBe("No models returned by server.")
 })
@@ -101,7 +98,7 @@ test("truncates from either end", () => {
 
 test("the chat view's text is only the empty-state hint; messages render per component", () => {
   const store = createAppStore()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
   expect(mainContent(store.state)).toBe("No messages yet. Type a prompt below.")
   store.enqueue("next question", "hysec_1")
@@ -120,7 +117,7 @@ test("child sessions nest under their parent in the session list, numbered in th
   expect(sessionTree(sessions).map((row) => [row.session.id, row.depth])).toEqual([
     ["hysec_o", 0], ["hysec_p", 0], ["hysec_c", 1], ["hysec_g", 2], ["hysec_x", 0],
   ])
-  store.applyCatalog({ sessions, interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.applyCatalog({ sessions, interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession(child)
   expect(sessionListText(store.state)).toBe([
     "  1. Other", "   plan", "",
@@ -142,7 +139,7 @@ test("asks of the open session tree are prompts, not pending lines; the sidebar 
       { id: "perm_c", session: "hysec_c", type: "INTERACTION_TYPE_PERMISSION", title: "bash ls" },
       { id: "que_o", session: "hysec_o", type: "INTERACTION_TYPE_QUESTION", title: "Why?" },
     ],
-    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(parent)
   expect(pendingLines(store.state)).toEqual(["? Why? · 1. Other · que_o"])
@@ -188,7 +185,7 @@ test("pending asks of other sessions name the session they belong to (its /open 
       { id: "perm_x", session: "hysec_2", type: "INTERACTION_TYPE_PERMISSION", title: "bash echo x" },
       { id: "que_y", session: "hysec_9", type: "INTERACTION_TYPE_QUESTION", title: "Which one?" },
     ],
-    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+    models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(selected)
   expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work · perm_x", "? Which one? · hysec_9 · que_y"])

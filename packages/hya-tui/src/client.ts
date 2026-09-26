@@ -138,12 +138,78 @@ export interface ModelSummary {
   contextLimit?: string
   /** Output ceiling in tokens, a decimal string; "0" or omitted when unknown. */
   outputLimit?: string
+  /** The route takes reasoning effort variants (omitted = false). */
+  reasoning?: boolean
+  /** Where the row comes from: `remote` (model cache), `config` (config.yaml only), `override` (both; config wins per field), `offline`. */
+  source?: string
 }
 
+/** `ProviderSummary` (docs/protocol/README.md "Providers and keys"); never carries a secret. */
 export interface ProviderSummary {
   id: string
   name?: string
+  /** `AUTH_STATUS_CREDENTIALED`, `_UNAUTHENTICATED`, `_AUTH_REJECTED`, `_AUTH_REQUIRED`, `_NOT_APPLICABLE` (offline). */
   auth?: string
+  /** Last model-list outcome: `models`, `empty`, `unavailable`, `invalid`. */
+  result?: string
+  /** Config protocol (`openai`, `openai-response`, `anthropic`, `google`, …); empty for the offline `hya` row. */
+  kind?: string
+  baseUrl?: string
+  /** `saved` (auth/<id>.yaml), `oauth`, `config` (inline api_key), or `none`. */
+  keySource?: string
+  modelCount?: number
+}
+
+/** `ProviderInfo`: a provider with its effective models. */
+export interface ProviderInfo {
+  summary?: ProviderSummary
+  models?: ModelSummary[]
+  supportsApiKey?: boolean
+  supportsOauth?: boolean
+}
+
+/** A remote model-list fetch (`ProviderUpdate.discovery`); a failed fetch never fails the call. */
+export interface DiscoveryOutcome {
+  ok?: boolean
+  /** `models`, `empty`, `auth_required`, `auth_rejected`, `unavailable`, `invalid`, `unsupported`. */
+  result?: string
+  /** Bounded, non-secret reason when `ok` is false. */
+  errorMessage?: string
+  modelCount?: number
+}
+
+/** Answer of every provider write (`UpsertProvider`, `RefreshProvider`, `SetProviderModel`, `RemoveProviderModel`). */
+export interface ProviderUpdate {
+  provider?: ProviderInfo
+  /** Only when the call fetched the remote list. */
+  discovery?: DiscoveryOutcome
+}
+
+/**
+ * `SetProviderModel` body: one `models:` entry of config.yaml. The server
+ * replaces `name`, `limit.context`, `limit.output`, and a boolean
+ * `reasoning` with what is sent; an absent, empty, or `0` field is removed.
+ */
+export interface ProviderModelPatch {
+  modelId: string
+  displayName?: string
+  /** Tokens (uint32); absent or `0` removes the limit. */
+  contextLimit?: number
+  outputLimit?: number
+  /** Omitted: remove a boolean `reasoning`. */
+  reasoning?: boolean
+}
+
+/** `TestProviderModelResponse`: `ok` false (omitted) with `errorCode` when the provider failed. */
+export interface ProviderTestResponse {
+  ok?: boolean
+  text?: string
+  /** `stop`, `length`, `tool_calls`, `cancelled`, `error`. */
+  finishReason?: string
+  /** `http_<status>`, `transport`, `timeout`, `unknown_model`, `incompatible`, `decode`, `auth_expired`, `provider_error`. */
+  errorCode?: string
+  errorMessage?: string
+  latencyMs?: number | string
 }
 
 export interface CommandSummary {
@@ -265,7 +331,8 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 /** An HTTP failure with its status preserved for optional v1 capabilities. */
 export class HttpError extends Error {
-  constructor(readonly status: number, method: string, path: string, detail: string) {
+  /** `detail` is the server's `code: message` (or `HTTP <status>`), without the method and path. */
+  constructor(readonly status: number, method: string, path: string, readonly detail: string) {
     super(`${method} ${path}: ${detail}`)
     this.name = "HttpError"
   }
@@ -296,7 +363,8 @@ export class HyaClient {
   /** The server's base URL (`/status`). */
   get baseUrl(): string { return this.base }
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** One v1 call; `signal` aborts it (the Provider View's Esc on a running call). */
+  async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     if (!path.startsWith("/v1/") || path.startsWith("//")) {
       throw new Error("API path must start with /v1/")
     }
@@ -307,6 +375,7 @@ export class HyaClient {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(signal ? { signal } : {}),
     })
     if (response.headers.get("content-type")?.includes("text/event-stream")) {
       await response.body?.cancel()
@@ -432,22 +501,39 @@ export class HyaClient {
     return this.listAll("/v1/commands", "commands")
   }
 
-  async listSavedKeys(): Promise<string[] | null> {
-    try {
-      const response = await this.request<{ providerIds?: string[] }>("GET", "/v1/auth")
-      return response.providerIds ?? []
-    } catch (error) {
-      if (error instanceof HttpError && error.status === 404) return null
-      throw error
-    }
+  /** `SetProviderAuth` (`PUT /v1/auth/{id}`): save a key (applies live); `discovery` when the model list was fetched too. */
+  async setProviderKey(provider: string, key: string, signal?: AbortSignal): Promise<{ status?: string; provider?: ProviderInfo; discovery?: DiscoveryOutcome }> {
+    return this.request("PUT", `/v1/auth/${encodeURIComponent(provider)}`, { apiKey: key }, signal)
   }
 
-  async setProviderKey(provider: string, key: string): Promise<void> {
-    await this.request("PUT", `/v1/auth/${encodeURIComponent(provider)}`, { apiKey: key })
+  /** `RemoveProviderAuth` (`DELETE /v1/auth/{id}`): delete the saved key (applies live). */
+  async removeProviderKey(provider: string, signal?: AbortSignal): Promise<void> {
+    await this.request("DELETE", `/v1/auth/${encodeURIComponent(provider)}`, undefined, signal)
   }
 
-  async removeProviderKey(provider: string): Promise<void> {
-    await this.request("DELETE", `/v1/auth/${encodeURIComponent(provider)}`)
+  /** `UpsertProvider` (`PUT /v1/providers/{id}`): write kind / base URL to config.yaml, save a non-empty key, fetch the models. */
+  async upsertProvider(provider: string, body: { kind: string; baseUrl: string; apiKey?: string }, signal?: AbortSignal): Promise<ProviderUpdate> {
+    return this.request("PUT", `/v1/providers/${encodeURIComponent(provider)}`, body, signal)
+  }
+
+  /** `RefreshProvider` (`POST /v1/providers/{id}/refresh`): fetch the remote model list into the model cache. */
+  async refreshProvider(provider: string, signal?: AbortSignal): Promise<ProviderUpdate> {
+    return this.request("POST", `/v1/providers/${encodeURIComponent(provider)}/refresh`, {}, signal)
+  }
+
+  /** `SetProviderModel` (`PUT /v1/providers/{id}/models`): write one model entry into config.yaml. */
+  async setProviderModel(provider: string, model: ProviderModelPatch, signal?: AbortSignal): Promise<ProviderUpdate> {
+    return this.request("PUT", `/v1/providers/${encodeURIComponent(provider)}/models`, model, signal)
+  }
+
+  /** `RemoveProviderModel` (`DELETE /v1/providers/{id}/models?modelId=`): delete a model's config.yaml entry. */
+  async removeProviderModel(provider: string, modelId: string, signal?: AbortSignal): Promise<ProviderUpdate> {
+    return this.request("DELETE", `/v1/providers/${encodeURIComponent(provider)}/models?modelId=${encodeURIComponent(modelId)}`, undefined, signal)
+  }
+
+  /** `TestProviderModel` (`POST /v1/providers/{id}/test`): one `hi` with 1 output token (16 on Responses routes), up to 60 s. */
+  async testProviderModel(provider: string, modelId: string, signal?: AbortSignal): Promise<ProviderTestResponse> {
+    return this.request("POST", `/v1/providers/${encodeURIComponent(provider)}/test`, { modelId }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

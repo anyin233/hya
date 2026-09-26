@@ -93,29 +93,45 @@ test("forwards backend slash commands as command turns", async () => {
   expect(body).toEqual({ command: { command: "compact", arguments: "now" } })
 })
 
-test("lists saved provider names and stores/removes a key without returning its value", async () => {
+test("provider routes: upsert, refresh, key set/remove, model override set/remove, and a test that can be aborted", async () => {
   const calls: Array<{ method: string; path: string; body: unknown }> = []
+  let signal: AbortSignal | undefined
   const fetcher: FetchLike = async (path, init) => {
     calls.push({ method: init?.method ?? "GET", path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
-    if (path.endsWith("/v1/auth")) return Response.json({ providerIds: ["anthropic"] })
-    return Response.json({ status: "AUTH_STATUS_CREDENTIALED" })
+    if (path.endsWith("/test")) {
+      signal = init?.signal ?? undefined
+      return Response.json({ ok: true, text: "Hi", finishReason: "length", latencyMs: 12 })
+    }
+    if (path.includes("/v1/auth/")) return Response.json({ status: "AUTH_STATUS_CREDENTIALED", discovery: { ok: true, result: "models", modelCount: 1 } })
+    return Response.json({ provider: { summary: { id: "gw" } }, discovery: { ok: false, result: "unavailable", errorMessage: "refused" } })
   }
   const client = new HyaClient("http://127.0.0.1:8080", "/work", fetcher)
-  expect(await client.listSavedKeys()).toEqual(["anthropic"])
-  await client.setProviderKey("anthropic", "sk-secret")
-  await client.removeProviderKey("anthropic")
+  const added = await client.upsertProvider("gw", { kind: "openai", baseUrl: "http://h/v1", apiKey: "sk-secret" })
+  expect(added.discovery?.errorMessage).toBe("refused")
+  await client.upsertProvider("gw", { kind: "openai", baseUrl: "http://h/v1" })
+  await client.refreshProvider("gw")
+  expect((await client.setProviderKey("gw", "sk-2")).discovery?.modelCount).toBe(1)
+  await client.removeProviderKey("gw")
+  await client.setProviderModel("gw", { modelId: "vendor/m:1", displayName: "M", contextLimit: 8000, reasoning: true })
+  await client.removeProviderModel("gw", "vendor/m:1")
+  const abort = new AbortController()
+  expect(await client.testProviderModel("gw", "vendor/m:1", abort.signal)).toEqual({ ok: true, text: "Hi", finishReason: "length", latencyMs: 12 })
+  expect(signal).toBe(abort.signal)
+  const base = "http://127.0.0.1:8080/v1"
   expect(calls).toEqual([
-    { method: "GET", path: "http://127.0.0.1:8080/v1/auth", body: undefined },
-    { method: "PUT", path: "http://127.0.0.1:8080/v1/auth/anthropic", body: { apiKey: "sk-secret" } },
-    { method: "DELETE", path: "http://127.0.0.1:8080/v1/auth/anthropic", body: undefined },
+    { method: "PUT", path: `${base}/providers/gw`, body: { kind: "openai", baseUrl: "http://h/v1", apiKey: "sk-secret" } },
+    { method: "PUT", path: `${base}/providers/gw`, body: { kind: "openai", baseUrl: "http://h/v1" } },
+    { method: "POST", path: `${base}/providers/gw/refresh`, body: {} },
+    { method: "PUT", path: `${base}/auth/gw`, body: { apiKey: "sk-2" } },
+    { method: "DELETE", path: `${base}/auth/gw`, body: undefined },
+    { method: "PUT", path: `${base}/providers/gw/models`, body: { modelId: "vendor/m:1", displayName: "M", contextLimit: 8000, reasoning: true } },
+    // Model ids may hold `/` and `:`: they travel in the query, percent-encoded.
+    { method: "DELETE", path: `${base}/providers/gw/models?modelId=vendor%2Fm%3A1`, body: undefined },
+    { method: "POST", path: `${base}/providers/gw/test`, body: { modelId: "vendor/m:1" } },
   ])
 })
 
-test("treats a missing auth list as unavailable and reports empty HTTP errors", async () => {
-  const missing = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
-    new Response(null, { status: 404, statusText: "Not Found" }))
-  expect(await missing.listSavedKeys()).toBeNull()
-
+test("reports empty HTTP errors", async () => {
   const failed = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
     new Response(null, { status: 503, statusText: "Service Unavailable" }))
   await expect(failed.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 503 Service Unavailable")

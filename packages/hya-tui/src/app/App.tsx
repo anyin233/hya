@@ -8,6 +8,7 @@ import { MainPanel } from "../components/MainPanel"
 import { ModeConfirm } from "../components/ModeConfirm"
 import { PendingBlock } from "../components/PendingBlock"
 import { Picker } from "../components/Picker"
+import { ProviderView } from "../components/ProviderView"
 import { paintSelection } from "../components/selection"
 import { copyNotice } from "../composer/clipboard"
 import { PromptDock } from "../components/PromptDock"
@@ -26,8 +27,9 @@ export { layoutBreakpoints } from "../state/layout"
  * panel, the working indicator for a running turn, pending block for other
  * sessions' asks, the permission/question prompt, the one-line yolo
  * confirmation, status line, bordered composer, footer instruction) and,
- * when shown, the sidebar on the right (state/layout.ts). The modal picker
- * (components/Picker.tsx) is drawn over both when open.
+ * when shown, the sidebar on the right (state/layout.ts). The full-screen
+ * Provider View (`/key`, components/ProviderView.tsx) is drawn over both
+ * when open, and the modal picker (components/Picker.tsx) over everything.
  *
  * Mouse selection: a left press paints the theme's selection color on the
  * text renderables (components/selection.ts); releasing a drag copies the
@@ -66,6 +68,7 @@ export function App() {
       <Show when={shown()}>
         <Sidebar width={side()} />
       </Show>
+      <ProviderView />
       <Picker />
     </box>
   )

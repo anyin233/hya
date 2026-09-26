@@ -3,6 +3,7 @@ import { mergeCommandEntries, nativeCommandSpecs } from "../src/commands"
 import { composerKeyLabel, helpGroups, helpPickerRows, helpRows, keyHelpText } from "../src/commands/help"
 import { composerKeyBindings, keyBindings, resolveBinding } from "../src/keys/bindings"
 import { sessionPickerActions } from "../src/commands/native"
+import { providerKeyRows } from "../src/state/providers"
 
 const entries = mergeCommandEntries(nativeCommandSpecs, [
   { name: "review", description: "Review changes", source: "command" },
@@ -78,4 +79,10 @@ test("help lists the external editor chord, mouse copy, and the vim normal-mode 
   for (const keys of ["h j k l", "w b e", "0 ^ $", "gg / G", "i a I A o O", "x / dd / D", "u / Ctrl+R", "Enter", "Esc"]) {
     expect(vim.some((row) => row.keys === keys), keys).toBe(true)
   }
+})
+
+test("help lists the Provider View keys in their own group", () => {
+  const rows = helpRows(entries).filter((row) => row.group === "Providers")
+  for (const row of providerKeyRows) expect(rows.some((candidate) => candidate.keys === row.keys && candidate.description === row.description), row.keys).toBe(true)
+  expect(rows.find((row) => row.keys === "t")?.description).toContain("Test the highlighted model")
 })

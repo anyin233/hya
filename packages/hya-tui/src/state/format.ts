@@ -168,7 +168,7 @@ export function webNotice(web: WebInfo | undefined): string | undefined {
 
 const titles: Record<View, string> = {
   chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions",
-  keys: "Saved provider keys", api: "API commands", help: "Help", todos: "Todos", status: "Status",
+  api: "API commands", help: "Help", todos: "Todos", status: "Status",
 }
 
 /** `TODO_STATUS_IN_PROGRESS` → `in_progress`, etc. */
@@ -353,14 +353,6 @@ export function mainContent(state: AppState): string {
     }
     case "interactions":
       return state.interactions.length ? state.interactions.map((item) => `${item.type} · ${item.id}\n${item.title}\n${item.detail ?? ""}\n${(item.options ?? []).join(" | ")}`).join("\n\n") : "No pending interactions."
-    case "keys": {
-      const ids = [...new Set([...state.providers.map((provider) => provider.id), ...state.savedKeys])].sort()
-      return !state.savedKeysAvailable
-        ? "Key listing is unavailable on this backend. Restart with hya 0.41.0 or newer."
-        : ids.length
-        ? ids.map((id) => `${state.savedKeys.includes(id) ? "● saved" : "○ no saved key"}  ${id}`).join("\n")
-        : "No providers or saved keys. Use /key set <provider> to add one."
-    }
     case "api": return state.apiOutput
     case "help": return keyHelpText()
     case "todos": return todosText(state.todos)

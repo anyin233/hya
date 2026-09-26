@@ -1,4 +1,4 @@
-/** Command completion and concealed key entry for the OpenTUI frontend. */
+/** Command completion and concealed key entry (the Provider View's key fields) for the OpenTUI frontend. */
 
 import { createCommandRegistry, nativeCommandSpecs } from "./commands/native"
 import { matchValues, type CommandRegistry } from "./commands/registry"
@@ -8,8 +8,6 @@ export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
 
 export interface CompletionContext {
   backendCommands: string[]
-  providers: string[]
-  savedKeys: string[]
   models: string[]
   sessions: string[]
   workflows: string[]
@@ -56,6 +54,11 @@ export class SecretEntry {
     this.value = ""
     return result
   }
+
+  /** The key without clearing it (a submission that may fail and be retried). */
+  peek(): string { return this.value.trim() }
+
+  get length(): number { return this.value.length }
 
   clear(): void { this.value = "" }
 }

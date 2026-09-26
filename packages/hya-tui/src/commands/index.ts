@@ -1,4 +1,4 @@
-export { backendCommand, createCommandRegistry, nativeCommandSpecs } from "./native"
+export { backendCommand, createCommandRegistry, nativeCommandSpecs, openModelPicker } from "./native"
 export { helpPickerHint, helpPickerRows, helpRows, keyHelpText } from "./help"
 export {
   commandSuggestionLimit,

@@ -67,9 +67,11 @@ interface CmdMenu {
  * editor (`controller.openEditor`, composer/editor.ts); any other key drops
  * the chord and is handled as usual.
  *
- * During `/key set` it swaps the editor for a masked `Key: •••` line and
- * routes every key and paste to the controller's secret entry, so the key
- * never enters the editor, the store, or the screen.
+ * While the Provider View (`/key`, components/ProviderView.tsx) is open,
+ * every key but Ctrl+C and every paste go to it (after the modal picker,
+ * which may open over the view); its key fields keep the key in the
+ * controller's `SecretEntry`, so it never enters the editor, the store, or
+ * the screen. Ctrl+C closes the view and keeps its quit meaning.
  */
 export function Composer() {
   const { store, controller, ui } = useApp()
@@ -95,7 +97,8 @@ export function Composer() {
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   let lookupTicket = 0
   let hintTimer: ReturnType<typeof setTimeout> | undefined
-  const entering = () => store.state.secretProvider !== undefined
+  /** The Provider View is open: keys and pastes go to it (the editor keeps its text). */
+  const providersOpen = () => store.state.providerView !== undefined
   /** A subagent's session is open: prompts are disabled, slash commands still run. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
@@ -159,7 +162,7 @@ export function Composer() {
    * backend (commands and skills) command list; see commands/menu.ts.
    */
   function updateCommandMenu(): void {
-    if (!editor || entering()) return closeCmdMenu()
+    if (!editor || providersOpen()) return closeCmdMenu()
     const text = editor.plainText
     if (!text.startsWith("/") || /\s/.test(text)) return closeCmdMenu()
     const items = filterCommands(controller.commandEntries(), text.slice(1)).slice(0, commandSuggestionLimit)
@@ -184,7 +187,7 @@ export function Composer() {
 
   /** Open, refresh, or close the `@file` list for the token at the cursor. */
   function updateMention(): void {
-    if (!editor || entering()) return closeMenu()
+    if (!editor || providersOpen()) return closeMenu()
     if (editor.plainText.startsWith("/")) return closeMenu()
     const token = mentionAt(editor.plainText, editor.cursorOffset)
     if (!token) {
@@ -258,7 +261,7 @@ export function Composer() {
   }
 
   function submit(): void {
-    if (!editor || entering()) return
+    if (!editor || providersOpen()) return
     const text = editor.plainText
     if (!text.trim()) return
     if (readOnly() && !text.trim().startsWith("/")) {
@@ -342,12 +345,6 @@ export function Composer() {
   }
 
   useKeyboard((key: KeyEvent) => {
-    if (entering()) {
-      key.preventDefault()
-      key.stopPropagation()
-      controller.secretKey(key)
-      return
-    }
     const consume = (): void => {
       key.preventDefault()
       key.stopPropagation()
@@ -359,6 +356,15 @@ export function Composer() {
       else {
         consume()
         controller.pickerKey(key)
+        return
+      }
+    }
+    // The Provider View takes every key but Ctrl+C, which closes it and keeps its quit meaning.
+    else if (providersOpen()) {
+      if (key.ctrl && !key.meta && key.name === "c") controller.closeProviders()
+      else {
+        consume()
+        controller.providerKey(key)
         return
       }
     }
@@ -552,8 +558,8 @@ export function Composer() {
     event.preventDefault()
     event.stopPropagation()
     const text = new TextDecoder().decode(event.bytes)
-    if (entering()) {
-      controller.secretPaste(text)
+    if (providersOpen() && !store.state.picker) {
+      controller.providerPaste(text)
       return
     }
     // A bracketed paste never submits: its line breaks (CR from xterm.js) become newlines.
@@ -596,8 +602,8 @@ export function Composer() {
         height={rows() + 2}
         flexShrink={0}
         border
-        borderColor={shell() && !entering() ? colors.warning : colors.border}
-        title={shell() && !entering() ? "! shell" : undefined}
+        borderColor={shell() ? colors.warning : colors.border}
+        title={shell() ? "! shell" : undefined}
         backgroundColor={colors.panel}
         paddingX={1}
       >
@@ -612,13 +618,11 @@ export function Composer() {
           cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
-          visible={!entering()}
-          focused={!entering() && !store.state.picker}
+          focused={!providersOpen() && !store.state.picker}
           onSubmit={submit}
           onContentChange={sync}
           onCursorChange={() => updateMention()}
         />
-        <text width="100%" fg={colors.accent} visible={entering()}>{entering() ? `Key: ${store.state.secretMask}` : ""}</text>
       </box>
     </box>
   )

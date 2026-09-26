@@ -35,7 +35,7 @@ test.describe("hya TUI commands and look", () => {
     await term.press("Enter")
     await term.waitForText("Help · keys and commands")
     await term.type("/key")
-    await term.waitForText(/\/key set\|remove <provider>\s+\[local\]/)
+    await term.waitForText(/\/key\s+\[local\]\s+Open the Provider View/)
     await term.press("Escape")
     await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
 
@@ -43,29 +43,13 @@ test.describe("hya TUI commands and look", () => {
     await term.press("Enter")
     await term.waitForText("Models")
     await term.waitForText("hya/offline")
-    await term.waitForText("Next: /model <provider/model> to switch this session · /help")
+    await term.waitForText("Next: /model <provider/model> to switch this session · /key opens the Provider View · /help")
 
     await term.type("/api")
     await term.press("Enter")
     await term.waitForText("API commands")
     await term.waitForText("/v1/health")
     await term.waitForText("Next: /api GET /v1/health · /help for command syntax")
-  })
-
-  test("/key set conceals the key and Esc cancels the entry", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
-    await term.type("/key set openai")
-    await term.press("Enter")
-    await term.waitForText("Enter API key for openai · Enter saves · Esc cancels")
-    await term.waitForText("Paste API key · Enter saves · Esc cancels")
-    await term.type("sk-abc")
-    await term.waitForText("Key: ••••••")
-    expect(await term.text()).not.toContain("sk-abc")
-    await term.press("Escape")
-    await term.waitForText("Key entry cancelled")
-    await term.waitForText("Enter a prompt · /new creates a session · /help lists commands")
-    expect(await term.text()).not.toContain("Key: ")
   })
 
   test("narrow terminals hide the sidebar until Ctrl+B shows it", async ({ tui, backend }) => {
