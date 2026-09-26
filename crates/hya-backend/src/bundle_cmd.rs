@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use clap::{Args, Subcommand};
 use hya_app::project_bundles::{
     ProjectBundle, ProjectBundleError, find_project_bundle, install_project_bundle,
-    plan_project_install, project_bundles, project_bundles_dir, remove_project_bundle,
+    plan_project_install, project_bundles, remove_project_bundle,
 };
 use hya_bundle::{
     BundleCatalog, PackageInspection, PreparedCatalog, PreparedInstallableBundle,
@@ -650,6 +650,16 @@ fn explain_project_error(error: ProjectBundleError) -> anyhow::Error {
         ProjectBundleError::Store(error) => explain_store_error(error),
         error => error.into(),
     }
+}
+
+/// Project bundle directory of the current working directory:
+/// `$CWD/.hya/bundles`. `hya bundle install|remove --project` legitimately
+/// uses the caller's cwd directly (unlike the runtime, which loads project
+/// bundles per registered Project from every Project root — see
+/// `hya_app::ProjectScopeRefresh`).
+fn project_bundles_dir() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    Some(cwd.join(".hya/bundles"))
 }
 
 /// Project scope root: `.hya/bundles` under the current directory, the same

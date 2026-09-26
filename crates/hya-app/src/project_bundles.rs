@@ -24,16 +24,6 @@ use hya_bundle::{
 };
 use hya_store::{BundleInstallAction, NamespaceInstallPolicy, StoreError};
 
-/// Project bundle directory of the current working directory:
-/// `$CWD/.hya/bundles`. Only the local `hya bundle install|remove --project`
-/// commands use it; the runtime loads project bundles per registered Project
-/// from every Project root (see [`crate::ProjectScopeRefresh`]).
-#[must_use]
-pub fn project_bundles_dir() -> Option<std::path::PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    Some(cwd.join(".hya/bundles"))
-}
-
 /// One loaded project bundle: its prepared catalog, source directory, and the
 /// content digest that feeds the directory fingerprint.
 struct LoadedProjectBundle {

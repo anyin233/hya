@@ -233,6 +233,50 @@ fn run_honors_configured_default_agent_like_exec() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn exec_uses_a_project_bundle_agent_from_the_cwd_and_records_a_project_id()
+-> Result<(), Box<dyn std::error::Error>> {
+    // F1 design Q3: the process-start-dir catalog tier is gone; an in-process
+    // root session (`exec`/`run`/`-p` goal/`loop`/`workflow`) ensures a
+    // Project for its cwd instead, so that directory's `.hya/bundles`
+    // project bundle tier applies exactly like a routed (daemon) session's
+    // server-ensured Project, and the session itself carries a project id.
+    let env = IsolatedEnv::new("hya-exec-project-bundle-agent")?;
+    let bundle_dir = env.workdir.join(".hya/bundles/demo");
+    std::fs::create_dir_all(bundle_dir.join("prompts"))?;
+    std::fs::write(
+        bundle_dir.join("bundle.yaml"),
+        "kind: AgentBundle\n\
+         identity:\n  id: hya/exec-project-demo\n  version: 1.0.0\n  publisher: hya\n\
+         agent:\n  id: exec-project-lead\n  role: main\n  prompt: prompts/lead.md\n",
+    )?;
+    std::fs::write(
+        bundle_dir.join("prompts/lead.md"),
+        "You are the project bundle's lead agent.\n",
+    )?;
+    write_config_with_default_agent(&env, "exec-project-lead")?;
+
+    let output = hya_command(&env)
+        .args(["exec", "--json", "hello"])
+        .output()?;
+    assert_success("exec --json (project bundle agent)", &output);
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
+    assert_eq!(
+        agent, "exec-project-lead",
+        "hya exec must ensure a Project for its cwd so the `.hya/bundles` \
+         project bundle agent is selectable through the Project catalog scope:\n{stdout}"
+    );
+    let project = session_created_field(&stdout, "project")?.ok_or(
+        "hya exec must record a project id on the session_created event once it \
+         ensures a Project for its cwd",
+    )?;
+    assert!(!project.is_empty(), "{stdout}");
+
+    Ok(())
+}
+
+#[test]
 fn exec_fails_clearly_when_default_agent_is_unselectable() -> Result<(), Box<dyn std::error::Error>>
 {
     let env = IsolatedEnv::new("hya-exec-unknown-default-agent")?;

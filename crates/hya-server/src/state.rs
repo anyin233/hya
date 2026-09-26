@@ -42,7 +42,6 @@ pub struct AppState {
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
     projects_updates: broadcast::Sender<()>,
-    project_lock: Arc<tokio::sync::Mutex<()>>,
     scratch_root: Option<PathBuf>,
     streams: StreamShutdown,
     pure_guidance: bool,
@@ -84,7 +83,6 @@ impl AppState {
             default_agent: None,
             catalog_updates,
             projects_updates,
-            project_lock: Arc::new(tokio::sync::Mutex::new(())),
             scratch_root: hya_store::user_cache_dir().map(|dir| dir.join("scratch")),
             streams: StreamShutdown::default(),
             pure_guidance: false,
@@ -339,9 +337,6 @@ pub(crate) struct ServerState {
     pub(crate) default_agent: Option<String>,
     pub(crate) catalog_updates: broadcast::Sender<Value>,
     pub(crate) projects_updates: broadcast::Sender<()>,
-    /// Serializes find-or-create of a Project (`EnsureProjectForPath`), so
-    /// two local clients starting in the same directory share one Project.
-    pub(crate) project_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) scratch_root: Option<PathBuf>,
     pub(crate) streams: StreamShutdown,
     pub(crate) pure_guidance: bool,
@@ -372,7 +367,6 @@ impl ServerState {
             default_agent: app.default_agent,
             catalog_updates: app.catalog_updates,
             projects_updates: app.projects_updates,
-            project_lock: app.project_lock,
             scratch_root: app.scratch_root,
             streams: app.streams,
             pure_guidance: app.pure_guidance,

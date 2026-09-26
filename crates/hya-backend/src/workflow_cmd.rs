@@ -145,6 +145,12 @@ impl WorkflowRuntime {
             );
             session
         } else {
+            // Ensure a Project for `workdir` before binding runtime, so a
+            // `.hya/bundles` project bundle agent is selectable below (F1
+            // design Q3, same as `exec`/`run`/`-p` goal/`loop`).
+            let project_id = crate::ensure_project_for_workdir(engine.store(), &workdir)
+                .await
+                .context("ensure project for cwd")?;
             // Same `default_agent` precedence/failure mode as `serve` and
             // `exec`: config `default_agent`, then the built-in default; an
             // unselectable id fails clearly rather than falling back silently.
@@ -170,7 +176,7 @@ impl WorkflowRuntime {
                     agent: agent.name.clone(),
                     model,
                     workdir: workdir.to_string_lossy().into_owned(),
-                    project: None,
+                    project: Some(project_id),
                     kind: hya_proto::SessionKind::Project,
                 })
                 .await
