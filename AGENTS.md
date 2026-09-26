@@ -189,7 +189,7 @@ For Rust changes, run:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --jobs 1 --exclude hya-e2e
+cargo test --workspace --exclude hya-e2e
 ```
 
 Exclude `hya-e2e` from the default workspace suite (matches CI): Track P spawns

@@ -214,4 +214,4 @@ PTY/workspace/sync behavior, and ACP.
 
 Each candidate should be implemented with a red test first, verified with
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-and `cargo test --workspace --jobs 1 --exclude hya-e2e`, then committed atomically.
+and `cargo test --workspace --exclude hya-e2e`, then committed atomically.

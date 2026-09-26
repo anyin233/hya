@@ -564,7 +564,7 @@ decisions are unchanged.
 
 Each phase lands TDD-first (one atomic failing test per behavior) with the
 Rust gate `cargo fmt --all --check && cargo clippy --workspace --all-targets
--- -D warnings && cargo test --workspace --jobs 1 --exclude hya-e2e`, plus the
+-- -D warnings && cargo test --workspace --exclude hya-e2e`, plus the
 process gate for agent-surface phases
 ([docs/testing/agent-matrix.md](../testing/agent-matrix.md)).
 
