@@ -125,13 +125,17 @@ symlinks before deciding, so a link inside a root that points elsewhere counts
 as outside.
 
 A path outside every root raises an `ExternalDirectory` ask for a concrete
-`<dir>/*` pattern, before the tool's normal `read`/`edit` check. `apply_patch`
+`<dir>/*` pattern, before the tool's normal `read`/`edit` check. `<dir>` is
+the canonical directory the path really lives in (symlinks resolved), and an
+"allow always" on the ask covers exactly that directory: not its
+subdirectories, and glob characters in the path are never interpreted. `apply_patch`
 refuses such a path with an input error instead of asking. `bash` has no path
 boundary: its `cwd` may be anywhere, and only its command rules apply.
 
 For example, with roots `/work/app` and `/work/lib` and workdir `/work/app`,
 `read {"path": "/work/lib/src/mod.rs"}` runs without asking, while
-`read {"path": "/etc/hosts"}` asks `ExternalDirectory` for `/etc/*`, and in
+`read {"path": "/etc/hosts"}` asks `ExternalDirectory` for `/etc/*` (on
+macOS, where `/etc` links to `/private/etc`, for `/private/etc/*`), and in
 yolo (`danger`) mode runs without asking.
 
 ```rust
@@ -141,7 +145,7 @@ use hya_tool::ProjectScope;
 let roots = [PathBuf::from("/work/app"), PathBuf::from("/work/lib")];
 let scope = ProjectScope::new(Path::new("/work/app"), &roots);
 let inside = scope.contains(Path::new("/work/lib/src/mod.rs"));
-let ask = scope.outside_dir_pattern(Path::new("/etc/hosts")); // "/etc/*"
+let ask = scope.outside_dir_pattern(Path::new("/etc/hosts")); // "/etc/*" (canonical)
 ```
 
 `ProjectScope` interface (`crates/hya-tool/src/project_scope.rs`):
@@ -151,8 +155,8 @@ let ask = scope.outside_dir_pattern(Path::new("/etc/hosts")); // "/etc/*"
 | `ProjectScope::new(workdir, roots)` | Canonicalizes each root once; an unresolvable root keeps its lexical absolute form; empty `roots` means `[workdir]`. |
 | `ProjectScope::for_ctx(ctx)` | `new(&ctx.workdir, &ctx.roots)`. |
 | `contains(path) -> bool` | Relative paths resolve against the workdir. Canonicalizes the path, or its nearest existing ancestor plus the missing remainder (a `..` in the remainder is outside). Component-wise containment in any root. Unreadable paths and symlink loops are outside. |
-| `outside_dir_pattern(path) -> String` | `<lexical parent>/*`, the file-tool ask resource. |
-| `outside_directory_pattern(dir) -> String` | `<dir>/*`, the directory-tool (`ls`, `find`) ask resource. |
+| `outside_dir_pattern(path) -> String` | `<canonical parent>/*`, the file-tool ask resource: the path is resolved like `contains` (a symlinked file names its target's directory) and falls back to its lexical form when it cannot be resolved. |
+| `outside_directory_pattern(dir) -> String` | `<canonical dir>/*`, the directory-tool (`ls`, `find`) ask resource. |
 | `authorize(plane, path, pattern)` | Asks `ExternalDirectory` for `pattern(scope)` unless `contains(path)`. |
 
 ## Interface definitions

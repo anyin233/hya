@@ -31,7 +31,8 @@ fn tempdir() -> PathBuf {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("hya-read-{nanos}-{}-{id}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    // Canonical, like the `ExternalDirectory` resources tools ask for.
+    std::fs::canonicalize(dir).unwrap()
 }
 
 fn ctx_with(workdir: PathBuf) -> ToolCtx {

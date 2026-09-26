@@ -304,6 +304,7 @@ Every resource flattens to a single match-pattern string via `Resource::pattern(
 `Rule(action, "*", Allow)` and then allows the entire action
 ([`apply_decision`](../../crates/hya-tool/src/permission.rs)), except for
 `ExternalDirectory`, which remembers only the concrete `<dir>/*` it asked for
+and then covers exactly that one directory
 (see [Remember scope for outside directories](#remember-scope-for-outside-directories)).
 
 The plugin wire form of the same union is `WireResource`: tagged variants
@@ -367,8 +368,9 @@ When an action evaluates to `Ask`:
 ADR-0026: an "allow always" on an `ExternalDirectory` ask approves one
 directory for one Project, not the disk. The ask carries
 `RememberScope::Scoped { pattern, scope }`, where `pattern` is the concrete
-`<dir>/*` resource that was asked (it also covers subdirectories, since `*`
-matches `/`) and `scope` is the plane's `GrantScope`:
+`<dir>/*` resource that was asked (`<dir>` is canonical, see
+[External directory boundary](#external-directory-boundary)) and `scope` is
+the plane's `GrantScope`:
 
 - **`GrantScope::Project(id)`** — set by the engine at each turn start
   (`PermissionPlane::with_grant_scope`) when the session (or, for a
@@ -383,12 +385,32 @@ by planes of the same scope. Other actions keep their remember behavior.
 Global rules (configured rules, legacy action-wide `*` grants, including an
 old saved `externaldirectory` `*` row) still apply to every session.
 
+**A remembered grant covers exactly one directory.** Remembered
+`ExternalDirectory` grants (scoped rules, saved rows, and the plane-wide
+grant of a plane with neither Project nor session) are not globs:
+`external_directory_grant_matches` compares the directory the grant names
+with the directory the ask names, as strings, after stripping one trailing
+`/*` from each (`/` for the root). So approving `/home/u/notes.txt`
+(`/home/u/*`) does not allow `/home/u/.ssh/*`; each subdirectory asks on its
+own. Glob metacharacters in a path are never interpreted, so a directory
+named `a*` cannot widen a grant to `abc`. Because the ask names the canonical
+directory, a symlink cannot make an approved directory reach anywhere else.
+The literal pattern `*` is the one exception: it still means every directory
+(legacy global rows). A saved row written before this rule (`<dir>/*`) or a
+bare `<dir>` row grants exactly `<dir>`.
+
+Configured rules (the plane's snapshot, including the per-turn attached
+directories below) keep glob semantics: `<dir>/*` there covers the whole tree
+under `<dir>`, because a user wrote it on purpose. Only remembered grants are
+exact.
+
 ### Saved grants
 
 An "allow always" answered by a client through the server
 (`POST /v1/interactions/{id}/respond`) is also persisted as a
 `saved_permission` row (`id`, `project_id`, `action` — the serde name above,
-`resource` — the exact subject value, `*`, or a concrete `<dir>/*`,
+`resource` — the exact subject value, `*`, or a concrete `<dir>/*` naming
+one canonical directory,
 `time_created` — ms since the epoch; migration `0013` added it, older rows
 keep it `NULL`). `project_id` is `global` for invocation and action-wide
 grants, which apply to every session because every session plane is derived
@@ -476,9 +498,13 @@ containment for every file tool:
   (permission denied, symlink loop) is treated as outside, so it asks.
 
 For a path outside, the tool asserts `Action::ExternalDirectory` on a
-concrete `<dir>/*` pattern **before** the normal Read/Edit/Lsp/… check. The
-pattern is built from the lexical path the tool was given (not the resolved
-target). The assert goes through the normal `PermissionPlane` order, so
+concrete `<dir>/*` pattern **before** the normal Read/Edit/Lsp/… check.
+`<dir>` is canonical: the path is resolved like a containment check (symlinks
+followed, a missing tail re-appended to its nearest existing ancestor) and
+the directory it really lives in is named, so `read ~/link/x` where `link`
+points at `/etc` asks for `/etc/*`, and a file that is itself a symlink names
+its target's directory. A path that cannot be resolved falls back to its
+lexical form. The assert goes through the normal `PermissionPlane` order, so
 `danger` (yolo) and `allow` models auto-approve it, and a bundle mode's
 `permission.approve` interceptor receives it like any other ask. Call-level
 invocation grants never satisfy `ExternalDirectory`, so it prompts separately
@@ -489,15 +515,15 @@ even inside an already-approved tool call. Canonicalization costs a few
 
 | Tool | What is gated |
 | --- | --- |
-| `read` | Resolved file or directory path (`<parent>/*` when outside). |
-| `write` | Resolved file path (`<parent>/*` when outside). |
-| `edit` | Resolved file path (`<parent>/*` when outside). |
+| `read` | Resolved file or directory path (canonical `<parent>/*` when outside). |
+| `write` | Resolved file path (canonical `<parent>/*` when outside). |
+| `edit` | Resolved file path (canonical `<parent>/*` when outside). |
 | `apply_patch` | Relative paths resolve against the workdir; absolute paths are accepted. A `..` component is an **input error**, and so is a path outside every root (including through a symlink). ExternalDirectory is never raised; each surviving path is then checked as `Action::Edit`. |
-| `lsp` | Resolved file path (`<parent>/*` when outside). |
-| `glob` | Search root when outside (kind-blind `<parent>/*`). |
-| `grep` | Search root, file or directory, when outside (kind-blind `<parent>/*`). |
-| `find` | Resolved search root directory when outside (`<root>/*`); asserts `Action::Glob` on the pattern first. |
-| `ls` | Resolved directory when outside (`<dir>/*`), then `Action::Read` on the directory. |
+| `lsp` | Resolved file path (canonical `<parent>/*` when outside). |
+| `glob` | Search root when outside (kind-blind canonical `<parent>/*`). |
+| `grep` | Search root, file or directory, when outside (kind-blind canonical `<parent>/*`). |
+| `find` | Resolved search root directory when outside (canonical `<root>/*`); asserts `Action::Glob` on the pattern first. |
+| `ls` | Resolved directory when outside (canonical `<dir>/*`), then `Action::Read` on the directory. |
 | `bash` (including hidden `shell`) | **Nothing path-based.** Its `cwd` may be any directory and its command's file effects are not inspected; only `Action::Bash` invocation rules apply. Its output artifacts stay under `<workdir>/.hya/tool-output`. |
 
 ### Per-turn external directories
@@ -511,8 +537,10 @@ only
 Rule { action: ExternalDirectory, resource: "<dir>/*", mode: Allow }
 ```
 
-for each directory in `external_dirs`. Directories the caller explicitly
-attached therefore never prompt for that turn. The overlay is **not** persisted
+for each directory in `external_dirs`, canonicalized to meet the canonical
+ask. These are snapshot rules, so they keep glob semantics and cover the
+attached tree. Directories the caller explicitly attached therefore never
+prompt for that turn. The overlay is **not** persisted
 as a `SessionPermissionSet` and does not survive the turn. The v1 turn path
 derives the list from the session's reference directories
 ([`reference.rs`](../../crates/hya-server/src/support/reference.rs)).

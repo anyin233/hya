@@ -8,6 +8,13 @@
 //!
 //! Call-scoped grants from a successful invocation authorize later resource
 //! checks **except** [`Action::ExternalDirectory`], which always re-evaluates.
+//!
+//! Configured (snapshot) rules match their resource pattern as a `*` glob.
+//! Remembered "allow always" grants match the same way, except
+//! [`Action::ExternalDirectory`] grants: those cover exactly one directory and
+//! are compared by equality ([`external_directory_grant_matches`]), so an
+//! approved directory never extends to its subdirectories or, through a
+//! literal `*` in a path, to its siblings (ADR-0026).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -405,6 +412,8 @@ impl PermissionRules {
     }
 
     /// Evaluate all matching rules for `action`/`resource`; default is ask.
+    ///
+    /// Patterns are `*` globs; use this for configured rules.
     #[must_use]
     pub fn evaluate(&self, action: Action, resource: &Resource) -> Mode {
         let target = resource.pattern();
@@ -415,6 +424,25 @@ impl PermissionRules {
             }
         }
         mode
+    }
+
+    /// Whether a remembered "allow always" grant allows `action`/`resource`.
+    ///
+    /// An [`Action::ExternalDirectory`] grant matches by
+    /// [`external_directory_grant_matches`]; every other grant is a `*` glob,
+    /// as in [`Self::evaluate`].
+    #[must_use]
+    fn grants(&self, action: Action, resource: &Resource) -> bool {
+        let target = resource.pattern();
+        self.rules.iter().any(|rule| {
+            rule.action == action
+                && rule.mode == Mode::Allow
+                && if action == Action::ExternalDirectory {
+                    external_directory_grant_matches(&rule.resource_pattern, &target)
+                } else {
+                    glob_match(&rule.resource_pattern, &target)
+                }
+        })
     }
 
     /// Clone rules and append `extra` for a turn-scoped overlay.
@@ -453,6 +481,30 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
         pi += 1;
     }
     pi == p.len()
+}
+
+/// Whether a remembered `ExternalDirectory` grant `pattern` covers the asked
+/// resource `target` (ADR-0026).
+///
+/// The literal pattern `*` (a legacy action-wide grant) covers everything.
+/// Any other pattern names exactly one directory: `<dir>/*` (as asked and
+/// stored) or a bare `<dir>`. It covers `target` only when both name the same
+/// directory, compared as strings; glob metacharacters are never interpreted,
+/// and subdirectories are not covered. Asked resources carry the canonical
+/// directory, so a symlink cannot make one directory pass for another.
+#[must_use]
+pub fn external_directory_grant_matches(pattern: &str, target: &str) -> bool {
+    pattern == "*" || grant_directory(pattern) == grant_directory(target)
+}
+
+/// The directory an `ExternalDirectory` pattern or resource names: the text
+/// before one trailing `/*`, `/` for the root.
+fn grant_directory(pattern: &str) -> &str {
+    match pattern.strip_suffix("/*") {
+        Some("") => "/",
+        Some(directory) => directory,
+        None => pattern,
+    }
 }
 
 /// Denial or infrastructure failure from the permission plane.
@@ -560,6 +612,7 @@ pub trait PermissionInterceptor: Send + Sync {
 #[derive(Clone)]
 pub struct PermissionPlane {
     snapshot: Arc<PermissionRules>,
+    /// Remembered plane-wide "allow always" grants (never configured rules).
     persistent: Arc<Mutex<PermissionRules>>,
     invocation_policy: Option<Arc<InvocationPolicy>>,
     native_grants: Arc<Mutex<HashSet<ExactSubject>>>,
@@ -626,8 +679,8 @@ impl PermissionPlane {
     ) -> (Self, mpsc::UnboundedReceiver<AskRequest>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let plane = Self {
-            snapshot: Arc::new(rules.clone()),
-            persistent: Arc::new(Mutex::new(rules)),
+            snapshot: Arc::new(rules),
+            persistent: Arc::default(),
             invocation_policy: invocation_policy.map(Arc::new),
             native_grants: Arc::default(),
             scoped: Arc::default(),
@@ -918,7 +971,7 @@ impl PermissionPlane {
         if self.call_grant && action != Action::ExternalDirectory {
             return Ok(());
         }
-        if self.persistent.lock().await.evaluate(action, &resource) == Mode::Allow {
+        if self.persistent.lock().await.grants(action, &resource) {
             return Ok(());
         }
         let scope = self.grant_scope();
@@ -928,12 +981,13 @@ impl PermissionPlane {
                 .lock()
                 .await
                 .get(scope)
-                .is_some_and(|rules| rules.evaluate(action, &resource) == Mode::Allow)
+                .is_some_and(|rules| rules.grants(action, &resource))
         {
             return Ok(());
         }
         // ADR-0026: an outside directory is remembered as the concrete
-        // directory for this Project (or session), never as `*`.
+        // directory for this Project (or session), never as `*`; it later
+        // covers exactly that directory.
         let remember = if action == Action::ExternalDirectory {
             RememberScope::Scoped {
                 pattern: resource.pattern(),

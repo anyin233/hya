@@ -54,8 +54,9 @@ fn relative_title(path: &Path, workdir: &Path) -> String {
 /// Project root (ADR-0026).
 ///
 /// Containment is judged by [`ProjectScope`] after symlink resolution. The
-/// asked resource names the target directory itself when `is_directory`,
-/// otherwise the target's lexical parent directory, followed by `/*`.
+/// asked resource names the canonical target directory itself when
+/// `is_directory`, otherwise the canonical directory the target lives in,
+/// followed by `/*`. An "allow always" on it covers exactly that directory.
 ///
 /// # Errors
 /// Returns the permission plane's denial or unavailability.
@@ -77,7 +78,7 @@ pub(crate) async fn assert_external_directory(
 }
 
 /// Authorize an external Grep or Glob target with one kind-blind resource:
-/// the target's lexical parent directory followed by `/*`.
+/// the canonical directory the target lives in, followed by `/*`.
 pub(crate) async fn assert_external_search_target(
     ctx: &ToolCtx,
     target: &Path,

@@ -2184,9 +2184,13 @@ fn permission_for_session(
     external_dirs: &[PathBuf],
 ) -> PermissionPlane {
     let permission = permission.for_session(session);
+    // `ExternalDirectory` asks name canonical directories (ADR-0026), so the
+    // attached directories are canonicalized to meet them. These are
+    // configured-style glob rules: they cover the attached tree.
     let rules = external_dirs
         .iter()
         .map(|dir| {
+            let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
             Rule::new(
                 Action::ExternalDirectory,
                 dir.join("*").to_string_lossy().replace('\\', "/"),
