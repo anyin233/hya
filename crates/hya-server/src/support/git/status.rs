@@ -5,18 +5,21 @@ use crate::ApiError;
 use super::{GitItem, status_name, text};
 
 pub(super) fn items(workdir: &Path) -> Result<Vec<GitItem>, ApiError> {
-    let out = text(
-        workdir,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-uall",
-            "--no-renames",
-            "-z",
-            "--",
-            ".",
-        ],
-    )?;
+    items_in(workdir, &[".".to_owned()])
+}
+
+/// Status items restricted to `pathspecs` (relative to `workdir`).
+pub(super) fn items_in(workdir: &Path, pathspecs: &[String]) -> Result<Vec<GitItem>, ApiError> {
+    let mut args = vec![
+        "status",
+        "--porcelain=v1",
+        "-uall",
+        "--no-renames",
+        "-z",
+        "--",
+    ];
+    args.extend(pathspecs.iter().map(String::as_str));
+    let out = text(workdir, &args)?;
     let mut items: Vec<_> = out
         .split('\0')
         .filter(|line| !line.is_empty())

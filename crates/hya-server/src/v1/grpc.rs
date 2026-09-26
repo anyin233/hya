@@ -75,7 +75,7 @@ impl V1Grpc {
         &self,
         method: &str,
         path: &str,
-        query: BTreeMap<String, String>,
+        query: impl IntoIterator<Item = (String, String)>,
         request: &Req,
     ) -> Result<Resp, Status>
     where
@@ -83,9 +83,9 @@ impl V1Grpc {
         Resp: DeserializeOwned,
     {
         let mut uri = String::from(path);
-        for (index, (key, value)) in query.iter().enumerate() {
+        for (index, (key, value)) in query.into_iter().enumerate() {
             uri.push(if index == 0 { '?' } else { '&' });
-            uri.push_str(&format!("{}={}", encode(key), encode(value)));
+            uri.push_str(&format!("{}={}", encode(&key), encode(&value)));
         }
         let body = serde_json::to_vec(request)
             .map_err(|error| Status::internal(format!("serialize request: {error}")))?;
@@ -141,9 +141,10 @@ fn body_len(body: &[u8]) -> String {
     body.len().to_string()
 }
 
-/// Serialize a request into non-empty query parameters.
-fn query_of<Req: Serialize>(request: &Req) -> BTreeMap<String, String> {
-    let mut query = BTreeMap::new();
+/// Serialize a request into non-empty query parameters. A repeated string
+/// field becomes one `key=value` pair per element (`?paths=a&paths=b`).
+fn query_of<Req: Serialize>(request: &Req) -> Vec<(String, String)> {
+    let mut query = Vec::new();
     let Ok(Value::Object(map)) = serde_json::to_value(request) else {
         return query;
     };
@@ -152,10 +153,20 @@ fn query_of<Req: Serialize>(request: &Req) -> BTreeMap<String, String> {
             Value::String(text) => text,
             Value::Number(number) => number.to_string(),
             Value::Bool(flag) => flag.to_string(),
+            Value::Array(items) => {
+                for item in items {
+                    if let Value::String(text) = item
+                        && !text.is_empty()
+                    {
+                        query.push((key.clone(), text));
+                    }
+                }
+                continue;
+            }
             _ => continue,
         };
         if !text.is_empty() && text != "0" && text != "false" {
-            query.insert(key, text);
+            query.push((key, text));
         }
     }
     query
@@ -885,6 +896,7 @@ impl pb::events_server::Events for V1Grpc {
             self.state.clone(),
             super::events::StreamScope::session(session, inner.include_descendants),
             inner.since_seq,
+            false,
         ))))
     }
 
@@ -900,6 +912,7 @@ impl pb::events_server::Events for V1Grpc {
             self.state.clone(),
             super::events::StreamScope::Global,
             inner.since_seq,
+            inner.interactions_only,
         ))))
     }
 }

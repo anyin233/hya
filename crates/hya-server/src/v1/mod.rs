@@ -29,9 +29,12 @@ mod worktree;
 
 use std::collections::BTreeMap;
 
+use axum::Router;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -60,6 +63,43 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(worktree::router())
         .merge(mcp::router())
         .merge(pty::router())
+}
+
+/// The v1 JSON body extractor and response: `axum::Json`, except that a body
+/// that fails to decode (malformed JSON, a wrong field type, an out-of-range
+/// number, a missing JSON content type) is a v1 `invalid_argument` error in
+/// the `{"error": {...}}` shape instead of axum's plain-text 400/415/422.
+/// An oversized body keeps the transport's 413.
+pub(crate) struct Json<T>(pub(crate) T);
+
+#[axum::async_trait]
+impl<T, S> FromRequest<S> for Json<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::Json::<T>::from_request(req, state).await {
+            Ok(axum::Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err(json_rejection(rejection)),
+        }
+    }
+}
+
+fn json_rejection(rejection: JsonRejection) -> Response {
+    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return rejection.into_response();
+    }
+    V1Error::invalid_argument(format!("invalid request body: {}", rejection.body_text()))
+        .into_response()
+}
+
+impl<T: Serialize> IntoResponse for Json<T> {
+    fn into_response(self) -> Response {
+        axum::Json(self.0).into_response()
+    }
 }
 
 /// One failed v1 call rendered as `{"error": {"code", "message"}}` with the
@@ -185,10 +225,30 @@ pub(crate) fn query_request<T: DeserializeOwned>(
     path_vars: &[(&str, &str)],
     query: &BTreeMap<String, String>,
 ) -> Result<T, V1Error> {
+    query_request_pairs(path_vars, query.iter(), &[])
+}
+
+/// [`query_request`] over raw query pairs, where each key in `repeated`
+/// (a `repeated` proto field) collects every occurrence into a JSON array
+/// (`?paths=a&paths=b`). Other keys keep the last occurrence.
+pub(crate) fn query_request_pairs<'a, T: DeserializeOwned>(
+    path_vars: &[(&str, &str)],
+    query: impl IntoIterator<Item = (&'a String, &'a String)>,
+    repeated: &[&str],
+) -> Result<T, V1Error> {
     let mut map = serde_json::Map::new();
     let mut page = serde_json::Map::new();
     for (key, value) in query {
         if value.is_empty() {
+            continue;
+        }
+        if repeated.contains(&key.as_str()) {
+            let entry = map
+                .entry(key.clone())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(items) = entry {
+                items.push(Value::String(value.clone()));
+            }
             continue;
         }
         // Query strings carry every value as text; protojson bools need

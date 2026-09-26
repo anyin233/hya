@@ -1,9 +1,11 @@
 //! `/v1` MCP domain: desired-state registry and connection control over
 //! the app-owned MCP control handle.
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+
+use super::Json;
 use hya_mcp::{McpServerConfig, McpStatus};
 
 use crate::ServerState;
@@ -115,12 +117,7 @@ async fn connect(
         .mcp_control
         .set_enabled(name.clone(), true)
         .await
-        .map_err(|_| {
-            V1Error::new(
-                hya_api::error::Code::NotFound,
-                format!("unknown mcp server: {name}"),
-            )
-        })?;
+        .map_err(V1Error::unavailable)?;
     if !enabled {
         return Err(V1Error::new(
             hya_api::error::Code::NotFound,
@@ -140,12 +137,7 @@ async fn disconnect(
         .mcp_control
         .set_enabled(name.clone(), false)
         .await
-        .map_err(|_| {
-            V1Error::new(
-                hya_api::error::Code::NotFound,
-                format!("unknown mcp server: {name}"),
-            )
-        })?;
+        .map_err(V1Error::unavailable)?;
     if !disabled {
         return Err(V1Error::new(
             hya_api::error::Code::NotFound,

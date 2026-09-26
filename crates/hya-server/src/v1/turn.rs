@@ -7,9 +7,11 @@
 
 use std::time::Duration;
 
+use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+
+use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;

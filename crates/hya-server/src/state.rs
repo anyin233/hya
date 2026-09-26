@@ -102,6 +102,19 @@ impl AppState {
         self
     }
 
+    /// Reload saved "allow always" grants from the store into the engine's
+    /// process permission plane, so remembered approvals survive a restart.
+    /// Call once at startup before serving; returns how many grants were
+    /// restored.
+    ///
+    /// # Errors
+    /// Returns the store error when the saved rows cannot be read.
+    pub async fn restore_saved_permissions(&self) -> Result<usize, hya_store::StoreError> {
+        self.permission_requests
+            .restore_saved(self.engine.permission_plane())
+            .await
+    }
+
     /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
@@ -152,7 +165,8 @@ impl AppState {
         self
     }
 
-    /// Publish a Compat `catalog.updated` event to global/session SSE subscribers.
+    /// Publish a provider-catalog change: every v1 event stream (global and
+    /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame.
     pub fn notify_catalog_updated(&self) {
         let payload = serde_json::json!({
             "id": format!(

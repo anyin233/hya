@@ -2,9 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+
+use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;
@@ -270,7 +272,7 @@ async fn fork_session(
         .record_session_forked(target, source, before)
         .await?;
     st.engine
-        .set_title(target, format!("forked from {source}"))
+        .set_title(target, fork_title(&projection, source))
         .await?;
     if let Some(metadata) = projection.session.metadata.clone() {
         st.engine.set_metadata(target, metadata).await?;
@@ -284,6 +286,24 @@ async fn fork_session(
     }))
 }
 
+/// Title of a fork: `<source title> (fork)`, the source id standing in for
+/// a missing or default title. The suffix is not stacked on a fork of a
+/// fork. Not a default title, so automatic titling never renames the fork.
+fn fork_title(source: &hya_proto::Projection, id: hya_proto::SessionId) -> String {
+    const SUFFIX: &str = " (fork)";
+    let title = source
+        .session
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty() && !hya_core::title::is_default_or_fallback_title(title));
+    match title {
+        Some(title) if title.ends_with(SUFFIX) => title.to_owned(),
+        Some(title) => format!("{title}{SUFFIX}"),
+        None => format!("{id}{SUFFIX}"),
+    }
+}
+
 fn parse_message(id: &str) -> Result<hya_proto::MessageId, V1Error> {
     id.parse::<hya_proto::MessageId>()
         .map_err(|_| V1Error::invalid_argument(format!("invalid message id: {id}")))
@@ -292,6 +312,8 @@ fn parse_message(id: &str) -> Result<hya_proto::MessageId, V1Error> {
 async fn compact_session(
     State(st): State<ServerState>,
     AxumPath(id): AxumPath<String>,
+    // `until_seq` is deprecated and ignored: a manual compaction always folds
+    // the whole transcript at the head (see `CompactSessionRequest`).
     Json(_request): Json<pb::CompactSessionRequest>,
 ) -> Result<Json<pb::CompactSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
@@ -300,7 +322,10 @@ async fn compact_session(
             let projection = st.engine.read_projection(session).await?;
             Ok(Json(pb::CompactSessionResponse {
                 compacted_until_seq: projection.last_seq,
-                strategy: "soft".to_owned(),
+                // `summarize_session` records a local-summarizer fold.
+                strategy: hya_proto::CompactionStrategy::LocalSummarizer
+                    .as_str()
+                    .to_owned(),
             }))
         }
         Err(hya_core::CoreError::Invalid(message)) if message == "summarizer not configured" => {

@@ -3,10 +3,12 @@
 
 use std::collections::BTreeMap;
 
+use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::routing::get;
-use axum::{Json, Router};
+
+use super::Json;
 use serde_json::Value;
 
 use crate::ServerState;

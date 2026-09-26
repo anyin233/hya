@@ -387,6 +387,9 @@ struct ParsedModel {
     limit: Option<hya_provider::ModelLimitOverride>,
     /// Image input from `modalities.input`; `None` when not declared.
     image_input: Option<bool>,
+    /// Reasoning support the config declares (`reasoning: true|false` or a
+    /// `reasoning:` mapping); `None` when the entry has no `reasoning`.
+    reasoning_declared: Option<bool>,
 }
 
 /// Validate one model `modalities` block: a mapping whose optional `input`
@@ -1664,6 +1667,11 @@ fn resolve_providers_filtered(
                 ),
             };
             let reasoning_off = matches!(reasoning_field, Some(ReasoningField::Flag(false)));
+            let reasoning_declared = match reasoning_field {
+                Some(ReasoningField::Flag(flag)) => Some(*flag),
+                Some(ReasoningField::Detailed(_)) => Some(true),
+                None => None,
+            };
             let reasoning = match reasoning_field {
                 Some(ReasoningField::Detailed(config)) => Some(config),
                 _ => None,
@@ -1741,6 +1749,7 @@ fn resolve_providers_filtered(
                 explicit_default,
                 limit,
                 image_input,
+                reasoning_declared,
             });
         }
         let api_key = if resolve_secrets {
@@ -2167,6 +2176,9 @@ struct EffectiveModel {
     limit: hya_provider::ModelLimitOverride,
     /// Declared image input (config `modalities.input`); `None` unknown.
     image_input: Option<bool>,
+    /// Declared reasoning support (config `reasoning`, else remote-list
+    /// effort metadata); `None` unknown.
+    reasoning_declared: Option<bool>,
     source: ModelCatalogSource,
 }
 
@@ -2207,6 +2219,7 @@ fn merge_provider_models(
                 reasoning_default: model.reasoning_default,
                 limit: model.limit.clone().unwrap_or_default(),
                 image_input: model.image_input,
+                reasoning_declared: model.reasoning_declared,
                 source: ModelCatalogSource::Configured,
             });
         }
@@ -2228,6 +2241,17 @@ fn cached_variants(kind: ProviderKind, row: &crate::model_cache::CachedModel) ->
     }
 }
 
+/// Reasoning support a cached remote row declares: effort metadata means
+/// `Some(true)`; a row without any is unknown.
+fn cached_reasoning_declared(row: &crate::model_cache::CachedModel) -> Option<bool> {
+    let declared = row
+        .reasoning_variants
+        .iter()
+        .any(|variant| ReasoningEffort::parse(variant).is_some())
+        || row.reasoning_default.is_some();
+    declared.then_some(true)
+}
+
 fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> EffectiveModel {
     EffectiveModel {
         id: row.id.trim().to_string(),
@@ -2242,6 +2266,7 @@ fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> Ef
             output: row.output_limit,
         },
         image_input: None,
+        reasoning_declared: cached_reasoning_declared(row),
         source: ModelCatalogSource::Discovered,
     }
 }
@@ -2298,6 +2323,9 @@ fn override_model(
         reasoning_default,
         limit,
         image_input: config.image_input,
+        reasoning_declared: config
+            .reasoning_declared
+            .or_else(|| cached_reasoning_declared(row)),
         source: ModelCatalogSource::Overridden,
     }
 }
@@ -2344,7 +2372,12 @@ fn route_for_models(
         models
             .iter()
             .filter_map(|model| model.image_input.map(|image| (model.id.clone(), image))),
-    );
+    )
+    .with_model_reasoning_declared(models.iter().filter_map(|model| {
+        model
+            .reasoning_declared
+            .map(|declared| (model.id.clone(), declared))
+    }));
     if credential.use_codex_session {
         route = route.with_codex_session_auth(credential.account_id.clone());
     }
@@ -4131,7 +4164,11 @@ plugins:
         assert_eq!(caps("glm-5.3-flash").max_output, 131_072);
         assert_eq!(caps("glm-5.3-flash").max_context, 1_048_576);
         assert_eq!(caps("glm-5.3").max_output, 0, "unlimited rows stay unknown");
-        assert_eq!(caps("glm-5.3").max_context, 200_000);
+        assert_eq!(
+            caps("glm-5.3").max_context,
+            0,
+            "a model without a known window reports it unknown"
+        );
         assert_eq!(caps("glm-5.3-ctx").max_context, 262_144);
         assert_eq!(caps("glm-5.3-ctx").max_output, 0);
         let route = plan.route.unwrap();
@@ -4234,6 +4271,63 @@ providers:
         assert_eq!(shared_row.source, ModelCatalogSource::Overridden);
         assert_eq!(shared_row.display_name.as_deref(), Some("Shared (config)"));
         assert_eq!(shared_row.capabilities.max_context, 100_000);
+    }
+
+    /// Catalog rows report metadata the model does not publish as unknown:
+    /// no context window and no reasoning claim, while the route keeps its
+    /// runtime fallbacks (context window and the kind's effort menu).
+    #[test]
+    fn catalog_rows_report_unknown_metadata_as_unknown() {
+        let provider = parse_providers(
+            r#"
+providers:
+  gw:
+    kind: openai-response
+    base_url: https://gw.example/v1
+    models:
+      - plain
+      - id: thinks
+        reasoning: true
+      - id: never
+        reasoning: false
+"#,
+        )
+        .unwrap()
+        .remove(0);
+        let mut declared = cached("remote-reasoning");
+        declared.reasoning_variants = vec!["low".into()];
+        let plan = plan_for_provider(
+            &provider,
+            &no_key(),
+            &[cached("remote-bare"), declared],
+            None,
+        )
+        .unwrap();
+        let row = |id: &str| {
+            plan.models
+                .iter()
+                .find(|row| row.model_id == id)
+                .cloned()
+                .unwrap()
+        };
+        for id in ["plain", "remote-bare"] {
+            assert_eq!(row(id).capabilities.max_context, 0, "{id}");
+            assert_eq!(row(id).reasoning, None, "{id}");
+            assert!(
+                !row(id).reasoning_variants.is_empty(),
+                "{id}: the kind's effort menu still applies at runtime"
+            );
+        }
+        assert_eq!(row("thinks").reasoning, Some(true));
+        assert_eq!(row("never").reasoning, Some(false));
+        assert_eq!(row("remote-reasoning").reasoning, Some(true));
+        let route = plan.route.unwrap();
+        assert_eq!(
+            hya_provider::Provider::capabilities(&route, &hya_proto::ModelRef::new("gw/plain"))
+                .map(|caps| caps.max_context),
+            Some(200_000),
+            "the runtime keeps its context fallback"
+        );
     }
 
     #[test]

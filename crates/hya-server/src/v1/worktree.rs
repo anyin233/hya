@@ -2,10 +2,12 @@
 
 use std::collections::BTreeMap;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+
+use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;

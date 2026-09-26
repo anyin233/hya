@@ -330,7 +330,7 @@
       },
       "post": {
         "operationId": "Mcp.AddMcpServer",
-        "summary": "Add (or replace) one MCP server in desired state.",
+        "summary": "Add (or replace) one MCP server in desired state. The server is stored",
         "tags": [
           "Mcp"
         ],
@@ -372,7 +372,7 @@
     "/v1/mcp/{name}/connect": {
       "post": {
         "operationId": "Mcp.ConnectMcp",
-        "summary": "Connect one MCP server now.",
+        "summary": "Enable and connect one MCP server now. A connect failure is answered",
         "tags": [
           "Mcp"
         ],
@@ -2046,6 +2046,9 @@
           "since_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "interactions_only": {
+            "type": "boolean"
           }
         }
       },
@@ -2148,12 +2151,15 @@
           },
           "parts_added": {
             "$ref": "#/components/schemas/PartsAdded"
+          },
+          "catalog_updated": {
+            "$ref": "#/components/schemas/CatalogUpdated"
           }
         }
       },
       "PartsAdded": {
         "type": "object",
-        "description": "Complete parts added to a message in one step.",
+        "description": "The provider/model catalog changed; carries no fields. Complete parts added to a message in one step.",
         "properties": {
           "message": {
             "type": "string"
@@ -2781,7 +2787,7 @@
       },
       "SavedRule": {
         "type": "object",
-        "description": "A persisted permission decision.",
+        "description": "A persisted permission decision: an \"allow always\" reply. Saved rules are process-wide (shared by every session and project), reload into the permission plane when the server starts, and deleting one revokes it live.",
         "properties": {
           "id": {
             "type": "string"

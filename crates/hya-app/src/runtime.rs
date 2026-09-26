@@ -2924,6 +2924,11 @@ impl HyaRuntime {
             .with_default_agent(runtime.default_agent.clone())
             .with_auto_title(true);
         state = state.with_permission_requests(asks);
+        // Remembered "allow always" grants survive restarts: reload them into
+        // the process permission plane before serving.
+        if let Err(error) = state.restore_saved_permissions().await {
+            tracing::warn!(%error, "failed to restore saved permission grants");
+        }
         let app_state = state.clone();
         let router = hya_server::router(state);
         Ok(Self {

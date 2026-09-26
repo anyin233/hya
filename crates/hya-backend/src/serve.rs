@@ -140,6 +140,11 @@ pub(crate) async fn prepare_server(
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
     state = state.with_permission_requests(asks);
+    // Remembered "allow always" grants survive restarts: reload them into
+    // the process permission plane before serving.
+    if let Err(error) = state.restore_saved_permissions().await {
+        eprintln!("hya: failed to restore saved permission grants ({error})");
+    }
     spawn_provider_catalog_refresh(
         provider_manager,
         state.catalog_updates_sender(),

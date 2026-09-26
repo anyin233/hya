@@ -4,9 +4,11 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::routing::get;
-use axum::{Json, Router};
+
+use super::Json;
 use serde_json::Value;
 
 use crate::ServerState;

@@ -231,6 +231,11 @@ pub struct ProviderModel {
     pub reasoning_variants: Vec<String>,
     /// Configured per-model reasoning default, when one was authored.
     pub reasoning_default: Option<ReasoningEffort>,
+    /// Reasoning support as declared by the model's metadata (the remote
+    /// model list or the config `reasoning` field); `None` when unknown. An
+    /// unknown model still accepts `reasoning_variants` (the provider
+    /// family's menu) at runtime.
+    pub reasoning: Option<bool>,
     /// Human-readable model name from config (`name`) or the remote model
     /// list, when either publishes one.
     pub display_name: Option<String>,

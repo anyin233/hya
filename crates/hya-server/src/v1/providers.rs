@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use axum::Json;
+use super::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use hya_api::v1 as pb;
 use hya_proto::{FinishReason, ModelRef};
@@ -83,7 +83,7 @@ async fn update_response(
     }
 }
 
-/// Emit `catalog.updated` to global/session SSE subscribers.
+/// Emit a catalog change; v1 streams deliver it as a live `catalogUpdated` frame.
 pub(crate) fn notify_catalog_updated(st: &ServerState) {
     let payload = serde_json::json!({
         "id": format!(

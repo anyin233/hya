@@ -191,6 +191,7 @@ fn row(model: &str, source: ModelCatalogSource, display: Option<&str>) -> Provid
         },
         reasoning_variants: vec!["low".to_string()],
         reasoning_default: None,
+        reasoning: Some(true),
         display_name: display.map(str::to_string),
         source,
     }
@@ -478,6 +479,24 @@ async fn provider_routes_reject_bad_input_and_map_control_errors() {
             "/v1/providers/acme/models",
             json!({"modelId": "m", "contextLimit": 10, "outputLimit": 20}),
         ),
+        // Body decode failures (out-of-range or mistyped numbers) are v1
+        // `invalid_argument` JSON errors, not axum's plain-text 422.
+        (
+            Method::PUT,
+            "/v1/providers/acme/models",
+            json!({"modelId": "m", "contextLimit": -1}),
+        ),
+        (
+            Method::PUT,
+            "/v1/providers/acme/models",
+            json!({"modelId": "m", "outputLimit": 5_000_000_000_u64}),
+        ),
+        (
+            Method::PUT,
+            "/v1/providers/acme/models",
+            json!({"modelId": "m", "contextLimit": "lots"}),
+        ),
+        (Method::POST, "/v1/sessions", json!({"title": 7})),
         (Method::PUT, "/v1/auth/bad..id", json!({"apiKey": "x"})),
         (Method::PUT, "/v1/auth/acme", json!({"apiKey": "  "})),
     ] {

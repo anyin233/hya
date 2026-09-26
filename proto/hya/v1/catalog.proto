@@ -160,14 +160,20 @@ message ModelSummary {
   string model_id = 3;
   // Display name when the provider publishes one.
   string display_name = 4;
-  // Whether the route supports reasoning effort variants.
-  bool reasoning = 5;
+  // Whether the model supports reasoning effort variants, as declared by
+  // its metadata (the remote model list or the config `reasoning` field);
+  // unset when unknown. An unknown model still accepts the provider
+  // family's effort variants at runtime.
+  optional bool reasoning = 5;
   // Auth state of the owning provider route.
   AuthStatus auth = 6;
-  // Context window of the route in tokens: the configured
-  // `limit.context`, else the route's advertised default. 0 when unknown.
+  // Context window in tokens from the model's metadata (config
+  // `limit.context`, else the remote model list); 0 (omitted) when unknown.
+  // With no known window the runtime sizes compaction against a 200000-token
+  // fallback.
   uint64 context_limit = 7;
-  // Maximum output tokens (`limit.output`); 0 when unknown.
+  // Maximum output tokens from the model's metadata (config `limit.output`,
+  // else the remote model list); 0 (omitted) when unknown.
   uint64 output_limit = 8;
   // Where the row comes from: `remote` (the provider's remote model list,
   // via the model cache), `config` (only a `models:` entry in
@@ -278,15 +284,23 @@ message SetProviderModelRequest {
   string provider_id = 2;
   // Provider-local model id (may contain `/` and `:`).
   string model_id = 3;
-  // Display name written as the entry's `name`; absent removes it.
+  // Patch semantics: an absent field keeps the entry's current value; a
+  // present field sets it, and `""` / `0` clears it. The entry is created
+  // when missing.
+  //
+  // Display name written as the entry's `name`; absent keeps it, `""`
+  // removes it.
   optional string display_name = 4;
-  // Context window written as `limit.context`; absent or 0 removes it.
+  // Context window written as `limit.context`; absent keeps it, 0 removes
+  // it. A value outside 0..=4294967295 (or not an integer) is
+  // `invalid_argument`.
   optional uint32 context_limit = 5;
-  // Max output tokens written as `limit.output`; absent or 0 removes it.
+  // Max output tokens written as `limit.output`; absent keeps it, 0 removes
+  // it. Must not exceed `context_limit` when both are set.
   optional uint32 output_limit = 6;
-  // Reasoning switch written as `reasoning: true|false`; absent removes a
-  // boolean `reasoning` (a detailed `reasoning:` mapping is kept when this
-  // is absent or true).
+  // Reasoning switch written as `reasoning: true|false`; absent keeps the
+  // current `reasoning` field (a detailed `reasoning:` mapping is kept when
+  // this is true). Only `RemoveProviderModel` clears it.
   optional bool reasoning = 7;
 }
 

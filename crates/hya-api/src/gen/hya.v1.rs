@@ -621,17 +621,23 @@ pub struct ModelSummary {
     /// Display name when the provider publishes one.
     #[prost(string, tag = "4")]
     pub display_name: ::prost::alloc::string::String,
-    /// Whether the route supports reasoning effort variants.
-    #[prost(bool, tag = "5")]
-    pub reasoning: bool,
+    /// Whether the model supports reasoning effort variants, as declared by
+    /// its metadata (the remote model list or the config `reasoning` field);
+    /// unset when unknown. An unknown model still accepts the provider
+    /// family's effort variants at runtime.
+    #[prost(bool, optional, tag = "5")]
+    pub reasoning: ::core::option::Option<bool>,
     /// Auth state of the owning provider route.
     #[prost(enumeration = "AuthStatus", tag = "6")]
     pub auth: i32,
-    /// Context window of the route in tokens: the configured
-    /// `limit.context`, else the route's advertised default. 0 when unknown.
+    /// Context window in tokens from the model's metadata (config
+    /// `limit.context`, else the remote model list); 0 (omitted) when unknown.
+    /// With no known window the runtime sizes compaction against a 200000-token
+    /// fallback.
     #[prost(uint64, tag = "7")]
     pub context_limit: u64,
-    /// Maximum output tokens (`limit.output`); 0 when unknown.
+    /// Maximum output tokens from the model's metadata (config `limit.output`,
+    /// else the remote model list); 0 (omitted) when unknown.
     #[prost(uint64, tag = "8")]
     pub output_limit: u64,
     /// Where the row comes from: `remote` (the provider's remote model list,
@@ -776,18 +782,26 @@ pub struct SetProviderModelRequest {
     /// Provider-local model id (may contain `/` and `:`).
     #[prost(string, tag = "3")]
     pub model_id: ::prost::alloc::string::String,
-    /// Display name written as the entry's `name`; absent removes it.
+    /// Patch semantics: an absent field keeps the entry's current value; a
+    /// present field sets it, and `""` / `0` clears it. The entry is created
+    /// when missing.
+    ///
+    /// Display name written as the entry's `name`; absent keeps it, `""`
+    /// removes it.
     #[prost(string, optional, tag = "4")]
     pub display_name: ::core::option::Option<::prost::alloc::string::String>,
-    /// Context window written as `limit.context`; absent or 0 removes it.
+    /// Context window written as `limit.context`; absent keeps it, 0 removes
+    /// it. A value outside 0..=4294967295 (or not an integer) is
+    /// `invalid_argument`.
     #[prost(uint32, optional, tag = "5")]
     pub context_limit: ::core::option::Option<u32>,
-    /// Max output tokens written as `limit.output`; absent or 0 removes it.
+    /// Max output tokens written as `limit.output`; absent keeps it, 0 removes
+    /// it. Must not exceed `context_limit` when both are set.
     #[prost(uint32, optional, tag = "6")]
     pub output_limit: ::core::option::Option<u32>,
-    /// Reasoning switch written as `reasoning: true|false`; absent removes a
-    /// boolean `reasoning` (a detailed `reasoning:` mapping is kept when this
-    /// is absent or true).
+    /// Reasoning switch written as `reasoning: true|false`; absent keeps the
+    /// current `reasoning` field (a detailed `reasoning:` mapping is kept when
+    /// this is true). Only `RemoveProviderModel` clears it.
     #[prost(bool, optional, tag = "7")]
     pub reasoning: ::core::option::Option<bool>,
 }
@@ -3815,28 +3829,34 @@ pub struct RespondInteractionResponse {
     #[prost(bool, tag = "1")]
     pub applied: bool,
 }
-/// A persisted permission decision.
+/// A persisted permission decision: an "allow always" reply. Saved rules are
+/// process-wide (shared by every session and project), reload into the
+/// permission plane when the server starts, and deleting one revokes it live.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SavedRule {
     /// Rule identifier.
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
-    /// Effect of the rule.
+    /// Effect of the rule; always RULE_PERMISSION_ALLOW for saved grants.
     #[prost(enumeration = "RulePermission", tag = "2")]
     pub permission: i32,
-    /// Tool name the rule matches; empty matches every tool.
+    /// Tool the rule matches: the exact tool or MCP tool name for a tool grant,
+    /// `bash` for a command grant, or the action name (`read`, `edit`,
+    /// `webfetch`, ...) for an action-wide grant.
     #[prost(string, tag = "3")]
     pub tool: ::prost::alloc::string::String,
-    /// Pattern the rule matches (command prefix, path prefix, ...).
+    /// Pattern the rule matches: the exact command for a `bash` grant, `*` for
+    /// an action-wide grant, empty for an exact tool grant.
     #[prost(string, tag = "4")]
     pub pattern: ::prost::alloc::string::String,
-    /// When the rule was saved.
+    /// When the rule was saved; absent for rules saved before creation times
+    /// were recorded.
     #[prost(message, optional, tag = "5")]
     pub time_created: ::core::option::Option<::pbjson_types::Timestamp>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSavedRulesRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Accepted for symmetry and ignored: saved rules are process-wide.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -3854,7 +3874,7 @@ pub struct ListSavedRulesResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteSavedRuleRequest {
-    /// Directory scope; empty means the process default directory.
+    /// Accepted for symmetry and ignored: saved rules are process-wide.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Rule identifier to delete.
@@ -6424,6 +6444,13 @@ pub struct StreamGlobalEventsRequest {
     /// frames (`seq = 0`) are always delivered. No history is replayed.
     #[prost(uint64, tag = "2")]
     pub since_seq: u64,
+    /// Deliver only the live interaction frames (`permissionRequested`,
+    /// `questionRequested`, `interactionResolved`) of every session plus the
+    /// process-wide `catalogUpdated` notice; skip every session's engine
+    /// events and their `resync` frames. For a client that follows one session
+    /// on its session stream and needs only the asks of the others.
+    #[prost(bool, tag = "3")]
+    pub interactions_only: bool,
 }
 /// One frame on a live stream.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -6469,7 +6496,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -6552,8 +6579,18 @@ pub mod stream_event {
         /// bytes. Append them to the message after its text.
         #[prost(message, tag = "24")]
         PartsAdded(super::PartsAdded),
+        /// The provider/model catalog changed (a provider was added, edited, or
+        /// refreshed, a key was set or removed, or startup discovery finished).
+        /// Live-only and process-wide: `seq` is 0 and `session` is empty on every
+        /// stream it reaches (global and session). Re-read `ListModels` /
+        /// `ListProviders`.
+        #[prost(message, tag = "25")]
+        CatalogUpdated(super::CatalogUpdated),
     }
 }
+/// The provider/model catalog changed; carries no fields.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct CatalogUpdated {}
 /// Complete parts added to a message in one step.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartsAdded {
@@ -6820,8 +6857,8 @@ pub struct CompactionApplied {
     /// Sequence of this compaction record.
     #[prost(uint64, tag = "1")]
     pub until_seq: u64,
-    /// Strategy that fired: `Native`, `LocalSummarizer`, `SnapCompact`, or
-    /// `Handoff` (a manual compaction reports `LocalSummarizer`).
+    /// Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or
+    /// `handoff` (a manual compaction reports `local_summarizer`).
     #[prost(string, tag = "2")]
     pub strategy: ::prost::alloc::string::String,
     /// System message carrying the summary (the transcript divider).
@@ -8825,7 +8862,12 @@ pub mod mcp_client {
             req.extensions_mut().insert(GrpcMethod::new("hya.v1.Mcp", "GetMcpStatus"));
             self.inner.unary(req, path, codec).await
         }
-        /// Add (or replace) one MCP server in desired state.
+        /// Add (or replace) one MCP server in desired state. The server is stored
+        /// even when it cannot start: a spawn or handshake failure is answered
+        /// with `state: MCP_SERVER_STATE_FAILED` and `error` (the call succeeds).
+        /// With `enabled: false` the server is stored without connecting
+        /// (`MCP_SERVER_STATE_DISCONNECTED`). Re-adding an unchanged config does
+        /// not reconnect.
         ///
         /// hya.http: POST /v1/mcp
         pub async fn add_mcp_server(
@@ -8849,7 +8891,9 @@ pub mod mcp_client {
             req.extensions_mut().insert(GrpcMethod::new("hya.v1.Mcp", "AddMcpServer"));
             self.inner.unary(req, path, codec).await
         }
-        /// Connect one MCP server now.
+        /// Enable and connect one MCP server now. A connect failure is answered
+        /// with `state: MCP_SERVER_STATE_FAILED` and `error`; an unknown name is
+        /// `not_found`.
         ///
         /// hya.http: POST /v1/mcp/{name}/connect
         pub async fn connect_mcp(
@@ -8997,14 +9041,21 @@ pub mod mcp_server {
             tonic::Response<super::GetMcpStatusResponse>,
             tonic::Status,
         >;
-        /// Add (or replace) one MCP server in desired state.
+        /// Add (or replace) one MCP server in desired state. The server is stored
+        /// even when it cannot start: a spawn or handshake failure is answered
+        /// with `state: MCP_SERVER_STATE_FAILED` and `error` (the call succeeds).
+        /// With `enabled: false` the server is stored without connecting
+        /// (`MCP_SERVER_STATE_DISCONNECTED`). Re-adding an unchanged config does
+        /// not reconnect.
         ///
         /// hya.http: POST /v1/mcp
         async fn add_mcp_server(
             &self,
             request: tonic::Request<super::AddMcpServerRequest>,
         ) -> std::result::Result<tonic::Response<super::McpServerStatus>, tonic::Status>;
-        /// Connect one MCP server now.
+        /// Enable and connect one MCP server now. A connect failure is answered
+        /// with `state: MCP_SERVER_STATE_FAILED` and `error`; an unknown name is
+        /// `not_found`.
         ///
         /// hya.http: POST /v1/mcp/{name}/connect
         async fn connect_mcp(
@@ -10467,10 +10518,14 @@ pub struct GetVcsDiffRequest {
     /// Directory scope; empty means the process default directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
-    /// Output format: unified patch (default) or raw.
+    /// Accepted and ignored: the diff is always git's unified patch
+    /// (`git diff HEAD` plus untracked files).
     #[prost(bool, tag = "2")]
     pub raw: bool,
-    /// Restrict to these repository-relative paths; empty diffs everything.
+    /// Restrict to these paths (git pathspecs relative to the scope directory:
+    /// a file or a directory prefix); empty diffs everything. Over HTTP repeat
+    /// the query key (`?paths=a&paths=b`). A path that is absolute or contains
+    /// `..` is `invalid_argument`.
     #[prost(string, repeated, tag = "3")]
     pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
@@ -12540,7 +12595,9 @@ pub struct CompactSessionRequest {
     /// Session identifier to compact.
     #[prost(string, tag = "1")]
     pub session: ::prost::alloc::string::String,
-    /// Compact events up to this sequence number; 0 compacts at the head.
+    /// Deprecated and ignored: a manual compaction always folds the whole
+    /// transcript at the head. The response's `compacted_until_seq` reports
+    /// the watermark actually reached.
     #[prost(uint64, tag = "2")]
     pub until_seq: u64,
 }
@@ -12549,8 +12606,9 @@ pub struct CompactSessionResponse {
     /// Watermark the context was compacted up to.
     #[prost(uint64, tag = "1")]
     pub compacted_until_seq: u64,
-    /// Which compaction method fired (`shake`, `remote`, `soft`,
-    /// `snap_compact`, `handoff`).
+    /// Compaction strategy that ran, the same name the recorded
+    /// `CompactionApplied.strategy` carries. A manual compaction is always
+    /// `local_summarizer`.
     #[prost(string, tag = "2")]
     pub strategy: ::prost::alloc::string::String,
 }

@@ -464,3 +464,92 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], json!("session_not_found"));
 }
+
+/// `GetVcsDiff.paths` restricts the diff to those paths (tracked and
+/// untracked) over HTTP (repeated `paths` query keys) and gRPC alike.
+#[tokio::test]
+async fn vcs_diff_honors_paths_over_http_and_grpc() {
+    if !support::git_available() {
+        return;
+    }
+    let repo = support::init_git_repo("vcs-diff-paths");
+    std::fs::write(repo.join("other.md"), "other\n").unwrap();
+    support::git(&repo, &["add", "other.md"]);
+    support::git(&repo, &["commit", "-m", "other"]);
+    std::fs::write(repo.join("README.md"), "hello\nchanged\n").unwrap();
+    std::fs::write(repo.join("other.md"), "other\nchanged\n").unwrap();
+    std::fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+    std::fs::write(repo.join("skip.txt"), "skip\n").unwrap();
+    let dir = repo.to_string_lossy().into_owned();
+    let app_state = state().await;
+    let app = router(app_state.clone());
+
+    let (status, all) = http_json(
+        &app,
+        Method::GET,
+        &format!("/v1/vcs/diff?directory={}", urlencode(&dir)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    let all = all["diff"].as_str().unwrap().to_owned();
+    for file in ["README.md", "other.md", "new.txt", "skip.txt"] {
+        assert!(all.contains(file), "unfiltered diff covers {file}: {all}");
+    }
+
+    let (status, body) = http_json(
+        &app,
+        Method::GET,
+        &format!(
+            "/v1/vcs/diff?directory={}&paths=README.md&paths=new.txt",
+            urlencode(&dir)
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let filtered = body["diff"].as_str().unwrap().to_owned();
+    assert!(filtered.contains("README.md"), "{filtered}");
+    assert!(filtered.contains("new.txt"), "{filtered}");
+    assert!(!filtered.contains("other.md"), "{filtered}");
+    assert!(!filtered.contains("skip.txt"), "{filtered}");
+
+    let (status, body) = http_json(
+        &app,
+        Method::GET,
+        &format!("/v1/vcs/diff?directory={}&paths=../x", urlencode(&dir)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("invalid_argument"), "{body}");
+
+    let address = grpc_endpoint(app_state).await;
+    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let grpc = pb::project_client::ProjectClient::new(channel)
+        .get_vcs_diff(pb::GetVcsDiffRequest {
+            directory: dir.clone(),
+            raw: false,
+            paths: vec!["README.md".to_owned(), "new.txt".to_owned()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(grpc.diff, filtered);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+fn urlencode(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}

@@ -667,3 +667,132 @@ async fn grpc_session_stream_delivers_descendant_questions_on_opt_in() {
         vec!["main".to_string(), "dev".to_string()]
     );
 }
+
+/// `interactionsOnly` on the global stream drops every session's engine
+/// events and keeps the live interaction frames (and process notices such as
+/// `catalogUpdated`), over HTTP and gRPC.
+#[tokio::test]
+async fn global_stream_interactions_only_skips_session_events() {
+    use hya_api::v1 as pb;
+
+    let (ask_tx, ask_rx) = mpsc::unbounded_channel::<AskRequest>();
+    let state = base_state().await.with_permission_requests(ask_rx);
+    let app = router(state.clone());
+
+    let is_ask = |frame: &Value| frame["event"]["permissionRequested"].is_object();
+    let filtered_app = app.clone();
+    let filtered = tokio::spawn(async move {
+        frames_until(
+            &filtered_app,
+            "/v1/events/stream?interactionsOnly=true",
+            is_ask,
+        )
+        .await
+    });
+    let unfiltered_app = app.clone();
+    let unfiltered =
+        tokio::spawn(
+            async move { frames_until(&unfiltered_app, "/v1/events/stream", is_ask).await },
+        );
+    let mut grpc = pb::events_client::EventsClient::new(grpc_channel(state.clone()).await)
+        .stream_global_events(pb::StreamGlobalEventsRequest {
+            interactions_only: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // A session event on the bus, a catalog notice, then an ask.
+    let (status, _body) = respond(&app, "/v1/sessions", json!({"agent": "build", "model": "fake", "workdir": std::env::temp_dir().to_string_lossy()})).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    state.notify_catalog_updated();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+    ask_tx
+        .send(AskRequest {
+            id: PermissionRequestId::new(),
+            session: Some(SessionId::new()),
+            message_id: None,
+            call_id: None,
+            action: Action::Bash,
+            resource: Resource::Command("ls".to_string()),
+            remember: RememberScope::LegacyAction,
+            reply: reply_tx,
+        })
+        .unwrap();
+
+    let unfiltered = unfiltered.await.unwrap();
+    assert!(
+        unfiltered
+            .iter()
+            .any(|frame| frame["event"]["sessionStarted"].is_object()),
+        "the unfiltered stream carries session events: {unfiltered:#?}"
+    );
+    let filtered = filtered.await.unwrap();
+    let kinds: Vec<String> = filtered
+        .iter()
+        .filter_map(|frame| frame["event"].as_object())
+        .flat_map(|event| event.keys().cloned().collect::<Vec<_>>())
+        .filter(|key| !matches!(key.as_str(), "seq" | "session" | "timeRecorded"))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "catalogUpdated".to_owned(),
+            "permissionRequested".to_owned()
+        ],
+        "{filtered:#?}"
+    );
+
+    let mut grpc_kinds = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(frame) = grpc.next().await {
+            let Some(pb::stream_frame::Frame::Event(event)) = frame.unwrap().frame else {
+                grpc_kinds.push("resync");
+                continue;
+            };
+            match event.payload {
+                Some(pb::stream_event::Payload::CatalogUpdated(_)) => {
+                    grpc_kinds.push("catalogUpdated");
+                }
+                Some(pb::stream_event::Payload::PermissionRequested(_)) => {
+                    grpc_kinds.push("permissionRequested");
+                    break;
+                }
+                _ => grpc_kinds.push("other"),
+            }
+        }
+    })
+    .await
+    .expect("gRPC ask frame");
+    assert_eq!(grpc_kinds, vec!["catalogUpdated", "permissionRequested"]);
+}
+
+/// A provider catalog change reaches v1 session streams too, as a live-only
+/// `catalogUpdated` frame.
+#[tokio::test]
+async fn catalog_updated_reaches_session_streams() {
+    let state = base_state().await;
+    let app = router(state.clone());
+    let (status, body) = respond(&app, "/v1/sessions", json!({"agent": "build", "model": "fake", "workdir": std::env::temp_dir().to_string_lossy()})).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let session = body["session"]["id"].as_str().unwrap().to_owned();
+    let stream_app = app.clone();
+    let collector = tokio::spawn(async move {
+        frames_until(
+            &stream_app,
+            &format!("/v1/sessions/{session}/events/stream"),
+            |frame| frame["event"]["catalogUpdated"].is_object(),
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    state.notify_catalog_updated();
+    let frames = collector.await.unwrap();
+    let last = frames.last().expect("a frame");
+    assert!(last["event"]["catalogUpdated"].is_object(), "{frames:#?}");
+    assert!(last["event"].get("seq").is_none(), "live-only: {last}");
+}

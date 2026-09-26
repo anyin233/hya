@@ -773,6 +773,52 @@ impl PermissionPlane {
         }
     }
 
+    /// Install a persisted "allow always" grant (a saved-permission row).
+    ///
+    /// `pattern` is the row's resource: `"*"` restores an action-wide legacy
+    /// grant; any other value restores the exact invocation subject for
+    /// [`Action::Tool`], [`Action::Mcp`], and [`Action::Bash`] (the only
+    /// actions an exact grant is saved under). Idempotent. The grant is shared
+    /// with every plane derived from this one.
+    pub async fn grant_saved(&self, action: Action, pattern: &str) {
+        match saved_subject(action, pattern) {
+            Some(subject) => {
+                self.native_grants.lock().await.insert(subject);
+            }
+            None => {
+                let mut persistent = self.persistent.lock().await;
+                let exists = persistent.rules.iter().any(|rule| {
+                    rule.action == action
+                        && rule.resource_pattern == pattern
+                        && rule.mode == Mode::Allow
+                });
+                if !exists {
+                    persistent
+                        .rules
+                        .push(Rule::new(action, pattern, Mode::Allow));
+                }
+            }
+        }
+    }
+
+    /// Remove a grant installed by [`Self::grant_saved`] or an "allow always"
+    /// reply with the same action and pattern. Snapshot (configured) rules are
+    /// untouched.
+    pub async fn revoke_saved(&self, action: Action, pattern: &str) {
+        match saved_subject(action, pattern) {
+            Some(subject) => {
+                self.native_grants.lock().await.remove(&subject);
+            }
+            None => {
+                self.persistent.lock().await.rules.retain(|rule| {
+                    !(rule.action == action
+                        && rule.resource_pattern == pattern
+                        && rule.mode == Mode::Allow)
+                });
+            }
+        }
+    }
+
     fn authorized(&self) -> Self {
         let mut plane = self.clone();
         plane.call_grant = true;
@@ -882,6 +928,21 @@ impl PermissionPlane {
             }),
         }
     }
+}
+
+/// Exact subject a saved `(action, pattern)` row stands for, or `None` for an
+/// action-wide legacy grant.
+fn saved_subject(action: Action, pattern: &str) -> Option<ExactSubject> {
+    if pattern == "*" {
+        return None;
+    }
+    let target = match action {
+        Action::Tool => PermissionTarget::Tool,
+        Action::Mcp => PermissionTarget::Mcp,
+        Action::Bash => PermissionTarget::Command,
+        _ => return None,
+    };
+    Some(ExactSubject::new(target, pattern))
 }
 
 const PERMISSION_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.permission.semantic-identity/v1";
@@ -1087,6 +1148,62 @@ mod tests {
             .expect("external directory remains separate");
         req.reply.send(Decision::AllowOnce).expect("send reply");
         task.await.expect("join").expect("external allowed");
+    }
+
+    #[tokio::test]
+    async fn saved_grants_restore_and_revoke_exact_and_action_wide() {
+        let policy = InvocationPolicy::compile(
+            PermissionModel::Default,
+            vec![InvocationRule::new(
+                PermissionTarget::Tool,
+                "^write$",
+                Mode::Ask,
+            )],
+        )
+        .expect("compile policy");
+        let (plane, mut rx) = PermissionPlane::new_with_policy(PermissionRules::default(), policy);
+        plane.grant_saved(Action::Tool, "write").await;
+        plane.grant_saved(Action::Bash, "git status").await;
+        plane.grant_saved(Action::WebFetch, "*").await;
+
+        plane
+            .authorize(&Invocation::tool("write", Mode::Ask))
+            .await
+            .expect("restored exact tool grant");
+        plane
+            .authorize(&Invocation::command("bash", "git status"))
+            .await
+            .expect("restored exact command grant");
+        plane
+            .assert(Action::WebFetch, Resource::Url("https://x".to_string()))
+            .await
+            .expect("restored action-wide grant");
+        assert!(rx.try_recv().is_err());
+
+        plane.revoke_saved(Action::Tool, "write").await;
+        plane.revoke_saved(Action::WebFetch, "*").await;
+        let derived = plane.for_session(SessionId::new());
+        let task = tokio::spawn(async move {
+            derived
+                .authorize(&Invocation::tool("write", Mode::Ask))
+                .await
+        });
+        let req = rx.recv().await.expect("revoked exact grant asks again");
+        req.reply.send(Decision::AllowOnce).expect("send reply");
+        task.await.expect("join").expect("allowed once");
+        let fetch = plane.clone();
+        let task = tokio::spawn(async move {
+            fetch
+                .assert(Action::WebFetch, Resource::Url("https://x".to_string()))
+                .await
+        });
+        let req = rx.recv().await.expect("revoked action grant asks again");
+        req.reply.send(Decision::AllowOnce).expect("send reply");
+        task.await.expect("join").expect("allowed once");
+        plane
+            .authorize(&Invocation::command("bash", "git status"))
+            .await
+            .expect("other grants stay");
     }
 
     #[tokio::test]

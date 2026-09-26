@@ -232,15 +232,18 @@ message ForkSessionResponse {
 message CompactSessionRequest {
   // Session identifier to compact.
   string session = 1;
-  // Compact events up to this sequence number; 0 compacts at the head.
+  // Deprecated and ignored: a manual compaction always folds the whole
+  // transcript at the head. The response's `compacted_until_seq` reports
+  // the watermark actually reached.
   uint64 until_seq = 2;
 }
 
 message CompactSessionResponse {
   // Watermark the context was compacted up to.
   uint64 compacted_until_seq = 1;
-  // Which compaction method fired (`shake`, `remote`, `soft`,
-  // `snap_compact`, `handoff`).
+  // Compaction strategy that ran, the same name the recorded
+  // `CompactionApplied.strategy` carries. A manual compaction is always
+  // `local_summarizer`.
   string strategy = 2;
 }
 

@@ -924,7 +924,10 @@ cut with `hya_core::fork_cut` over the source's **visible** messages
 for another role, `not_found` when absent). The server then creates the
 session (source agent, model, workdir), records
 `session_forked { source, before_message }` (the cut, `None` for a head
-fork), titles it `forked from <source>`, copies the metadata, and calls
+fork), titles it `<source title> (fork)` (the source id when the source has
+no title or a default one; a fork of a fork keeps one suffix, so automatic
+titling — which renames only default titles — never renames it), copies the
+metadata, and calls
 `copy_messages_to_session`, which replays the kept messages as **fresh**
 events with newly minted `MessageId` / `PartId` per copy (ids are never
 reused). `SessionInfo.forkedFrom` reports `{session, messageId}` from

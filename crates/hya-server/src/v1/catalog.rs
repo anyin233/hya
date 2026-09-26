@@ -4,10 +4,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{delete, get, post, put};
-use axum::{Json, Router};
+
+use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;
@@ -168,7 +170,8 @@ pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
             provider_id: row.provider_id.clone(),
             model_id: row.model_id.clone(),
             display_name: row.display_name.clone().unwrap_or_default(),
-            reasoning: !row.reasoning_variants.is_empty(),
+            // Declared by the model's metadata; unset when unknown.
+            reasoning: row.reasoning,
             auth: *auth_by_provider
                 .get(&row.provider_id)
                 .unwrap_or(&(pb::AuthStatus::NotApplicable as i32)),
@@ -524,29 +527,31 @@ async fn list_saved_rules(
 }
 
 /// Saved permission rules shared with the bootstrap snapshot.
+///
+/// Every row is an "allow always" grant, so the effect is always
+/// `RULE_PERMISSION_ALLOW`. Exact tool/MCP grants report the granted tool as
+/// `tool` with an empty `pattern`; exact command grants report `bash` plus the
+/// command; action-wide grants report the action name plus `*`.
 pub(crate) async fn saved_rule_rows(st: &ServerState) -> Vec<pb::SavedRule> {
     let Ok(rows) = st.permission_requests.list_saved(None).await else {
         return Vec::new();
     };
-    rows.into_iter()
-        .map(|row| pb::SavedRule {
-            id: field(&row, "id"),
-            permission: pb::RulePermission::Ask as i32,
-            tool: field(&row, "action"),
-            pattern: field(&row, "resource"),
-            time_created: None,
-        })
-        .collect()
+    rows.into_iter().map(saved_rule).collect()
 }
 
-/// Extract a serialized field from a Compat row type without widening its
-/// private field visibility.
-fn field<T: serde::Serialize>(row: &T, name: &str) -> String {
-    serde_json::to_value(row)
-        .ok()
-        .and_then(|value| value.get(name).cloned())
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+fn saved_rule(row: hya_store::SavedPermission) -> pb::SavedRule {
+    let exact = row.resource != "*";
+    let (tool, pattern) = match row.action.as_str() {
+        "tool" | "mcp" if exact => (row.resource, String::new()),
+        _ => (row.action, row.resource),
+    };
+    pb::SavedRule {
+        id: row.id,
+        permission: pb::RulePermission::Allow as i32,
+        tool,
+        pattern,
+        time_created: row.time_created_ms.and_then(super::convert::timestamp),
+    }
 }
 
 async fn delete_saved_rule(
@@ -554,7 +559,7 @@ async fn delete_saved_rule(
     AxumPath(rule): AxumPath<String>,
 ) -> Result<Json<pb::DeleteSavedRuleResponse>, V1Error> {
     st.permission_requests
-        .remove_saved(&rule)
+        .remove_saved(&rule, st.engine.permission_plane())
         .await
         .map_err(V1Error::from)?;
     Ok(Json(pb::DeleteSavedRuleResponse {}))

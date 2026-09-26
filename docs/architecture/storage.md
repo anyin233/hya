@@ -94,7 +94,9 @@ CREATE INDEX saved_permission_project ON saved_permission(project_id);
 ```
 
 Durable store for **allow-always** permission decisions. See
-[Saved permissions](#saved-permissions).
+[Saved permissions](#saved-permissions). `0013_saved_permission_time.sql`
+adds `time_created INTEGER` (ms since the Unix epoch; `NULL` for rows saved
+before it).
 
 ### `0004` → `0008` admission journal
 
@@ -484,8 +486,9 @@ Store API:
 
 | Method | Behavior |
 | --- | --- |
-| `save_permission` | `INSERT OR IGNORE` — re-saving is a no-op |
+| `save_permission` | `INSERT OR IGNORE` — re-saving is a no-op; stamps `time_created` with now when `time_created_ms` is `None` |
 | `list_saved_permissions(project_id: Option<&str>)` | Filter by project or list all |
+| `saved_permission(id)` | Read one row by id |
 | `remove_saved_permission(id)` | Delete by id |
 
 v1 HTTP (see [Server and Client](server-client.md)):
@@ -493,15 +496,13 @@ v1 HTTP (see [Server and Client](server-client.md)):
 - `GET /v1/permissions/rules` (saved-rule list, feeds the bootstrap snapshot)
 - `DELETE /v1/permissions/rules/{rule}`
 
-Rows survive server restart because they live in the session SQLite file.
-**That does not make the grant survive restart.** An `always` answer updates the
-**in-process** `PermissionPlane` (`persistent` rules / `native_grants`) for the
-current process only; that plane is empty at startup. Nothing outside
-`hya-server/src/pending/` reads these rows into the plane — `list_saved_permissions`
-feeds the v1 saved-rule list/delete APIs and store tests, not turn-time
-authorization. After restart the user is asked again for the same action until
-they answer `always` in the new process (which both re-grants in memory and may
-insert another row via `INSERT OR IGNORE`).
+Rows survive server restart because they live in the session SQLite file, and
+so do the grants: at startup `AppState::restore_saved_permissions` reads every
+row into the process `PermissionPlane` (`persistent` rules for `*` rows,
+`native_grants` for exact `tool` / `mcp` / `bash` subjects), and
+`DELETE /v1/permissions/rules/{rule}` revokes the in-memory grant along with
+the row. See [Tools and permissions — Saved
+grants](tools-and-permissions.md#saved-grants).
 
 ## Sync store API
 

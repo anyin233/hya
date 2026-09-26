@@ -6,9 +6,11 @@
 //! over HTTP are not wired for v1 yet and answer `unavailable` honestly
 //! rather than faking a flow.
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, State};
 use axum::routing::{get, put};
-use axum::{Json, Router};
+
+use super::Json;
 
 use crate::ServerState;
 use hya_api::v1 as pb;

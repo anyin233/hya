@@ -103,6 +103,12 @@ message StreamGlobalEventsRequest {
   // Skip durable events with `seq` at or below this watermark. Live-only
   // frames (`seq = 0`) are always delivered. No history is replayed.
   uint64 since_seq = 2;
+  // Deliver only the live interaction frames (`permissionRequested`,
+  // `questionRequested`, `interactionResolved`) of every session plus the
+  // process-wide `catalogUpdated` notice; skip every session's engine
+  // events and their `resync` frames. For a client that follows one session
+  // on its session stream and needs only the asks of the others.
+  bool interactions_only = 3;
 }
 
 // One frame on a live stream.
@@ -187,8 +193,17 @@ message StreamEvent {
     // images attached to a prompt turn, as `AttachmentPart`s without their
     // bytes. Append them to the message after its text.
     PartsAdded parts_added = 24;
+    // The provider/model catalog changed (a provider was added, edited, or
+    // refreshed, a key was set or removed, or startup discovery finished).
+    // Live-only and process-wide: `seq` is 0 and `session` is empty on every
+    // stream it reaches (global and session). Re-read `ListModels` /
+    // `ListProviders`.
+    CatalogUpdated catalog_updated = 25;
   }
 }
+
+// The provider/model catalog changed; carries no fields.
+message CatalogUpdated {}
 
 // Complete parts added to a message in one step.
 message PartsAdded {
@@ -396,8 +411,8 @@ message TokensRecorded {
 message CompactionApplied {
   // Sequence of this compaction record.
   uint64 until_seq = 1;
-  // Strategy that fired: `Native`, `LocalSummarizer`, `SnapCompact`, or
-  // `Handoff` (a manual compaction reports `LocalSummarizer`).
+  // Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or
+  // `handoff` (a manual compaction reports `local_summarizer`).
   string strategy = 2;
   // System message carrying the summary (the transcript divider).
   string message = 3;

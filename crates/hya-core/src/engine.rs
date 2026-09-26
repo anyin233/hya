@@ -880,6 +880,13 @@ impl SessionEngine {
         self.permission.snapshot_rules()
     }
 
+    /// Process permission plane. Remembered grants installed on it are shared
+    /// with every session plane derived from it.
+    #[must_use]
+    pub fn permission_plane(&self) -> &PermissionPlane {
+        &self.permission
+    }
+
     /// Formatter plane used after write/edit/patch.
     #[must_use]
     pub fn formatter(&self) -> &FormatterPlane {

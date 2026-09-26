@@ -6,11 +6,13 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 
+use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+
+use super::Json;
 use futures::StreamExt;
 use serde_json::Value;
 use tokio_stream::Stream;
@@ -85,7 +87,7 @@ async fn stream_session(
         return Err(V1Error::session_not_found(&request.session));
     }
     let scope = StreamScope::session(session, request.include_descendants);
-    Ok(session_stream(st, scope, request.since_seq).into_response())
+    Ok(session_stream(st, scope, request.since_seq, false).into_response())
 }
 
 async fn stream_global(
@@ -93,7 +95,13 @@ async fn stream_global(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Response, V1Error> {
     let request: pb::StreamGlobalEventsRequest = super::query_request(&[], &query)?;
-    Ok(session_stream(st, StreamScope::Global, request.since_seq).into_response())
+    Ok(session_stream(
+        st,
+        StreamScope::Global,
+        request.since_seq,
+        request.interactions_only,
+    )
+    .into_response())
 }
 
 /// Which sessions a live stream serves.
@@ -132,8 +140,9 @@ fn session_stream(
     st: ServerState,
     scope: StreamScope,
     since_seq: u64,
+    interactions_only: bool,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
-    let events = frame_stream(st, scope, since_seq).map(|frame| {
+    let events = frame_stream(st, scope, since_seq, interactions_only).map(|frame| {
         let event = match frame {
             Ok(frame) => SseEvent::default().json_data(frame).unwrap_or_default(),
             Err(status) => SseEvent::default().event("error").data(status.message()),
@@ -145,8 +154,11 @@ fn session_stream(
 
 /// The shared live frame producer backing both SSE and gRPC streams.
 ///
-/// Merges three feeds: the engine event bus, the pending permission plane,
-/// and the pending question plane. Permission and question frames are
+/// Merges four feeds: the engine event bus, the pending permission plane,
+/// the pending question plane, and provider-catalog notices (a live-only,
+/// process-wide `catalogUpdated` frame on every scope). With
+/// `interactions_only` the engine bus (and so its `resync` frames) is left
+/// out. Permission and question frames are
 /// live-only (`seq == 0`): the pending queues are the authoritative
 /// listing, the streams are delivery. A session scope with `descendants`
 /// also passes interaction frames whose session lies below the streamed one
@@ -163,6 +175,7 @@ pub(crate) fn frame_stream(
     st: ServerState,
     scope: StreamScope,
     since_seq: u64,
+    interactions_only: bool,
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
     let session = scope.session_id();
     let lineage = st.engine.clone();
@@ -226,7 +239,37 @@ pub(crate) fn frame_stream(
     let question: std::pin::Pin<
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(question);
-    futures::stream::select_all([engine, permission, question])
+    #[allow(clippy::result_large_err)]
+    let catalog = BroadcastStream::new(st.catalog_updates.subscribe())
+        .filter_map(|result| async { result.ok().map(|_notice| Ok(catalog_updated_frame())) });
+    let catalog: std::pin::Pin<
+        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
+    > = Box::pin(catalog);
+    let mut feeds = vec![permission, question, catalog];
+    if !interactions_only {
+        feeds.push(engine);
+    }
+    futures::stream::select_all(feeds)
+}
+
+/// The live-only, process-wide `catalogUpdated` frame.
+fn catalog_updated_frame() -> pb::StreamFrame {
+    pb::StreamFrame {
+        frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+            seq: 0,
+            session: String::new(),
+            time_recorded: super::convert::timestamp(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+                    .unwrap_or_default(),
+            ),
+            payload: Some(pb::stream_event::Payload::CatalogUpdated(
+                pb::CatalogUpdated {},
+            )),
+        })),
+    }
 }
 
 /// Live-only envelopes are published with `seq == 0` and never persisted.

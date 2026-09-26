@@ -169,6 +169,7 @@ impl ProviderCatalogSnapshot {
                 capabilities: crate::Capabilities::default(),
                 reasoning_variants: Vec::new(),
                 reasoning_default: None,
+                reasoning: Some(false),
                 display_name: None,
                 source: ModelCatalogSource::Offline,
             });

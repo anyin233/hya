@@ -419,7 +419,8 @@ its `models:` entries:
 - A provider with neither cached remote rows nor `models:` entries makes one
   bounded request during startup. Providers with no cached rows, and
   discovery-only providers (absent, empty, or blank-only `models:`), also
-  refresh in the background after startup (`catalog.updated` follows).
+  refresh in the background after startup (a `catalogUpdated` stream frame
+  follows).
   Fetched rows are written to the model cache, never into `config.yaml`.
   Authentication headers are sent only when Hya has a credential.
 
@@ -629,9 +630,14 @@ collapses both `xhigh` and `max` to the label `xhigh`.
 
 An object-form model entry may declare the model's token limits with an
 optional `limit` block. hya otherwise knows nothing about a configured model's
-real window: routes advertise a 200k context and no output limit, and Anthropic
+real window: its catalog row (`ModelSummary`, `hya models --verbose`) reports
+the context and output limits as unknown (omitted), the runtime sizes the
+compaction threshold against a 200k-token fallback window, and Anthropic
 routes send `max_tokens: 4096` whenever the agent does not ask for a specific
-value — enough to truncate a long report with `finish: length`.
+value — enough to truncate a long report with `finish: length`. Likewise a
+model whose entry has no `reasoning` field and whose remote row publishes no
+effort metadata reports reasoning as unknown, while still accepting the
+provider kind's effort variants.
 
 ```yaml
 providers:
@@ -649,7 +655,7 @@ providers:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `limit.context` | positive `u32` | Context window in tokens. Replaces the 200k route default for this model's catalog row and drives the compaction threshold. |
+| `limit.context` | positive `u32` | Context window in tokens. Reported on this model's catalog row (`contextLimit`) and drives the compaction threshold in place of the 200k runtime fallback. |
 | `limit.output` | positive `u32` | Max output tokens. Becomes the default and the ceiling for the request's max-tokens field on this model. |
 
 Both fields are optional; an omitted field stays unspecified. Validation fails
@@ -914,7 +920,7 @@ not forwarded to another host.
 Over the v1 API, `PUT /v1/auth/{providerId}` (`{"apiKey": "..."}`) writes a
 static key file (`type: api`, mode `0600`) and `DELETE /v1/auth/{providerId}`
 removes it; either change applies to the running server at once — the server
-rebuilds that provider's route and catalog and emits `catalog.updated`, so no
+rebuilds that provider's route and catalog and emits a `catalogUpdated` stream frame, so no
 restart is needed. Saving a key for a provider with no cached remote models
 also fetches its model list. `GET /v1/auth` (`ListProviderAuth`) answers
 `{"providerIds": ["anthropic", ...]}`: the sorted ids that have an
@@ -1115,6 +1121,15 @@ mode), `SessionUpdated.permission_mode` on the root session's event stream,
 and `Catalog.ListPermissionModes` (`GET /v1/permission-modes`, rows
 `{id, title, description, source}` with `source` = `builtin` or the bundle
 id). See [`docs/protocol/api-reference.md`](protocol/api-reference.md).
+
+**Saved "allow always" grants.** Answering a permission ask with *allow
+always* in a client (TUI `2`, or `POST /v1/interactions/{id}/respond` with
+`{"permission": {"allowed": true, "persist": true}}`) saves a grant in the session database (`saved_permission`). Saved
+grants apply to every session of the server process, survive restarts (they
+are reloaded when the server starts), and are listed and deleted with
+`/rules` in the TUI or `GET` / `DELETE /v1/permissions/rules` — a deleted
+grant stops applying at once. They are not written to `config.yaml`; see
+[Protocol guide — Saved permission rules](protocol/README.md#saved-permission-rules).
 
 Omitting `permission` is equivalent to `model: default` with no rules. A
 permission-only config remains active while hya uses the offline provider **only
