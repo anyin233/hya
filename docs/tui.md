@@ -337,7 +337,11 @@ the bordered input, and the instruction line. The permission mode picker
 - **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
   under its parent, `· running` while it works, `· ◌ waiting` while a
-  permission or question of that session waits for an answer), `Todos` (the
+  permission or question of that session waits for an answer — opening a
+  session syncs its row to the fresh `GetSession` read, so a stale `running`
+  from before it was opened does not linger, and its own stream's turn-end
+  frame clears it live if the turn was already running when it was opened;
+  `state/store.ts` `openSession()` / `setSessionBusy()`), `Todos` (the
   live todo list — see
   [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
   and `Context` (session, agent, model, the merged transcript's message
@@ -553,20 +557,28 @@ still opens the full-panel view (same glyphs) for a longer list.
 
 **Compaction.** A `compactionApplied { untilSeq, strategy, message,
 foldedCount, manual }` frame renders as a muted transcript divider,
-`── context compacted · 12 messages · manual ──`: the number of messages
-folded behind the summary (omitted when the event has none), then `manual`
-for `/compact` (`CompactSession`) or `/summarize`, else the strategy that
-fired mid-turn (`Native`, `SnapCompact`, `Handoff`, …). The divider sits
-right before `message`, the system message that holds the summary, once the
-transcript has it (until then, right after the newest message); the summary
-follows it as a muted notice, without the internal `HYA_COMPACTED_CONTEXT`
-marker line. For example, `/compact` after a short exchange shows:
+`── context compacted · 12 messages · manual · local summary ──`: the number
+of messages folded behind the summary (omitted when the event has none),
+`manual` for a client-requested `/compact` (`CompactSession`) or
+`/summarize` (omitted for a compaction that fired mid-turn), and always the
+strategy in words (`state/format.ts` `strategyText()`): `native` (provider-
+native), `local_summarizer` → `local summary` (a model-written summary —
+also every manual compaction), `snap_compact` → `snapshot` (a local dense
+archive, no model call), `handoff` → `handoff` (a model-written handoff
+document). The divider sits right before `message`, the system message that
+holds the summary, once the transcript has it (until then, right after the
+newest message); the summary follows it as a muted notice, without the
+internal `HYA_COMPACTED_CONTEXT` marker line. For example, `/compact` after
+a short exchange shows:
 
 ```text
-── context compacted · 2 messages · manual ──
+── context compacted · 2 messages · manual · local summary ──
 
 Summary: the user asked for …
 ```
+
+`/compact`'s status line reads the same way: `Compacting…`, then
+`Compacted · <strategy in words>` (e.g. `Compacted · local summary`).
 
 **Compactions from before the session was opened.** Opening a session
 (at start with `--session`/`--continue`, `/open`, `/sessions`, a subagent's
@@ -1396,24 +1408,48 @@ Permission needed in 2. Fix the build · /open 2 to answer there
 ```
 
 **Interfaces.** From start, the TUI keeps one subscription to
-`GET /v1/events/stream?sinceSeq=18446744073709551615` (`StreamGlobalEvents`,
-SSE `StreamFrame`s of every session). `sinceSeq` is the largest uint64, so
-the server drops every durable event; only live-only frames arrive — the
-ask planes' `permissionRequested {interaction}`, `questionRequested
-{interaction}`, and `interactionResolved {request}` (never durable), and
-in-flight text deltas, which the TUI ignores. `state/prompts.ts`
-`globalAskRoute(event, context)` returns `ignore` for anything but those
-three, `tree` for an ask of the open session's tree (its own stream carries
-it too; applying it again is harmless — asks are kept by id), and `other`
-otherwise; `app/controller.ts` `onGlobalFrame` applies both through
-`store.applyAsk` and, for a new `other` ask, sets the status notice
-(`state/format.ts` `otherAskNotice`) and notifies. The stream is not a
-history: after every (re)subscribe and every `resync` the TUI reads
-`GET /v1/interactions` once. It reconnects after 800 ms, doubling to at most
-15 s while it keeps failing (a backend without the route); its failures do
-not touch the status bar's connection state, which the session stream
-owns. `state/format.ts` `askSessionLabel(sessionId, sessions)` renders
+`GET /v1/events/stream?interactionsOnly=true` (`StreamGlobalEvents`, SSE
+`StreamFrame`s of every session). The server leaves out every session's
+engine events (text, tools, messages, status) and their `resync` frames, so
+only the ask planes' `permissionRequested {interaction}`, `questionRequested
+{interaction}`, `interactionResolved {request}` (never durable), and
+`catalogUpdated {}` (live, no seq, empty `session`) arrive — no history is
+replayed and, unlike `streamSession`, no `resync` is expected on this
+filtered stream. `state/prompts.ts` `globalAskRoute(event, context)` returns
+`ignore` for anything but the three ask frames, `tree` for an ask of the
+open session's tree (its own stream carries it too; applying it again is
+harmless — asks are kept by id), and `other` otherwise; `app/controller.ts`
+`onGlobalFrame` applies both through `store.applyAsk` and, for a new `other`
+ask, sets the status notice (`state/format.ts` `otherAskNotice`) and
+notifies. A `catalogUpdated` frame is checked first (before `globalAskRoute`,
+which would otherwise `ignore` it) and does not touch the pending list; see
+[Catalog updates](#catalog-updates) below. The stream is not a history: after
+every (re)subscribe the TUI reads `GET /v1/interactions` once (a `resync` on
+this stream is not expected, but the handler still re-lists on one
+defensively). It reconnects after 800 ms, doubling to at most 15 s while it
+keeps failing (a backend without the route); its failures do not touch the
+status bar's connection state, which the session stream owns.
+`state/format.ts` `askSessionLabel(sessionId, sessions)` renders
 `<n>. <title or id>` (or the bare id when the list does not have it).
+
+### Catalog updates
+
+`catalogUpdated {}` (live-only: no seq, empty `session`) marks a change to
+the provider/model catalog — a provider added, edited, or refreshed, a key
+set or removed, or startup model discovery finishing
+(`docs/protocol/README.md` "Live and durable frames"). It arrives on the
+global stream (above) and, separately, on the open session's own stream
+(`app/controller.ts` `applyEvent`); either one triggers a re-read of
+`GET /v1/models` and `GET /v1/providers` only (`refreshCatalogOnly()`,
+lighter than a full catalog `refresh()`, so it does not also disturb the
+session list or interactions), applied with `store.setProviderCatalog()`.
+Both handlers share one debounce (`app/debounce.ts createDebounce`, the same
+120 ms / 400 ms window as the projection re-read), so a burst — both
+streams delivering the same frame, or a `catalogUpdated` arriving right
+after the Provider View's own post-call reload — coalesces into a single
+re-read; there is no double flicker. The `/model` picker (built from
+`state.models`) therefore shows a provider added over the HTTP API, from
+another client, without the TUI restarting or a manual refresh.
 
 The only polling left is the child-session round for `task` cards (their
 status and latest activity, `GetSession` + `ListMessages` of each child,
@@ -1911,9 +1947,18 @@ closes it too and keeps its quit meaning. The help overlay (`?`, group
 ## Saved Rules
 
 `/rules` opens a full-screen list of saved permission decisions (the rules a
-persisted "always allow" answer writes). Each row shows the
-effect, the tool it matches (`*` for every tool), the pattern, and when it
-was saved.
+persisted "always allow" answer writes). Each row shows the effect, the
+tool it matches, the pattern, and how long ago it was saved, e.g.
+`allow  bash  git status  · 2m ago`. The pattern column tells apart the
+three grant shapes the server reports (`docs/protocol/README.md` "Saved
+permission rules"): the exact command for a `bash` grant, `*` for an
+action-wide grant (every command of that tool, or every action for a
+non-`bash` tool), and empty for a tool-wide grant — shown blank, not folded
+into `*`, so it stays distinct from an action-wide grant. `tool` itself
+falls back to `*` only when the server leaves it empty (not expected in
+practice). The saved time is relative (`state/catalog.ts` `relativeTime()`,
+`state/rules.ts` `ruleTimeText()`: `Ns`/`Nm`/`Nh`/`Nd ago`), `—` for a rule
+saved before creation times were recorded.
 
 ### Keys
 

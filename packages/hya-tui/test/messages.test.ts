@@ -161,10 +161,10 @@ test("a live CompactionApplied for a summary in the history replaces its divider
   const store = createAppStore()
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", lastSeq: "10" })
   store.setMessages("hysec_1", [text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello"), summary("s1")])
-  store.applyEvent({ seq: "11", session: "hysec_1", compactionApplied: { untilSeq: "11", strategy: "LocalSummarizer", message: "s1", foldedCount: 2, manual: true } })
+  store.applyEvent({ seq: "11", session: "hysec_1", compactionApplied: { untilSeq: "11", strategy: "local_summarizer", message: "s1", foldedCount: 2, manual: true } })
   const views = transcriptViews(store.state)
   expect(views.map((view) => view.role)).toEqual(["user", "assistant", "divider", "system"])
-  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · 2 messages · manual ──" })
+  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · 2 messages · manual · local summary ──" })
   // The live event arrived before its summary message reached the transcript: still one divider, before it.
   const live = createAppStore()
   live.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })

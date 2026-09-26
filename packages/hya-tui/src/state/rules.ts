@@ -8,6 +8,7 @@
  * runs (`busy`) Esc cancels it.
  */
 import type { SavedRule } from "../client"
+import { relativeTime } from "./catalog"
 import type { KeyLike } from "../keys/bindings"
 import { truncate } from "./format"
 
@@ -67,13 +68,14 @@ export function permissionText(permission: string | undefined): string {
   }
 }
 
-/** A saved timestamp as `YYYY-MM-DD HH:MM`; `—` when the server left it unset. */
-export function ruleTimeText(time: string | undefined): string {
-  if (!time) return "—"
-  const parsed = new Date(time)
-  if (Number.isNaN(parsed.getTime())) return "—"
-  const pad = (value: number): string => String(value).padStart(2, "0")
-  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`
+/**
+ * A saved timestamp as `Nm ago` / `Nh ago` / `Nd ago` (state/catalog.ts
+ * `relativeTime`); `—` when the server left it unset (a rule saved before
+ * creation times were recorded) or the timestamp does not parse.
+ */
+export function ruleTimeText(time: string | undefined, now: number = Date.now()): string {
+  const rel = relativeTime(time, now)
+  return rel ? `${rel} ago` : "—"
 }
 
 function cell(text: string, width: number): string {
@@ -81,14 +83,23 @@ function cell(text: string, width: number): string {
   return cut + " ".repeat(Math.max(0, width - Bun.stringWidth(cut)))
 }
 
-/** One rule row: effect, tool, pattern, saved time (fits `width`). */
+/**
+ * A rule's pattern column: the server leaves `pattern` empty for a tool-wide
+ * grant (distinct from `*`, an action-wide grant across every tool), so an
+ * empty pattern is shown as-is, not folded into `*`.
+ */
+function patternText(rule: SavedRule): string {
+  return rule.pattern ?? ""
+}
+
+/** One rule row: effect, tool, pattern, relative saved time (fits `width`), e.g. `allow  bash  git status  · 2m ago`. */
 export function ruleLine(rule: SavedRule, width: number): string {
-  const line = `${cell(permissionText(rule.permission), 6)} ${cell(rule.tool || "*", 12)} ${cell(rule.pattern || "*", width > 60 ? 40 : 20)} ${ruleTimeText(rule.timeCreated)}`
+  const line = `${cell(permissionText(rule.permission), 6)} ${cell(rule.tool || "*", 12)} ${cell(patternText(rule), width > 60 ? 40 : 20)} · ${ruleTimeText(rule.timeCreated)}`
   return truncate(line.trimEnd(), width)
 }
 
 export function ruleHeaderLine(width: number): string {
-  return truncate(`${cell("EFFECT", 6)} ${cell("TOOL", 12)} ${cell("PATTERN", width > 60 ? 40 : 20)} SAVED`, width)
+  return truncate(`${cell("EFFECT", 6)} ${cell("TOOL", 12)} ${cell("PATTERN", width > 60 ? 40 : 20)} · SAVED`, width)
 }
 
 function matches(haystack: string, filter: string): boolean {

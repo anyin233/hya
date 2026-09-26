@@ -442,7 +442,23 @@ export function createAppStore() {
         set("children", new Map())
         set("dividers", [])
         set("liveRound", undefined)
+        // The sidebar's session list may hold a stale `busy` (the last list
+        // read, possibly before or after this session's turn ended): sync its
+        // row to this fresh read so the row does not show `running` forever.
+        if (state.sessions.some((row) => row.id === session.id)) {
+          set("sessions", state.sessions.map((row) => row.id === session.id ? sessionRow(row, session) : row))
+        }
       })
+    },
+
+    /**
+     * The open session's `busy` flag changed (a turn on its own stream ended,
+     * `docs/tui.md` "Sidebar"): keep the sidebar row current without waiting
+     * for the next full session list refresh.
+     */
+    setSessionBusy(id: string, busy: boolean): void {
+      if (!state.sessions.some((row) => row.id === id && row.busy !== busy)) return
+      set("sessions", state.sessions.map((row) => row.id === id ? { ...row, busy } : row))
     },
 
     setSelected(session: SessionInfo): void { set("selected", session) },

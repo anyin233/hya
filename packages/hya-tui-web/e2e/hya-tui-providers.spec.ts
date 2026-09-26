@@ -68,6 +68,31 @@ test.describe("hya TUI Provider View", () => {
     expect(await term.text()).not.toContain("PROVIDER")
   })
 
+  test("a provider added over the API while the TUI is running reaches the /model picker live, no restart or manual refresh (catalogUpdated)", async ({ tui, backend }) => {
+    await withFake([], ["alpha"], async (fake) => {
+      const term = await tui(hyaTui(backend))
+      await term.waitForText("Connected to hya")
+      // Never opens the Provider View (whose own reload would also pick this
+      // up): the global stream's live `catalogUpdated` frame is what must
+      // carry it to the `/model` picker.
+      await addOverApi(backend, fake, "k-1")
+      // The picker's rows are a snapshot taken when `/model` runs (not
+      // reactive), so wait for the server-side discovery to finish, then for
+      // the TUI's own debounced re-read (`catalogRefreshLater`, at most
+      // 400 ms) to catch up, before opening it once — instead of racing the
+      // `/model` command against that update.
+      await expect.poll(async () => {
+        const models = await api<{ models?: Array<{ id?: string }> }>(backend, "GET", "/v1/models")
+        return (models.models ?? []).some((model) => model.id === "gw/alpha")
+      }, { timeout: 20_000 }).toBe(true)
+      await term.page.waitForTimeout(600)
+      await term.type("/model")
+      await term.press("Enter")
+      await term.waitForText(/alpha\s+\[gw\]/, 5_000)
+      await term.press("Escape")
+    })
+  })
+
   test("add a provider in the wizard: models are fetched, the session moves off hya/offline, a test replies", async ({ tui, backend }) => {
     await withFake([hangStep(), textStep("Hi", { finish: "length" })], ["alpha", "beta"], async (fake) => {
       const term = await tui(hyaTui(backend))

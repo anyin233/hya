@@ -257,6 +257,27 @@ export function createController({ client, store, directory, registry = createCo
     refreshLater.schedule()
   }
 
+  /** Re-read only the provider/model catalog (`GET /v1/models` / `GET /v1/providers`): lighter than `refresh()`, so a `catalogUpdated` frame does not also disturb the session list or interactions. */
+  async function refreshCatalogOnly(): Promise<void> {
+    const [models, providers] = await Promise.all([client.listModels(), client.listProviders()])
+    store.setProviderCatalog(providers, models)
+  }
+
+  /**
+   * `catalogUpdated` (live, no seq, empty `session`) arrives on the global
+   * stream and on the open session's own stream, so it is debounced here:
+   * one at most every `refreshWaitMs`, coalescing a burst from both streams
+   * (or from this client's own Provider View write, which also re-reads the
+   * catalog directly) into a single re-read.
+   */
+  const catalogRefreshLater = createDebounce(() => {
+    void refreshCatalogOnly().catch(() => undefined)
+  }, { wait: refreshWaitMs, maxWait: refreshMaxWaitMs })
+
+  function scheduleCatalogRefresh(): void {
+    catalogRefreshLater.schedule()
+  }
+
   /** Publish the overlay at most once per `flushMs`, however many deltas arrived. */
   function scheduleFlush(): void {
     if (flushTimer) return
@@ -317,6 +338,13 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   function applyEvent(event: StreamEvent): void {
+    // Live, no seq, empty `session`: the provider/model catalog changed. Not
+    // a transcript or ask frame, so it never reaches the store's fold —
+    // debounced here instead of `scheduleRefresh()`'s projection re-read.
+    if (event.catalogUpdated) {
+      scheduleCatalogRefresh()
+      return
+    }
     const effect = store.applyEvent(event)
     if (event.memberUpdated && effect.durable) trackChildren()
     if (effect.changed) scheduleFlush()
@@ -333,8 +361,14 @@ export function createController({ client, store, directory, registry = createCo
     // A revert or redo (maybe another client's): re-read the session row (`revert`) with the transcript.
     if (event.sessionReverted && effect.durable) sessionDue = true
     if (!delta && !ask && (effect.durable || !event.seq)) scheduleRefresh()
-    // A turn ended: the working directory's git status may have changed (E22).
-    if (effect.finished) void refreshVcs()
+    // A turn ended: the working directory's git status may have changed (E22),
+    // and the sidebar's session-list row (possibly stale from before this
+    // session was opened, or from another client's turn) is no longer busy.
+    if (effect.finished) {
+      void refreshVcs()
+      const selected = store.state.selected
+      if (selected) store.setSessionBusy(selected.id, false)
+    }
     turns.observe(effect)
   }
 
@@ -409,6 +443,13 @@ export function createController({ client, store, directory, registry = createCo
     }
     const event = frame.event
     if (!event) return
+    // Live, no seq, empty `session`: never an ask, so `globalAskRoute` would
+    // ignore it; debounced with the copy that may also arrive on the open
+    // session's own stream (`applyEvent`), so a burst on both is one re-read.
+    if (event.catalogUpdated) {
+      scheduleCatalogRefresh()
+      return
+    }
     const route = globalAskRoute(event, store.state)
     if (route === "ignore") return
     const raw = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
