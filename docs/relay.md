@@ -90,3 +90,47 @@ the local direction (half-close); sending after the peer is gone fails with
 `hya_relay::transport::memory::pair(capacity)` returns a connected in-memory
 pair for tests; `MemoryTransport::inject_error` delivers a failure to the
 peer.
+
+### Relay link grammar
+
+A relay link is the one string a client needs, and it is the credential:
+whoever holds it controls the backend. `hya_relay::link::RelayLink` parses
+and formats it.
+
+```text
+hya://<host>[:port][/<prefix>]/<room_id>[?t=auto|grpc|ws]#<b64url(x25519_pub)>.<b64url(psk)>
+hya+insecure://<host>[:port][/<prefix>]/<room_id>[?t=…]#<…>.<…>
+```
+
+| Part | Meaning |
+| --- | --- |
+| `hya://` | TLS toward the first hop; default port **443**. |
+| `hya+insecure://` | Plaintext toward the first hop (LAN, tailnet, dev); default port **80**. Name the port explicitly for a bare `hya proxy` (`:8766`). |
+| `<host>` | The **public** relay host the backend was given, never the proxy's listen address. DNS name, IPv4, or bracketed IPv6; lowercased. No userinfo. |
+| `<prefix>` | Optional path prefix (one or more segments of `A-Za-z0-9-._~`, no `.`/`..`) under which the relay is published. |
+| `<room_id>` | 26 lowercase base32 characters (`a-z2-7`): the first 26 characters of unpadded base32 of `sha256(ed25519_pub)`. `hya_relay::link::room_id_from_ed25519`. |
+| `t` | Transport binding hint: `auto` (default; gRPC, falling back to WebSocket), `grpc`, or `ws`. Given twice is an error; other query parameters are ignored. |
+| fragment | The backend's Noise static public key (X25519) and the PSK, each exactly 32 bytes, unpadded base64url, joined by `.`. |
+
+Example:
+`hya://relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4?t=ws#AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8.__________________________________________8`.
+
+Formatting is canonical: the host is lowercased, the default port and
+`t=auto` are omitted. `RelayLink::to_secret_string()` returns the full link;
+`Display`, `Debug`, and `RelayLink::redacted()` show only
+`hya[+insecure]://host[:port][/prefix]/<room_id>`, and `LinkError` messages
+never contain key material. `LinkError` variants: `UnknownScheme`,
+`InvalidHost`, `InvalidPort`, `InvalidPath`, `MissingRoom`, `InvalidRoomId`,
+`UnknownTransport`, `InvalidQuery`, `MissingFragment`, `InvalidFragment`,
+`InvalidBase64{field}`, `InvalidKeyLength{field, len}`.
+
+`RelayAddress` (from a link, or `RelayAddress::parse_proxy_url("https://relay.example.com/hya")`)
+yields the binding endpoints:
+
+| Method | Example (`hya://relay.example.com/hya/…`) |
+| --- | --- |
+| `origin()` | `https://relay.example.com` |
+| `base_url()` / `grpc_url()` | `https://relay.example.com/hya` (gRPC paths `/hya.relay.v1.Relay/<Method>` go below it) |
+| `ws_url(WsRoute::Host)` | `wss://relay.example.com/hya/hya.relay.v1/ws/host` |
+
+`hya+insecure://` links map to `http://` and `ws://` the same way.

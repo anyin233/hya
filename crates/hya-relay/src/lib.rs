@@ -12,8 +12,11 @@
 //! - [`transport`] — [`transport::RelayTransport`], the bidirectional message
 //!   stream the relay state machines are written against, independent of the
 //!   gRPC or WebSocket binding, plus an in-memory pair for tests.
+//! - [`link`] — [`link::RelayLink`], the `hya://` relay link (the client
+//!   credential), and [`link::RoomId`] derivation.
 //!
 //! This crate deliberately depends on no hya runtime crate.
 
+pub mod link;
 pub mod proto;
 pub mod transport;
