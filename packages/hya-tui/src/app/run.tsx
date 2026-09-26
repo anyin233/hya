@@ -199,6 +199,11 @@ export async function run(options: Options): Promise<void> {
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
   renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30, autoFocus: false })
+  // Every full-screen view and the main layout follow the terminal size
+  // (`useTerminalDimensions`, one "resize" listener each, all mounted at
+  // once). Past Node's default of 10 its MaxListenersExceededWarning would be
+  // printed on stderr, over the TUI.
+  renderer.setMaxListeners(64)
   // OpenTUI's own signal handlers destroy the renderer; finish the shutdown from there.
   // Only reached when nothing above started the shutdown (a signal OpenTUI caught first): never archive.
   renderer.once("destroy", () => void shutdown(0, "signal"))
