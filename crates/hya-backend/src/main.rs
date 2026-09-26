@@ -941,14 +941,18 @@ async fn main() -> anyhow::Result<()> {
             ) {
                 // The link (read before the TUI owns the terminal) is the
                 // credential: only its redacted form is ever printed.
-                let connect = match connect {
-                    Some(source) => {
-                        if bridge::exposed_in_argv(&source) {
+                let (connect, connect_relay_ca) = match connect {
+                    Some(bare) => {
+                        if bridge::exposed_in_argv(&bare.source) {
                             eprintln!("hya: {}", bridge::ARGV_WARNING);
                         }
-                        Some(bridge::read_link(&source, "--connect")?)
+                        let link = bridge::read_link(&bare.source, "--connect")?;
+                        (
+                            Some(bridge::with_transport(link, bare.transport)),
+                            bare.relay_ca,
+                        )
                     }
-                    None => None,
+                    None => (None, None),
                 };
                 return frontend::run(frontend::LaunchRequest {
                     port: web_port,
@@ -960,6 +964,7 @@ async fn main() -> anyhow::Result<()> {
                     pure,
                     state_dir: state_dir(),
                     connect,
+                    connect_relay_ca,
                 })
                 .await;
             }

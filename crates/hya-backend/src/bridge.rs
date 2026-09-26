@@ -243,7 +243,8 @@ pub(crate) fn with_transport(link: RelayLink, transport: Option<Transport>) -> R
     }
 }
 
-fn parse_transport(text: &str) -> anyhow::Result<Transport> {
+/// `--transport auto|grpc|ws`.
+pub(crate) fn parse_transport(text: &str) -> anyhow::Result<Transport> {
     match text {
         "auto" => Ok(Transport::Auto),
         "grpc" => Ok(Transport::Grpc),

@@ -516,6 +516,13 @@ cannot be reached or a link the backend rejects stops `hya` with exit status
 **1** before it touches the terminal; an offline backend does not (the TUI
 shows `unavailable: remote backend is offline` until it comes back). The
 bridge lives as long as `hya`. `--connect` conflicts with `--backend`.
+`--relay-ca <PEM>` (extra trusted CA certificates for a relay behind a private
+CA) and `--transport auto|grpc|ws` (the relay binding, overriding the link's
+`t=`) configure that bridge, like `hya bridge`'s flags of the same names;
+both need `--connect`. The TUIs also get `--hya <this binary>`, the `hya`
+their `/connect-remote` runs `hya bridge` with (a TUI started by
+`--connect` has no local backend, so `/disconnect-remote` explains that
+instead of going back to one).
 
 **When the daemon goes away.** Every TUI bare `hya` started (the terminal
 one and every WebUI tab) knows the database (`--db`), and the server says
@@ -624,8 +631,9 @@ so Ctrl+C in the terminal reaches only the TUI and `hya`.
 | `BUN` | Bun executable; must exist when set. Else `bun` on `PATH`. |
 | `--backend <URL>` | `http://` or `https://` URL of a running server; bare invocation only; must answer `GET /v1/health`. |
 | `--connect [<LINK>\|-]` | A relay link, `-` (read from the terminal, not echoed), or no value (`HYA_RELAY_LINK`); bare invocation only; conflicts with `--backend`. |
+| `--relay-ca <PEM>`, `--transport <auto\|grpc\|ws>` | Only with `--connect`: the in-process bridge's extra CA file and relay binding. |
 | `--resume [<ID>]` | Bare invocation only (else an error); passed to the terminal TUI as `--resume [<ID>]`. |
-| TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`; `--server <bridge-url> --dir <cwd> --remote --server-label <label>` with `--connect`); the terminal TUI adds exactly one of `--web-url <url>` / `--web-error <reason>` and `--resume [<id>]` when given ([tui.md](tui.md#start-it)); the WebUI tabs' command adds `--web-tab` instead. |
+| TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`; `--server <bridge-url> --dir <cwd> --hya <hya> --remote --server-label <label>` with `--connect`); the terminal TUI adds exactly one of `--web-url <url>` / `--web-error <reason>` and `--resume [<id>]` when given ([tui.md](tui.md#start-it)); the WebUI tabs' command adds `--web-tab` instead. |
 | Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
 | Log files | `<state dir>/hya/hya.log` (bare `hya`) and `<db>.server.log` (the daemon), append-only; each rotated once to `.1` above 4 MiB. |
 | Daemon | Found: `<db>.server.json` whose pid is alive and whose `/v1/health` answers. Else started like `hya serve start` (60 s wait). Never stopped by bare `hya`; after `hya serve stop` its TUIs start it again only on `/reconnect`. |

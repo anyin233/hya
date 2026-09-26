@@ -54,6 +54,20 @@ pub(crate) struct Cli {
         conflicts_with = "backend"
     )]
     pub(crate) connect: Option<String>,
+    /// PEM file of extra trusted CA certificates for the relay's TLS, used
+    /// by `--connect`'s in-process bridge (a relay behind a private CA).
+    /// Only with `--connect`.
+    #[arg(long = "relay-ca", value_name = "PEM", requires = "connect")]
+    pub(crate) connect_relay_ca: Option<std::path::PathBuf>,
+    /// Relay binding of `--connect`'s in-process bridge: `auto`, `grpc`, or
+    /// `ws`, overriding the link's `t=`. Only with `--connect`.
+    #[arg(
+        long = "transport",
+        value_name = "BINDING",
+        value_parser = ["auto", "grpc", "ws"],
+        requires = "connect"
+    )]
+    pub(crate) connect_transport: Option<String>,
     /// Open this session in the terminal TUI and unarchive it; without an
     /// id, pick one of the directory's sessions (archived ones included).
     /// Only for bare `hya`.
@@ -476,9 +490,18 @@ pub(crate) fn bare_backend(cli: &Cli) -> anyhow::Result<Option<String>> {
     Ok(Some(trimmed.to_string()))
 }
 
-/// Bare `hya`'s `--connect [LINK]`: where the relay link comes from. Only
-/// without a subcommand or `-p` (`hya bridge` is the standalone form).
-pub(crate) fn bare_connect(cli: &Cli) -> anyhow::Result<Option<crate::bridge::LinkSource>> {
+/// Bare `hya`'s `--connect [LINK]`: where the relay link comes from, and
+/// the in-process bridge's `--relay-ca` / `--transport`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BareConnect {
+    pub(crate) source: crate::bridge::LinkSource,
+    pub(crate) relay_ca: Option<std::path::PathBuf>,
+    pub(crate) transport: Option<hya_relay::link::Transport>,
+}
+
+/// Bare `hya`'s `--connect [LINK]` with its bridge flags. Only without a
+/// subcommand or `-p` (`hya bridge` is the standalone form).
+pub(crate) fn bare_connect(cli: &Cli) -> anyhow::Result<Option<BareConnect>> {
     let Some(value) = &cli.connect else {
         return Ok(None);
     };
@@ -487,7 +510,16 @@ pub(crate) fn bare_connect(cli: &Cli) -> anyhow::Result<Option<crate::bridge::Li
             "--connect only applies to bare `hya`; use `hya bridge` for a standalone bridge"
         );
     }
-    Ok(Some(crate::bridge::LinkSource::from_arg(Some(value))))
+    let transport = cli
+        .connect_transport
+        .as_deref()
+        .map(crate::bridge::parse_transport)
+        .transpose()?;
+    Ok(Some(BareConnect {
+        source: crate::bridge::LinkSource::from_arg(Some(value)),
+        relay_ca: cli.connect_relay_ca.clone(),
+        transport,
+    }))
 }
 
 /// Bare `hya`'s `--resume [ID]` for the terminal TUI: a session id, or the
@@ -1080,22 +1112,50 @@ mod tests {
     }
 
     #[test]
+    fn bare_connect_takes_the_bridge_relay_ca_and_transport() {
+        use hya_relay::link::Transport;
+        let bare = super::bare_connect(&parse([
+            "hya",
+            "--connect",
+            "-",
+            "--relay-ca",
+            "/etc/relay-ca.pem",
+            "--transport",
+            "ws",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            bare.relay_ca.as_deref(),
+            Some(std::path::Path::new("/etc/relay-ca.pem"))
+        );
+        assert_eq!(bare.transport, Some(Transport::Ws));
+        // A bare `--connect` alone: neither.
+        let bare = super::bare_connect(&parse(["hya", "--connect", "-"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!((bare.relay_ca, bare.transport), (None, None));
+        // Both need `--connect`; the binding is one of the three.
+        assert!(Cli::try_parse_from(["hya", "--relay-ca", "/x.pem"]).is_err());
+        assert!(Cli::try_parse_from(["hya", "--transport", "ws"]).is_err());
+        assert!(Cli::try_parse_from(["hya", "--connect", "-", "--transport", "quic"]).is_err());
+    }
+
+    #[test]
     fn connect_is_a_bare_hya_link_source() {
         use crate::bridge::LinkSource;
+        let source = |cli| super::bare_connect(&cli).unwrap().map(|bare| bare.source);
         let link = "hya://relay.example.com/eh7ddx5bksrgcytl7bkai36se4#k.p";
         assert_eq!(
-            super::bare_connect(&parse(["hya", "--connect", link])).unwrap(),
+            source(parse(["hya", "--connect", link])),
             Some(LinkSource::Arg(link.into()))
         );
         assert_eq!(
-            super::bare_connect(&parse(["hya", "--connect", "-"])).unwrap(),
+            source(parse(["hya", "--connect", "-"])),
             Some(LinkSource::Stdin)
         );
         // Without a value: `$HYA_RELAY_LINK`.
-        assert_eq!(
-            super::bare_connect(&parse(["hya", "--connect"])).unwrap(),
-            Some(LinkSource::Env)
-        );
+        assert_eq!(source(parse(["hya", "--connect"])), Some(LinkSource::Env));
         assert_eq!(super::bare_connect(&parse(["hya"])).unwrap(), None);
         assert!(
             Cli::try_parse_from(["hya", "--connect", "-", "--backend", "http://x"]).is_err(),
