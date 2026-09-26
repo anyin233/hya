@@ -98,10 +98,11 @@ the server process's cwd:
 
 ### `RuntimeCatalogRefresh`
 
-Optional app-owned hook that `SessionEngine::bind_root_runtime` calls **before**
-binding a root turn snapshot. Child/bound turns reuse the parent's pinned
-`TurnBinding` and never consult the registry. `hya-app` implements it so the
-installed bundle catalog can refresh when the registry generation changed.
+Optional app-owned hook that `SessionEngine::bind_scope_runtime` (and so every
+root, session, and catalog bind) calls **before** binding a snapshot. Child/bound
+turns reuse the parent's pinned `TurnBinding` and never consult the registry.
+`hya-app` implements it so the installed bundle catalog can refresh when the
+registry generation changed.
 
 ```rust
 #[async_trait]
@@ -110,6 +111,13 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
         &self,
         runtime: &RuntimeRegistry,
     ) -> Result<bool, CoreError>;
+
+    /// Default: `Ok(false)`.
+    async fn refresh_scope(
+        &self,
+        runtime: &RuntimeRegistry,
+        scope: &CatalogScope,
+    ) -> Result<bool, CoreError>;
 }
 ```
 
@@ -117,12 +125,13 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
 
 | Result | Meaning |
 | --- | --- |
-| `Ok(true)` | A new generation was published |
+| `Ok(true)` | A new generation (or scope overlay) was published |
 | `Ok(false)` | Nothing changed |
-| `Err(_)` | Discovery/publication failed; **`bind_root_runtime` aborts** and does not bind |
+| `Err(_)` | Discovery/publication failed; **a turn bind aborts** and does not bind (catalog reads only log it) |
 
-The engine discards the `bool` after success (`let _ = refresh…await?`) and always
-proceeds to `runtime.bind_turn(workdir)` when the result is `Ok`. Implementors own
+The engine discards the `bool` after success (`let _ = refresh…await?`), calls
+`refresh_if_changed` then `refresh_scope` for the scope being bound, and binds
+that scope (see "Scope resolution and the scope cache" below). Implementors own
 MCP/plugin discovery I/O; the engine only rebinds after a successful refresh.
 
 ## Session Creation
@@ -539,6 +548,57 @@ a caller-defined `fingerprint` the registry never interprets.
 
 Which scope a session binds, and the overlay builders for project bundles and
 plugins, sit above this mechanism in `SessionEngine` and `hya-app`.
+
+#### Scope resolution and the scope cache (`SessionEngine`)
+
+Every bind of a session (create-time `session.start` hooks, admission, each
+turn and round rebind, direct shell, title, summary, residents, loop mode)
+goes through `bind_session_runtime`, which binds the session's scope
+(`catalog_scope_for_session`):
+
+| Session | Scope |
+| --- | --- |
+| Project kind with a live Project (archived included) | `Project { id, roots }`, roots read from the store at every bind, so a roots edit applies to the next turn |
+| Temporary, Project kind without a Project (legacy), or its Project deleted | `Directory(workdir)` (inert tiers only) |
+| Child / resident | the parent's: a child copies its parent's Project and kind at creation |
+
+Catalog reads use `catalog_scope_for_directory(dir)`: the unarchived Project
+with a root containing `dir` (`resolve_project_by_path`), else
+`Directory(dir)` (also for a path the store rejects, such as a relative one);
+no directory is `Global`. `bind_root_runtime(dir)` binds that scope and
+`bind_global_runtime()` binds `Global`.
+
+`bind_scope_runtime(scope, workdir)` runs `refresh_if_changed` (base), then
+`refresh_scope(runtime, scope)` for every scope, `Global` included (the app
+publishes or drops the scope's overlay there), then `bind_scoped_with_skills`
+with skills discovered for the workdir plus, for a Project, every root in
+order (`discover_skills_for_roots_with_builtins`: first root wins a name).
+
+Bundle APIs and permission modes: session-scoped calls (`invoke_bundle_api`
+with a session, `session_bundle_apis`, `session_permission_modes`, and the
+mode check in `set_permission_mode`) resolve in the session's scope, so a
+Project session reaches its Project bundles; their refresh failures are only
+logged. The global variants (`bundle_apis`, `permission_modes`,
+`invoke_bundle_api` without a session) stay base-only.
+
+`invalidate_catalog_scope(project_id)` drops the Project's overlay and sends
+`ScopeKey::Project(id)` to every `subscribe_catalog_scope_invalidations()`
+receiver (the server turns it into a catalog-updated notice). Call it when a
+Project's roots change, or it is deleted or archived. Existing bindings keep
+their snapshot; the next bind rebuilds the overlay.
+
+Scope cache: every non-global bind records the scope's last-bind time. On
+each bind and on `sweep_catalog_scopes()` the engine drops (`drop_scope`)
+scopes idle longer than `CatalogScopeCacheConfig::idle_ttl` (default 30
+minutes), then the least recently bound beyond `max_scopes` (default 32).
+The scope just bound and any scope a live `TurnBinding` still retains
+(`RuntimeRegistry::scope_in_use`, a turn in flight) are never dropped; turns
+rebind every round, which keeps their scope recent. A dropped scope is
+rebuilt by the next bind's `refresh_scope`, and bindings keep their snapshot
+and its sources alive regardless. Set the limits with
+`with_catalog_scope_cache` or `set_catalog_scope_cache_config`
+(evictions are not reported to invalidation subscribers: the catalog does not
+change).
 
 #### `ToolRegistrySnapshot` and dispatch identity
 

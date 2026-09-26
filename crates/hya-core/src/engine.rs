@@ -69,6 +69,7 @@ pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
 mod revert;
 mod roots;
+mod scope_binding;
 pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
 mod session_cleanup;
 mod session_state;
@@ -105,6 +106,7 @@ pub use admission::SpawnAdmissionOutcome;
 pub use file_snapshot::{MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES};
 pub use fork::{ForkAt, ForkError, fork_cut};
 pub use revert::{RevertError, RevertOutcome, RevertTarget};
+pub use scope_binding::CatalogScopeCacheConfig;
 pub use turn::advertise_tool;
 pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};
@@ -192,10 +194,13 @@ impl DirectMailPreAppendGate {
 
 /// Optional app-owned hook to refresh the runtime catalog before a root bind.
 ///
-/// **Contract:** Called from [`SessionEngine::bind_root_runtime`]. Return
-/// `Ok(true)` when a new generation was published, `Ok(false)` when nothing
-/// changed. Errors abort the bind. Implementors own MCP/plugin discovery I/O;
-/// the engine only rebinds after a successful refresh.
+/// **Contract:** Called from [`SessionEngine::bind_scope_runtime`] (and so
+/// every root, session, and catalog bind): first
+/// [`Self::refresh_if_changed`] for the base, then [`Self::refresh_scope`]
+/// for the scope being bound. Return `Ok(true)` when something was
+/// published, `Ok(false)` when nothing changed. Errors abort a turn bind
+/// (catalog reads only log them). Implementors own MCP/plugin discovery
+/// I/O; the engine only rebinds after a successful refresh.
 #[async_trait]
 pub trait RuntimeCatalogRefresh: Send + Sync {
     /// Refresh `runtime` if external sources changed.
@@ -203,6 +208,25 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
     /// # Errors
     /// Propagate discovery or publication failures as [`CoreError`].
     async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError>;
+
+    /// Bring `scope`'s overlay up to date before it is bound: publish (via
+    /// [`RuntimeRegistry::publish_scope`] under `scope.key()`) or drop the
+    /// overlay when the scope's inputs changed. Called for every scope,
+    /// `Global` and `Directory` included; an implementor that loads no tier
+    /// for a scope returns `Ok(false)`. The engine may drop an idle overlay
+    /// at any time (cache limits); the next call must then republish it.
+    ///
+    /// # Errors
+    /// Propagate failures that must abort the bind; tolerate per-bundle or
+    /// per-plugin failures by publishing without them.
+    async fn refresh_scope(
+        &self,
+        runtime: &RuntimeRegistry,
+        scope: &crate::catalog_scope::CatalogScope,
+    ) -> Result<bool, CoreError> {
+        let _ = (runtime, scope);
+        Ok(false)
+    }
 }
 
 /// One spawn request bound to the immutable runtime snapshot of its parent turn.
@@ -375,6 +399,9 @@ pub struct SessionEngine {
     model_categories: Arc<CategoryRegistry>,
     runtime: Arc<RuntimeRegistry>,
     catalog_refresh: Option<Arc<dyn RuntimeCatalogRefresh>>,
+    /// Scope overlay last-bind times and invalidation fan-out, shared by
+    /// every clone of this engine.
+    scope_cache: Arc<scope_binding::ScopeCache>,
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
@@ -437,6 +464,7 @@ impl Clone for SessionEngine {
             model_categories: self.model_categories.clone(),
             runtime: self.runtime.clone(),
             catalog_refresh: self.catalog_refresh.clone(),
+            scope_cache: Arc::clone(&self.scope_cache),
             permission: self.permission.clone(),
             interaction: self.interaction.clone(),
             spawner: self.spawner.clone(),
@@ -539,6 +567,7 @@ impl SessionEngine {
             model_categories: Arc::new(CategoryRegistry::default()),
             runtime,
             catalog_refresh: None,
+            scope_cache: Arc::new(scope_binding::ScopeCache::new()),
             permission,
             interaction,
             spawner,
@@ -644,6 +673,14 @@ impl SessionEngine {
     #[must_use]
     pub fn with_catalog_refresh(mut self, refresh: Arc<dyn RuntimeCatalogRefresh>) -> Self {
         self.catalog_refresh = Some(refresh);
+        self
+    }
+
+    /// Set the scope overlay cache limits (default: 32 scopes, 30 minutes
+    /// idle). Shared with every clone of this engine.
+    #[must_use]
+    pub fn with_catalog_scope_cache(self, config: scope_binding::CatalogScopeCacheConfig) -> Self {
+        self.set_catalog_scope_cache_config(config);
         self
     }
 
@@ -970,7 +1007,9 @@ impl SessionEngine {
         Ok(self.runtime.bind_turn(workdir)?)
     }
 
-    /// Optionally refresh external catalogs, then bind a root turn for `workdir`.
+    /// Optionally refresh external catalogs, then bind the scope of
+    /// `workdir` ([`Self::catalog_scope_for_directory`]: its registered
+    /// Project, else the directory) for a turn or catalog read there.
     ///
     /// # Errors
     /// Propagates catalog refresh or bind failures.
@@ -978,10 +1017,8 @@ impl SessionEngine {
         &self,
         workdir: &std::path::Path,
     ) -> Result<TurnBinding, CoreError> {
-        if let Some(refresh) = &self.catalog_refresh {
-            let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
-        }
-        Ok(self.runtime.bind_turn(workdir)?)
+        let scope = self.catalog_scope_for_directory(Some(workdir)).await;
+        self.bind_scope_runtime(&scope, workdir).await
     }
 
     /// Optionally refresh external catalogs, then bind a project-less view
@@ -990,16 +1027,16 @@ impl SessionEngine {
     /// # Errors
     /// Propagates catalog refresh or bind failures.
     pub async fn bind_global_runtime(&self) -> Result<TurnBinding, CoreError> {
-        if let Some(refresh) = &self.catalog_refresh {
-            let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
-        }
-        Ok(self.runtime.bind_global()?)
+        self.bind_scope_runtime(&crate::catalog_scope::CatalogScope::Global, Path::new(""))
+            .await
     }
 
-    /// Bind a fresh runtime for a Session and apply its root-tree model
-    /// overrides. Catalog refresh and skill discovery happen exactly as for a
-    /// root bind; temporary models are filtered against currently available
-    /// providers without mutating their durable projection.
+    /// Bind a fresh runtime for a Session in its catalog scope
+    /// ([`Self::catalog_scope_for_session`], roots read fresh) and apply its
+    /// root-tree model overrides. Catalog refresh and skill discovery happen
+    /// as in [`Self::bind_scope_runtime`]; temporary models are filtered
+    /// against currently available providers without mutating their durable
+    /// projection.
     ///
     /// # Errors
     /// Returns [`CoreError::Invalid`] when `session` (or its lineage root) is
@@ -1020,7 +1057,10 @@ impl SessionEngine {
                 "session root not found: {root}"
             )));
         }
-        let binding = self.bind_root_runtime(workdir).await?;
+        let scope = self
+            .scope_for_projection(session, &projection, workdir)
+            .await;
+        let binding = self.bind_scope_runtime(&scope, workdir).await?;
         let overrides = root_projection
             .session
             .agent_model_overrides
@@ -1105,14 +1145,32 @@ impl SessionEngine {
         Ok(recorded.unwrap_or_else(|| self.default_permission_mode().as_wire()))
     }
 
-    /// Every selectable permission mode: the built-in `manual` and `yolo`,
-    /// then each published bundle's declared modes (after refreshing the
-    /// runtime catalog so newly installed bundles appear).
+    /// Every selectable permission mode in the global view: the built-in
+    /// `manual` and `yolo`, then each base-published bundle's declared modes
+    /// (after refreshing the runtime catalog so newly installed bundles
+    /// appear). Project bundles' modes are not listed (see
+    /// [`Self::session_permission_modes`]).
     pub async fn permission_modes(&self) -> Vec<crate::permission_mode::PublishedPermissionMode> {
         self.refresh_catalog_for_bundle_api().await;
         let mut modes = crate::permission_mode::builtin_permission_modes();
         modes.extend(self.runtime.published_permission_modes());
         modes
+    }
+
+    /// Every permission mode selectable in `session`: the built-ins, then
+    /// each bundle mode published in the session's catalog scope (a Project
+    /// session also sees its Project bundles' modes).
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] for an unknown session; bind failures.
+    pub async fn session_permission_modes(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<crate::permission_mode::PublishedPermissionMode>, CoreError> {
+        let binding = self.session_scope_binding(session).await?;
+        let mut modes = crate::permission_mode::builtin_permission_modes();
+        modes.extend(binding.published_permission_modes());
+        Ok(modes)
     }
 
     /// Set the permission mode of `session`'s tree.
@@ -1136,12 +1194,13 @@ impl SessionEngine {
             .ok_or_else(|| CoreError::Invalid(format!("unknown permission mode: {mode:?}")))?;
         if let crate::permission_mode::SessionPermissionMode::Bundle { .. } = &parsed {
             let wire = parsed.as_wire();
-            if !self
-                .permission_modes()
-                .await
-                .iter()
-                .any(|published| published.id == wire)
-            {
+            // Validate in the session's scope; an unknown session falls back
+            // to the global view and fails the existence check below.
+            let available = match self.session_permission_modes(session).await {
+                Ok(modes) => modes,
+                Err(_) => self.permission_modes().await,
+            };
+            if !available.iter().any(|published| published.id == wire) {
                 return Err(CoreError::Invalid(format!(
                     "permission mode is not available: {mode:?}"
                 )));
@@ -1301,16 +1360,34 @@ impl SessionEngine {
         }
     }
 
-    /// Every published bundle's declared API endpoints.
+    /// Every base-published bundle's declared API endpoints (the global
+    /// view: Project bundles are listed only by
+    /// [`Self::session_bundle_apis`]).
     pub async fn bundle_apis(&self) -> Vec<crate::bundle_apis::PublishedBundleApis> {
         self.refresh_catalog_for_bundle_api().await;
         self.runtime.published_bundle_apis()
     }
 
+    /// Every bundle's declared API endpoints in `session`'s catalog scope.
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] for an unknown session; bind failures.
+    pub async fn session_bundle_apis(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<crate::bundle_apis::PublishedBundleApis>, CoreError> {
+        Ok(self
+            .session_scope_binding(session)
+            .await?
+            .published_bundle_apis())
+    }
+
     /// Serve one bundle API call.
     ///
     /// Checks the session of a session-scoped call, resolves the bundle in
-    /// the live published generation, routes the path against its declared
+    /// the live published generation (a session-scoped call: in the
+    /// session's catalog scope, so a Project session reaches its Project
+    /// bundles; a global call: in the base only), routes the path against its declared
     /// templates, and forwards the request to its process, which reads
     /// through a request-scoped read-only capability (bound to the session for
     /// session scope, to no session for global scope).
@@ -1332,13 +1409,20 @@ impl SessionEngine {
         {
             return Err(crate::BundleApiError::SessionNotFound(session));
         }
-        self.refresh_catalog_for_bundle_api().await;
-        let apis = self.runtime.bundle_apis(&call.bundle).ok_or_else(|| {
-            crate::BundleApiError::NotFound {
-                bundle: call.bundle.clone(),
-                scope: call.scope(),
-                path: call.path.clone(),
+        let apis = match call.session {
+            Some(session) => self
+                .session_scope_binding(session)
+                .await?
+                .bundle_apis(&call.bundle),
+            None => {
+                self.refresh_catalog_for_bundle_api().await;
+                self.runtime.bundle_apis(&call.bundle)
             }
+        };
+        let apis = apis.ok_or_else(|| crate::BundleApiError::NotFound {
+            bundle: call.bundle.clone(),
+            scope: call.scope(),
+            path: call.path.clone(),
         })?;
         apis.invoke(call).await
     }
