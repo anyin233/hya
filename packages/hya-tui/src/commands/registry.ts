@@ -45,6 +45,12 @@ export interface AppActions {
   copyText(text: string): boolean
   /** Edit the composer's input in the external editor (composer/editor.ts); the result goes back into the input. */
   openEditor(): void
+  /** `/undo`: revert the last prompt (app/revert.ts). */
+  undo(): Promise<void>
+  /** `/redo`: undo the pending revert. */
+  redo(): Promise<void>
+  /** `/fork`: open the fork picker. */
+  fork(): void
 }
 
 export interface CommandContext {

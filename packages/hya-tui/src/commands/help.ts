@@ -49,6 +49,9 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   help: "Views",
   chord: "Composer",
   externalEditor: "Composer",
+  undo: "Turns",
+  redo: "Turns",
+  fork: "Turns",
 }
 
 /** Longest joined key label (the picker's label column is 28 wide). */

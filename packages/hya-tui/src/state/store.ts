@@ -51,6 +51,7 @@ import { compactionText } from "./format"
 import { manualMode, modeCycle, modeNotice, type ModeConfirm, type PermissionModeInfo } from "./modes"
 import type { ActivePicker, PickerState } from "./picker"
 import type { ProviderViewState } from "./providers"
+import { sessionRow } from "./revert"
 import type { RulesViewState } from "./rules"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
@@ -439,6 +440,26 @@ export function createAppStore() {
 
     setSelected(session: SessionInfo): void { set("selected", session) },
 
+    /**
+     * The open session after a revert or redo (`RevertSession`'s `session`):
+     * its row (with or without `revert`) replaces the open one, and the
+     * streaming overlay is dropped — no turn runs during a revert, and the
+     * overlay's messages may be the hidden ones (the projection re-read
+     * shows what is left).
+     */
+    applyRevert(session: SessionInfo): void {
+      const selected = state.selected
+      if (selected?.id !== session.id) return
+      fold.reset(fold.lastSeq)
+      batch(() => {
+        set("selected", sessionRow(selected, session))
+        set("overlay", [])
+        if (state.sessions.some((row) => row.id === session.id)) {
+          set("sessions", state.sessions.map((row) => row.id === session.id ? sessionRow(row, session) : row))
+        }
+      })
+    },
+
     /** The open session's tree runs in `mode` now (a switch or a `sessionUpdated` frame); adds the transcript notice once per change. */
     applyPermissionMode,
     setPermissionModes(rows: PermissionModeInfo[]): void { set("permissionModes", rows) },
@@ -464,7 +485,7 @@ export function createAppStore() {
         set("sessions", rows)
         const selected = state.selected
         const row = selected && rows.find((candidate) => candidate.id === selected.id)
-        if (row) set("selected", { ...selected, ...row })
+        if (row) set("selected", sessionRow(selected, row))
       })
     },
 
@@ -492,6 +513,17 @@ export function createAppStore() {
       // Pending asks are live frames: shown at once.
       applyAsk(event)
       // Durable session state below: skip a replayed duplicate (effect.durable is false for it).
+      // A revert or redo (this client's, or another's): the overlay may hold hidden messages; the controller re-reads the rest.
+      if (event.sessionReverted && effect.durable) {
+        fold.reset(fold.lastSeq)
+        set("overlay", [])
+      }
+      // The next message after a revert commits it: `/redo` is no longer possible.
+      const selected = state.selected
+      if (event.messageStarted && effect.durable && selected?.revert && (!event.session || event.session === selected.id)) {
+        const { revert: _committed, ...rest } = selected
+        set("selected", rest)
+      }
       const compaction = event.compactionApplied
       if (compaction && effect.durable) addNotice(compactionText(compaction), `divider-${event.seq}`, compaction.message)
       // The whole list after a todo tool changed it (E23).

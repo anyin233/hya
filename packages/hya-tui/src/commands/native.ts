@@ -7,6 +7,7 @@ import { modelReference, sessionTree } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
+import { forkSourceText } from "../state/revert"
 import type { PickerAction } from "../state/picker"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
@@ -265,6 +266,21 @@ export const nativeCommandSpecs: CommandSpec[] = [
     },
   },
   {
+    name: "/undo",
+    description: "Revert the last prompt: hide it and every later message, restore the files its tools changed, and put the prompt back in the input",
+    run: ({ actions }) => actions.undo(),
+  },
+  {
+    name: "/redo",
+    description: "Undo the pending /undo: bring the messages and file changes back (only until the next prompt)",
+    run: ({ actions }) => actions.redo(),
+  },
+  {
+    name: "/fork",
+    description: "Fork the session into a new one: at the latest message, or before a picked prompt (which goes back into the input)",
+    run: ({ actions }) => { actions.fork() },
+  },
+  {
     name: "/summarize",
     description: "Summarize the session into a new message",
     run: async ({ store, client, actions }) => {
@@ -296,6 +312,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         `Version     ${store.state.serverVersion || "unknown"}`,
         `Directory   ${client.directory}`,
         `Session     ${selected ? (selected.title || selected.id) : "none"}`,
+        ...(selected?.forkedFrom ? [`Forked      ${forkSourceText(selected.forkedFrom, store.state.sessions)!.replace(/^forked /, "")}`] : []),
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,

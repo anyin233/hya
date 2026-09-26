@@ -64,6 +64,7 @@ import { notificationBody, notificationSequence, shouldNotify, type NotifyKind }
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
 import { defaultModelRef } from "../state/providers"
+import { sessionRow } from "../state/revert"
 import type { AppStore } from "../state/store"
 import { createAgentModelsController } from "./agentModels"
 import type { UiHandles } from "./context"
@@ -72,6 +73,7 @@ import { createMcpController } from "./mcp"
 import { createModeSwitcher } from "./modes"
 import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
+import { createRevertController } from "./revert"
 import { createRulesController } from "./rules"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
@@ -226,7 +228,7 @@ export function createController({ client, store, directory, registry = createCo
     if (!selected) return
     const row = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(selected.id)}`)
     const current = store.state.selected
-    if (current?.id === row.id) store.setSelected({ ...current, ...row })
+    if (current?.id === row.id) store.setSelected(sessionRow(current, row))
   }
 
   /** `GET /v1/interactions` into the pending list (after a (re)subscribe or `resync`: frames before it are not replayed). */
@@ -320,6 +322,8 @@ export function createController({ client, store, directory, registry = createCo
     const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
     if (asked) notifyAsk(asked.id, event.permissionRequested ? "permission" : "question", asked.title ?? "")
     if (event.tokensRecorded && effect.durable) sessionDue = true
+    // A revert or redo (maybe another client's): re-read the session row (`revert`) with the transcript.
+    if (event.sessionReverted && effect.durable) sessionDue = true
     if (!delta && !ask && (effect.durable || !event.seq)) scheduleRefresh()
     // A turn ended: the working directory's git status may have changed (E22).
     if (effect.finished) void refreshVcs()
@@ -598,6 +602,7 @@ export function createController({ client, store, directory, registry = createCo
   const mcp = createMcpController({ store, client, copyText: (text) => terminal?.copy(text) ?? false })
   const rules = createRulesController({ store, client })
   const agentModels = createAgentModelsController({ store, client, openPicker })
+  const revert = createRevertController({ store, client, composer: () => composer, openSession, refresh, openPicker })
 
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
@@ -607,6 +612,9 @@ export function createController({ client, store, directory, registry = createCo
     openRules: () => rules.open(),
     openAgentModels: () => agentModels.open(),
     copyText: (text) => terminal?.copy(text) ?? false,
+    undo: () => revert.undo(),
+    redo: () => revert.redo(),
+    fork: () => revert.fork(),
     cancelTurn: () => turns.cancel(),
     quit,
     openPicker,

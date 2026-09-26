@@ -1,5 +1,11 @@
 # 0.41.0
 
+## TUI `/undo`, `/redo`, and `/fork`
+
+- `/undo` (or Ctrl+X U) takes back the last prompt and its replies and restores the files those turns changed. If the input is empty, it gets the reverted prompt; text you typed is kept. The status line lists restored, deleted, skipped, and failed files. Run it again to go further back.
+- `/redo` (or Ctrl+X R) brings the messages and file changes back, until the next prompt makes the undo permanent. While an undo is pending, the transcript ends with `↶ N messages reverted · /redo or Ctrl+X R restores them · the next prompt makes it permanent`. It updates live when another client undoes.
+- `/fork` (or Ctrl+X F) opens a picker: fork at the latest message, or before one of your earlier prompts. The TUI switches to the new session and puts that prompt in the input. The sidebar and `/status` show `Forked from <title>`. See [TUI](docs/tui.md).
+
 ## Image attachments on prompts
 
 - A v1 prompt turn can carry images: `PromptTurn.attachments` is a list of `{name, mime, data (base64), path}` entries.

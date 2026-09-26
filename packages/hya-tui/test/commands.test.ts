@@ -29,6 +29,9 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     savePreferences: (patch) => { calls.push(`prefs ${JSON.stringify(patch)}`) },
     copyText: (text) => { calls.push(`copy ${text}`); return copyWorks },
     openEditor: () => { calls.push("editor") },
+    undo: async () => { calls.push("undo") },
+    redo: async () => { calls.push("redo") },
+    fork: () => { calls.push("fork") },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -427,4 +430,20 @@ test("/notifications toggles desktop notifications (or sets it with on/off) and 
   expect(store.state.notifications).toBe(false)
   expect(calls).toEqual(['prefs {"notifications":false}', 'prefs {"notifications":true}', 'prefs {"notifications":false}'])
   await expect(run("/notifications maybe")).rejects.toThrow("Usage: /notifications [on|off]")
+})
+
+test("/undo, /redo, and /fork run the revert actions", async () => {
+  const { calls, run } = harness()
+  await run("/undo")
+  await run("/redo")
+  await run("/fork")
+  expect(calls).toEqual(["undo", "redo", "fork"])
+})
+
+test("/status names the session a fork came from", async () => {
+  const { store, run } = harness()
+  store.setSessions([{ id: "hysec_src", agent: "build", workdir: "/w", title: "Parser" }])
+  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", forkedFrom: { session: "hysec_src" } })
+  await run("/status")
+  expect(store.state.statusText).toContain("Forked      from Parser")
 })

@@ -50,8 +50,9 @@ test("every binding is documented and reachable without a browser-reserved short
     .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" })))
   // The second key of the Ctrl+X chord.
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
+  for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "help", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools"])
+    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "fork", "help", "interrupt", "pageDown", "pageUp", "quit", "redo", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 
@@ -91,4 +92,18 @@ test("Ctrl+X starts a chord; Ctrl+E (or E) after it opens the external editor", 
   expect(resolveBinding(key("e", { ctrl: true }))).toBeUndefined()
   expect(resolveBinding(key("e", { sequence: "e" }))).toBeUndefined()
   expect(keyBindings.find((binding) => binding.action === "externalEditor")?.label).toBe("Ctrl+X Ctrl+E")
+})
+
+test("Ctrl+X U / R / F undo, redo, and fork; without the prefix the letters type", () => {
+  expect(resolveBinding(key("u", { sequence: "u" }), { chord: "ctrl+x" })).toBe("undo")
+  expect(resolveBinding(key("u", { ctrl: true }), { chord: "ctrl+x" })).toBe("undo")
+  expect(resolveBinding(key("r", { sequence: "r" }), { chord: "ctrl+x" })).toBe("redo")
+  // Ctrl+R after the prefix is redo, not refresh.
+  expect(resolveBinding(key("r", { ctrl: true }), { chord: "ctrl+x" })).toBe("redo")
+  expect(resolveBinding(key("f", { sequence: "f" }), { chord: "ctrl+x" })).toBe("fork")
+  expect(resolveBinding(key("u", { sequence: "u" }))).toBeUndefined()
+  expect(resolveBinding(key("r", { ctrl: true }))).toBe("refresh")
+  expect(keyBindings.find((binding) => binding.action === "undo")?.label).toBe("Ctrl+X U")
+  expect(keyBindings.find((binding) => binding.action === "redo")?.label).toBe("Ctrl+X R")
+  expect(keyBindings.find((binding) => binding.action === "fork")?.label).toBe("Ctrl+X F")
 })

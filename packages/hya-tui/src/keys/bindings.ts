@@ -29,6 +29,9 @@ export type KeyAction =
   | "help"
   | "chord"
   | "externalEditor"
+  | "undo"
+  | "redo"
+  | "fork"
 
 /** The subset of OpenTUI's KeyEvent a binding looks at. */
 export interface KeyLike {
@@ -66,9 +69,27 @@ export const keyBindings: readonly KeyBinding[] = [
     matches: (key, context) => context.chord === "ctrl+x" && !key.meta && key.name === "e",
   },
   {
+    action: "undo",
+    label: "Ctrl+X U",
+    description: "Revert the last prompt, like /undo (works whatever the input holds; Ctrl+X Ctrl+U too)",
+    matches: (key, context) => context.chord === "ctrl+x" && !key.meta && key.name === "u",
+  },
+  {
+    action: "redo",
+    label: "Ctrl+X R",
+    description: "Undo the pending revert, like /redo (works whatever the input holds; Ctrl+X Ctrl+R too)",
+    matches: (key, context) => context.chord === "ctrl+x" && !key.meta && key.name === "r",
+  },
+  {
+    action: "fork",
+    label: "Ctrl+X F",
+    description: "Open the fork picker, like /fork",
+    matches: (key, context) => context.chord === "ctrl+x" && !key.meta && key.name === "f",
+  },
+  {
     action: "chord",
     label: "Ctrl+X",
-    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor); any other next key cancels it",
+    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor; U undo, R redo, F fork); any other next key cancels it",
     matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "x" && context.chord === undefined,
   },
   {
