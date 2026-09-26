@@ -82,7 +82,7 @@ export function initialSessionId(sessions: readonly SessionInfo[], startup: { co
 
 export interface DaemonOptions {
   bin: string
-  /** Working directory of `hya serve start` (and so of a daemon it starts). */
+  /** Working directory of `hya serve start` (a relative `db` resolves against it); the daemon it starts runs in the home directory. */
   directory: string
   db: string
   env?: Record<string, string | undefined>
@@ -141,8 +141,8 @@ export interface DiscoveryInfo {
 }
 
 /**
- * `<db>.lock` and `<db>.server.json` for `db` as the started server sees it:
- * relative to `directory` (its working directory), with the directory
+ * `<db>.lock` and `<db>.server.json` for `db` as `hya` resolves it:
+ * relative to `directory` (where `hya serve start` runs), with the directory
  * canonicalized the way `hya` does. `undefined` for stores that are not
  * locked (in-memory, SQLite URIs).
  */
