@@ -16,11 +16,12 @@
 //!    `--web-url <url>` or `--web-error <reason>` (and `--resume [id]` when
 //!    `hya --resume [id]` asked for it).
 //!
-//! Both TUIs also get `--db <db> --hya <this binary>` (not with `--backend`
-//! or `--connect`), so when the backend stops or crashes they find (or
-//! start) the next one. With `--connect` they get `--remote --server-label
-//! "remote: <relay>/<room>"` instead (no local Project for the directory;
-//! the header shows the relay, not the loopback URL).
+//! Both TUIs also get `--db <db> --hya <this binary>` (neither with
+//! `--backend`), so when the backend stops or crashes they find (or start)
+//! the next one. With `--connect` they get `--hya <this binary> --remote
+//! --server-label "remote: <relay>/<room>"` instead (no database; `--hya`
+//! for `/connect-remote`'s `hya bridge`; no local Project for the
+//! directory; the header shows the relay, not the loopback URL).
 //! The tab command also carries `--web-tab`: a tab's TUI then does not offer
 //! `/to-background` and Ctrl+D does not quit it (closing the tab already
 //! leaves the session running). The host itself stays generic.
@@ -367,17 +368,27 @@ pub(crate) async fn connect(
 /// `--connect <link>`: no daemon; start the bridge in this process (it
 /// lives as long as bare `hya`) and hand its loopback URL to the TUIs as a
 /// fixed remote backend. A lost connection is retried against the same
-/// URL: every new connection opens a new tunnel.
+/// URL: every new connection opens a new tunnel. `relay_ca` is `--relay-ca`
+/// (the link already carries `--transport`); `exe` is passed to the TUIs as
+/// `--hya`, the binary their `/connect-remote` runs `hya bridge` with.
 pub(crate) async fn connect_remote(
     link: hya_relay::link::RelayLink,
+    relay_ca: Option<PathBuf>,
+    exe: &Path,
     log: crate::bridge::Log,
 ) -> anyhow::Result<(crate::bridge::Bridge, BackendLink, Vec<String>)> {
-    let bridge =
-        crate::bridge::Bridge::start(link, crate::bridge::BridgeOptions::default(), log).await?;
+    let options = crate::bridge::BridgeOptions {
+        client: hya_relay::client::ClientConfig {
+            extra_ca_pem: relay_ca,
+            ..hya_relay::client::ClientConfig::default()
+        },
+        ..crate::bridge::BridgeOptions::default()
+    };
+    let bridge = crate::bridge::Bridge::start(link, options, log).await?;
     let backend = BackendLink {
         url: bridge.url(),
         db: None,
-        hya: None,
+        hya: Some(exe.to_path_buf()),
         remote: Some(bridge.label().to_owned()),
     };
     let notes = vec![format!(
@@ -420,6 +431,8 @@ pub(crate) struct LaunchRequest {
     /// `--connect <link>`: a remote backend through the relay, instead of
     /// the database's daemon.
     pub(crate) connect: Option<hya_relay::link::RelayLink>,
+    /// `--relay-ca <pem>` of `--connect`'s bridge.
+    pub(crate) connect_relay_ca: Option<PathBuf>,
 }
 
 /// The paths bare `hya` runs: Bun, the two packages, and the workspace.
@@ -466,8 +479,13 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
     // Held until `hya` exits: the remote backend's in-process bridge.
     let (_bridge, backend, notes) = match request.connect.clone() {
         Some(link) => {
-            let (bridge, backend, notes) =
-                connect_remote(link, crate::bridge::stderr_log()).await?;
+            let (bridge, backend, notes) = connect_remote(
+                link,
+                request.connect_relay_ca.clone(),
+                &exe,
+                crate::bridge::stderr_log(),
+            )
+            .await?;
             (Some(bridge), backend, notes)
         }
         None => {
@@ -1060,13 +1078,13 @@ mod tests {
         BackendLink {
             url: "http://127.0.0.1:6001".into(),
             db: None,
-            hya: None,
+            hya: Some(PathBuf::from("/opt/hya/bin/hya")),
             remote: Some("remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4".into()),
         }
     }
 
     #[test]
-    fn a_remote_backend_marks_both_tuis_remote_with_a_label_and_no_database() {
+    fn a_remote_backend_marks_both_tuis_remote_with_a_label_and_the_binary_but_no_database() {
         let tui = [
             "/b/bun",
             "/lib/tui/src/main.ts",
@@ -1074,6 +1092,8 @@ mod tests {
             "http://127.0.0.1:6001",
             "--dir",
             "/work",
+            "--hya",
+            "/opt/hya/bin/hya",
             "--remote",
             "--server-label",
             "remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4",
@@ -1113,8 +1133,8 @@ mod tests {
         expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
         assert_eq!(terminal, expected);
         for argv in [&host, &terminal] {
+            // `--hya`: the binary `/connect-remote` and `/disconnect-remote` need.
             assert!(!argv.contains(&OsString::from("--db")));
-            assert!(!argv.contains(&OsString::from("--hya")));
         }
     }
 
@@ -1149,6 +1169,7 @@ mod tests {
             pure: false,
             state_dir: PathBuf::from("/nonexistent/hya"),
             connect: None,
+            connect_relay_ca: None,
         }
     }
 
@@ -1175,14 +1196,15 @@ mod tests {
         let keep = lines.clone();
         let log: crate::bridge::Log =
             Arc::new(move |line| keep.lock().unwrap().push(line.to_owned()));
-        let (bridge, link_out, notes) = connect_remote(link.clone(), log).await.unwrap();
+        let exe = Path::new("/opt/hya/bin/hya");
+        let (bridge, link_out, notes) = connect_remote(link.clone(), None, exe, log).await.unwrap();
         assert!(
             link_out.url.starts_with("http://127.0.0.1:"),
             "{link_out:?}"
         );
         assert_eq!(link_out.url, bridge.url());
         assert_eq!(link_out.db, None);
-        assert_eq!(link_out.hya, None);
+        assert_eq!(link_out.hya.as_deref(), Some(exe));
         assert_eq!(
             link_out.remote.as_deref(),
             Some(format!("remote: 127.0.0.1:{}/{}", relay.port(), link.room_id()).as_str())
