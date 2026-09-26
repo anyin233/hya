@@ -164,6 +164,15 @@ test.describe("hya TUI Diff view", () => {
     await term.waitForText("file59.txt")
     await term.waitForText(/↑ \d+ more/)
     await term.waitForText("n/p file")
+    // The file list should fill the panel down to its border, not leave a
+    // blank band: the last file sits on the row right above the panel's
+    // bottom border, or within one row of it.
+    {
+      const lines = await term.lines()
+      const last = lines.findIndex((line) => line.includes("▸ file59.txt"))
+      const border = lines.findIndex((line, index) => index > last && /└/.test(line))
+      expect(border - last).toBeLessThanOrEqual(2)
+    }
 
     await term.press("p")
     await term.waitForText("Diff › file58.txt")

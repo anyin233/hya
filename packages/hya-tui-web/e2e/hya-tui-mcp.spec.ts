@@ -94,6 +94,10 @@ test.describe("hya TUI MCP view", () => {
       expect(hint).toBeGreaterThan(last)
       expect(lines[hint]).toContain(detailHint)
       expect(lines.filter((line) => line.includes("Esc back"))).toHaveLength(1)
+      // The windowed tool list should fill the space down to the hint line,
+      // not leave a blank band: the last tool sits right above the (first)
+      // hint row, or within one empty row of it.
+      expect(hint - last).toBeLessThanOrEqual(2)
     })
   })
 })
