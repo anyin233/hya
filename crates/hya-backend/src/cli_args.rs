@@ -242,6 +242,14 @@ pub(crate) enum Command {
         #[command(flatten)]
         args: ProxyArgs,
     },
+    /// Reach a remote backend through a secure relay link: listen on a
+    /// loopback port and carry every connection end-to-end encrypted to the
+    /// backend (docs/relay.md "Connecting from a client"). Point a TUI at it
+    /// with `--server <url> --remote`.
+    Bridge {
+        #[command(flatten)]
+        args: crate::bridge::BridgeArgs,
+    },
     /// Relay diagnostics.
     Relay {
         #[command(subcommand)]

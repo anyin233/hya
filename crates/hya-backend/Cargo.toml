@@ -41,3 +41,7 @@ futures = { workspace = true }
 [dev-dependencies]
 serde_norway = { workspace = true }
 hya-relay = { workspace = true, features = ["testing"] }
+ed25519-dalek = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }

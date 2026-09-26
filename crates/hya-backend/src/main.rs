@@ -14,6 +14,7 @@
 
 mod agent_cmd;
 mod auth_cmd;
+mod bridge;
 mod bundle_cmd;
 mod cli_args;
 mod daemon;
@@ -1093,6 +1094,8 @@ async fn main() -> anyhow::Result<()> {
         // The proxy composes no runtime either: no config, providers, MCP,
         // or session store — it only opens network connections.
         Some(Command::Proxy { args }) => proxy_cmd::cmd_proxy(args).await,
+        // The bridge composes no runtime either: it only relays connections.
+        Some(Command::Bridge { args }) => bridge::cmd_bridge(args).await,
         // The doctor also composes no runtime: it only probes the relay.
         Some(Command::Relay { command }) => {
             let code = relay_doctor::run(command).await?;
