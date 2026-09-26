@@ -422,6 +422,30 @@ path = "crates/hya-e2e/tests/p36_wait_archive.rs"
 tags = ["pr", "subagent", "mailbox"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.32"
+title = "manual mode: a session reads any root of its multi-root Project without asking; a read outside every root asks ExternalDirectory for the concrete <dir>/*; allow-always then covers a sibling session of the same Project for a sibling file in that directory, but a session of a different Project asks again"
+track = "P"
+path = "crates/hya-e2e/tests/p37_project_permission_scope.rs"
+tags = ["pr", "permissions", "project"]
+timeout_secs = 90
+
+[[scenario]]
+id = "T2.33"
+title = "yolo mode auto-approves a read outside every Project root without ever raising an ExternalDirectory ask"
+track = "P"
+path = "crates/hya-e2e/tests/p37_project_permission_scope.rs"
+tags = ["pr", "permissions", "project"]
+timeout_secs = 60
+
+[[scenario]]
+id = "T2.34"
+title = "bash's cwd outside every Project root never raises ExternalDirectory, even in manual mode where the command itself still asks Action::Bash"
+track = "P"
+path = "crates/hya-e2e/tests/p37_project_permission_scope.rs"
+tags = ["pr", "permissions", "project"]
+timeout_secs = 60
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
