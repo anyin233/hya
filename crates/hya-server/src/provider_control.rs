@@ -71,8 +71,9 @@ pub struct ProviderUpsert {
     pub api_key: Option<String>,
 }
 
-/// Metadata written into one model's `models:` entry (replace semantics:
-/// `None` removes that field from the entry).
+/// Patch for one model's `models:` entry: `None` keeps the current value;
+/// an empty `display_name` or a zero limit removes that field; `reasoning`
+/// can be set but not cleared (remove the entry for that).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProviderModelOverride {
     /// Entry `name`.

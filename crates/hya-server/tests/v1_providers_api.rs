@@ -376,6 +376,16 @@ async fn provider_mutations_forward_to_the_control_and_emit_catalog_updated() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.get("discovery").is_none());
+    // Patch semantics: an empty name and zero limits reach the control as
+    // explicit clears; absent fields stay `None` (keep).
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/acme/models",
+        json!({"modelId": "vendor/m-1", "displayName": " ", "outputLimit": 0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     let (status, body) = send(
         &app,
@@ -424,6 +434,16 @@ async fn provider_mutations_forward_to_the_control_and_emit_catalog_updated() {
                     context_limit: Some(1000),
                     output_limit: Some(100),
                     reasoning: Some(false),
+                },
+            ),
+            Call::SetModel(
+                "acme".to_string(),
+                "vendor/m-1".to_string(),
+                ProviderModelOverride {
+                    display_name: Some(String::new()),
+                    context_limit: None,
+                    output_limit: Some(0),
+                    reasoning: None,
                 },
             ),
             Call::RemoveModel("acme".to_string(), "vendor/m-1:free".to_string()),

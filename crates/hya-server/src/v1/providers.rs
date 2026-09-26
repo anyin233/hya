@@ -148,10 +148,9 @@ pub(crate) async fn set_provider_model(
 ) -> Result<Json<pb::ProviderUpdate>, V1Error> {
     check_provider_id(&provider_id)?;
     let model_id = check_model_id(&request.model_id)?;
-    let display_name = request
-        .display_name
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty());
+    // Patch semantics: absent keeps, `""` / `0` clear (see
+    // `ProviderModelOverride`).
+    let display_name = request.display_name.map(|name| name.trim().to_owned());
     if display_name
         .as_deref()
         .is_some_and(|name| name.len() > 256 || name.chars().any(char::is_control))
@@ -160,9 +159,10 @@ pub(crate) async fn set_provider_model(
             "invalid display name: at most 256 characters without control characters",
         ));
     }
-    let context_limit = request.context_limit.filter(|limit| *limit > 0);
-    let output_limit = request.output_limit.filter(|limit| *limit > 0);
+    let context_limit = request.context_limit;
+    let output_limit = request.output_limit;
     if let (Some(context), Some(output)) = (context_limit, output_limit)
+        && context > 0
         && output > context
     {
         return Err(V1Error::invalid_argument(format!(
