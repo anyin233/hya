@@ -115,6 +115,23 @@ struct FileConfig {
     /// over both. Absent → [`hya_provider::RetryConfig`] defaults.
     #[serde(default)]
     provider_retry: Option<ProviderRetryFile>,
+    /// Per-Project catalog scope cache limits (`catalog_scopes:` block).
+    /// Absent → [`hya_core::CatalogScopeCacheConfig`] defaults.
+    #[serde(default)]
+    catalog_scopes: Option<CatalogScopesFile>,
+}
+
+/// `catalog_scopes:` block: how many Project/Directory catalog scopes (and
+/// their project plugin and bundle processes) stay cached, and for how long
+/// an unbound scope is kept.
+#[derive(Debug, Default, Deserialize)]
+struct CatalogScopesFile {
+    /// Most cached scopes; the least recently bound beyond it are dropped.
+    #[serde(default)]
+    max: Option<usize>,
+    /// Seconds a scope may stay unbound before it is dropped.
+    #[serde(default)]
+    idle_ttl_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1955,6 +1972,32 @@ pub fn load_categories() -> CategoryRegistry {
         .unwrap_or_default()
 }
 
+/// Resolve the catalog scope cache limits from an optional file block;
+/// absent fields keep the defaults (32 scopes, 30 minutes idle).
+fn resolve_catalog_scope_cache(
+    file: Option<&CatalogScopesFile>,
+) -> hya_core::CatalogScopeCacheConfig {
+    let defaults = hya_core::CatalogScopeCacheConfig::default();
+    hya_core::CatalogScopeCacheConfig {
+        max_scopes: file.and_then(|f| f.max).unwrap_or(defaults.max_scopes),
+        idle_ttl: file
+            .and_then(|f| f.idle_ttl_secs)
+            .map_or(defaults.idle_ttl, std::time::Duration::from_secs),
+    }
+}
+
+/// Resolve the catalog scope cache limits (`catalog_scopes:`) independent of
+/// provider config, so the offline path honors them too.
+#[must_use]
+pub fn load_catalog_scope_cache() -> hya_core::CatalogScopeCacheConfig {
+    let file_block = config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .and_then(|file| file.catalog_scopes);
+    resolve_catalog_scope_cache(file_block.as_ref())
+}
+
 /// Every plugin id declared under `plugins:` (enabled or not). A project
 /// plugin manifest with one of these ids never loads: config wins.
 #[must_use]
@@ -3071,6 +3114,32 @@ permission:
         assert_eq!(
             resolve_permission(&mode_alias).unwrap().model(),
             PermissionModel::Allow
+        );
+    }
+
+    #[test]
+    fn catalog_scope_cache_keys_parse_and_default() {
+        let file =
+            parse_config("default_model: x\ncatalog_scopes:\n  max: 4\n  idle_ttl_secs: 90\n")
+                .unwrap();
+        let config = resolve_catalog_scope_cache(file.catalog_scopes.as_ref());
+        assert_eq!(config.max_scopes, 4);
+        assert_eq!(config.idle_ttl, std::time::Duration::from_secs(90));
+
+        let partial = parse_config("default_model: x\ncatalog_scopes:\n  max: 7\n").unwrap();
+        let config = resolve_catalog_scope_cache(partial.catalog_scopes.as_ref());
+        assert_eq!(config.max_scopes, 7);
+        assert_eq!(config.idle_ttl, std::time::Duration::from_secs(30 * 60));
+
+        let absent = parse_config("default_model: x\n").unwrap();
+        assert_eq!(
+            resolve_catalog_scope_cache(absent.catalog_scopes.as_ref()),
+            hya_core::CatalogScopeCacheConfig::default()
+        );
+        assert_eq!(
+            hya_core::CatalogScopeCacheConfig::default().max_scopes,
+            32,
+            "documented default"
         );
     }
 

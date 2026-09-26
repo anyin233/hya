@@ -360,6 +360,11 @@ plugins:
       TOKEN: literal-token               # NOT templated — see Plugins
   ext:
     kind: bun                          # rust (default) | bun | other
+
+# Per-Project catalog scope cache (project bundles, project plugins).
+catalog_scopes:
+  max: 32                                # most cached Project/directory scopes
+  idle_ttl_secs: 1800                    # drop a scope unbound this long
 ```
 
 ## Providers
@@ -1045,6 +1050,33 @@ config key; a legacy `max_depth` entry in the block parses but is ignored.
 Environment overrides for these five keys win over the file (see
 [Environment Variables](#environment-variables)). Unparseable env values fall
 back to the config/default value.
+
+## Catalog Scope Cache
+
+Each registered Project (and each directory outside every Project) binds its
+own catalog scope: the Project's bundles and plugins on top of the installed
+ones ([Plugins](#plugins)). A scope is built at its first bind and cached;
+the top-level `catalog_scopes:` block bounds that cache
+([`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs)
+`load_catalog_scope_cache`). Every field is optional. Read once at startup,
+also while offline.
+
+```yaml
+catalog_scopes:
+  max: 32
+  idle_ttl_secs: 1800
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `max` | usize | `32` | Most cached scopes; beyond it the least recently bound are dropped. |
+| `idle_ttl_secs` | u64 | `1800` (30 min) | A scope not bound for this many seconds is dropped. |
+
+Dropping a scope stops its project plugin and project bundle processes once no
+running turn still uses them; the next bind of that Project rebuilds the scope
+and starts them again. Scopes are checked at every bind and by a sweep every
+60 seconds, so an idle server releases them too. A scope that a live turn is
+bound to is never dropped.
 
 ## Web Search
 
