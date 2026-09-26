@@ -6649,6 +6649,10 @@ pub struct SessionUpdated {
     /// root session only).
     #[prost(string, optional, tag = "5")]
     pub permission_mode: ::core::option::Option<::prost::alloc::string::String>,
+    /// New archived flag of a root session when changed: `true` when it was
+    /// archived, `false` when it was unarchived (explicitly or by a new turn).
+    #[prost(bool, optional, tag = "6")]
+    pub archived: ::core::option::Option<bool>,
 }
 /// A session was deleted.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -12449,6 +12453,14 @@ pub struct SessionInfo {
     /// turn commits the revert. Unset when nothing is pending.
     #[prost(message, optional, tag = "16")]
     pub revert: ::core::option::Option<SessionRevert>,
+    /// Whether this root session is archived: hidden from `ListSessions`
+    /// unless requested. Subagent child sessions are never archived; they
+    /// follow their root. Archiving does not cancel a running turn.
+    #[prost(bool, tag = "17")]
+    pub archived: bool,
+    /// When the session was archived; unset when it is not archived.
+    #[prost(message, optional, tag = "18")]
+    pub archived_at: ::core::option::Option<::pbjson_types::Timestamp>,
 }
 /// Where a forked session came from.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -12521,6 +12533,12 @@ pub struct ListSessionsRequest {
     /// Standard pagination controls.
     #[prost(message, optional, tag = "3")]
     pub page: ::core::option::Option<PageRequest>,
+    /// Also list archived root sessions (default: they are left out).
+    #[prost(bool, tag = "4")]
+    pub include_archived: bool,
+    /// List only archived root sessions (implies `include_archived`).
+    #[prost(bool, tag = "5")]
+    pub archived_only: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSessionsResponse {
@@ -12555,6 +12573,13 @@ pub struct UpdateSessionRequest {
     /// the tree.
     #[prost(string, optional, tag = "6")]
     pub permission_mode: ::core::option::Option<::prost::alloc::string::String>,
+    /// Archive (`true`) or unarchive (`false`) a root session when set.
+    /// Idempotent: archiving an archived session keeps its first `archived_at`.
+    /// Archiving a subagent child session is `invalid_argument`; unarchiving
+    /// one is a no-op. Archiving does not cancel a running turn. A new prompt,
+    /// command, or shell turn unarchives the session implicitly.
+    #[prost(bool, optional, tag = "7")]
+    pub archived: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteSessionRequest {
@@ -12802,6 +12827,8 @@ pub mod session_client {
             self.inner.unary(req, path, codec).await
         }
         /// List sessions, optionally scoped under one parent (subagent tree).
+        /// Archived root sessions are left out unless `include_archived` or
+        /// `archived_only` is set.
         ///
         /// hya.http: GET /v1/sessions
         pub async fn list_sessions(
@@ -12828,7 +12855,8 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "ListSessions"));
             self.inner.unary(req, path, codec).await
         }
-        /// Update mutable session fields: title, agent, model, background flag.
+        /// Update mutable session fields: title, agent, model, background flag,
+        /// permission mode, and the archived flag of a root session.
         ///
         /// hya.http: PATCH /v1/sessions/{session}
         pub async fn update_session(
@@ -13029,6 +13057,8 @@ pub mod session_server {
             request: tonic::Request<super::GetSessionRequest>,
         ) -> std::result::Result<tonic::Response<super::SessionInfo>, tonic::Status>;
         /// List sessions, optionally scoped under one parent (subagent tree).
+        /// Archived root sessions are left out unless `include_archived` or
+        /// `archived_only` is set.
         ///
         /// hya.http: GET /v1/sessions
         async fn list_sessions(
@@ -13038,7 +13068,8 @@ pub mod session_server {
             tonic::Response<super::ListSessionsResponse>,
             tonic::Status,
         >;
-        /// Update mutable session fields: title, agent, model, background flag.
+        /// Update mutable session fields: title, agent, model, background flag,
+        /// permission mode, and the archived flag of a root session.
         ///
         /// hya.http: PATCH /v1/sessions/{session}
         async fn update_session(

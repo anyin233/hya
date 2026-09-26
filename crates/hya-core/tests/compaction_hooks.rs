@@ -375,10 +375,7 @@ async fn session_lifecycle_hooks_fire_best_effort() {
         "session.start must fire on create"
     );
 
-    engine
-        .set_archived(session, serde_json::Number::from(1))
-        .await
-        .unwrap();
+    engine.archive_session(session).await.unwrap();
     assert!(
         hooks.calls().contains(&format!("session.end:{session}")),
         "session.end must fire when the session is archived"

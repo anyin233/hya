@@ -63,7 +63,9 @@ pub struct SessionProjection {
     /// carries between episodes; revival seeds model context from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<HandoffProjection>,
-    /// Archive stamp when archived.
+    /// Archive stamp (unix epoch milliseconds) while this root session is
+    /// archived; `None` when it is not (never archived, unarchived, or a
+    /// legacy zero stamp). See [`SessionProjection::is_archived`].
     pub archived: Option<serde_json::Number>,
     /// Share URL when shared; `None` after clear.
     pub share: Option<String>,
@@ -702,6 +704,83 @@ pub struct HandoffProjection {
     pub degraded: bool,
 }
 
+/// Whether an archive stamp is zero (the legacy "not archived" value).
+fn is_zero_stamp(stamp: &serde_json::Number) -> bool {
+    stamp.as_u64() == Some(0) || stamp.as_i64() == Some(0) || stamp.as_f64() == Some(0.0)
+}
+
+impl SessionProjection {
+    /// Whether this (root) session is archived.
+    #[must_use]
+    pub fn is_archived(&self) -> bool {
+        self.archived.is_some()
+    }
+
+    /// When this session was archived (unix epoch milliseconds); `None`
+    /// when it is not archived.
+    #[must_use]
+    pub fn archived_at_millis(&self) -> Option<i64> {
+        let stamp = self.archived.as_ref()?;
+        stamp.as_i64().or_else(|| {
+            stamp
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(|value| value as i64)
+        })
+    }
+}
+
+/// Why a session's archive state cannot change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionArchiveError {
+    /// The projection has no `SessionCreated`: the session does not exist.
+    NotFound,
+    /// Only root sessions are archived; subagent children follow their root.
+    NotRoot,
+}
+
+impl std::fmt::Display for SessionArchiveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("session not found"),
+            Self::NotRoot => f.write_str("only root sessions can be archived"),
+        }
+    }
+}
+
+impl std::error::Error for SessionArchiveError {}
+
+/// The event that moves `projection`'s session to `archived`, or `None` when
+/// it already is there (archiving is idempotent and keeps the first stamp).
+///
+/// `now_millis` stamps a new archive. Unarchiving a subagent child is a
+/// no-op (children are never archived); archiving one is
+/// [`SessionArchiveError::NotRoot`].
+///
+/// # Errors
+/// [`SessionArchiveError::NotFound`] for an empty projection, and
+/// [`SessionArchiveError::NotRoot`] when archiving a child session.
+pub fn session_archive_event(
+    projection: &Projection,
+    archived: bool,
+    now_millis: i64,
+) -> Result<Option<Event>, SessionArchiveError> {
+    let session = projection.session.id.ok_or(SessionArchiveError::NotFound)?;
+    if archived == projection.session.is_archived() {
+        return Ok(None);
+    }
+    if !archived {
+        return Ok(Some(Event::SessionUnarchived { session }));
+    }
+    if projection.session.parent.is_some() {
+        return Err(SessionArchiveError::NotRoot);
+    }
+    Ok(Some(Event::SessionArchived {
+        session,
+        archived: serde_json::Number::from(now_millis.max(1)),
+    }))
+}
+
 /// Version of the shared reducer's fold semantics and of the durable snapshot
 /// encoding ([`Projection::encode_snapshot`]).
 ///
@@ -711,7 +790,7 @@ pub struct HandoffProjection {
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 6;
+pub const PROJECTION_REDUCER_VERSION: u32 = 7;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -950,7 +1029,11 @@ impl Projection {
                 self.session.permission = Some(permission.clone());
             }
             Event::SessionArchived { archived, .. } => {
-                self.session.archived = Some(archived.clone());
+                // A zero stamp is the legacy Compat "clear archive" write.
+                self.session.archived = (!is_zero_stamp(archived)).then(|| archived.clone());
+            }
+            Event::SessionUnarchived { .. } => {
+                self.session.archived = None;
             }
             Event::SessionShareSet { url, .. } => {
                 self.session.share = Some(url.clone());

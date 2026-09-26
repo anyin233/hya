@@ -24,11 +24,14 @@ service Session {
   rpc GetSession(GetSessionRequest) returns (SessionInfo);
 
   // List sessions, optionally scoped under one parent (subagent tree).
+  // Archived root sessions are left out unless `include_archived` or
+  // `archived_only` is set.
   //
   // hya.http: GET /v1/sessions
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
 
-  // Update mutable session fields: title, agent, model, background flag.
+  // Update mutable session fields: title, agent, model, background flag,
+  // permission mode, and the archived flag of a root session.
   //
   // hya.http: PATCH /v1/sessions/{session}
   rpc UpdateSession(UpdateSessionRequest) returns (SessionInfo);
@@ -118,6 +121,12 @@ message SessionInfo {
   // `ListMessages` until an undo restores them or the next prompt or shell
   // turn commits the revert. Unset when nothing is pending.
   SessionRevert revert = 16;
+  // Whether this root session is archived: hidden from `ListSessions`
+  // unless requested. Subagent child sessions are never archived; they
+  // follow their root. Archiving does not cancel a running turn.
+  bool archived = 17;
+  // When the session was archived; unset when it is not archived.
+  google.protobuf.Timestamp archived_at = 18;
 }
 
 // Where a forked session came from.
@@ -173,6 +182,10 @@ message ListSessionsRequest {
   string parent = 2;
   // Standard pagination controls.
   PageRequest page = 3;
+  // Also list archived root sessions (default: they are left out).
+  bool include_archived = 4;
+  // List only archived root sessions (implies `include_archived`).
+  bool archived_only = 5;
 }
 
 message ListSessionsResponse {
@@ -199,6 +212,12 @@ message UpdateSessionRequest {
   // Switching to `yolo` also allows (once) every pending permission ask of
   // the tree.
   optional string permission_mode = 6;
+  // Archive (`true`) or unarchive (`false`) a root session when set.
+  // Idempotent: archiving an archived session keeps its first `archived_at`.
+  // Archiving a subagent child session is `invalid_argument`; unarchiving
+  // one is a no-op. Archiving does not cancel a running turn. A new prompt,
+  // command, or shell turn unarchives the session implicitly.
+  optional bool archived = 7;
 }
 
 message DeleteSessionRequest {

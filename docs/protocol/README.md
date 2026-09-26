@@ -152,6 +152,47 @@ created or renamed with a title (`CreateSession.title`, `UpdateSession`), and
 later turns are never titled; a manual rename always wins. The title call is
 billed to the session (`tokensRecorded` with an empty `message`).
 
+## Archived sessions
+
+A root session can be archived to hide it from the default session list
+without deleting it. The TUI archives its session when you quit it
+gracefully; `--resume` brings it back. Archiving is only a flag: a turn that
+is running keeps running and finishes, and the transcript stays readable.
+
+- **Archive / unarchive:** `PATCH /v1/sessions/{id}` (`UpdateSession`) with
+  `{"archived": true}` or `{"archived": false}`. Both are idempotent;
+  archiving an archived session keeps its first `archivedAt`. Only root
+  sessions are archived: archiving a subagent child session is
+  `invalid_argument` (unarchiving one is a no-op). Subagent sessions are
+  never archived themselves.
+- **Implicit unarchive:** admitting a new prompt, command (including
+  `/workflow`), or shell turn on an archived session unarchives it before
+  the turn's user message is recorded. Engine-internal continuations (goal
+  and loop rounds, subagent wake-ups) do not.
+- **Read:** `SessionInfo.archived` (`bool`) and `SessionInfo.archivedAt`
+  (timestamp; unset when not archived).
+- **List:** `GET /v1/sessions` (`ListSessions`) leaves archived root
+  sessions out. `includeArchived=true` lists them too; `archivedOnly=true`
+  lists only them. Filtering happens before pagination.
+- **Stream:** each change is a durable `sessionUpdated` event with only
+  `archived` set (`true` or `false`), on the per-session stream and on the
+  global stream (not with `interactionsOnly`), so other clients update
+  live.
+- **Fork:** a fork of an archived session is not archived.
+- **Durable events:** `session_archived` (with an epoch-millisecond stamp)
+  and `session_unarchived`; see
+  [event-model.md](../architecture/event-model.md#session-lifecycle).
+
+```sh
+curl -X PATCH localhost:3250/v1/sessions/hysec_... -d '{"archived": true}'
+curl 'localhost:3250/v1/sessions?includeArchived=true'
+curl 'localhost:3250/v1/sessions?archivedOnly=true'
+```
+
+```json
+{ "event": { "seq": "88", "session": "hysec_...", "sessionUpdated": { "archived": true } } }
+```
+
 ## Usage and context occupancy
 
 `TokenUsage` follows one invariant on every provider

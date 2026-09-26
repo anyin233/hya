@@ -629,11 +629,14 @@ Fetch one session's projection summary.
 ### `Session.ListSessions`
 
 List sessions, optionally scoped under one parent (subagent tree).
+Archived root sessions are left out unless `include_archived` or
+`archived_only` is set.
 
 
 ### `Session.UpdateSession`
 
-Update mutable session fields: title, agent, model, background flag.
+Update mutable session fields: title, agent, model, background flag,
+permission mode, and the archived flag of a root session.
 
 
 ### `Session.DeleteSession`
@@ -1428,6 +1431,7 @@ Session metadata changed.
 | `agent` (3) | `optional string` | New agent name when changed. |
 | `background` (4) | `optional bool` | New background flag when changed. |
 | `permission_mode` (5) | `optional string` | New permission mode of the session tree when changed (emitted on the root session only). |
+| `archived` (6) | `optional bool` | New archived flag of a root session when changed: `true` when it was archived, `false` when it was unarchived (explicitly or by a new turn). |
 
 ### `MessageStarted`
 
@@ -2452,6 +2456,8 @@ Projection summary of one session.
 | `usage` (14) | `TokenUsage` | Billed usage of the session: every provider call made for it (turn rounds plus title/summarizer side calls), summed. Never decreases (compaction, revert, and deletion keep billed usage). Unset when none. |
 | `forked_from` (15) | `ForkSource` | Source of a forked session; unset for sessions that are not forks. |
 | `revert` (16) | `SessionRevert` | Pending revert (`RevertSession`): its messages are hidden from `ListMessages` until an undo restores them or the next prompt or shell turn commits the revert. Unset when nothing is pending. |
+| `archived` (17) | `bool` | Whether this root session is archived: hidden from `ListSessions` unless requested. Subagent child sessions are never archived; they follow their root. Archiving does not cancel a running turn. |
+| `archived_at` (18) | `google.protobuf.Timestamp` | When the session was archived; unset when it is not archived. |
 
 ### `ForkSource`
 
@@ -2507,6 +2513,8 @@ A pending revert of a session.
 | `directory` (1) | `string` | Directory whose sessions should be listed. |
 | `parent` (2) | `string` | Restrict to direct children of this session id when non-empty. |
 | `page` (3) | `PageRequest` | Standard pagination controls. |
+| `include_archived` (4) | `bool` | Also list archived root sessions (default: they are left out). |
+| `archived_only` (5) | `bool` | List only archived root sessions (implies `include_archived`). |
 
 ### `ListSessionsResponse`
 
@@ -2527,6 +2535,7 @@ A pending revert of a session.
 | `agent` (4) | `optional string` | New agent name when set. |
 | `background` (5) | `optional bool` | New background flag when set. |
 | `permission_mode` (6) | `optional string` | New permission mode for the whole session tree when set: `manual`, `yolo`, or a `<bundle-id>/<mode-id>` listed by `ListPermissionModes`. Unknown or unavailable modes are rejected with `invalid_argument`. Switching to `yolo` also allows (once) every pending permission ask of the tree. |
+| `archived` (7) | `optional bool` | Archive (`true`) or unarchive (`false`) a root session when set. Idempotent: archiving an archived session keeps its first `archived_at`. Archiving a subagent child session is `invalid_argument`; unarchiving one is a no-op. Archiving does not cancel a running turn. A new prompt, command, or shell turn unarchives the session implicitly. |
 
 ### `DeleteSessionRequest`
 

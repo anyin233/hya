@@ -3,7 +3,8 @@
 //! `script(seed, ...)` produces a plausible single-session event log mixing
 //! transcript streaming, usage records (per-round and legacy), message/part
 //! deletion (revert, compaction), file changes, transcript revert/unrevert/
-//! commit, compaction markers, todo lists, forks, Workflow runs
+//! commit, archive/unarchive (including legacy zero stamps), compaction
+//! markers, todo lists, forks, Workflow runs
 //! (including a re-emitted `WorkflowRunStarted` for an already-seen run, which
 //! only replay-only reducer state can deduplicate), and team roster/mail
 //! traffic. The same seed always yields the same events, so a failing seed is
@@ -411,6 +412,21 @@ impl Script {
                 session,
                 files: Vec::new(),
             },
+            24 => {
+                if self.rng.chance(60) {
+                    Event::SessionArchived {
+                        session,
+                        // Mostly real stamps, sometimes the legacy zero.
+                        archived: serde_json::Number::from(if self.rng.chance(80) {
+                            1_700_000_000_000 + self.rng.below(1_000) as u64
+                        } else {
+                            0
+                        }),
+                    }
+                } else {
+                    Event::SessionUnarchived { session }
+                }
+            }
             _ => self.title(),
         }
     }

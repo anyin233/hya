@@ -22,6 +22,7 @@ mod frontend;
 mod models_cmd;
 mod rpc;
 mod serve;
+mod sessions_cmd;
 mod workflow_cmd;
 
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
@@ -837,22 +838,6 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_sessions(db: String) -> anyhow::Result<()> {
-    let store = open_store(&db).await?;
-    let sessions = store.list_sessions().await.context("list sessions")?;
-    if sessions.is_empty() {
-        println!("no sessions found in {db}");
-        return Ok(());
-    }
-    for s in sessions {
-        println!(
-            "{}  events={}  started_ms={}",
-            s.session, s.events, s.started_millis
-        );
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -994,9 +979,21 @@ async fn main() -> anyhow::Result<()> {
             }
             models_cmd::cmd_models(&runtime.catalog, provider, verbose)
         }
-        Some(Command::Sessions { db: command_db }) => {
+        Some(Command::Sessions {
+            db: command_db,
+            all,
+            archived,
+            action,
+        }) => {
             let path = command_db.unwrap_or_else(|| db.clone());
-            cmd_sessions(resolve_interactive_db(&path)).await
+            let listing = if archived {
+                sessions_cmd::Listing::Archived
+            } else if all {
+                sessions_cmd::Listing::All
+            } else {
+                sessions_cmd::Listing::Active
+            };
+            sessions_cmd::run(resolve_interactive_db(&path), action, listing).await
         }
         Some(Command::Rpc) => cmd_rpc(model, yolo, pure).await,
         // The update TCB runs without composing any runtime: no config,

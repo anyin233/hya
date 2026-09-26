@@ -248,6 +248,9 @@ message SessionUpdated {
   // New permission mode of the session tree when changed (emitted on the
   // root session only).
   optional string permission_mode = 5;
+  // New archived flag of a root session when changed: `true` when it was
+  // archived, `false` when it was unarchived (explicitly or by a new turn).
+  optional bool archived = 6;
 }
 
 // A session was deleted.

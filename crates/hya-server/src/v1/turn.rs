@@ -149,6 +149,8 @@ async fn create_turn(
                 ensure_image_input(&st, session, &turn.agent).await?;
             }
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+            // A new turn brings an archived session back.
+            super::session::unarchive_for_turn(&st, session).await?;
             let message = st
                 .engine
                 .admit_user_prompt_with_attachments(session, prompt.text, attachments)
@@ -209,6 +211,8 @@ async fn create_turn(
                 }));
             }
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+            // A new turn brings an archived session back.
+            super::session::unarchive_for_turn(&st, session).await?;
             let explicit_model = native_request.model_ref();
             if let Some(model) = &explicit_model {
                 st.engine.switch_model(session, model.clone()).await?;
@@ -289,6 +293,8 @@ async fn create_turn(
                     V1Error::new(hya_api::error::Code::Internal, error.text().to_owned())
                 })?;
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+            // A new turn brings an archived session back.
+            super::session::unarchive_for_turn(&st, session).await?;
             let engine = st.engine.clone();
             let command = native_request.command.clone();
             let (message, _finish) = engine

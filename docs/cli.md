@@ -799,12 +799,33 @@ spawnable via catalog `can_spawn` reachability.
 
 ```sh
 hya sessions --db hya.db
+hya sessions --all            # archived root sessions too
+hya sessions --archived       # only archived root sessions
+hya sessions archive <session-id>
+hya sessions unarchive <session-id>
 hya rpc
 ```
 
 `sessions` lists persisted sessions in a SQLite database, including sessions
-created by `exec --db` and `exec --json --db`. Empty `--db` is remapped to the
-durable XDG path (same as bare interactive startup), not in-memory. `rpc` reads
+created by `exec --db` and `exec --json --db`, one per line:
+`<id>  events=<n>  started_ms=<ms>`, plus `  archived_ms=<ms>` on an archived
+session. Empty `--db` is remapped to the durable XDG path (same as bare
+interactive startup), not in-memory; `--db` may also follow `archive` and
+`unarchive`.
+
+Archived root sessions are hidden by default: the TUI archives its session
+when you quit it gracefully, and `--resume` brings it back (see
+[Archived sessions](protocol/README.md#archived-sessions)). `--all` lists them
+too and `--archived` lists only them (the two flags conflict).
+`archive <id>` archives a root session and `unarchive <id>` brings one back;
+both print `archived <id>` / `unarchived <id>` and succeed when the session
+already is in that state. Archiving a subagent child session or an unknown id
+fails (exit 1). When a server holds the database (bare `hya`'s daemon or
+`hya serve`), the change goes through that server's `UpdateSession`, so
+connected clients see it live; if the holder does not serve HTTP yet, the
+command exits 75. Otherwise it takes the database lock and writes the
+`session_archived` / `session_unarchived` event directly (no session hooks
+run then). `rpc` reads
 JSONL requests on stdin, accepts `{"type":"prompt","text":"..."}` and
 `{"type":"quit"}`, and emits new session events plus a `{"type":"done"}` marker
 using an in-memory store; `rpc` does not persist to the global `--db` database.
