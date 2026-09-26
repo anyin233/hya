@@ -37,7 +37,7 @@ puts it there), else `HYA_TUI_WEB_DIR`, else the source checkout's
 
 ```text
 bun <tui-web>/src/main.ts --host 127.0.0.1 --port <port> --cwd <cwd> -- \
-  bun <tui>/src/main.ts --server <daemon URL> --dir <cwd> --db <db> --hya <hya>
+  bun <tui>/src/main.ts --server <daemon URL> --dir <cwd> --db <db> --hya <hya> --web-tab
 ```
 
 So every browser tab runs its own TUI against the database's backend daemon,
@@ -47,7 +47,12 @@ terminal started and the other way round. `--db` and `--hya` let a tab find or
 start the next daemon when that one stops, and let a new tab fall back to the
 daemon when the URL in its command no longer answers
 ([tui.md](tui.md#when-the-server-goes-away)). With `hya --backend <url>` the
-command carries only `--server <url> --dir <cwd>`. `hya` reads the host's `hya-tui-web listening on <url>` line (stdout)
+command carries only `--server <url> --dir <cwd> --web-tab`. `--web-tab`
+tells the tab's TUI that closing the tab is how one leaves a session running:
+it does not offer `/to-background`, and Ctrl+D shows `Close the tab to leave
+this session running` instead of quitting
+([tui.md](tui.md#quit-and-keep-running-or-archive)). The terminal TUI never
+gets it. `hya` reads the host's `hya-tui-web listening on <url>` line (stdout)
 to learn that it is up and passes the URL to the terminal TUI (`--web-url`),
 or the reason it failed (`--web-error`, for example `port 3250 is in use`).
 The host's output goes to `hya`'s log file (`[webui] ` lines). When the
@@ -84,21 +89,27 @@ in the same directory:
 
 ```sh
 HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts -- \
-  bun packages/hya-tui/src/main.ts --dir "$PWD"
+  bun packages/hya-tui/src/main.ts --dir "$PWD" --web-tab
 ```
+
+Pass the TUI's `--web-tab` yourself in a command like this one, which only
+runs in browser tabs: the host adds nothing to the command, so without it
+the tab's TUI behaves like a terminal one (`/to-background` and Ctrl+D quit
+the tab's process and leave the tab showing `[process exited]`).
 
 Or against a backend you run yourself (`hya serve --bind 127.0.0.1:8080`):
 
 ```sh
 bun packages/hya-tui-web/src/main.ts -- \
-  bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
+  bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD" --web-tab
 ```
 
 The host stays generic either way: it runs the one fixed command, and the
 TUI finds its backend.
 
 Each browser tab gets its own process. Closing the tab sends the process
-SIGHUP. When the process exits, the page shows
+SIGHUP (the hya TUI then leaves its session running, not archived, and
+deletes it only if it was empty and never used). When the process exits, the page shows
 `[process exited with code N]`.
 
 SIGINT, SIGTERM, or SIGHUP to the host stops it: it sends every tab's

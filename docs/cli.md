@@ -26,7 +26,7 @@ hya <subcommand> --help                # flags for one area
 
 ```text
 hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
-     [--port <PORT>] [--backend <URL>] [--yolo] [--db <PATH>] [COMMAND]
+     [--port <PORT>] [--backend <URL>] [--resume [<ID>]] [--yolo] [--db <PATH>] [COMMAND]
 ```
 
 | Option | Meaning |
@@ -36,6 +36,7 @@ hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
 | `--port <PORT>` | WebUI port of [bare `hya`](#bare-hya) on `127.0.0.1`. Default `3250`; `0` picks a free port. Only valid without a subcommand and without `-p` (`hya --port 1 sessions` is an error); `hya serve --port` is the server's own flag. |
 | `--backend <URL>` | [Bare `hya`](#bare-hya) only: use this running server (`http://host:port`) instead of the database's backend daemon — no discovery, no auto-start. An unreachable URL is an error (exit **1**). |
+| `--resume [<ID>]` | [Bare `hya`](#bare-hya) only: the terminal TUI opens that session and unarchives it; without an id it opens a picker of the directory's sessions, archived ones included. Before another flag it takes no id (`hya --resume --port 0`). |
 | `--yolo` | Auto-approve every tool action. This applies to headless and server composition. |
 | `--db <PATH>` | SQLite database path. Semantics of an empty value depend on the command (see below). |
 | `--print-logs` | Compat-compatible global flag. Parsed, then ignored (no-op). |
@@ -456,14 +457,21 @@ hya --port 8000     # WebUI on http://127.0.0.1:8000
 hya --port 0        # WebUI on a free port (the TUI shows which)
 hya --db ~/work.db  # the daemon of another database
 hya --backend http://127.0.0.1:8080   # a server you run yourself
+hya --resume        # pick a session to resume (archived ones included)
+hya --resume hysec_abc123   # resume that session (and unarchive it)
 ```
 
 The terminal TUI's status bar, its sidebar `Context` box, and `/status` show
 `WebUI http://127.0.0.1:<port>`. Open that address in a browser: each tab runs
-its own TUI process against the same daemon. Quit the terminal TUI (`/exit`,
-Ctrl+D, or Ctrl+C twice) to stop the TUI and the WebUI. **The daemon keeps
-running**, so the next `hya` (or TUI) starts at once and finds every session;
-`hya serve stop` stops it ([Backend daemon](#backend-daemon)).
+its own TUI process against the same daemon. Quit the terminal TUI to stop
+the TUI and the WebUI: Ctrl+C twice or `/exit` also **archive** its session;
+Ctrl+D or `/to-background` leave it running on the daemon, not archived.
+Closing a browser tab leaves the tab's session running too (a tab offers no
+`/to-background`; its Ctrl+D only says so). **The daemon keeps running**, so
+the next `hya` (or TUI) starts at once and finds every session; `hya serve
+stop` stops it ([Backend daemon](#backend-daemon)). `hya --resume` (or
+`/resume` in any TUI or tab) brings an archived session back
+([tui.md](tui.md#quit-and-keep-running-or-archive)).
 
 **Finding the daemon.** One database has one server
 ([ADR-0022](adr/0022-one-writer-per-database.md)). Before it touches the
@@ -526,12 +534,14 @@ must not treat exit 0 as "interactive session ready."
    restarts and `hya sessions` lists them. The path is made absolute.
 2. The web host: `bun <tui-web>/src/main.ts --host 127.0.0.1 --port <port>
    --cwd <cwd> -- bun <tui>/src/main.ts --server <server-url> --dir <cwd>
-   --db <db> --hya <this hya>` (no `--db`/`--hya` with `--backend`). `hya`
+   --db <db> --hya <this hya> --web-tab` (no `--db`/`--hya` with
+   `--backend`; `--web-tab` tells a tab's TUI it runs in a browser tab). `hya`
    waits up to 20 s for its `hya-tui-web listening on <url>` line. If the
    host fails (the port is in use, it crashes, or it prints nothing in time),
    `hya` still starts the TUI and passes the reason on.
-3. The terminal TUI, attached to this terminal: the same TUI command plus
-   `--web-url <url>` or `--web-error <reason>` (see
+3. The terminal TUI, attached to this terminal: the same TUI command without
+   `--web-tab`, plus `--web-url <url>` or `--web-error <reason>`, and
+   `--resume [<id>]` when given (see
    [tui.md](tui.md#start-it)). A failed WebUI shows `WebUI unavailable:
    <reason> · hya --port <N>` in the status line and `/status`, and
    `WebUI unavailable` (warning color) in the status bar.
@@ -596,7 +606,8 @@ so Ctrl+C in the terminal reaches only the TUI and `hya`.
 | `HYA_TUI_DIR`, `HYA_TUI_WEB_DIR` | Directory of the TUI / web host package (must contain `src/main.ts` and `node_modules/`). |
 | `BUN` | Bun executable; must exist when set. Else `bun` on `PATH`. |
 | `--backend <URL>` | `http://` or `https://` URL of a running server; bare invocation only; must answer `GET /v1/health`. |
-| TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`) and exactly one of `--web-url <url>` / `--web-error <reason>` ([tui.md](tui.md#start-it)). The WebUI tabs' TUI command is the same without the web flag. |
+| `--resume [<ID>]` | Bare invocation only (else an error); passed to the terminal TUI as `--resume [<ID>]`. |
+| TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`); the terminal TUI adds exactly one of `--web-url <url>` / `--web-error <reason>` and `--resume [<id>]` when given ([tui.md](tui.md#start-it)); the WebUI tabs' command adds `--web-tab` instead. |
 | Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
 | Log files | `<state dir>/hya/hya.log` (bare `hya`) and `<db>.server.log` (the daemon), append-only; each rotated once to `.1` above 4 MiB. |
 | Daemon | Found: `<db>.server.json` whose pid is alive and whose `/v1/health` answers. Else started like `hya serve start` (60 s wait). Never stopped by bare `hya`; after `hya serve stop` its TUIs start it again only on `/reconnect`. |

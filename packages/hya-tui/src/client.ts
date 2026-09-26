@@ -23,6 +23,10 @@ export interface SessionInfo {
   forkedFrom?: ForkSource
   /** A pending revert (`RevertSession`, `/undo`): set until `/redo` undoes it or the next prompt or shell turn commits it. */
   revert?: SessionRevert
+  /** Archived (docs/protocol/README.md "Archived sessions"): hidden from the default list; a graceful TUI exit archives, `--resume`/`/resume` unarchives. */
+  archived?: boolean
+  /** When it was archived (RFC 3339); unset when not archived. */
+  archivedAt?: string
 }
 
 /** `ForkSource`: the source session and the user message the fork was cut before (empty for a head fork). */
@@ -379,7 +383,7 @@ export interface StreamEvent {
   interactionResolved?: { request?: string }
   workflowUpdated?: unknown
   /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. */
-  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string }
+  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string; archived?: boolean }
   /**
    * Part of the context was folded behind a summary (`docs/tui.md` "Notices"):
    * `message` is the summary system message (the divider sits right before
@@ -598,8 +602,9 @@ export class HyaClient {
     throw new Error("Too many result pages")
   }
 
-  async listSessions(): Promise<SessionInfo[]> {
-    return this.listAll("/v1/sessions", "sessions")
+  /** `ListSessions`; archived root sessions only with `includeArchived` (the server leaves them out by default). */
+  async listSessions(options: { includeArchived?: boolean } = {}): Promise<SessionInfo[]> {
+    return this.listAll("/v1/sessions", "sessions", options.includeArchived ? "&includeArchived=true" : "")
   }
 
   async listMessages(session: string): Promise<MessageInfo[]> {
@@ -751,6 +756,11 @@ export class HyaClient {
   }
 
   /** `DeleteSession` (`DELETE /v1/sessions/:id`): the `/sessions` picker's delete row action (Ctrl+D). */
+  /** Archive or unarchive a root session (`PATCH {archived}`; idempotent; a subagent session cannot be archived). */
+  async setArchived(session: string, archived: boolean): Promise<SessionInfo> {
+    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, { archived })
+  }
+
   async deleteSession(session: string): Promise<void> {
     await this.request("DELETE", `/v1/sessions/${encodeURIComponent(session)}`)
   }

@@ -95,9 +95,11 @@ Without `--server` the TUI uses the backend daemon of its database
    Two TUIs that start at the same moment end up on one daemon: the database
    lock lets only one start.
 
-The TUI never stops the daemon: Ctrl+C twice, Ctrl+D, `/exit`, and a signal
-(SIGINT, SIGTERM, SIGHUP, which is also what the WebUI host sends when its
-browser tab closes) quit only the TUI. So a second TUI on the same database
+The TUI never stops the daemon: Ctrl+C twice, Ctrl+D, `/exit`,
+`/to-background`, and a signal (SIGINT, SIGTERM, SIGHUP, which is also what
+the WebUI host sends when its browser tab closes) quit only the TUI (what
+each does with the open session: [Quit and keep running, or
+archive](#quit-and-keep-running-or-archive)). So a second TUI on the same database
 shares the first one's sessions and live events (streamed turns, renames,
 asks), and the next start is instant. `/status` shows
 `Backend     daemon · pid <pid> · db <db> · started <N>s ago`.
@@ -142,15 +144,17 @@ without `--db`.
 | `--dir <path>` | Workspace directory: the `x-hya-directory` scope of every request, the scope of `--continue`, and the working directory of a daemon the TUI starts. Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary that starts the daemon (first in the lookup order above). |
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
-| `-c`, `--continue` | Open the most recently updated top-level session of `--dir` (subagent sessions are opened from their parent). |
+| `-c`, `--continue` | Open the most recently updated top-level session of `--dir` that is not archived (subagent sessions are opened from their parent). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
+| `--resume [id]` | Open that session and unarchive it (`PATCH {archived:false}`). Without an id (the next argument starts with `-`, or there is none), open a picker of `--dir`'s top-level sessions, archived ones included and tagged `[archived]`, newest first; Enter resumes (and unarchives) the highlighted one, Esc starts a new session instead. Cannot be combined with `--continue` or `--session`. |
+| `--web-tab` | This TUI runs in a WebUI tab: `/to-background` is not offered and Ctrl+D only shows `Close the tab to leave this session running` (closing the tab already leaves the session running). Bare `hya` adds it to its web host's tab command; pass it yourself in the command of a web host you start by hand (see [tui-web.md](tui-web.md#usage)). |
 | `--web-url <url>` | Show this WebUI address (status bar `WebUI <url>`, sidebar `Context` row, `/status`). Bare `hya` passes it; an HTTP(S) URL. |
 | `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in the status line and `/status`, and `WebUI unavailable` in the status bar. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
 | `-h`, `--help` | Print the flags and the binary lookup order. |
 
 ### Sessions on start and exit
 
-Without `--continue` or `--session`, the TUI creates a new session as soon as
+Without `--continue`, `--session`, or `--resume`, the TUI creates a new session as soon as
 it connects (with the default agent and model; without any model the first
 prompt creates it instead), so the header names it before you type.
 `/sessions` (or the sidebar) reaches the earlier ones. Empty sessions do not
@@ -173,12 +177,55 @@ open session and the reply streams into the transcript as it arrives (see
 [Streaming, queued prompts, and turn status](#streaming-queued-prompts-and-turn-status)).
 For example, type `summarize this repository`, then `/models` to inspect
 available routes, and `/open 1` to return to the first session. Press Ctrl+C
-twice (or Ctrl+D on an empty input, or type `/exit`) to exit and restore the
-terminal. Next time, `--continue` picks the conversation up again:
+twice (or type `/exit`) to quit and archive the session, or Ctrl+D on an
+empty input (`/to-background`) to quit and leave it running. Next time,
+`--resume` offers the conversation again (archived or not), and
+`--continue` picks up the newest one that is not archived:
 
 ```sh
-HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --continue
+HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --resume
 ```
+
+### Quit and keep running, or archive
+
+How you leave a TUI decides what happens to its open session on the
+backend daemon (ADR-0023). Archiving is only a flag
+([Archived sessions](protocol/README.md#archived-sessions)): it hides the
+session from the default list, the sidebar, and `--continue`, and never
+cancels a running turn, which finishes on the daemon.
+
+| Way out | Open session |
+| --- | --- |
+| Ctrl+C twice, `/exit`, `/quit` (graceful) | Archived at once (`PATCH /v1/sessions/{id} {"archived": true}`); in a subagent's read-only view, its root session is archived. |
+| Ctrl+D on an empty input, `/to-background` (terminal only) | Left as is: it keeps running on the daemon, not archived. |
+| Closing a WebUI tab, SIGTERM/SIGHUP/SIGINT, a kill or crash | Left as is: it keeps running on the daemon, not archived. |
+| Switching sessions (`/new`, `/open`, `/sessions`, `/resume`, a `/fork` switch) | Not an exit: the previous session keeps running. |
+
+In every case an empty session this TUI created and never used is deleted
+instead (the rule above). The exit waits at most 2 s for the archive or the
+delete.
+
+In a WebUI tab (`--web-tab`) `/to-background` is not offered (it is left
+out of the command menu, completion, and `/help`); typing it, or Ctrl+D on
+an empty input, shows `Close the tab to leave this session running` and
+does not quit. Closing the tab already does that.
+
+To come back to a session, archived or not: `--resume [id]` at start, or
+`/resume [id]` in a running TUI (the same picker; this is how a WebUI tab,
+which cannot pass flags, resumes). Both unarchive the session and open it,
+and say `Resumed <title>`. The terminal TUI and WebUI tabs of one database
+share its daemon, so each resumes the other's sessions. The `/sessions`
+picker shows archived sessions too after Ctrl+A (see
+[Row actions](#row-actions)). Sending a prompt into an archived session
+(for example one another client archived while it was open here) unarchives
+it on the backend as well.
+
+A `sessionUpdated {archived}` frame (another client archived or unarchived
+a session) updates the sidebar live: an archived session leaves the list,
+except the open one, which stays with `· archived` after its agent; an
+unarchived one is marked back, or listed again. The open session's own
+stream carries the frame; other sessions' frames arrive on the global stream
+once the backend sends session frames there.
 
 ### When the server goes away
 
@@ -242,11 +289,13 @@ Changes apply to the running backend at once; no restart is needed.
 | `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
 | `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
 | Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
-| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
-| Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
-| `/exit`, `/quit` | Quit. |
+| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
+| Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
+| `/exit`, `/quit` | Quit and archive the session (an empty one is deleted). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
+| `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
+| `/resume [id]` | Unarchive and open that session; without an id, pick one of `--dir`'s sessions, archived ones included and tagged `[archived]`, newest first. |
 | `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |
-| `/sessions` | Open the sessions picker: a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation (see [Pickers](#pickers)). |
+| `/sessions` | Open the sessions picker: a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions (see [Pickers](#pickers)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. With no session yet, a picker or direct choice is remembered for the next one (see [Pickers](#pickers)). |
 | `/agent [name]` | Open the agent picker (visible agents, tagged with their default model); `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -924,10 +973,14 @@ Esc in normal mode has the meanings above.
 
 **Quitting.** The renderer does not quit on Ctrl+C by itself. The first
 Ctrl+C clears the input (on an empty input it only arms) and shows
-`Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. Any other key
-in between disarms it. Ctrl+D on an empty input quits; with text it deletes
-the character under the cursor. `/exit` and `/quit` quit. Quitting destroys
-the renderer, which restores the terminal, and exits with code 0.
+`Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives
+the session. Any other key in between disarms it. Ctrl+D on an empty input
+quits and leaves the session running (in a WebUI tab it only shows a
+notice); with text it deletes the character under the cursor. `/exit` and
+`/quit` quit and archive; `/to-background` quits and leaves the session
+running (see [Quit and keep running, or
+archive](#quit-and-keep-running-or-archive)). Quitting destroys the
+renderer, which restores the terminal, and exits with code 0.
 
 Example:
 
@@ -1735,13 +1788,13 @@ at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
 │ ▸   New session          [new]       Create a session with the curr… │
 │   ● Fix the flaky test              build · fake/model · 3m           │
 │       ↳ Explore the auth code [subagent]  explore · fake/model · 1m  │
-│ Enter opens · F2 renames · Ctrl+D deletes · Esc closes · type to fil… │
+│ Enter opens · F2 renames · Ctrl+D deletes · Ctrl+A shows archived · E… │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Row actions
 
-The `/sessions` picker's highlighted row also takes two keys the plain
+The `/sessions` picker's highlighted row also takes keys the plain
 filter never sees (never Ctrl+R, which means refresh):
 
 - **F2** renames it: the picker switches to a one-line editable field seeded
@@ -1757,9 +1810,14 @@ filter never sees (never Ctrl+R, which means refresh):
   session (or shows no session, if none is left); the confirmation applies
   the same way whether or not the row is the open session, so the open
   session is never deleted without it.
+- **Ctrl+A** shows archived sessions too (it re-reads the list with
+  `GET /v1/sessions?includeArchived=true`; the title becomes `Sessions ·
+  archived included` and archived rows are tagged `[archived]`), and hides
+  them again. Enter on an archived row resumes it like `/resume <id>`: it is
+  unarchived, then opened. The sidebar never lists archived sessions.
 
 `state/picker.ts`'s `PickerAction` (`{id, key, ctrl?, label, prompt: "value"
-| "confirm", confirmText?}`) and the `"rename"`/`"confirm"` picker modes are
+| "confirm" | "none", confirmText?}`; `"none"` commits at once, a toggle) and the `"rename"`/`"confirm"` picker modes are
 a small, backward-compatible extension of the picker used by `/permissions`:
 a picker with no `actions` behaves exactly as before. See
 [Code layout — The picker](#code-layout) for the API.
@@ -2079,6 +2137,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
+| `GET /v1/sessions?includeArchived=true` | No body | Archived root sessions too (`SessionInfo.archived`, `archivedAt`): the `/resume` picker and the `/sessions` picker after Ctrl+A. |
+| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); `--resume`, `/resume`, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |

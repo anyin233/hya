@@ -66,3 +66,56 @@ test("a read failure keeps the session (never delete on doubt)", async () => {
   keeper.created("s1")
   expect(await keeper.dropIfEmpty("s1")).toBe("kept")
 })
+
+/** A fake server with parents and an archive call, for the exit modes. */
+function exitServer(sessions: Record<string, Partial<SessionInfo>>, messages: Record<string, number> = {}, archiveFails = false) {
+  const base = fakeServer(sessions, messages)
+  const archived: string[] = []
+  const client = {
+    ...base.client,
+    archiveSession: async (id: string): Promise<void> => {
+      if (archiveFails) throw new Error("offline")
+      archived.push(id)
+    },
+  }
+  return { ...base, client, archived }
+}
+
+test("a graceful exit archives the session; background and signal exits leave it running", async () => {
+  const server = exitServer({ s1: {} }, { s1: 3 })
+  const keeper = createSessionKeeper({ client: server.client })
+  expect(await keeper.leave("s1", "background")).toBe("kept")
+  expect(await keeper.leave("s1", "signal")).toBe("kept")
+  expect(server.archived).toEqual([])
+  expect(await keeper.leave("s1", "archive")).toBe("archived")
+  expect(server.archived).toEqual(["s1"])
+  expect(server.deleted).toEqual([])
+})
+
+test("a graceful exit from a subagent's view archives its root session", async () => {
+  const server = exitServer({ root: {}, child: { parent: "mid" }, mid: { parent: "root" } })
+  const keeper = createSessionKeeper({ client: server.client })
+  expect(await keeper.leave("child", "archive")).toBe("archived")
+  expect(server.archived).toEqual(["root"])
+})
+
+test("an empty session this client created is dropped on every exit, never archived", async () => {
+  for (const mode of ["archive", "background", "signal"] as const) {
+    const server = exitServer({ s1: {} })
+    const keeper = createSessionKeeper({ client: server.client })
+    keeper.created("s1")
+    expect(await keeper.leave("s1", mode)).toBe("deleted")
+    expect(server.deleted).toEqual(["s1"])
+    expect(server.archived).toEqual([])
+  }
+})
+
+test("a running turn is archived as is (archiving never cancels it); an archive failure keeps the session", async () => {
+  const busy = exitServer({ s1: { busy: true } })
+  const keeper = createSessionKeeper({ client: busy.client, localBusy: () => true })
+  keeper.created("s1")
+  expect(await keeper.leave("s1", "archive")).toBe("archived")
+  expect(busy.archived).toEqual(["s1"])
+  const failing = exitServer({ s1: {} }, { s1: 1 }, true)
+  expect(await createSessionKeeper({ client: failing.client }).leave("s1", "archive")).toBe("kept")
+})

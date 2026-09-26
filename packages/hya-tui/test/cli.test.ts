@@ -61,3 +61,19 @@ test("--attached-pid is gone: the backend is a daemon nobody owns", () => {
   expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "4242"], "/cwd")).toThrow("Unknown or incomplete option: --attached-pid")
   expect(usage).not.toContain("--attached-pid")
 })
+
+test("--resume [id] reopens a session (and clears its archived state); without an id it asks with a picker", () => {
+  expect(parseArguments(["--resume"], "/cwd")).toEqual({ directory: "/cwd", continue: false, resume: {} })
+  expect(parseArguments(["--resume", "hysec_1"], "/cwd")).toEqual({ directory: "/cwd", continue: false, resume: { id: "hysec_1" } })
+  // A flag after it is not an id.
+  expect(parseArguments(["--resume", "--dir", "/w"], "/cwd")).toEqual({ directory: "/w", continue: false, resume: {} })
+  expect(() => parseArguments(["--resume", "--continue"], "/cwd")).toThrow("--resume cannot be combined with --continue or --session")
+  expect(() => parseArguments(["--session", "a", "--resume", "b"], "/cwd")).toThrow("--resume cannot be combined with --continue or --session")
+  expect(usage).toContain("--resume [ID]")
+})
+
+test("--web-tab marks a TUI that runs in a WebUI tab (bare hya's host command sets it)", () => {
+  expect(parseArguments(["--web-tab"], "/cwd")).toEqual({ directory: "/cwd", continue: false, webTab: true })
+  expect(parseArguments([], "/cwd")?.webTab).toBeUndefined()
+  expect(usage).toContain("--web-tab")
+})

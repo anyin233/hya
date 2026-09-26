@@ -38,6 +38,11 @@ pub(crate) struct Cli {
     /// unreachable URL is an error. Only for bare `hya`.
     #[arg(long, value_name = "URL")]
     pub(crate) backend: Option<String>,
+    /// Open this session in the terminal TUI and unarchive it; without an
+    /// id, pick one of the directory's sessions (archived ones included).
+    /// Only for bare `hya`.
+    #[arg(long, value_name = "ID", num_args = 0..=1, default_missing_value = "")]
+    pub(crate) resume: Option<String>,
     /// Model id to use (overrides config `default_model` + `HYA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     pub(crate) model: Option<String>,
@@ -332,6 +337,24 @@ pub(crate) fn bare_backend(cli: &Cli) -> anyhow::Result<Option<String>> {
     Ok(Some(trimmed.to_string()))
 }
 
+/// Bare `hya`'s `--resume [ID]` for the terminal TUI: a session id, or the
+/// picker without one. Only without a subcommand or `-p`.
+pub(crate) fn bare_resume(cli: &Cli) -> anyhow::Result<Option<crate::frontend::Resume>> {
+    use crate::frontend::Resume;
+    let Some(id) = &cli.resume else {
+        return Ok(None);
+    };
+    if cli.command.is_some() || cli.prompt.is_some() {
+        anyhow::bail!("--resume only applies to bare `hya` (the terminal TUI)");
+    }
+    let id = id.trim();
+    Ok(Some(if id.is_empty() {
+        Resume::Pick
+    } else {
+        Resume::Session(id.to_string())
+    }))
+}
+
 pub(crate) fn serve_bind(
     bind: String,
     hostname: Option<String>,
@@ -517,14 +540,29 @@ mod tests {
     }
 
     #[test]
-    fn rejects_resume_as_unknown_argument() {
-        let err = match Cli::try_parse_from(["hya", "--resume", "hysec_abcdefghijklmnopqrst"]) {
-            Ok(_) => panic!("--resume should be rejected once the interactive TUI is removed"),
-            Err(err) => err,
-        };
-
-        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
-        assert!(err.to_string().contains("--resume"));
+    fn bare_hya_takes_resume_with_or_without_a_session_id() {
+        use crate::frontend::Resume;
+        let cli = parse(["hya", "--resume", "hysec_abcdefghijklmnopqrst"]);
+        assert_eq!(
+            super::bare_resume(&cli).unwrap(),
+            Some(Resume::Session("hysec_abcdefghijklmnopqrst".into()))
+        );
+        assert_eq!(
+            super::bare_resume(&parse(["hya", "--resume"])).unwrap(),
+            Some(Resume::Pick)
+        );
+        // Before another flag it takes no id.
+        let cli = parse(["hya", "--resume", "--port", "0"]);
+        assert_eq!(super::bare_resume(&cli).unwrap(), Some(Resume::Pick));
+        assert_eq!(cli.port, Some(0));
+        assert_eq!(super::bare_resume(&parse(["hya"])).unwrap(), None);
+        let error = super::bare_resume(&parse(["hya", "--resume", "x", "sessions"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("--resume only applies to bare `hya`"),
+            "{error}"
+        );
     }
 
     #[test]

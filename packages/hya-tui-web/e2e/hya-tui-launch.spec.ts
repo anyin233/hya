@@ -2,8 +2,9 @@
 // the TUI finds the `hya` binary (`HYA_BIN` here) and uses the backend daemon
 // of its database: the one already running, else one it starts with
 // `hya serve start` (detached, in `--dir`). The daemon outlives the TUI.
-// `--continue` reopens the most recent session; a plain start opens a new
-// session that is deleted again when the TUI exits with it still empty. A
+// `--continue` reopens the most recent session that is not archived; a plain
+// start opens a new session that is deleted again when the TUI exits with it
+// still empty. A
 // missing binary or a daemon that fails to start is reported with its
 // output tail.
 
@@ -78,6 +79,7 @@ test.describe("one-command launch", () => {
   })
 
   test("a plain start opens a new session; an empty one is deleted on exit, one with messages kept; --continue reopens it", async ({ tui, workspace }) => {
+    // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
     // Created on connect: the header names it before anything is typed.
@@ -86,7 +88,7 @@ test.describe("one-command launch", () => {
     await prompt(first, "remember this")
     await first.waitForText("Launched and replying.", 20_000)
     await first.waitForText(/^Ready/m)
-    await prompt(first, "/exit")
+    await first.press("Control+d")
     await first.waitForExit()
 
     // A fresh start gets its own new, empty session…

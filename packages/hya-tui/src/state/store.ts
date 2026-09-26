@@ -193,6 +193,8 @@ export interface AppState {
   readonly backend: BackendInfo | undefined
   /** The WebUI bare `hya` serves next to this TUI (`--web-url` / `--web-error`); `undefined` otherwise. */
   readonly web: WebInfo | undefined
+  /** This TUI runs in a WebUI tab (`--web-tab`): `/to-background` is not offered and Ctrl+D only shows a notice. */
+  readonly webTab: boolean
 }
 
 /** One billed provider round (`tokensRecorded` with a non-empty `message`). */
@@ -312,6 +314,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     liveRound: undefined,
     backend: undefined,
     web: undefined,
+    webTab: false,
   }
 }
 
@@ -383,6 +386,22 @@ export function createAppStore() {
         set("sessions", state.sessions.map((row) => row.id === sessionId ? { ...row, ...changes } : row))
       }
       if (state.selected?.id === sessionId) set("selected", { ...state.selected, ...changes })
+    })
+  }
+  /**
+   * A `sessionUpdated {archived}` frame (another client archived or
+   * unarchived a session): an archived row leaves the list (the default
+   * listing hides archived sessions) unless it is the open one, which stays
+   * marked; an unarchived row is marked back.
+   */
+  const applyArchived = (sessionId: string, archived: boolean): void => {
+    batch(() => {
+      const open = state.selected?.id === sessionId
+      if (archived && !open) set("sessions", state.sessions.filter((row) => row.id !== sessionId))
+      else if (state.sessions.some((row) => row.id === sessionId)) {
+        set("sessions", state.sessions.map((row) => row.id === sessionId ? { ...row, archived } : row))
+      }
+      if (open) set("selected", { ...state.selected!, archived })
     })
   }
   const dropAsk = (id: string): void => {
@@ -574,6 +593,7 @@ export function createAppStore() {
       if (updated && event.session && (updated.title !== undefined || updated.agent !== undefined || updated.model !== undefined)) {
         applySessionMeta(event.session, updated)
       }
+      if (updated?.archived !== undefined && event.session) applyArchived(event.session, updated.archived)
       return effect
     },
 
@@ -588,6 +608,10 @@ export function createAppStore() {
     setServerUrl(url: string): void { set("serverUrl", url) },
     /** The WebUI state from bare `hya` (status bar, sidebar, `/status`). */
     setWeb(info: WebInfo | undefined): void { set("web", info) },
+    /** `--web-tab` (src/cli.ts). */
+    setWebTab(on: boolean): void { set("webTab", on) },
+    /** A `sessionUpdated {archived}` frame from the global stream (another session than the open one). */
+    applyArchived,
 
     /** Replace the member rows (a fresh `SessionInfo.members` read). */
     setMembers(rows: MemberInfo[]): void { set("members", rows) },
@@ -778,6 +802,7 @@ export function createAppStore() {
         agents: state.agents.map((agent) => agent.name),
         apiOperations: apiOperationNames,
         permissionModes: modeCycle(state.permissionModes),
+        webTab: state.webTab,
       }
     },
   }

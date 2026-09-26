@@ -3,7 +3,7 @@ import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
 import { agentRows, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { modelReference, sessionTree, strategyText } from "../state/format"
+import { modelReference, sessionTree, strategyText, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
@@ -13,11 +13,25 @@ import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
-/** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh). */
+/** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh), Ctrl+A shows or hides archived sessions. */
 export const sessionPickerActions: readonly PickerAction[] = [
   { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
+  { id: "archived", key: "a", ctrl: true, label: "Ctrl+A archived sessions (show or hide; opening one unarchives it)", prompt: "none" },
 ]
+
+/**
+ * `/to-background` and Ctrl+D: quit at once and leave the session running on
+ * the daemon (no archive). In a WebUI tab (`--web-tab`) closing the tab
+ * already does that, so this only says so.
+ */
+export function toBackground({ store, actions }: CommandContext): void {
+  if (store.state.webTab) {
+    store.setStatus(webTabBackgroundNotice)
+    return
+  }
+  actions.quit("background")
+}
 
 /**
  * `/status`'s Backend row: the daemon's pid, database, and start time
@@ -37,19 +51,32 @@ export function backendText(backend: BackendInfo | undefined, serverPid?: number
   return parts.join(" · ")
 }
 
-/** Open the `/sessions` picker (C13): a `New session` row first, then the tree; Enter opens, F2 renames, Ctrl+D deletes with confirmation. */
-function openSessionsPicker(context: CommandContext): void {
+/**
+ * Open the `/sessions` picker (C13): a `New session` row first, then the
+ * tree; Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A
+ * shows or hides archived sessions (listed with `includeArchived`, tagged
+ * `archived`; opening one unarchives it, like `/resume`).
+ */
+async function openSessionsPicker(context: CommandContext, showArchived = false): Promise<void> {
   const { store, client, actions } = context
+  // The sidebar keeps the default listing; the archived view is this picker's own.
+  const sessions = showArchived ? await client.listSessions({ includeArchived: true }) : store.state.sessions
+  const archived = new Set(sessions.filter((session) => session.archived).map((session) => session.id))
   actions.openPicker({
-    title: "Sessions",
-    rows: sessionRows(store.state.sessions, store.state.selected?.id),
-    hint: "Enter opens · F2 renames · Ctrl+D deletes · Esc closes · type to filter",
+    title: showArchived ? "Sessions · archived included" : "Sessions",
+    rows: sessionRows(sessions, store.state.selected?.id),
+    hint: `Enter opens · F2 renames · Ctrl+D deletes · Ctrl+A ${showArchived ? "hides" : "shows"} archived · Esc closes · type to filter`,
     actions: sessionPickerActions,
     onSelect: async (row) => {
       if (row.id === "__new__") { await actions.newSession(); return }
+      if (archived.has(row.id)) { await actions.resume(row.id); return }
       await actions.openSession(row.id)
     },
     onAction: async (id, row, value) => {
+      if (id === "archived") {
+        await openSessionsPicker(context, !showArchived)
+        return
+      }
       if (id === "rename") {
         const title = (value ?? "").trim()
         if (!title) { store.setStatus("Rename cancelled: title cannot be empty"); return }
@@ -57,7 +84,7 @@ function openSessionsPicker(context: CommandContext): void {
         if (store.state.selected?.id === row.id) store.setSelected(info)
         await actions.refresh()
         store.setStatus(`Renamed to ${title}`)
-        openSessionsPicker(context)
+        await openSessionsPicker(context, showArchived)
       } else if (id === "delete") {
         await client.deleteSession(row.id)
         const wasOpen = store.state.selected?.id === row.id
@@ -174,8 +201,15 @@ export const nativeCommandSpecs: CommandSpec[] = [
       // The list lives in the sidebar; show it when the width hides it.
       if (!sidebarVisible(store.state.sidebar, store.state.columns)) store.setSidebar("open")
       await actions.refresh()
-      openSessionsPicker(context)
+      await openSessionsPicker(context)
     },
+  },
+  {
+    name: "/resume",
+    description: "Reopen a session and unarchive it: pick one of this directory's sessions (archived ones included, newest first), or name its id",
+    argumentHint: "[id]",
+    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.sessions) : [],
+    run: ({ actions }, { args }) => actions.resume(args[0]),
   },
   {
     name: "/new",
@@ -559,13 +593,19 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/exit",
-    description: "Quit the TUI (Ctrl+C twice, Ctrl+D on an empty input)",
-    run: ({ actions }) => { actions.quit() },
+    description: "Quit the TUI and archive the session (Ctrl+C twice); an empty session is deleted. /resume brings an archived one back",
+    run: ({ actions }) => { actions.quit("archive") },
   },
   {
     name: "/quit",
     description: "Alias for /exit",
-    run: ({ actions }) => { actions.quit() },
+    run: ({ actions }) => { actions.quit("archive") },
+  },
+  {
+    name: "/to-background",
+    description: "Quit the TUI at once and leave the session running on the backend daemon, not archived (Ctrl+D on an empty input). Not in a WebUI tab: close the tab instead",
+    terminalOnly: true,
+    run: (context) => { toBackground(context) },
   },
   {
     name: "/api",

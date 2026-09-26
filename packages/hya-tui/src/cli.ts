@@ -19,6 +19,17 @@ export interface Options {
   continue: boolean
   /** Open this session (`--session <id>`). */
   session?: string
+  /**
+   * `--resume [id]`: open that session and clear its archived state; without
+   * an id, pick one of the directory's sessions (archived ones included).
+   */
+  resume?: { id?: string }
+  /**
+   * `--web-tab`: this TUI runs in a WebUI tab (bare `hya` adds it to its web
+   * host's tab command). Closing the tab already leaves the session running,
+   * so `/to-background` is not offered and Ctrl+D only says so.
+   */
+  webTab?: boolean
   /** The WebUI bare `hya` serves next to this TUI (`--web-url`), or why it could not (`--web-error`). */
   web?: WebInfo
 }
@@ -52,6 +63,11 @@ Options:
                     else ~/.local/state/hya/sessions.db)
   -c, --continue    Open the most recent top-level session in --dir
   -s, --session ID  Open the session with this id
+  --resume [ID]     Open this session and unarchive it; without an id, pick
+                    one of --dir's sessions, archived ones included
+  --web-tab         This TUI runs in a WebUI tab (set by bare hya's web host
+                    command; pass it yourself to a standalone tui-web host):
+                    /to-background is not offered and Ctrl+D does not quit
   --web-url URL     Show this WebUI address (set by bare hya, which serves
                     the WebUI next to this TUI)
   --web-error TEXT  Show "WebUI unavailable: TEXT" (set by bare hya when the
@@ -73,11 +89,19 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let webUrl: string | undefined
   let webError: string | undefined
   let resume = false
+  let reopen: { id?: string } | undefined
+  let webTab = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
     const value = argv[index + 1]
     if (arg === "--help" || arg === "-h") return null
     if (arg === "--continue" || arg === "-c") resume = true
+    else if (arg === "--web-tab") webTab = true
+    else if (arg === "--resume") {
+      // The id is optional: a following flag is not one.
+      if (value !== undefined && !value.startsWith("-")) reopen = { id: argv[++index]! }
+      else reopen = {}
+    }
     else if (value === undefined) throw new Error(`Unknown or incomplete option: ${arg}`)
     else if (arg === "--server") server = argv[++index]!
     else if (arg === "--dir") directory = argv[++index]!
@@ -89,6 +113,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     else throw new Error(`Unknown or incomplete option: ${arg}`)
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
+  if (reopen && (resume || session)) throw new Error("--resume cannot be combined with --continue or --session")
   const options: Options = { directory: resolve(directory), continue: resume }
   if (server !== undefined) {
     const url = new URL(server)
@@ -98,6 +123,8 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   if (hya !== undefined) options.hya = hya
   if (db !== undefined) options.db = db
   if (session !== undefined) options.session = session
+  if (reopen) options.resume = reopen
+  if (webTab) options.webTab = true
   if (webUrl !== undefined && webError !== undefined) throw new Error("--web-url and --web-error cannot be combined")
   if (webUrl !== undefined) {
     const url = new URL(webUrl)

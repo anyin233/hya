@@ -22,7 +22,8 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openAgentModels: () => { calls.push("agentModels") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
-    quit: () => { calls.push("quit") },
+    quit: (mode) => { calls.push(`quit ${mode}`) },
+    resume: async (id) => { calls.push(`resume ${id ?? ""}`.trim()) },
     openPicker: (picker) => { pickers.push(picker) },
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
     openHelp: () => { calls.push("help") },
@@ -273,12 +274,12 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
   expect(registry.complete("/sidebar o", store.completionContext())).toEqual(["/sidebar off", "/sidebar on"])
 })
 
-test("/exit and /quit quit; /cancel cancels the running turn", async () => {
+test("/exit and /quit quit and archive; /cancel cancels the running turn", async () => {
   const { calls, run } = harness()
   await run("/exit")
   await run("/quit")
   await run("/cancel")
-  expect(calls).toEqual(["quit", "quit", "cancel"])
+  expect(calls).toEqual(["quit archive", "quit archive", "cancel"])
 })
 
 test("/permissions opens the mode picker from the backend listing; /permissions <mode> switches directly", async () => {
@@ -320,7 +321,7 @@ test("/sessions opens a picker with a New session row first, then the tree, the 
   expect(picker.title).toBe("Sessions")
   expect(picker.rows.map((row) => row.id)).toEqual(["__new__", "hysec_1", "hysec_2"])
   expect(picker.rows[1]?.current).toBe(true)
-  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete"])
+  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete", "archived"])
   // Enter on a row opens it; on the New session row it creates one.
   await picker.onSelect(picker.rows[2]!)
   expect(calls).toContain("open hysec_2")

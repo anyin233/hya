@@ -57,14 +57,17 @@
  * changes that: after `stop` nothing is started and prompts are refused
  * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
- * Sessions (app/sessionKeeper.ts): without `--session`/`--continue` a
- * session is created on connect; a session this client created and never
- * used is deleted when the client leaves it (another session opened, or
- * `close()` on exit).
+ * Sessions (app/sessionKeeper.ts): without `--session`/`--continue`/
+ * `--resume` a session is created on connect; a session this client created
+ * and never used is deleted when the client leaves it (another session
+ * opened, or `close()` on exit). `close("archive")` (a graceful exit:
+ * `/exit`, Ctrl+C twice) archives the open session's root; `background`
+ * (`/to-background`, Ctrl+D) and `signal` leave it running. `/resume` and
+ * `--resume` unarchive and open one (app/resume.ts).
  */
 import type { HyaClient, Interaction, MessageInfo, PromptAttachment, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand } from "../completion"
-import { createCommandRegistry, mergeCommandEntries, openModelPicker, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
+import { createCommandRegistry, mergeCommandEntries, openModelPicker, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
   attachmentName,
   exceedsTurnBudget,
@@ -100,7 +103,8 @@ import { createRulesController } from "./rules"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 import { createReconnector, type ServerSwitch } from "./reconnect"
-import { createSessionKeeper } from "./sessionKeeper"
+import { createSessionKeeper, type ExitMode } from "./sessionKeeper"
+import { createResumer } from "./resume"
 import { probeHealth } from "../launch"
 import { tuiVersion } from "../version"
 
@@ -116,7 +120,7 @@ export const childPollMs = 1500
 /** Global stream reconnect backoff: the session stream's 800 ms, doubling up to 15 s while it keeps failing (an older backend without the route). */
 const globalRetryMs = 800
 const globalRetryMaxMs = 15_000
-/** Longest wait on exit for deleting this client's empty session. */
+/** Longest wait on exit for deleting this client's empty session, or archiving the open one. */
 const dropOnExitMs = 2_000
 
 export interface ControllerOptions {
@@ -125,10 +129,10 @@ export interface ControllerOptions {
   /** Workspace directory for new sessions (`--dir`). */
   directory: string
   registry?: CommandRegistry
-  /** Leave the TUI (destroys the renderer, which restores the terminal). */
-  quit?: () => void
-  /** Which session to open at start (`--continue`, `--session`; src/launch.ts `initialSessionId`). Default: none. */
-  startup?: { continue: boolean; session?: string }
+  /** Leave the TUI (destroys the renderer, which restores the terminal); `mode` is what happens to the open session (app/sessionKeeper.ts). */
+  quit?: (mode: "archive" | "background") => void
+  /** Which session to open at start (`--continue`, `--session`, `--resume [id]`; src/launch.ts `initialSessionId`, app/resume.ts). Default: a new one. */
+  startup?: { continue: boolean; session?: string; resume?: { id?: string } }
   /** Appended to the status line when the backend cannot be reached. */
   connectionHint?: string
   /** TUI preferences file (src/prefs.ts); unset = preference changes apply for this run only. */
@@ -222,6 +226,7 @@ export function createController({ client, store, directory, registry = createCo
       getSession: (id) => client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
       listMessages: (id) => client.listMessages(id),
       deleteSession: (id) => client.deleteSession(id),
+      archiveSession: async (id) => { await client.setArchived(id, true) },
     },
     localBusy: (id) => (store.state.selected?.id === id && store.state.running) || store.state.queued.some((item) => item.session === id),
   })
@@ -503,6 +508,16 @@ export function createController({ client, store, directory, registry = createCo
       scheduleCatalogRefresh()
       return
     }
+    // Another client archived or unarchived a session: drop or mark its sidebar row.
+    const archived = event.sessionUpdated?.archived
+    if (archived !== undefined && event.session) {
+      const id = event.session
+      store.applyArchived(id, archived)
+      if (!archived && !store.state.sessions.some((row) => row.id === id)) {
+        await client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
+      }
+      return
+    }
     const route = globalAskRoute(event, store.state)
     if (route === "ignore") return
     const raw = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
@@ -710,6 +725,11 @@ export function createController({ client, store, directory, registry = createCo
   const rules = createRulesController({ store, client })
   const agentModels = createAgentModelsController({ store, client, openPicker })
   const revert = createRevertController({ store, client, composer: () => composer, openSession, refresh, openPicker })
+  const resumer = createResumer({
+    store, directory, openSession, openPicker,
+    client: { listSessions: (options) => client.listSessions(options), setArchived: (id, archived) => client.setArchived(id, archived) },
+    refresh: async () => { store.setSessions(await client.listSessions()) },
+  })
 
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
@@ -725,6 +745,7 @@ export function createController({ client, store, directory, registry = createCo
     reconnect: () => reconnectNow(),
     cancelTurn: () => turns.cancel(),
     quit,
+    resume: (id) => resumer.resume(id),
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
     savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
@@ -869,7 +890,13 @@ export function createController({ client, store, directory, registry = createCo
       startGlobalStream()
       const target = initialSessionId(store.state.sessions, startup, directory)
       let missing = ""
-      if (target) await openSession(target).catch(() => { missing = ` · session ${target} not found` })
+      const resumeId = startup.resume?.id
+      if (resumeId) await resumer.resume(resumeId).catch(() => { missing = ` · session ${resumeId} not found` })
+      else if (startup.resume) {
+        // The picker waits for a choice; Esc (or nothing to pick) starts a new session as a plain start does.
+        await resumer.resume(undefined, () => void newSession().catch(() => undefined))
+      }
+      else if (target) await openSession(target).catch(() => { missing = ` · session ${target} not found` })
       else if (startup.continue) missing = " · no earlier session in this directory"
       // A plain start opens a new session right away (deleted again if it stays empty).
       // Without a model it is created by the first prompt instead.
@@ -877,7 +904,9 @@ export function createController({ client, store, directory, registry = createCo
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion} · hya serve restart` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
-      status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
+      // `--resume <id>` already said `Resumed …`; keep it unless something needs saying.
+      const resumed = resumeId && !missing && !mismatch && store.state.status.startsWith("Resumed ")
+      if (!resumed) status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
       store.setView("help")
@@ -920,10 +949,15 @@ export function createController({ client, store, directory, registry = createCo
     if (selected) startStream(selected.id)
   }
 
-  /** Before exit: delete this client's session when it created it and never used it (bounded wait). */
-  async function close(): Promise<void> {
+  /**
+   * Before exit (bounded wait): delete this client's session when it created
+   * it and never used it; else, on a graceful exit (`archive`), archive the
+   * open session's root. `background` and `signal` (the default: a WebUI tab
+   * closed, a kill) leave it running on the daemon.
+   */
+  async function close(mode: ExitMode = "signal"): Promise<void> {
     const selected = store.state.selected?.id
-    if (selected) await Promise.race([dropIfEmpty(selected).catch(() => undefined), Bun.sleep(dropOnExitMs)])
+    if (selected) await Promise.race([keeper.leave(selected, mode).catch(() => undefined), Bun.sleep(dropOnExitMs)])
     dispose()
   }
 
@@ -944,7 +978,9 @@ export function createController({ client, store, directory, registry = createCo
 
   /** Merged, deduplicated command list for the `/` command menu (commands/menu.ts). */
   function commandEntries(): CommandEntry[] {
-    return mergeCommandEntries(registry.list(), store.state.backendCommands)
+    // A WebUI tab does not offer terminal-only commands (`/to-background`).
+    const local = registry.list().filter((spec) => !(store.state.webTab && spec.terminalOnly))
+    return mergeCommandEntries(local, store.state.backendCommands)
   }
 
   return {
@@ -958,6 +994,8 @@ export function createController({ client, store, directory, registry = createCo
     submit,
     returnToParent: () => void returnToParent().catch((error: unknown) => status(`Open failed: ${String(error)}`)),
     cancelTurn,
+    /** Ctrl+D: quit and leave the session running; in a WebUI tab only a notice (commands/native.ts `toBackground`). */
+    toBackground: () => toBackground({ store, client, actions }),
     answer,
     findFiles,
     fileExists,

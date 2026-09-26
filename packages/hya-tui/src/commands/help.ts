@@ -128,7 +128,7 @@ function pickerRows(): HelpRow[] {
     { group: "Pickers", keys: "Enter, click", description: "Choose the highlighted row" },
     { group: "Pickers", keys: "type, Backspace, Ctrl+U", description: "Filter the rows, widen, clear the filter" },
     { group: "Pickers", keys: "Esc", description: "Close the picker (Ctrl+C closes it too and keeps its quit meaning)" },
-    ...sessionPickerActions.map((action) => ({ group: "Pickers" as const, keys: action.label.split(" ")[0]!, description: `/sessions: ${action.label}${action.prompt === "confirm" ? " (asks to confirm)" : " (edit inline, Enter saves)"}` })),
+    ...sessionPickerActions.map((action) => ({ group: "Pickers" as const, keys: action.label.split(" ")[0]!, description: `/sessions: ${action.label}${action.prompt === "confirm" ? " (asks to confirm)" : action.prompt === "value" ? " (edit inline, Enter saves)" : ""}` })),
   ]
 }
 

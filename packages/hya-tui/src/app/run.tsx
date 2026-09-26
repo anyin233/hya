@@ -12,11 +12,13 @@
  * When the TUI knows its database it also replaces a lost server
  * (app/reconnect.ts). A fixed `--server` without `--db` is never replaced.
  *
- * Lifecycle: every way out — Ctrl+C twice, Ctrl+D, `/exit`, or a signal
- * (SIGINT, SIGTERM, SIGHUP; the WebUI host sends SIGHUP when its tab
- * closes) — runs `shutdown()` once: restore the terminal, delete this
- * client's session if it created it and never used it (app/sessionKeeper.ts,
- * at most 2 s), then exit. The backend daemon keeps running. A backend that
+ * Lifecycle: every way out runs `shutdown()` once: restore the terminal,
+ * settle the open session (app/sessionKeeper.ts, at most 2 s), then exit.
+ * The backend daemon keeps running. The way out decides the session's fate:
+ * Ctrl+C twice or `/exit` archive it (graceful); Ctrl+D or `/to-background`
+ * leave it running; a signal (SIGINT, SIGTERM, SIGHUP; the WebUI host sends
+ * SIGHUP when its tab closes) never archives. An empty session this client
+ * created is deleted on every way out. A backend that
  * cannot be reached or started is reported on stderr with the tail of its
  * output, and the TUI exits with status 1 before it takes over the terminal.
  */
@@ -31,6 +33,7 @@ import { createAppStore, type BackendInfo } from "../state/store"
 import { App } from "./App"
 import { AppContext } from "./context"
 import { createController, type Controller } from "./controller"
+import type { ExitMode } from "./sessionKeeper"
 
 const exitSignals = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const
 
@@ -40,7 +43,7 @@ export async function run(options: Options): Promise<void> {
   let renderer: CliRenderer | undefined
   let controller: Controller | undefined
   let stopping = false
-  const shutdown = async (code: number): Promise<void> => {
+  const shutdown = async (code: number, mode: ExitMode): Promise<void> => {
     // Once: `renderer.destroy()` re-enters here synchronously (its "destroy" event).
     if (stopping) return
     stopping = true
@@ -49,10 +52,11 @@ export async function run(options: Options): Promise<void> {
     } catch {
       // The terminal is being torn down anyway.
     }
-    await controller?.close().catch(() => undefined)
+    await controller?.close(mode).catch(() => undefined)
     process.exit(code)
   }
-  for (const [signal, code] of Object.entries(exitSignals)) process.on(signal, () => void shutdown(code))
+  // A signal is never a graceful exit: the session keeps running (no archive).
+  for (const [signal, code] of Object.entries(exitSignals)) process.on(signal, () => void shutdown(code, "signal"))
 
   // The database whose daemon this TUI uses: `--db`, or the default without `--server`.
   const db = options.db ?? (options.server ? undefined : defaultDatabase(process.env))
@@ -101,11 +105,12 @@ export async function run(options: Options): Promise<void> {
   store.setServerUrl(server)
   store.setBackend(backend)
   if (options.web) store.setWeb(options.web)
+  if (options.webTab) store.setWebTab(true)
   if (loaded.preferences.vim) store.setVim(true)
   controller = createController({
     client, store, directory: options.directory,
-    quit: () => void shutdown(0),
-    startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}) },
+    quit: (mode) => void shutdown(0, mode),
+    startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}), ...(options.resume ? { resume: options.resume } : {}) },
     connectionHint: db ? `the hya server daemon of ${db} did not answer · hya serve status` : "start hya serve or drop --server",
     ...(db
       ? {
@@ -153,7 +158,8 @@ export async function run(options: Options): Promise<void> {
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
   renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30, autoFocus: false })
   // OpenTUI's own signal handlers destroy the renderer; finish the shutdown from there.
-  renderer.once("destroy", () => void shutdown(0))
+  // Only reached when nothing above started the shutdown (a signal OpenTUI caught first): never archive.
+  renderer.once("destroy", () => void shutdown(0, "signal"))
   const active = controller
   await render(() => (
     <AppContext.Provider value={{ store, controller: active, server, ui: active.ui }}>
