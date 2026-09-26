@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_server::{AppState, router as server_router};
 
-use crate::db_lock;
+use crate::cli_args::RelayFlags;
+use crate::{db_lock, serve_relay};
 
 use super::{
     agent_base_with_model, build_session_engine, build_session_engine_pure, open_store,
@@ -16,7 +17,10 @@ pub(crate) async fn cmd_serve(
     model_override: Option<String>,
     yolo: bool,
     pure: bool,
+    relay: RelayFlags,
 ) -> anyhow::Result<()> {
+    // A bad relay URL or CA file fails before anything starts.
+    let relay_settings = serve_relay::settings(&relay)?;
     // One writer per database: fail fast, before composing anything, when
     // another server owns it (ADR-0022).
     let lock = match db_lock::try_claim(&db).context("lock the database")? {
@@ -27,7 +31,19 @@ pub(crate) async fn cmd_serve(
             std::process::exit(db_lock::EXIT_DB_IN_USE);
         }
     };
-    let prepared = prepare_server(&bind, db, lock, model_override, yolo, pure).await?;
+    let prepared = prepare_server(&bind, db, lock, model_override, yolo, pure, &relay).await?;
+    // Join the relay before announcing readiness, so an identity-file
+    // failure stops the start; the link is printed after the listen line.
+    let link = match relay_settings {
+        Some(settings) => Some(
+            prepared
+                .relay
+                .connect(settings)
+                .await
+                .map_err(|error| anyhow::anyhow!("join the relay: {error}"))?,
+        ),
+        None => None,
+    };
     // Install the termination handlers BEFORE announcing readiness. Callers that parse the
     // listen line and then signal us (the e2e harness) would otherwise race handler setup,
     // and losing that race means the default disposition kills the process outright —
@@ -35,6 +51,11 @@ pub(crate) async fn cmd_serve(
     let terminate = install_termination_signals().context("install termination handlers")?;
     println!("hya server listening on {}", prepared.url);
     emit_startup_mark("backend_listen", Some(&prepared.url));
+    if let Some(link) = link
+        && !relay.relay_quiet_link
+    {
+        serve_relay::print_link(&link.to_secret_string());
+    }
     // Without a shutdown future `axum::serve` never returns, so `built.shutdown()` would be
     // unreachable and the process could only ever die by signal — skipping atexit handlers
     // (and therefore any coverage/profile flush). Handing it SIGTERM/Ctrl-C makes the
@@ -50,8 +71,42 @@ pub(crate) async fn cmd_serve_action(
     model: Option<String>,
     yolo: bool,
     pure: bool,
+    parent_relay: RelayFlags,
 ) -> anyhow::Result<()> {
     use crate::cli_args::ServeAction;
+    // `hya serve --relay X start` means `hya serve start --relay X`.
+    let relay_flags = |own: RelayFlags| -> anyhow::Result<RelayFlags> {
+        let flags = if own.is_set() {
+            own
+        } else {
+            parent_relay.clone()
+        };
+        let flags = serve_relay::absolutize(flags)?;
+        serve_relay::settings(&flags)?;
+        Ok(flags)
+    };
+    // After `start|restart --relay`: the daemon's link (its own output goes
+    // to the log file, so it never prints it).
+    let print_daemon_link = |ready: &daemon::Ready, relay: &RelayFlags| {
+        let url = ready.discovery.url.clone();
+        let asked = relay.relay.is_some();
+        let started = ready.started;
+        async move {
+            if !asked {
+                return;
+            }
+            if !started {
+                eprintln!(
+                    "hya: a server was already running; --relay was not applied (use `hya serve relay connect <url>`)"
+                );
+                return;
+            }
+            match serve_relay::call(&url, reqwest::Method::GET, "/v1/relay/link", None).await {
+                Ok(value) => serve_relay::print_link(value["link"].as_str().unwrap_or("")),
+                Err(error) => eprintln!("hya: could not read the relay link ({error:#})"),
+            }
+        }
+    };
     use crate::daemon;
     let spec = || -> anyhow::Result<daemon::DaemonSpec> {
         Ok(daemon::DaemonSpec {
@@ -102,18 +157,33 @@ pub(crate) async fn cmd_serve_action(
         }
     };
     match action {
-        ServeAction::Start { json } => {
-            let ready = daemon::start(&spec()?, daemon::START_WAIT).await?;
+        ServeAction::Start { json, relay } => {
+            let relay = relay_flags(relay)?;
+            let ready = daemon::start_with_relay(&spec()?, &relay, daemon::START_WAIT).await?;
             print_ready(&ready, json);
+            print_daemon_link(&ready, &relay).await;
         }
         ServeAction::Restart {
             json,
             force,
             timeout,
+            relay,
         } => {
+            // The new daemon rejoins the old one's relay (recorded in its
+            // discovery file) unless told otherwise.
+            let old = db_lock::holder(&db)
+                .ok()
+                .flatten()
+                .and_then(|busy| busy.discovery)
+                .and_then(|found| found.relay);
+            let relay = serve_relay::restart_flags(relay_flags(relay)?, old.as_ref());
             stop(timeout, force, json, hya_server::ShutdownReason::Restart).await?;
-            let ready = daemon::start(&spec()?, daemon::START_WAIT).await?;
+            let ready = daemon::start_with_relay(&spec()?, &relay, daemon::START_WAIT).await?;
             print_ready(&ready, json);
+            print_daemon_link(&ready, &relay).await;
+        }
+        ServeAction::Relay { action } => {
+            serve_relay::run(action, &db).await?;
         }
         ServeAction::Stop { force, timeout } => {
             stop(timeout, force, false, hya_server::ShutdownReason::Stop).await?;
@@ -143,6 +213,7 @@ pub(crate) async fn cmd_serve_action(
                         "uptimeMs": u64::try_from(uptime.as_millis()).unwrap_or(u64::MAX),
                         "db": db,
                         "log": log,
+                        "relay": found.relay,
                     })
                 );
             } else {
@@ -152,6 +223,12 @@ pub(crate) async fn cmd_serve_action(
                 println!("  uptime   {}", daemon::human_duration(uptime));
                 if let Some(log) = log {
                     println!("  log      {log}");
+                }
+                if let Some(relay) = &found.relay {
+                    println!(
+                        "  relay    {} (`hya serve relay status` for the connection)",
+                        relay.proxy_url
+                    );
                 }
             }
             if let Some(note) = daemon::version_note(&found) {
@@ -174,6 +251,9 @@ pub(crate) struct PreparedServer {
     lock: Option<db_lock::DbLock>,
     /// Ends every live event stream when the shutdown begins.
     streams: hya_server::StreamShutdown,
+    /// The relay host connector (joined by `--relay` or `hya serve relay
+    /// connect`); left after the drain.
+    pub(crate) relay: hya_server::RelayHost,
 }
 
 /// Serve `prepared` until `stop` resolves, then drain and tear down.
@@ -193,29 +273,39 @@ pub(crate) async fn serve_until(
         mut built,
         lock,
         streams,
+        relay,
         ..
     } = prepared;
     let supervisor = built.resident_supervisor();
     let stop_request = lock.as_ref().map(db_lock::DbLock::stop_request_path);
-    let serve_result = axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            stop.await;
-            // Why: `hya serve stop|restart` leave a request addressed to this
-            // pid before their SIGTERM; anything else is a plain signal.
-            let reason = stop_request
-                .and_then(|path| db_lock::take_stop_request(&path, std::process::id()))
-                .unwrap_or(hya_server::ShutdownReason::Signal);
-            // End every client's live event stream first, with that reason as
-            // the last frame: they never finish on their own, and connected
-            // clients (the daemon outlives them, ADR-0023) must not hold the
-            // shutdown open. Health answers `unavailable` from here on.
-            streams.close(reason);
-            supervisor
-                .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
-                .await;
-        })
-        .await
-        .context("serve http");
+    // Peer addresses let the loopback-only rpcs (`RelayControl`) refuse
+    // non-loopback clients.
+    let serve_result = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        stop.await;
+        // Why: `hya serve stop|restart` leave a request addressed to this
+        // pid before their SIGTERM; anything else is a plain signal.
+        let reason = stop_request
+            .and_then(|path| db_lock::take_stop_request(&path, std::process::id()))
+            .unwrap_or(hya_server::ShutdownReason::Signal);
+        // End every client's live event stream first, with that reason as
+        // the last frame: they never finish on their own, and connected
+        // clients (the daemon outlives them, ADR-0023) must not hold the
+        // shutdown open. Health answers `unavailable` from here on.
+        streams.close(reason);
+        supervisor
+            .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+            .await;
+    })
+    .await
+    .context("serve http");
+    // Relay streams already got their `serverStopping` frame and the drain
+    // closed their turns: leave the relay (the room is released) and close
+    // what is left of them.
+    relay.shutdown().await;
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     // Last: remove the discovery file and release the lock.
     drop(lock);
@@ -233,6 +323,7 @@ pub(crate) async fn prepare_server(
     model_override: Option<String>,
     yolo: bool,
     pure: bool,
+    relay_flags: &RelayFlags,
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
     super::first_run_config_bootstrap(false)?;
@@ -296,6 +387,19 @@ pub(crate) async fn prepare_server(
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
     state = state.with_permission_requests(asks);
+    // The relay host connector: its identity lives next to the database;
+    // the discovery file records the relay it joins (never the link).
+    let relay = hya_server::RelayHost::new(serve_relay::host_config(&db, relay_flags));
+    if let Some(discovery) = lock.as_ref().map(db_lock::DbLock::discovery_path) {
+        let heartbeat = relay_flags.relay_heartbeat;
+        relay.set_settings_hook(Arc::new(move |settings| {
+            let record = settings.map(|settings| serve_relay::discovered(settings, heartbeat));
+            if let Err(error) = db_lock::set_discovery_relay(&discovery, record) {
+                eprintln!("hya: could not record the relay in the discovery file ({error})");
+            }
+        }));
+    }
+    state = state.with_relay_host(relay.clone());
     // Remembered "allow always" grants survive restarts: reload them into
     // the process permission plane before serving.
     if let Err(error) = state.restore_saved_permissions().await {
@@ -346,6 +450,9 @@ pub(crate) async fn prepare_server(
                     .add_service(pbv1::pty_server::PtyServer::new(grpc.clone()))
                     .add_service(pbv1::logs_server::LogsServer::new(grpc.clone()))
                     .add_service(pbv1::bundle_api_server::BundleApiServer::new(grpc.clone()))
+                    .add_service(pbv1::relay_control_server::RelayControlServer::new(
+                        grpc.clone(),
+                    ))
                     .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
                 let _ = server.await;
             }
@@ -359,13 +466,16 @@ pub(crate) async fn prepare_server(
         lock.publish(&db_lock::connect_url(addr))
             .context("publish the server discovery file")?;
     }
+    let router = server_router(state.clone());
+    relay.set_service(router.clone());
     Ok(PreparedServer {
         url: format!("http://{addr}"),
         listener,
         streams: state.streams(),
-        router: server_router(state),
+        router,
         built,
         lock,
+        relay,
     })
 }
 

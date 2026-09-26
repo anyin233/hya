@@ -92,6 +92,9 @@ pub(crate) enum ServeAction {
         /// Print `{url, pid, version, startedAt, db, log, started}` as JSON.
         #[arg(long)]
         json: bool,
+        /// Join a secure relay at start (the daemon runs `hya serve --relay`).
+        #[command(flatten)]
+        relay: RelayFlags,
     },
     /// Show the running backend of `--db` (url, pid, version, db, uptime);
     /// exit 1 when none is running.
@@ -121,6 +124,104 @@ pub(crate) enum ServeAction {
         /// Seconds to wait for the old backend to stop.
         #[arg(long, default_value_t = 30, value_name = "SECONDS")]
         timeout: u64,
+        /// Join this relay instead of the one the old backend was joined to
+        /// (by default the new daemon rejoins the old backend's relay).
+        #[command(flatten)]
+        relay: RelayFlags,
+    },
+    /// Control the secure relay of the running backend of `--db`
+    /// (docs/relay.md "Hosting a backend on a relay"). Loopback only.
+    Relay {
+        #[command(subcommand)]
+        action: ServeRelayAction,
+    },
+}
+
+/// Relay flags of `hya serve`, `hya serve start`, and `hya serve restart`
+/// (ADR-0025; docs/relay.md "Hosting a backend on a relay").
+#[derive(clap::Args, Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RelayFlags {
+    /// Join the secure relay published at this public URL
+    /// (`https://host[:port][/prefix]`, or `http://…` for plaintext on a
+    /// LAN or tailnet) and print the relay link once on stderr. The link is
+    /// a secret: whoever holds it controls this backend.
+    #[arg(long = "relay", value_name = "URL")]
+    pub(crate) relay: Option<String>,
+    /// Relay binding: `auto` (gRPC, falling back to WebSocket), `grpc`, or
+    /// `ws`; also the link's `t=` hint.
+    #[arg(
+        long = "relay-transport",
+        value_name = "BINDING",
+        value_parser = ["auto", "grpc", "ws"],
+        requires = "relay"
+    )]
+    pub(crate) relay_transport: Option<String>,
+    /// PEM file of extra trusted CA certificates for the relay's TLS.
+    #[arg(long = "relay-ca", value_name = "PEM", requires = "relay")]
+    pub(crate) relay_ca: Option<std::path::PathBuf>,
+    /// Use a throwaway relay identity instead of the database's identity
+    /// file `<db>.relay-identity.json`: the link dies with the process.
+    #[arg(long = "relay-ephemeral", requires = "relay")]
+    pub(crate) relay_ephemeral: bool,
+    /// Relay heartbeat interval in seconds (default 15; a stream silent for
+    /// three intervals is presumed dead).
+    #[arg(long = "relay-heartbeat", value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) relay_heartbeat: Option<u64>,
+    /// Do not print the relay link (the daemon's output goes to its log
+    /// file; `hya serve start` prints the link instead).
+    #[arg(long = "relay-quiet-link", hide = true)]
+    pub(crate) relay_quiet_link: bool,
+}
+
+impl RelayFlags {
+    /// Whether any relay flag was given.
+    pub(crate) fn is_set(&self) -> bool {
+        self.relay.is_some() || self.relay_heartbeat.is_some()
+    }
+}
+
+/// `hya serve relay …`: the running backend's relay connector, through the
+/// loopback-only `RelayControl` rpcs.
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ServeRelayAction {
+    /// Join a relay (replacing any current one) and print the relay link.
+    Connect {
+        /// The relay's public URL (`https://host[:port][/prefix]` or
+        /// `http://…`).
+        proxy_url: String,
+        /// Relay binding: `auto`, `grpc`, or `ws`.
+        #[arg(long, value_name = "BINDING", value_parser = ["auto", "grpc", "ws"], default_value = "auto")]
+        transport: String,
+        /// PEM file of extra trusted CA certificates.
+        #[arg(long = "relay-ca", value_name = "PEM")]
+        relay_ca: Option<std::path::PathBuf>,
+        /// A throwaway identity: the link dies with this connection.
+        #[arg(long)]
+        ephemeral: bool,
+        /// Print `{status, link}` as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Leave the relay: the room is released and relay clients are cut off.
+    Disconnect {
+        /// Print the status as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the relay connector's state (never the link's secret part).
+    Status {
+        /// Print the status as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the full relay link (a secret) on stdout.
+    Link,
+    /// Issue a new link key: every earlier link stops working and open relay
+    /// connections are closed. Prints the new link.
+    Rotate {
+        /// Print `{link, status}` as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -169,6 +270,9 @@ pub(crate) enum Command {
         /// `start`, `status`, `stop`, `restart`).
         #[arg(long, global = true)]
         db: Option<String>,
+        /// Join a secure relay (foreground `hya serve`).
+        #[command(flatten)]
+        relay: RelayFlags,
         /// Control the backend daemon of `--db` instead of serving in the
         /// foreground (default database: `$XDG_STATE_HOME/hya/sessions.db`).
         #[command(subcommand)]
@@ -838,7 +942,10 @@ mod tests {
         assert_eq!(
             action(parse(["hya", "serve", "start", "--json", "--db", "/s.db"])),
             (
-                Some(ServeAction::Start { json: true }),
+                Some(ServeAction::Start {
+                    json: true,
+                    relay: super::RelayFlags::default()
+                }),
                 Some("/s.db".into())
             )
         );
@@ -861,7 +968,8 @@ mod tests {
             Some(ServeAction::Restart {
                 json: false,
                 force: false,
-                timeout: 30
+                timeout: 30,
+                relay: super::RelayFlags::default()
             })
         );
         // Plain `hya serve` still serves in the foreground.
@@ -869,6 +977,88 @@ mod tests {
             action(parse(["hya", "serve", "--bind", "127.0.0.1:0"])).0,
             None
         );
+    }
+
+    #[test]
+    fn parses_serve_relay_flags_and_relay_actions() {
+        use super::{RelayFlags, ServeAction, ServeRelayAction};
+        let serve = |cli: Cli| match cli.command {
+            Some(super::Command::Serve { relay, action, .. }) => (relay, action),
+            _ => panic!("expected serve command"),
+        };
+        let (relay, action) = serve(parse([
+            "hya",
+            "serve",
+            "--relay",
+            "https://relay.example.com/hya",
+            "--relay-transport",
+            "ws",
+            "--relay-ephemeral",
+        ]));
+        assert_eq!(action, None);
+        assert_eq!(
+            relay.relay.as_deref(),
+            Some("https://relay.example.com/hya")
+        );
+        assert_eq!(relay.relay_transport.as_deref(), Some("ws"));
+        assert!(relay.relay_ephemeral);
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--relay-ephemeral"]).is_err(),
+            "relay options need --relay"
+        );
+        let (_, action) = serve(parse([
+            "hya",
+            "serve",
+            "start",
+            "--relay",
+            "http://100.64.0.7:8766",
+        ]));
+        assert_eq!(
+            action,
+            Some(ServeAction::Start {
+                json: false,
+                relay: RelayFlags {
+                    relay: Some("http://100.64.0.7:8766".into()),
+                    ..RelayFlags::default()
+                }
+            })
+        );
+        let (_, action) = serve(parse([
+            "hya",
+            "serve",
+            "relay",
+            "connect",
+            "https://relay.example.com",
+            "--transport",
+            "grpc",
+            "--db",
+            "/s.db",
+        ]));
+        assert_eq!(
+            action,
+            Some(ServeAction::Relay {
+                action: ServeRelayAction::Connect {
+                    proxy_url: "https://relay.example.com".into(),
+                    transport: "grpc".into(),
+                    relay_ca: None,
+                    ephemeral: false,
+                    json: false,
+                }
+            })
+        );
+        for (words, expected) in [
+            ("status", ServeRelayAction::Status { json: false }),
+            ("link", ServeRelayAction::Link),
+            ("rotate", ServeRelayAction::Rotate { json: false }),
+            ("disconnect", ServeRelayAction::Disconnect { json: false }),
+        ] {
+            let (_, action) = serve(parse(["hya", "serve", "relay", words]));
+            assert_eq!(
+                action,
+                Some(ServeAction::Relay { action: expected }),
+                "{words}"
+            );
+        }
     }
 
     #[test]

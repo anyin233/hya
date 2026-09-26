@@ -775,6 +775,11 @@ caller's cwd as their session's workdir.
 | `--mdns-domain <NAME>` | Accepted for Compat CLI compatibility. |
 | `--cors <ORIGIN>` | Accepted for Compat CLI compatibility; hya mirrors CORS origins globally. |
 | `--db <PATH>` | SQLite path. Empty string uses an in-memory store. A file database is locked for this process (see "One server per database" below); a second `serve` on it exits **75**. |
+| `--relay <URL>` | Join the secure relay published at this public URL (`https://host[:port][/prefix]`, or `http://…` for plaintext on a LAN or tailnet) and print the relay link once on stderr as `hya relay link: <link>`. The link is a **secret**: whoever holds it controls this backend. See [Hosting a backend on a relay](relay.md#hosting-a-backend-on-a-relay). |
+| `--relay-transport auto\|grpc\|ws` | Relay binding (default `auto`); also the link's `t=`. Needs `--relay`. |
+| `--relay-ca <PEM>` | Extra trusted CA certificates for the relay's TLS. Needs `--relay`. |
+| `--relay-ephemeral` | A throwaway relay identity instead of `<db>.relay-identity.json`: the link dies with the process. Needs `--relay`. |
+| `--relay-heartbeat <SECONDS>` | Relay heartbeat interval (default 15). |
 
 **Readiness contract.** After the listener is bound, the process prints exactly:
 
@@ -785,6 +790,8 @@ hya server listening on <url>
 That string is a stability contract: harnesses, supervisors, and client SDKs
 parse this exact line from merged stdout/stderr to discover the base URL. Do not
 change its wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs).
+With `--relay` the relay is joined before this line, and the link follows it
+on stderr, once, as `hya relay link: <link>` plus a one-line secrecy note.
 
 **One server per database.** With a file `--db`, `serve` takes an exclusive
 lock on the database before it opens it, and publishes a discovery file once
@@ -795,7 +802,8 @@ same file a second time ([ADR-0022](adr/0022-one-writer-per-database.md)).
 | --- | --- |
 | `<db>.lock` | Exclusive advisory lock (`flock`), taken without waiting before the store opens and held until the process exits; the OS releases it on a crash or SIGKILL. Contents: the owner's pid. Never deleted. |
 | `<db>.server.stop` | Written atomically by `hya serve stop` / `restart` just before their SIGTERM: `{"pid": <lock holder>, "reason": "stop" \| "restart"}`. The server reads it when a termination signal arrives, uses it only when `pid` is its own, and deletes it; the reason becomes the last frame of every client stream (`serverStopping`, see below). Deleted by whoever takes the lock. |
-| `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
+| `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. While the server is joined to a relay it also has `"relay": {"proxyUrl", "transport", "ephemeral", "ca"?, "heartbeatSecs"?}` (public settings only, never the link; read by `hya serve restart`). An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
+| `<db>.relay-identity.json` | The relay identity (room key, Noise static key, link PSK), mode 0600, created on the first relay join and kept across restarts; see [relay.md](relay.md#hosting-a-backend-on-a-relay). |
 
 `<db>` is the `--db` path with its directory resolved (symlinks and `..`), so
 different spellings of one file share one lock. An in-memory store (`--db ""`,
@@ -836,6 +844,8 @@ hya serve stop                  # graceful stop; waits until it released the dat
 hya serve stop --force          # SIGKILL after --timeout (default 30 s)
 hya serve restart --db ~/work.db
 hya serve start --json          # machine-readable (the TUI uses this)
+hya serve start --relay https://relay.example.com   # a daemon on a secure relay
+hya serve relay status          # the running backend's relay (see below)
 ```
 
 `--db` defaults to the durable `$XDG_STATE_HOME/hya/sessions.db` for these
@@ -847,7 +857,16 @@ after the action. The path is made absolute.
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
 | `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log"}`. | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
 | `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
-| `restart [--json] [--force] [--timeout <s>]` | `stop` with reason `restart`, then `start`. | As `start`; the stop line goes to stderr with `--json`. | As `stop`, then `start` |
+| `restart [--json] [--force] [--timeout <s>]` | `stop` with reason `restart`, then `start`. The new daemon rejoins the relay recorded in the old one's discovery file (same identity, so the same link) unless `restart` is given its own `--relay …`. | As `start`; the stop line goes to stderr with `--json`. | As `stop`, then `start` |
+| `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
+
+`start` and `restart` accept the relay flags of plain `hya serve`
+(`--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`,
+`--relay-heartbeat`). The daemon joins the relay at start but never prints
+the link to its log; `start`/`restart` read it over loopback and print
+`hya relay link: <link>` on stderr. When a server was already running,
+`start --relay` changes nothing and says so (use `hya serve relay connect`).
+`status` shows a `relay` line (`--json`: `relay`) while joined.
 
 A stop is a stop: connected TUIs start nothing after `hya serve stop` (or a
 plain signal). They show `Backend stopped (hya serve stop) · /reconnect
@@ -885,7 +904,7 @@ See [Diagnosing Slow Startup](troubleshooting.md#diagnosing-slow-startup).
 The server serves exactly one HTTP contract — `hya.v1` — under `/v1`
 (HTTP/JSON + SSE + WebSocket). The former native `/sessions/*` routes and the
 Compat-compatible legacy/v2 route groups are deleted. Setting
-`HYA_GRPC_BIND=<host:port>` additionally serves the same seventeen services over
+`HYA_GRPC_BIND=<host:port>` additionally serves the same eighteen services over
 gRPC (reflection enabled). See [Protocol guide](protocol/README.md),
 [API reference](protocol/api-reference.md), and
 [Server and Client](architecture/server-client.md).
@@ -1172,4 +1191,4 @@ advice table per failure kind.
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` and `bridge` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` when no server runs. **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `serve stop` with nothing running, `proxy` and `bridge` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **75** from `serve` on a database another process holds. **1** from `serve status` and `serve relay …` when no server runs (and from `serve relay …` when its rpc fails). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |
