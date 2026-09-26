@@ -681,3 +681,235 @@ yields the binding endpoints:
 | `ws_url(WsRoute::Host)` | `wss://relay.example.com/hya/hya.relay.v1/ws/host` |
 
 `hya+insecure://` links map to `http://` and `ws://` the same way.
+
+## Deployment recipes
+
+`hya proxy` needs only one inbound TCP port and speaks both bindings on it
+(see [Bindings](#bindings)), so any of these fronts work; the intermediary
+conformance suite (`crates/hya-relay/tests/conformance.rs`) is the CI proof
+that each shape works, and each recipe below ends with the matching `hya
+relay doctor` command. These four are first-class (ADR-0025 D9); anything
+that behaves like "an HTTPS hop that may be HTTP/1.1-only, may cut idle
+streams, and may rewrite Host/paths" is expected to work the same way.
+
+### 1. Cloudflare Tunnel
+
+`cloudflared` proxies to `hya proxy` over plain HTTP; no inbound port is
+needed on the proxy host at all.
+
+```yaml
+# cloudflared config.yml
+tunnel: <tunnel-id>
+credentials-file: /etc/cloudflared/<tunnel-id>.json
+ingress:
+  - hostname: relay.example.com
+    service: http://localhost:8766
+  - service: http_status:404
+```
+
+By default `cloudflared`'s origin connection is **HTTP/1.1**, so the
+WebSocket binding carries the traffic (case (c) in the conformance suite);
+`auto` picks it up automatically (`ProbeFailureKind::NoHttp2`). To let gRPC
+through instead, add `http2Origin: true` under the ingress rule's
+`originRequest`:
+
+```yaml
+  - hostname: relay.example.com
+    service: http://localhost:8766
+    originRequest:
+      http2Origin: true
+```
+
+The Cloudflare edge cuts idle connections at roughly 100s; the relay's
+default heartbeat (15s, dead after 45s) stays well under that, so open
+streams survive (case (e)). Targets this Cloudflare Tunnel targeting
+`cloudflared` 2024+.
+
+```sh
+hya proxy --port 8766
+hya relay doctor https://relay.example.com
+# expect: WebSocket ok, recommended t=auto (or t=ws if pinning); with
+# http2Origin: true, gRPC ok too.
+```
+
+### 2. nginx
+
+nginx needs an `http2`-enabled `server` for gRPC and a separate `location`
+for the WebSocket upgrade; both proxy to the same `hya proxy` port. Targets
+nginx 1.25+ (`grpc_pass` and `http2 on;` inside `server` are both stable
+since 1.25.1; older nginx needs `listen … http2;` instead).
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name relay.example.com;
+
+    ssl_certificate     /etc/nginx/relay.crt;
+    ssl_certificate_key /etc/nginx/relay.key;
+
+    # gRPC binding: content-type: application/grpc.
+    location / {
+        if ($content_type !~ "^application/grpc") {
+            break;
+        }
+        grpc_pass grpc://127.0.0.1:8766;
+        grpc_read_timeout 1h;
+        grpc_send_timeout 1h;
+    }
+
+    # WebSocket binding.
+    location /hya.relay.v1/ws/ {
+        proxy_pass http://127.0.0.1:8766;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_buffering off;
+    }
+
+    client_max_body_size 0;
+}
+```
+
+`grpc_read_timeout`/`grpc_send_timeout` and `proxy_read_timeout`/
+`proxy_send_timeout` at 1h (or any value comfortably above the relay's own
+120s idle timeout) keep nginx from cutting long-lived streams itself;
+`proxy_buffering off` and `client_max_body_size 0` keep it from buffering
+the streaming bodies. Path-prefix variant (`hya proxy --path-prefix
+/relay`): change both `location` blocks to match under `/relay/` and keep
+the prefix in the link/proxy URL:
+
+```nginx
+    location /relay/ {
+        if ($content_type !~ "^application/grpc") { break; }
+        grpc_pass grpc://127.0.0.1:8766;
+    }
+    location /relay/hya.relay.v1/ws/ {
+        proxy_pass http://127.0.0.1:8766;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+```
+
+```sh
+hya proxy --port 8766                      # or: --path-prefix /relay
+hya relay doctor https://relay.example.com
+# expect: gRPC ok, WebSocket ok, recommended t=auto.
+```
+
+### 3. Caddy
+
+Caddy's `reverse_proxy` with an `h2c://` upstream carries both gRPC and
+WebSocket over one directive, and Caddy manages TLS automatically. Targets
+Caddy 2.7+.
+
+```caddyfile
+relay.example.com {
+    reverse_proxy h2c://127.0.0.1:8766 {
+        flush_interval -1
+    }
+}
+```
+
+`flush_interval -1` disables Caddy's response buffering so streaming frames
+are forwarded immediately (needed for both bindings). This is the suite's
+"canary" shape: case (a) (h2c carries both bindings) plus, if you rewrite the
+Host header, case (h).
+
+```sh
+hya proxy --port 8766
+hya relay doctor https://relay.example.com
+# expect: gRPC ok, WebSocket ok, recommended t=auto.
+```
+
+### 4. Tailscale
+
+Two shapes, both avoiding a public listener entirely.
+
+**(a) Plain tailnet, no `tailscale serve`.** Run `hya proxy` directly on a
+tailnet node (it may be the same machine as the backend) and use
+`hya+insecure://` — plaintext toward the first hop is fine here because
+WireGuard already encrypts the tailnet hop and Noise still encrypts the
+relay payload end to end; nothing between the two hosts ever sees plaintext
+application data.
+
+```sh
+hya proxy --host 0.0.0.0 --port 8766
+```
+
+`hya+insecure://`'s default port is **80**, so the link must name `:8766`
+explicitly:
+
+```text
+hya+insecure://100.64.1.2:8766/<room_id>#<key>.<psk>
+# or the tailnet MagicDNS name:
+hya+insecure://myhost.tailnet-name.ts.net:8766/<room_id>#<key>.<psk>
+```
+
+```sh
+hya relay doctor hya+insecure://100.64.1.2:8766
+# expect: gRPC ok, WebSocket ok, recommended t=auto. (Case (i) in the
+# conformance suite: a direct plaintext link, no intermediary at all.)
+```
+
+**(b) `tailscale serve` / `tailscale funnel`.** `tailscale serve` puts
+Tailscale's own HTTPS in front of `hya proxy` on the tailnet (or, with
+`funnel`, on the public internet), so the link becomes a real `hya://`:
+
+```sh
+hya proxy --host 127.0.0.1 --port 8766
+tailscale serve --bg --https=443 http://127.0.0.1:8766
+# public instead of tailnet-only:
+tailscale funnel --bg 443
+```
+
+```text
+hya://myhost.tailnet-name.ts.net/<room_id>#<key>.<psk>
+```
+
+`tailscale serve`/`funnel` terminate TLS and forward over HTTP/1.1, so this
+is cases (b) (TLS) plus (h) (the proxy sees `tailscale serve`'s own
+`Host`/`:authority`, not the public name) in the conformance suite.
+
+```sh
+hya relay doctor https://myhost.tailnet-name.ts.net
+# expect: WebSocket ok; gRPC ok too if tailscale serve's origin carries h2.
+```
+
+### 5. Direct TLS
+
+`hya proxy` can terminate TLS itself with no intermediary at all:
+
+```sh
+hya proxy --port 8766 --tls-cert relay.crt --tls-key relay.key
+```
+
+```text
+hya://relay.example.com:8766/<room_id>#<key>.<psk>
+```
+
+```sh
+hya relay doctor https://relay.example.com:8766
+# expect: gRPC ok, WebSocket ok, recommended t=auto.
+```
+
+## Troubleshooting
+
+Keyed by `hya relay doctor`'s report (see [`hya relay
+doctor`](#hya-relay-doctor)); `docs/troubleshooting.md` links here for the
+short version.
+
+| Doctor says | Likely cause | Fix |
+| --- | --- | --- |
+| gRPC failed `NoHttp2`; WebSocket ok | The hop in front of the proxy is HTTP/1.1-only (default Cloudflare Tunnel origin, many ingresses/PaaS). | Nothing to fix — `t=auto` already picked WebSocket. Enable `http2Origin`/an h2-capable upstream if you want gRPC too. |
+| gRPC failed `TrailersStripped`; WebSocket ok | An HTTP/2-aware hop drops gRPC trailers (`grpc-status`). | Use WebSocket (`t=ws`), or reconfigure the hop to pass trailers through. |
+| Both failed `HopRejected` | A hop answered with its own HTTP error (404/502/…) instead of reaching the relay. | Check the hop's routing/upstream address and that `hya proxy` is actually running on the port it points at. |
+| Both failed `WrongPath` | The link/proxy URL's path prefix does not match the proxy's `--path-prefix`. | Match the prefix on both sides, or drop it from both. |
+| Both failed `Tls` | Wrong certificate, wrong CA, or a host name mismatch. | Pass `--relay-ca <pem>` for a private CA, or check the link/proxy URL host against the certificate's name. |
+| Both failed `Connect` | Wrong host/port, firewall, or the proxy is not running. | Check the address and that `hya proxy` is listening (its own readiness line). |
+| Both failed `Timeout` | A hop buffers streaming responses instead of forwarding them as they arrive. | Disable response buffering on that hop (for nginx: `proxy_buffering off`; see the [nginx recipe](#2-nginx)). |
+| `--measure-idle` reports a cut | An intermediary's idle timeout is shorter than the relay's own heartbeat interval reaching it (rare with the 15s default). | Lower `--relay-heartbeat` (Phase 6) below the hop's idle cut, or configure the hop's idle timeout upward (see the [nginx](#2-nginx)/[Cloudflare Tunnel](#1-cloudflare-tunnel) recipes). |
+| Neither binding works (exit 1) | The path is not reaching a relay at all. | Confirm the proxy is running, the hop's upstream address/port, and DNS for the host in the URL/link. |
