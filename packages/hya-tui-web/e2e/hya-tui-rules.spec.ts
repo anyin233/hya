@@ -23,8 +23,9 @@ test.describe("hya TUI Saved Rules view", () => {
 
     await prompt(term, "/rules")
     await term.waitForText("Saved Rules")
-    await term.waitForText(/EFFECT\s+TOOL\s+PATTERN\s+SAVED/)
-    await term.waitForText(/allow\s+bash/)
+    await term.waitForText(/EFFECT\s+TOOL\s+PATTERN\s+·\s+SAVED/)
+    // Readable row: effect, tool, the exact bash command as the pattern, and a relative "saved" time.
+    await term.waitForText(/allow\s+bash\s+echo saved-rule\s+·\s+\d+s ago/)
     await term.waitForText("↑↓ move · d delete · r refresh · / filter · Esc close")
 
     await term.press("d")

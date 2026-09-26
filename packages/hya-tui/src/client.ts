@@ -393,6 +393,14 @@ export interface StreamEvent {
   todoUpdated?: { items?: TodoItem[] }
   /** A revert (`messageId` set) or its undo (`undone`, `messageId` empty) of the session (durable); re-read the session and its messages. */
   sessionReverted?: { messageId?: string; undone?: boolean; files?: RevertedFile[] }
+  /**
+   * Live-only, empty `session`: the provider/model catalog changed (a
+   * provider added/edited/refreshed, a key set/removed, or startup discovery
+   * finished). Arrives on the global stream and every session stream;
+   * re-read `GET /v1/models` / `GET /v1/providers` (`docs/protocol/README.md`
+   * "Live and durable frames").
+   */
+  catalogUpdated?: Record<string, never>
 }
 
 export interface StreamFrame {
@@ -852,12 +860,13 @@ export class HyaClient {
   }
 
   /**
-   * `StreamGlobalEvents` (`GET /v1/events/stream`): every session's live
-   * frames, for the permission/question asks (and their resolves) of
-   * sessions this TUI does not have open. `sinceSeq` is the largest uint64,
-   * so the server drops every durable event: only live-only frames arrive —
-   * the ask planes' frames (never durable) and in-flight text deltas, which
-   * the caller ignores. No history is replayed.
+   * `StreamGlobalEvents` (`GET /v1/events/stream?interactionsOnly=true`):
+   * every session's live interaction frames (the permission/question asks
+   * and their resolves) of sessions this TUI does not have open, plus
+   * `catalogUpdated`. The server leaves out every session's engine events
+   * (text, tools, messages, status) and their `resync` frames
+   * (`docs/protocol/README.md` "Interactions-only global stream"), so unlike
+   * `streamSession` no history is replayed and no `resync` is expected.
    */
   async streamGlobal(
     onFrame: (frame: StreamFrame) => void | Promise<void>,
@@ -865,7 +874,7 @@ export class HyaClient {
     /** Runs once the stream is subscribed, before any frame is read. */
     onOpen?: () => void | Promise<void>,
   ): Promise<void> {
-    await this.readStream(`/v1/events/stream?sinceSeq=${maxSeq}`, onFrame, signal, onOpen)
+    await this.readStream("/v1/events/stream?interactionsOnly=true", onFrame, signal, onOpen)
   }
 
   /** Open one SSE stream and hand every frame to `onFrame` until it ends or `signal` aborts. */
@@ -902,6 +911,3 @@ export class HyaClient {
     }
   }
 }
-
-/** The largest uint64 `seq`: as a `sinceSeq` it filters out every durable event. */
-const maxSeq = "18446744073709551615"

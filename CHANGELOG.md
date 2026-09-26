@@ -1,5 +1,12 @@
 # 0.41.0
 
+## TUI follows server-side catalog changes and new compaction names
+
+- The TUI's global stream now uses `interactionsOnly=true`, so it no longer receives every session's live text. The model list and providers reload on `catalogUpdated`, so a provider added by another client, or through the API, shows up in the `/model` picker without a restart.
+- Compaction dividers and `/compact` always name the strategy in words, for example `── context compacted · 2 messages · manual · local summary ──` and `Compacted · local summary`.
+- `/rules` rows read `allow  bash  git status  · 2m ago`.
+- Fix: a session that was busy when you opened it no longer shows `running` in the sidebar after its turn ends.
+
 ## One server per database: later TUIs and bare `hya` attach
 
 - `hya serve --db <file>` and bare `hya` now lock the database (`<db>.lock`) and, once listening, write `<db>.server.json` (`{url, pid, version, startedAt}`). A second `hya serve` on the same database exits with status 75 and names the running server's URL and pid.

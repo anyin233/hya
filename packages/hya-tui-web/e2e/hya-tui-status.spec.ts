@@ -200,7 +200,7 @@ test.describe("compaction divider", () => {
     await term.waitForText("First answer before compaction.", 20_000)
     await term.waitForText(/^Ready/m)
     await prompt(term, "/compact")
-    await term.waitForText(/── context compacted · \d+ messages? · manual ──/, 20_000)
+    await term.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
     const divider = await match(term, /── context compacted/)
     expect(divider.row).toBeGreaterThan((await at(term, "First answer before compaction.")).row)
     expect((await term.cell(divider.row, divider.col))?.fg).toBe(colors.muted)
@@ -230,7 +230,7 @@ test.describe("compaction divider in history", () => {
     await first.waitForText("First answer before compaction.", 20_000)
     await first.waitForText(/^Ready/m)
     await prompt(first, "/compact")
-    await first.waitForText(/── context compacted · \d+ messages? · manual ──/, 20_000)
+    await first.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
     await first.waitForText("Summary: the user said hi.", 20_000)
     const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
     await prompt(first, "/exit")

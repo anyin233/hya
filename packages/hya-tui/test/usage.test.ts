@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { compactionText, contextUsage, formatTokens, sessionTokens, statusBarSegments, statusBarText } from "../src/state/format"
+import { compactionText, contextUsage, formatTokens, sessionTokens, statusBarSegments, statusBarText, strategyText } from "../src/state/format"
 import { transcriptViews } from "../src/state/messages"
 import { askFrameRoute } from "../src/state/prompts"
 import { createAppStore } from "../src/state/store"
@@ -80,24 +80,34 @@ test("todoUpdated frames replace the open session's todo list", () => {
   expect(store.state.todos).toEqual([])
 })
 
-test("the compaction divider reads the folded count and manual flag", () => {
-  expect(compactionText({ strategy: "LocalSummarizer", foldedCount: 12, manual: true })).toBe("── context compacted · 12 messages · manual ──")
-  expect(compactionText({ strategy: "Native", foldedCount: 1 })).toBe("── context compacted · 1 message · Native ──")
-  expect(compactionText({ strategy: "SnapCompact" })).toBe("── context compacted · SnapCompact ──")
+test("the compaction divider reads the folded count, manual flag, and human strategy name", () => {
+  expect(compactionText({ strategy: "local_summarizer", foldedCount: 12, manual: true })).toBe("── context compacted · 12 messages · manual · local summary ──")
+  expect(compactionText({ strategy: "native", foldedCount: 1 })).toBe("── context compacted · 1 message · native ──")
+  expect(compactionText({ strategy: "snap_compact" })).toBe("── context compacted · snapshot ──")
+  expect(compactionText({ strategy: "handoff", manual: true })).toBe("── context compacted · manual · handoff ──")
+})
+
+test("strategyText names every known strategy in words; an unknown or missing one falls back", () => {
+  expect(strategyText("native")).toBe("native")
+  expect(strategyText("local_summarizer")).toBe("local summary")
+  expect(strategyText("snap_compact")).toBe("snapshot")
+  expect(strategyText("handoff")).toBe("handoff")
+  expect(strategyText("shake")).toBe("shake")
+  expect(strategyText(undefined)).toBe("unknown")
 })
 
 test("a compaction divider sits right before its summary message (compactionApplied.message)", () => {
   const store = open()
   const text = (id: string, role: string, value: string) => ({ id, role, finish: "FINISH_REASON_STOP", parts: [{ id: `p-${id}`, text: { text: value } }] })
   store.setMessages("hysec_1", [text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello")])
-  store.applyEvent({ seq: "9", session: "hysec_1", compactionApplied: { untilSeq: "9", strategy: "LocalSummarizer", message: "sum", foldedCount: 2, manual: true } })
+  store.applyEvent({ seq: "9", session: "hysec_1", compactionApplied: { untilSeq: "9", strategy: "local_summarizer", message: "sum", foldedCount: 2, manual: true } })
   // The summary message is not read yet: the divider goes at the end.
   expect(transcriptViews(store.state).map((view) => view.role)).toEqual(["user", "assistant", "divider"])
   // It is now: the divider moves right before it, even with later messages after it.
   store.setMessages("hysec_1", [text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello"), text("sum", "ROLE_SYSTEM", "Summary: greeted"), text("m5", "ROLE_USER", "next")])
   const views = transcriptViews(store.state)
   expect(views.map((view) => view.id)).toEqual(["m1", "m2", "divider-9", "sum", "m5"])
-  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · 2 messages · manual ──" })
+  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · 2 messages · manual · local summary ──" })
 })
 
 test("descendant ask frames on the open session's stream are routed to the prompt list, other descendant frames are dropped", () => {

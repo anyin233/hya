@@ -184,7 +184,7 @@ test("streamSession opts in to descendant ask frames with includeDescendants=tru
   ])
 })
 
-test("streamGlobal subscribes to the global stream past every durable seq (live ask frames only)", async () => {
+test("streamGlobal subscribes with interactionsOnly=true (live ask frames and catalogUpdated only)", async () => {
   const urls: string[] = []
   const frames: unknown[] = []
   const client = new HyaClient("http://127.0.0.1:1", "/w", async (input) => {
@@ -193,7 +193,7 @@ test("streamGlobal subscribes to the global stream past every durable seq (live 
   })
   let opened = false
   await client.streamGlobal((frame) => { frames.push(frame) }, new AbortController().signal, () => { opened = true })
-  expect(urls).toEqual(["http://127.0.0.1:1/v1/events/stream?sinceSeq=18446744073709551615"])
+  expect(urls).toEqual(["http://127.0.0.1:1/v1/events/stream?interactionsOnly=true"])
   expect(opened).toBe(true)
   expect(frames).toEqual([{ event: { session: "hysec_9", permissionRequested: { interaction: { id: "perm_1", title: "bash" } } } }])
 })

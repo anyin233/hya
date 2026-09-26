@@ -31,8 +31,9 @@ test("permissionText maps every RulePermission", () => {
   expect(permissionText("RULE_PERMISSION_UNSPECIFIED")).toBe("—")
 })
 
-test("ruleTimeText formats an RFC3339 timestamp, dashes when unset or invalid", () => {
-  expect(ruleTimeText("2026-01-02T03:04:00Z")).toBe("2026-01-02 03:04")
+test("ruleTimeText reads a relative age, dashes when unset or invalid", () => {
+  const now = new Date("2026-01-02T03:06:00Z").getTime()
+  expect(ruleTimeText("2026-01-02T03:04:00Z", now)).toBe("2m ago")
   expect(ruleTimeText(undefined)).toBe("—")
   expect(ruleTimeText("not-a-date")).toBe("—")
 })
@@ -42,9 +43,17 @@ test("ruleLine and ruleHeaderLine fit the given width and show a fallback wildca
   expect(line).toContain("allow")
   expect(line).toContain("bash")
   expect(line).toContain("git *")
+  expect(line).toContain("ago")
   expect(ruleLine(rules[1]!, 80)).toContain("—") // no timeCreated
   expect(ruleHeaderLine(80)).toContain("EFFECT")
   expect(Bun.stringWidth(ruleLine(rules[0]!, 20))).toBeLessThanOrEqual(20)
+})
+
+test("ruleLine keeps a tool-wide grant's empty pattern distinct from an action-wide `*`", () => {
+  const toolWide: SavedRule = { id: "r3", permission: "RULE_PERMISSION_ALLOW", tool: "read", pattern: "" }
+  const actionWide: SavedRule = { id: "r4", permission: "RULE_PERMISSION_ALLOW", tool: "bash", pattern: "*" }
+  expect(ruleLine(toolWide, 80)).not.toContain("*")
+  expect(ruleLine(actionWide, 80)).toContain("*")
 })
 
 test("shownRules filters by tool, pattern, or effect", () => {

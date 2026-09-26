@@ -351,8 +351,8 @@ test.describe("asks of other sessions", () => {
       await term.waitForText("Connected to hya")
       await prompt(term, "/new")
       await term.waitForText(/Created hysec_/, 20_000)
-      // The global stream is open (only live frames: subscribed past every durable seq).
-      await expect.poll(() => proxy.log.some((entry) => entry.path.startsWith("/v1/events/stream?sinceSeq=18446744073709551615"))).toBe(true)
+      // The global stream is open (interactions-only: asks/resolves plus catalogUpdated, no other session's text).
+      await expect.poll(() => proxy.log.some((entry) => entry.path.startsWith("/v1/events/stream?interactionsOnly=true"))).toBe(true)
 
       // Another client runs a turn in a session of its own; its model asks to run bash.
       const started = Date.now()

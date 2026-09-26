@@ -48,6 +48,25 @@ test("opening a session resets the transcript and resumes from its last sequence
   expect(store.state.messages).toEqual([])
 })
 
+test("opening a session syncs its stale sidebar row instead of leaving it running forever (U8b)", () => {
+  const store = createAppStore()
+  store.setSessions([session("hysec_1", { busy: true }), session("hysec_2")])
+  // The list said `busy: true` (e.g. the last full refresh, before the turn ended);
+  // the fresh `GetSession` read at open time is the truth.
+  store.openSession(session("hysec_1", { busy: false, lastSeq: "5" }))
+  expect(store.state.sessions.find((row) => row.id === "hysec_1")?.busy).toBe(false)
+})
+
+test("setSessionBusy flips a sidebar row without touching the others; a no-op change is a no-op mutation", () => {
+  const store = createAppStore()
+  store.setSessions([session("hysec_1", { busy: true }), session("hysec_2", { busy: false })])
+  store.setSessionBusy("hysec_1", false)
+  expect(store.state.sessions.map((row) => [row.id, row.busy])).toEqual([["hysec_1", false], ["hysec_2", false]])
+  const before = store.state.sessions
+  store.setSessionBusy("hysec_2", false)
+  expect(store.state.sessions).toBe(before)
+})
+
 test("advances the stream cursor only forward and tracks the turn state", () => {
   const store = createAppStore()
   store.openSession(session("hysec_1"))

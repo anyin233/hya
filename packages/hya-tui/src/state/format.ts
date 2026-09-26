@@ -205,16 +205,35 @@ export function todosCompactText(items: readonly TodoItem[]): string | undefined
 }
 
 /**
+ * `CompactionApplied.strategy` (`docs/protocol/README.md` "Compaction") in
+ * words: `native` (provider-native compaction), `local_summarizer` (a
+ * model-written summary — also every manual `/compact`), `snap_compact` (a
+ * local dense archive, no model call), or `handoff` (a model-written handoff
+ * document); an unrecognized or missing name is shown as-is (or `unknown`).
+ */
+export function strategyText(strategy: string | undefined): string {
+  switch (strategy) {
+    case "native": return "native"
+    case "local_summarizer": return "local summary"
+    case "snap_compact": return "snapshot"
+    case "handoff": return "handoff"
+    default: return strategy || "unknown"
+  }
+}
+
+/**
  * A `CompactionApplied` transcript divider:
- * `── context compacted · 12 messages · manual ──` for a `/compact` (or
- * `/summarize`), the strategy (`Native`, `SnapCompact`, …) in place of
- * `manual` for a mid-turn compaction; the count is omitted when the event
- * does not carry one.
+ * `── context compacted · 12 messages · manual · local summary ──` for a
+ * `/compact` (or `/summarize`), without `manual` for a mid-turn compaction;
+ * the count is omitted when the event does not carry one. The strategy name
+ * is always shown (`strategyText`) — manual and automatic compactions both
+ * carry one.
  */
 export function compactionText(payload: { untilSeq?: string; strategy?: string; foldedCount?: number | string; manual?: boolean }): string {
   const count = Number(payload.foldedCount ?? 0)
   const folded = count > 0 ? ` · ${count} message${count === 1 ? "" : "s"}` : ""
-  return `── context compacted${folded} · ${payload.manual ? "manual" : payload.strategy || "unknown"} ──`
+  const manual = payload.manual ? " · manual" : ""
+  return `── context compacted${folded}${manual} · ${strategyText(payload.strategy)} ──`
 }
 
 /**

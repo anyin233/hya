@@ -3,7 +3,7 @@ import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
 import { agentRows, modelRows, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { modelReference, sessionTree } from "../state/format"
+import { modelReference, sessionTree, strategyText } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
@@ -270,7 +270,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
       if (!selected) throw new Error("Usage: /compact in a session")
       store.setStatus("Compacting…")
       const result = await client.compactSession(selected.id)
-      store.setStatus(`Compacted · ${result.strategy || "done"}`)
+      store.setStatus(`Compacted · ${result.strategy ? strategyText(result.strategy) : "done"}`)
     },
   },
   {
