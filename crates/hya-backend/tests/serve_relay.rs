@@ -107,7 +107,7 @@ async fn health_through(link: &str) -> Result<String, String> {
     .map_err(|_| "handshake timed out".to_owned())?
     .map_err(|e| e.to_string())?;
     tunnel
-        .write_all(b"GET /v1/health HTTP/1.1\r\nHost: hya\r\nConnection: close\r\n\r\n")
+        .write_all(b"GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .await
         .map_err(|e| e.to_string())?;
     let mut response = Vec::new();

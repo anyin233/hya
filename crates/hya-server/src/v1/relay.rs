@@ -30,6 +30,12 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/relay/rotate", post(rotate))
 }
 
+/// The TCP peer of a gRPC call, set by the gRPC binding on the request it
+/// dispatches through the router (the in-process dispatch has no
+/// `ConnectInfo`). The server sets it; it is never parsed from the wire.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GrpcPeer(pub(crate) SocketAddr);
+
 /// Refuse a request that did not come from the local owner.
 pub(crate) fn require_local_owner(
     extensions: &Extensions,
@@ -41,13 +47,26 @@ pub(crate) fn require_local_owner(
             "relay control is loopback-only: refused for a request that arrived through the relay",
         ));
     }
-    if let Some(ConnectInfo(peer)) = extensions.get::<ConnectInfo<SocketAddr>>()
-        && !peer.ip().is_loopback()
-    {
-        return Err(V1Error::new(
-            Code::PermissionDenied,
-            "relay control is loopback-only: refused for a non-loopback client",
-        ));
+    // Fail closed: a request whose peer is unknown (no TCP `ConnectInfo`,
+    // no gRPC peer) is refused, whatever listener it came from.
+    let peer = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| *peer)
+        .or_else(|| extensions.get::<GrpcPeer>().map(|GrpcPeer(peer)| *peer));
+    match peer {
+        None => {
+            return Err(V1Error::new(
+                Code::PermissionDenied,
+                "relay control is loopback-only: refused for a request whose client address is unknown",
+            ));
+        }
+        Some(peer) if !peer.ip().is_loopback() => {
+            return Err(V1Error::new(
+                Code::PermissionDenied,
+                "relay control is loopback-only: refused for a non-loopback client",
+            ));
+        }
+        Some(_) => {}
     }
     if headers.contains_key("origin") || headers.contains_key("sec-fetch-site") {
         return Err(V1Error::new(

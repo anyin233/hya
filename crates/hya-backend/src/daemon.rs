@@ -51,6 +51,9 @@ pub(crate) struct DaemonSpec {
     pub(crate) model: Option<String>,
     pub(crate) yolo: bool,
     pub(crate) pure: bool,
+    /// `--allow-host` names the daemon accepts besides loopback (Host
+    /// allowlist; docs/cli.md "Allowed Host names").
+    pub(crate) allow_hosts: Vec<String>,
     /// The `hya` binary to run (`std::env::current_exe()`).
     pub(crate) exe: PathBuf,
 }
@@ -209,6 +212,9 @@ fn serve_command(spec: &DaemonSpec, relay: &RelayFlags, dir: &std::path::Path) -
     }
     if spec.pure {
         command.arg("--pure");
+    }
+    for host in &spec.allow_hosts {
+        command.args(["--allow-host", host]);
     }
     if let Some(url) = &relay.relay {
         command.args(["--relay", url]);
@@ -461,6 +467,7 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").into(),
             started_at: 0,
             relay: None,
+            allow_hosts: Vec::new(),
         };
         assert_eq!(version_note(&found), None);
         found.version = "0.0.1".into();
@@ -485,6 +492,7 @@ mod tests {
             model: Some("hya/echo".into()),
             yolo: true,
             pure: true,
+            allow_hosts: vec!["hya.example.lan".into(), "192.168.1.20".into()],
             exe: PathBuf::from("/bin/hya"),
         };
         let command = serve_command(
@@ -509,12 +517,17 @@ mod tests {
                 "--model",
                 "hya/echo",
                 "--yolo",
-                "--pure"
+                "--pure",
+                "--allow-host",
+                "hya.example.lan",
+                "--allow-host",
+                "192.168.1.20"
             ]
         );
         let plain = DaemonSpec {
             model: None,
             yolo: false,
+            allow_hosts: Vec::new(),
             pure: false,
             ..spec
         };
@@ -539,6 +552,7 @@ mod tests {
             model: None,
             yolo: false,
             pure: false,
+            allow_hosts: Vec::new(),
             exe: PathBuf::from("/bin/hya"),
         };
         let relay = RelayFlags {
@@ -580,6 +594,7 @@ mod tests {
             model: None,
             yolo: false,
             pure: false,
+            allow_hosts: Vec::new(),
             exe: PathBuf::from("/nonexistent/hya"),
         };
         let error = start(&spec, Duration::from_millis(10)).await.unwrap_err();

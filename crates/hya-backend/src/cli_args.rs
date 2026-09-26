@@ -68,6 +68,16 @@ pub(crate) struct Cli {
         requires = "connect"
     )]
     pub(crate) connect_transport: Option<String>,
+    /// Accept this Host name (a host name or IP address, no port) besides
+    /// `localhost`, `127.0.0.1`, and `[::1]` on the backend daemon bare
+    /// `hya` starts (repeatable; the Host allowlist, docs/cli.md "Allowed
+    /// Host names"). Only for bare `hya` without `--backend`/`--connect`.
+    #[arg(
+        long = "allow-host",
+        value_name = "HOST",
+        conflicts_with_all = ["backend", "connect"]
+    )]
+    pub(crate) allow_host: Vec<String>,
     /// Open this session in the terminal TUI and unarchive it; without an
     /// id, pick one of the directory's sessions (archived ones included).
     /// Only for bare `hya`.
@@ -280,6 +290,14 @@ pub(crate) enum Command {
         /// Accepted for Compat CLI compatibility; hya mirrors CORS origins globally.
         #[arg(long)]
         cors: Vec<String>,
+        /// Accept requests whose Host names HOST (a host name or IP
+        /// address, no port) besides `localhost`, `127.0.0.1`, and `[::1]`
+        /// (repeatable; also after `start`/`restart`). Every other Host is
+        /// refused with 403 (DNS rebinding); a non-wildcard `--bind` host is
+        /// accepted by itself, a wildcard bind (`0.0.0.0`, `--mdns`) needs
+        /// the LAN names here.
+        #[arg(long = "allow-host", value_name = "HOST", global = true)]
+        allow_host: Vec<String>,
         /// Override global SQLite database path for this server (also after
         /// `start`, `status`, `stop`, `restart`).
         #[arg(long, global = true)]
@@ -488,6 +506,53 @@ pub(crate) fn bare_backend(cli: &Cli) -> anyhow::Result<Option<String>> {
         anyhow::bail!("--backend needs an http:// or https:// URL, got {url:?}");
     }
     Ok(Some(trimmed.to_string()))
+}
+
+/// Bare `hya`'s `--allow-host` names (normalized) for the daemon it starts.
+/// Only without a subcommand or `-p`.
+pub(crate) fn bare_allow_hosts(cli: &Cli) -> anyhow::Result<Vec<String>> {
+    if cli.allow_host.is_empty() {
+        return Ok(Vec::new());
+    }
+    if cli.command.is_some() || cli.prompt.is_some() {
+        anyhow::bail!("--allow-host applies to bare `hya` and `hya serve`; put it after `serve`");
+    }
+    allow_host_names(&cli.allow_host)
+}
+
+/// `--allow-host` values checked and normalized (lowercase, IPv6 in
+/// brackets), loopback names dropped.
+pub(crate) fn allow_host_names(names: &[String]) -> anyhow::Result<Vec<String>> {
+    hya_server::HostPolicy::with_hosts(names)
+        .map(|policy| policy.extra_hosts())
+        .map_err(anyhow::Error::msg)
+}
+
+/// The Host allowlist of `hya serve --bind <bind> --allow-host …`: the
+/// `--allow-host` names, plus the bind host unless it is a wildcard
+/// (`0.0.0.0`, `::`) or loopback.
+pub(crate) fn serve_host_policy(
+    bind: &str,
+    allow_hosts: &[String],
+) -> anyhow::Result<hya_server::HostPolicy> {
+    let host = bind
+        .rsplit_once(':')
+        .map_or(bind, |(host, _port)| host)
+        .trim();
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    let wildcard = bare.is_empty()
+        || bare == "*"
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_unspecified());
+    let mut names = allow_hosts.to_vec();
+    if !wildcard && hya_server::HostPolicy::with_hosts([bare]).is_ok() {
+        names.push(bare.to_owned());
+    }
+    hya_server::HostPolicy::with_hosts(&names).map_err(anyhow::Error::msg)
 }
 
 /// Bare `hya`'s `--connect [LINK]`: where the relay link comes from, and
@@ -1109,6 +1174,59 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("only applies to bare"), "{error}");
+    }
+
+    #[test]
+    fn allow_host_is_repeatable_on_serve_start_restart_and_bare_hya() {
+        let cli = parse([
+            "hya",
+            "serve",
+            "--allow-host",
+            "Hya.Example.Lan",
+            "--allow-host",
+            "192.168.1.20",
+            "--bind",
+            "0.0.0.0:8080",
+        ]);
+        match cli.command {
+            Some(super::Command::Serve { allow_host, .. }) => {
+                assert_eq!(allow_host, ["Hya.Example.Lan", "192.168.1.20"]);
+                assert_eq!(
+                    super::allow_host_names(&allow_host).unwrap(),
+                    ["192.168.1.20", "hya.example.lan"]
+                );
+            }
+            _ => panic!("serve"),
+        }
+        for action in ["start", "restart"] {
+            let cli = parse(["hya", "serve", action, "--allow-host", "hya.lan"]);
+            match cli.command {
+                Some(super::Command::Serve { allow_host, .. }) => {
+                    assert_eq!(allow_host, ["hya.lan"], "{action}");
+                }
+                _ => panic!("serve {action}"),
+            }
+        }
+        let bare = parse(["hya", "--allow-host", "hya.lan"]);
+        assert_eq!(super::bare_allow_hosts(&bare).unwrap(), ["hya.lan"]);
+        assert!(
+            Cli::try_parse_from(["hya", "--allow-host", "x", "--backend", "http://h:1"]).is_err()
+        );
+        assert!(super::allow_host_names(&["host:8080".into()]).is_err());
+    }
+
+    #[test]
+    fn a_specific_bind_host_is_allowed_a_wildcard_one_is_not() {
+        let hosts = |bind: &str| super::serve_host_policy(bind, &[]).unwrap().extra_hosts();
+        assert!(hosts("127.0.0.1:8080").is_empty());
+        assert!(hosts("0.0.0.0:8080").is_empty());
+        assert!(hosts("[::]:8080").is_empty());
+        assert_eq!(hosts("192.168.1.5:8080"), ["192.168.1.5"]);
+        assert_eq!(hosts("[fe80::1]:8080"), ["[fe80::1]"]);
+        assert_eq!(hosts("MyBox:8080"), ["mybox"]);
+        let policy = super::serve_host_policy("0.0.0.0:8080", &["hya.lan".into()]).unwrap();
+        assert!(policy.allows("hya.lan:8080"));
+        assert!(!policy.allows("192.168.1.5:8080"));
     }
 
     #[test]

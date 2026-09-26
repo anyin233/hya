@@ -82,6 +82,24 @@ impl V1Grpc {
         Req: Serialize,
         Resp: DeserializeOwned,
     {
+        self.dispatch_from(None, method, path, query, request).await
+    }
+
+    /// [`Self::dispatch`] recording the gRPC call's TCP peer (`GrpcPeer`)
+    /// for the loopback-only rpcs.
+    #[allow(clippy::result_large_err)]
+    async fn dispatch_from<Req, Resp>(
+        &self,
+        peer: Option<std::net::SocketAddr>,
+        method: &str,
+        path: &str,
+        query: impl IntoIterator<Item = (String, String)>,
+        request: &Req,
+    ) -> Result<Resp, Status>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
         let mut uri = String::from(path);
         for (index, (key, value)) in query.into_iter().enumerate() {
             uri.push(if index == 0 { '?' } else { '&' });
@@ -96,9 +114,14 @@ impl V1Grpc {
         if let Ok(value) = HeaderValue::from_str(&body_len(&body)) {
             builder = builder.header("content-length", value);
         }
-        let http_request = builder
+        let mut http_request = builder
             .body(Body::from(body))
             .map_err(|error| Status::internal(format!("build request: {error}")))?;
+        if let Some(peer) = peer {
+            http_request
+                .extensions_mut()
+                .insert(super::relay::GrpcPeer(peer));
+        }
         let mut router = self.router.clone();
         use tower::Service;
         let response = router
@@ -1529,17 +1552,62 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
 }
 
 // ---------------------------------------------------------------------------
-// RelayControl (loopback-only: a non-loopback gRPC peer is refused here; the
-// in-process dispatch below carries no relay origin)
+// RelayControl (loopback-only: a non-loopback or unknown gRPC peer is
+// refused here; the in-process dispatch carries the peer as `GrpcPeer`, so
+// the router's check sees it too, and no relay origin)
 // ---------------------------------------------------------------------------
 
+/// The loopback peer of a relay-control call; fails closed (an unknown
+/// peer is refused).
 #[allow(clippy::result_large_err)]
-fn require_loopback_peer<T>(request: &GrpcRequest<T>) -> Result<(), Status> {
+fn require_loopback_peer<T>(request: &GrpcRequest<T>) -> Result<std::net::SocketAddr, Status> {
     match request.remote_addr() {
-        Some(peer) if !peer.ip().is_loopback() => Err(Status::permission_denied(
+        Some(peer) if peer.ip().is_loopback() => Ok(peer),
+        Some(_) => Err(Status::permission_denied(
             "relay control is loopback-only: refused for a non-loopback client",
         )),
-        _ => Ok(()),
+        None => Err(Status::permission_denied(
+            "relay control is loopback-only: refused for a request whose client address is unknown",
+        )),
+    }
+}
+
+impl V1Grpc {
+    #[allow(clippy::result_large_err)]
+    async fn relay_post<Req, Resp>(
+        &self,
+        path: &str,
+        request: GrpcRequest<Req>,
+    ) -> Result<GrpcResponse<Resp>, Status>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        let peer = require_loopback_peer(&request)?;
+        let inner = request.into_inner();
+        into_response(
+            self.dispatch_from(Some(peer), "POST", path, BTreeMap::new(), &inner)
+                .await?,
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    async fn relay_get<Req, Resp>(
+        &self,
+        path: &str,
+        request: GrpcRequest<Req>,
+    ) -> Result<GrpcResponse<Resp>, Status>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        let peer = require_loopback_peer(&request)?;
+        let inner = request.into_inner();
+        let query = query_of(&inner);
+        into_response(
+            self.dispatch_from(Some(peer), "GET", path, query, &inner)
+                .await?,
+        )
     }
 }
 
@@ -1549,39 +1617,34 @@ impl pb::relay_control_server::RelayControl for V1Grpc {
         &self,
         request: GrpcRequest<pb::ConnectRelayRequest>,
     ) -> Result<GrpcResponse<pb::ConnectRelayResponse>, Status> {
-        require_loopback_peer(&request)?;
-        unary!(self, "POST", "/v1/relay/connect", request)
+        self.relay_post("/v1/relay/connect", request).await
     }
 
     async fn disconnect_relay(
         &self,
         request: GrpcRequest<pb::DisconnectRelayRequest>,
     ) -> Result<GrpcResponse<pb::RelayStatus>, Status> {
-        require_loopback_peer(&request)?;
-        unary!(self, "POST", "/v1/relay/disconnect", request)
+        self.relay_post("/v1/relay/disconnect", request).await
     }
 
     async fn get_relay_status(
         &self,
         request: GrpcRequest<pb::GetRelayStatusRequest>,
     ) -> Result<GrpcResponse<pb::RelayStatus>, Status> {
-        require_loopback_peer(&request)?;
-        get_rpc!(self, "/v1/relay/status", request)
+        self.relay_get("/v1/relay/status", request).await
     }
 
     async fn get_relay_link(
         &self,
         request: GrpcRequest<pb::GetRelayLinkRequest>,
     ) -> Result<GrpcResponse<pb::RelayLinkResponse>, Status> {
-        require_loopback_peer(&request)?;
-        get_rpc!(self, "/v1/relay/link", request)
+        self.relay_get("/v1/relay/link", request).await
     }
 
     async fn rotate_relay_key(
         &self,
         request: GrpcRequest<pb::RotateRelayKeyRequest>,
     ) -> Result<GrpcResponse<pb::RelayLinkResponse>, Status> {
-        require_loopback_peer(&request)?;
-        unary!(self, "POST", "/v1/relay/rotate", request)
+        self.relay_post("/v1/relay/rotate", request).await
     }
 }
