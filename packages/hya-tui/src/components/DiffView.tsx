@@ -62,7 +62,19 @@ export function DiffView() {
         const fileListWidth = () => Math.min(36, Math.max(16, Math.floor(size().width * 0.28)))
         const file = () => currentDiffFile(open())
         const empty = () => (store.state.gitBranch ? "No changes" : "Not a git repository")
-        const fileWindow = () => diffFileWindow(open().files, open().current, Math.max(1, size().height - 12))
+        // The file list panel's own border (2) + the outer border (2) + the
+        // "N files changed" line (1) reserve 5 rows; 2 more cover the
+        // `↑/↓ N more` indicators (both can show when scrolled to the
+        // middle) so the window never overflows past the panel's border.
+        // A flatter guess here used to leave a blank band above the border
+        // (T1f, following the same fix on the /mcp detail tool list).
+        // The file list panel's own border (2) + the outer border (2) + the
+        // "N files changed" line (1) reserve 5 rows; 2 more cover the
+        // `↑/↓ N more` indicators (both can show when scrolled to the
+        // middle) so the window never overflows past the panel's border.
+        // A flatter guess here used to leave a blank band above the border
+        // (T1f, following the same fix on the /mcp detail tool list).
+        const fileWindow = () => diffFileWindow(open().files, open().current, Math.max(1, size().height - 7))
         const shownFiles = () => {
           const window = fileWindow()
           return open().files.slice(window.start, window.end)

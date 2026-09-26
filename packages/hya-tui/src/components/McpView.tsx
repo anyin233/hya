@@ -5,6 +5,7 @@
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
+import { wrapLineCount } from "../state/layout"
 import { pickerWindow } from "../state/picker"
 import { mcpToolIndex, mcpToolLabel, mcpToolWindow, mcpViewHint, serverHeaderLine, serverLine, serverStateText, shownServers, type McpBusy, type McpNotice, type McpViewState } from "../state/mcp"
 import { colors } from "../theme"
@@ -39,15 +40,40 @@ export function McpView() {
         const detail = () => open().screen === "detail"
         const server = () => store.state.mcpServers.find((row) => row.name === open().server)
         const rows = () => shownServers(open(), store.state.mcpServers)
+        const contentWidth = () => Math.max(1, size().width - 4)
+        // Rows the lines below the flexGrow list box use: the auth pop-up
+        // (or busy line), a notice, the filter line, and the hint. The hint
+        // and notice/auth text wrap (wrapMode="word"), so measure them
+        // instead of a flat guess — a flat height-12 used to leave a blank
+        // band above the hint on the detail screen (T1f).
+        const footerRows = () => {
+          const auth = open().auth
+          let extra = 0
+          if (auth) extra += wrapLineCount(`Open ${auth.url} (copied to the clipboard)`, contentWidth()) + 1
+          else if (open().busy) extra += 1
+          const notice = open().notice
+          if (notice) extra += wrapLineCount(notice.text, contentWidth())
+          if (open().filtering || open().filter) extra += 1
+          extra += wrapLineCount(mcpViewHint(open()), contentWidth())
+          return extra
+        }
         const shown = () => {
           const all = rows()
           const at = Math.max(0, all.findIndex((row) => row.name === open().server))
-          const visible = Math.max(3, size().height - 10)
+          // border (2) + the header line (1) + footerRows(); the server list
+          // has no `N more` indicator rows.
+          const visible = Math.max(3, size().height - 3 - footerRows())
           const window = pickerWindow(all.length, at, visible)
           return all.slice(window.start, window.end)
         }
         const tools = () => server()?.tools ?? []
-        const toolWindow = () => mcpToolWindow(tools().length, mcpToolIndex(open()), Math.max(1, size().height - 12))
+        const toolWindow = () => {
+          // Same reservation as `shown`, plus up to 2 rows for the tool
+          // list's own `↑/↓ N more` indicators (both can show at once when
+          // scrolled to the middle).
+          const visible = Math.max(1, size().height - 3 - footerRows() - 2)
+          return mcpToolWindow(tools().length, mcpToolIndex(open()), visible)
+        }
         const shownTools = () => {
           const window = toolWindow()
           return tools().slice(window.start, window.end).map((tool, offset) => ({ tool, at: window.start + offset }))
