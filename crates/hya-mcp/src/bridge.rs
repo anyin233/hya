@@ -269,6 +269,7 @@ mod tests {
             formatter: hya_tool::FormatterPlane::default(),
             agents: Default::default(),
             workdir: std::env::temp_dir(),
+            roots: vec![std::env::temp_dir()],
             cancel: CancellationToken::new(),
         }
     }

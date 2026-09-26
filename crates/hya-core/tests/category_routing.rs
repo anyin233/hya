@@ -177,6 +177,8 @@ async fn four_categories_drive_four_distinct_model_calls() {
             agent: AgentName::new("build"),
             model: ModelRef::new("base"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

@@ -75,6 +75,9 @@ struct TurnExecution<'a> {
     agents: Arc<[AgentDef]>,
     cancel: &'a CancellationToken,
     external_dirs: &'a [PathBuf],
+    /// Workspace roots resolved at this turn's start (ADR-0024); every tool
+    /// call of the turn carries them in `ToolCtx::roots`.
+    roots: Arc<[PathBuf]>,
     actor_claim: Option<&'a ActorClaim>,
     /// Immutable triggering-turn guidance scoped into child SpawnerPlane.
     guidance: Option<Arc<str>>,
@@ -769,6 +772,11 @@ impl SessionEngine {
                     false,
                 ),
             };
+        // Read fresh per turn so a Project edit applies to the next turn.
+        let roots: Arc<[PathBuf]> = self
+            .session_roots(session, &projection, binding.workdir())
+            .await
+            .into();
         let sidecar_hooks = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.hook_dispatcher())
@@ -883,6 +891,7 @@ impl SessionEngine {
                 agents,
                 cancel: &cancel,
                 external_dirs,
+                roots: Arc::clone(&roots),
                 actor_claim,
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
@@ -1146,6 +1155,7 @@ impl SessionEngine {
             cancel,
             apply_default_overlays,
             external_dirs,
+            roots,
             actor_claim,
             guidance,
             workflow_route,
@@ -1968,6 +1978,7 @@ impl SessionEngine {
                                     lsp: self.lsp.clone(),
                                     formatter: self.formatter.clone(),
                                     workdir: binding.workdir().to_path_buf(),
+                                    roots: roots.to_vec(),
                                     cancel: cancel.clone(),
                                 };
                                 // Permission and plugin hooks can await. Recheck at the

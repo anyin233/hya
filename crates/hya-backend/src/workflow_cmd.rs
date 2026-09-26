@@ -167,6 +167,8 @@ impl WorkflowRuntime {
                     agent: agent.name.clone(),
                     model,
                     workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 })
                 .await
                 .context("create workflow Session")?

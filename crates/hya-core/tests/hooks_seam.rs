@@ -174,6 +174,8 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -287,6 +289,8 @@ async fn hooks_fire_once_per_event_and_pass_through() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -357,6 +361,8 @@ async fn tool_after_cannot_mask_permission_denial() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -435,6 +441,8 @@ async fn normal_turn_after_hook_rewrite_removes_unpublished_bash_artifact() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -554,6 +562,8 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -563,6 +573,8 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
             agent: AgentName::new("explore"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -572,6 +584,8 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
             agent: AgentName::new("explore"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

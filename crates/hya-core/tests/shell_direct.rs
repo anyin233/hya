@@ -84,6 +84,8 @@ async fn direct_shell_runs_command_and_records_tool_part() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -199,6 +201,8 @@ async fn policy_engine(
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -415,6 +419,8 @@ async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

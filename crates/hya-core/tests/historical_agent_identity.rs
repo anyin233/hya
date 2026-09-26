@@ -152,6 +152,8 @@ async fn create_historical_session(
             agent: AgentName::new(HISTORICAL_AGENT),
             model: ModelRef::new("session-model"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create historical session")
@@ -234,6 +236,8 @@ async fn historical_agent_name_survives_read_only_fork_copy_without_catalog_look
                 .clone()
                 .unwrap_or_else(|| ModelRef::new("session-model")),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("fork create with historical identity");
@@ -355,6 +359,8 @@ async fn forked_historical_session_continue_fails_definition_missing_before_prov
                 .expect("source agent"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

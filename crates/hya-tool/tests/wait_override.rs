@@ -35,6 +35,7 @@ fn ctx(lifecycle: LifecyclePlane) -> hya_tool::ToolCtx {
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: std::path::PathBuf::from("."),
+        roots: vec![std::path::PathBuf::from(".")],
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }

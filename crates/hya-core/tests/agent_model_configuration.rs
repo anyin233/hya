@@ -111,6 +111,8 @@ async fn session(engine: &SessionEngine, id: SessionId, parent: Option<SessionId
                 agent: AgentName::new("general"),
                 model: model("base"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         )
         .await

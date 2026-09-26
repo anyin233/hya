@@ -148,6 +148,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         agents: Default::default(),
         lsp: LspPlane::default(),
         workdir: PathBuf::from("/tmp/bundle-apis"),
+        roots: vec![PathBuf::from("/tmp/bundle-apis")],
         cancel: CancellationToken::new(),
     }
 }

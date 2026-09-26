@@ -96,6 +96,8 @@ async fn compat_prompt_files_are_replayed_as_media_parts() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -180,6 +182,8 @@ async fn text_file_reference_stays_file_context_with_native_guidance() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -335,6 +339,8 @@ async fn image_attachment_reaches_responses_and_replays_in_order() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

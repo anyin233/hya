@@ -210,6 +210,8 @@ async fn fixture_with_hooks(
             agent: agent_name,
             model: ModelRef::new(session_model),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

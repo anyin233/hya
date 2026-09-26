@@ -3834,6 +3834,8 @@ flowchart TD
                 agent: base.name.clone(),
                 model: base.model.clone(),
                 workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap();
@@ -3875,6 +3877,7 @@ flowchart TD
             lsp: LspPlane::default(),
             formatter: FormatterPlane::default(),
             agents: Default::default(),
+            roots: vec![workdir.clone()],
             workdir,
             cancel: CancellationToken::new(),
         };
@@ -6606,6 +6609,8 @@ export default {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .expect("create E2E lead");
@@ -6846,6 +6851,8 @@ export default {
                 agent: AgentName::new("root-hook-agent"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .expect("create root Bun hook session");
@@ -6986,6 +6993,8 @@ export default {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .expect("create resident E2E lead");
@@ -7240,6 +7249,8 @@ export default {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .expect("create resident loss lead");
@@ -7573,6 +7584,8 @@ for line in sys.stdin:
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .expect("create resident running loss lead");
@@ -8750,6 +8763,7 @@ export default {
             agents: Default::default(),
             lsp: LspPlane::default(),
             workdir: PathBuf::from("."),
+            roots: vec![PathBuf::from(".")],
             cancel: Default::default(),
         };
         let cancel = ctx.cancel.clone();

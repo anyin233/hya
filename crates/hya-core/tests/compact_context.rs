@@ -103,6 +103,8 @@ async fn compact_context_prunes_prior_messages_from_next_provider_request() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("session");

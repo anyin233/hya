@@ -54,6 +54,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }

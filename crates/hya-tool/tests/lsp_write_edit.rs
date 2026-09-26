@@ -117,6 +117,7 @@ fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolC
         lsp,
         formatter,
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }

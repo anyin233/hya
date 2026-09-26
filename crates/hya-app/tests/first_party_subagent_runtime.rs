@@ -96,6 +96,8 @@ async fn installed_subagent_bundle_spawns_a_resident_worker_that_replays_mail() 
             agent: base.name,
             model: base.model,
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

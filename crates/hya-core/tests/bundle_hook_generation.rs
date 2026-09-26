@@ -125,6 +125,8 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create session");

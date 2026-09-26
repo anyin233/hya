@@ -35,6 +35,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
     let (interaction, _irx) = InteractionPlane::new();
     let operation = ToolOperation::from_tool_call(ToolCallId::new());
+    let workdir = tempdir();
     ToolCtx {
         workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
@@ -52,7 +53,8 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: std::sync::Arc::<[AgentDef]>::from([]),
-        workdir: tempdir(),
+        roots: vec![workdir.clone()],
+        workdir,
         cancel: CancellationToken::new(),
     }
 }

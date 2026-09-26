@@ -83,6 +83,8 @@ async fn command_execute_before_mutates_text_before_user_message_is_admitted() {
             agent: AgentName::new("build"),
             model: ModelRef::new("hya/offline"),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

@@ -154,6 +154,8 @@ async fn make_session(engine: &SessionEngine, parent: Option<SessionId>, agent: 
             agent: AgentName::new(agent),
             model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap()

@@ -422,6 +422,7 @@ for line in sys.stdin:
             formatter: hya_tool::FormatterPlane::default(),
             agents: Default::default(),
             workdir: std::path::PathBuf::from("."),
+            roots: vec![std::path::PathBuf::from(".")],
             cancel: CancellationToken::new(),
         }
     }

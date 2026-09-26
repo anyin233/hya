@@ -150,6 +150,8 @@ async fn list_info_select_state_and_stale_revision_share_one_catalog_contract() 
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: root.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create Session");
@@ -398,6 +400,8 @@ async fn selected_run_rejects_same_name_source_substitution() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: root.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create Session");
@@ -471,6 +475,8 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: root.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create Session");
@@ -834,6 +840,8 @@ async fn workflow_catalog_precedence_revision_and_binding_contract() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: control_root.display().to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create first-party control Session");

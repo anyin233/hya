@@ -98,6 +98,8 @@ async fn run_turn(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

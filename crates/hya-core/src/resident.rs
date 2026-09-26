@@ -3655,6 +3655,8 @@ impl ResidentSupervisor {
                             agent: agent.name.clone(),
                             model: agent.model.clone(),
                             workdir: agent.workdir.to_string_lossy().into_owned(),
+                            project: None,
+                            kind: hya_proto::SessionKind::Project,
                         },
                     )
                     .await?
@@ -3666,6 +3668,8 @@ impl ResidentSupervisor {
                         agent: agent.name.clone(),
                         model: agent.model.clone(),
                         workdir: agent.workdir.to_string_lossy().into_owned(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
                     })
                     .await?
             }

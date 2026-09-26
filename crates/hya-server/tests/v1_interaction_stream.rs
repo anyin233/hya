@@ -525,6 +525,8 @@ async fn session_tree(state: &AppState) -> (SessionId, SessionId, SessionId) {
         agent: AgentName::new("build"),
         model: ModelRef::new("fake"),
         workdir: std::env::temp_dir().to_string_lossy().into_owned(),
+        project: None,
+        kind: hya_proto::SessionKind::Project,
     };
     let root = state.engine.create(create(None)).await.unwrap();
     let child = state.engine.create(create(Some(root))).await.unwrap();

@@ -67,6 +67,8 @@ async fn tool_errors_record_structured_payload_for_provider_replay() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

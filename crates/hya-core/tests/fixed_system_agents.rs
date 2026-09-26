@@ -305,6 +305,8 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-fallback-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -368,6 +370,8 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-fallback-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -421,6 +425,8 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -491,6 +497,8 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -588,6 +596,8 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -660,6 +670,8 @@ async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -714,6 +726,8 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -752,6 +766,8 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -790,6 +806,8 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -949,6 +967,8 @@ async fn title_generation_usage_is_attributed_to_the_session_with_title_purpose(
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1017,6 +1037,8 @@ async fn compaction_usage_is_attributed_with_compaction_purpose() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

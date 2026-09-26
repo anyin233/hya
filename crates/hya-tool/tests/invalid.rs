@@ -31,6 +31,7 @@ async fn invalid_tool_reports_argument_error_in_open_code_shape() {
                 formatter: hya_tool::FormatterPlane::default(),
                 agents: Default::default(),
                 workdir: std::path::PathBuf::from("."),
+                roots: vec![std::path::PathBuf::from(".")],
                 cancel: tokio_util::sync::CancellationToken::new(),
             },
             json!({ "tool": "read", "error": "missing path" }),

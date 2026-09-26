@@ -59,6 +59,7 @@ fn ctx_with_rules(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -501,6 +502,7 @@ async fn read_authorizes_lexical_external_path_before_metadata_probe() {
         lsp: hya_tool::LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     };

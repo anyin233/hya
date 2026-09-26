@@ -950,6 +950,8 @@ mod tests {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap();
@@ -1004,6 +1006,8 @@ mod tests {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap();
@@ -1054,6 +1058,8 @@ mod tests {
                 agent: AgentName::new("resident"),
                 model: ModelRef::new("fake"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap();

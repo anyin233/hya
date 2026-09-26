@@ -116,6 +116,8 @@ async fn team(rng: Option<Box<dyn HandleRng>>) -> Team {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -304,6 +306,8 @@ async fn old_counter_handles_keep_resolving_next_to_new_names() {
             agent: AgentName::new("scout"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

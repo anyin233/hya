@@ -40,6 +40,7 @@ fn ctx_with(mailbox: MailboxPlane, session: SessionId) -> ToolCtx {
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

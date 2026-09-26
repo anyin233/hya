@@ -1,5 +1,6 @@
 //! Integration tests for `hya-core`: ADR-0024 session Project and kind.
-//! A subagent session's `SessionCreated` carries its parent's Project and kind.
+//! A root session records the Project and kind it was created with; a
+//! subagent session's `SessionCreated` carries its parent's instead.
 
 #![allow(clippy::unwrap_used)]
 
@@ -28,11 +29,21 @@ async fn engine() -> SessionEngine {
 }
 
 fn spec(parent: Option<SessionId>) -> CreateSession {
+    spec_in(parent, None, SessionKind::Project)
+}
+
+fn spec_in(
+    parent: Option<SessionId>,
+    project: Option<ProjectId>,
+    kind: SessionKind,
+) -> CreateSession {
     CreateSession {
         parent,
         agent: AgentName::new("build"),
         model: ModelRef::new("fake"),
         workdir: "/tmp/hya-core-session-project".to_string(),
+        project,
+        kind,
     }
 }
 
@@ -67,8 +78,19 @@ async fn subagent_session_inherits_parent_project_and_kind() {
     let project = ProjectId::new();
     let root = root_with(&engine, Some(project), SessionKind::Project).await;
 
-    let child = engine.create(spec(Some(root))).await.unwrap();
-    let grandchild = engine.create(spec(Some(child))).await.unwrap();
+    // A subagent's own spec never overrides its parent's Project or kind.
+    let child = engine
+        .create(spec_in(
+            Some(root),
+            Some(ProjectId::new()),
+            SessionKind::Project,
+        ))
+        .await
+        .unwrap();
+    let grandchild = engine
+        .create(spec_in(Some(child), None, SessionKind::Temporary))
+        .await
+        .unwrap();
 
     for session in [child, grandchild] {
         let projection = engine.read_projection(session).await.unwrap();
@@ -90,11 +112,52 @@ async fn subagent_of_temporary_session_is_temporary() {
 }
 
 #[tokio::test]
-async fn root_session_records_no_project_yet() {
+async fn root_session_without_a_project_records_none() {
     let engine = engine().await;
     let root = engine.create(spec(None)).await.unwrap();
 
     let projection = engine.read_projection(root).await.unwrap();
     assert_eq!(projection.session.project, None);
     assert_eq!(projection.session.kind, SessionKind::Project);
+}
+
+#[tokio::test]
+async fn root_session_records_its_project_and_kind() {
+    let engine = engine().await;
+    let project = ProjectId::new();
+
+    let in_project = engine
+        .create(spec_in(None, Some(project), SessionKind::Project))
+        .await
+        .unwrap();
+    let temporary = engine
+        .create(spec_in(None, None, SessionKind::Temporary))
+        .await
+        .unwrap();
+
+    let projection = engine.read_projection(in_project).await.unwrap();
+    assert_eq!(projection.session.project, Some(project));
+    assert_eq!(projection.session.kind, SessionKind::Project);
+    let projection = engine.read_projection(temporary).await.unwrap();
+    assert_eq!(projection.session.project, None);
+    assert_eq!(projection.session.kind, SessionKind::Temporary);
+}
+
+#[tokio::test]
+async fn temporary_root_session_cannot_name_a_project() {
+    let engine = engine().await;
+
+    let error = engine
+        .create(spec_in(
+            None,
+            Some(ProjectId::new()),
+            SessionKind::Temporary,
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, hya_core::CoreError::Invalid(_)),
+        "unexpected error: {error:?}"
+    );
 }

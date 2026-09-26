@@ -255,6 +255,8 @@ async fn root_session(
             agent: AgentName::new(agent),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap()

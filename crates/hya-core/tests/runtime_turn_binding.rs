@@ -146,6 +146,8 @@ async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_d
             agent: AgentName::new("build"),
             model: ModelRef::new("gated/model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

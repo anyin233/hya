@@ -7656,6 +7656,7 @@ agent:
             lsp: hya_tool::LspPlane::default(),
             formatter: hya_tool::FormatterPlane::default(),
             workdir: workdir.to_path_buf(),
+            roots: vec![workdir.to_path_buf()],
             cancel: tokio_util::sync::CancellationToken::new(),
         }
     }

@@ -53,6 +53,8 @@ async fn make_root(engine: &SessionEngine) -> SessionId {
             agent: AgentName::new("build"),
             model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap()
@@ -65,6 +67,8 @@ async fn make_child(engine: &SessionEngine, root: SessionId) -> SessionId {
             agent: AgentName::new("general"),
             model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap()

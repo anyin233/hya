@@ -240,6 +240,8 @@ async fn compaction_replace_instructions_reach_the_summarizer() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -302,6 +304,8 @@ async fn compaction_skip_on_overflow_falls_back_to_builtin() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -367,6 +371,8 @@ async fn session_lifecycle_hooks_fire_best_effort() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -410,6 +416,8 @@ async fn agent_spawn_hook_fires_on_member_registration() {
             agent: agent_spec.name.clone(),
             model: agent_spec.model.clone(),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

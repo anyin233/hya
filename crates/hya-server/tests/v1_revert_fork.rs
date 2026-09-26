@@ -461,3 +461,33 @@ async fn a_fork_is_titled_after_its_source_and_keeps_that_title() {
         "automatic titling never renames a fork"
     );
 }
+
+#[tokio::test]
+async fn a_fork_keeps_its_source_project_and_kind() {
+    let fx = fixture("v1-fork-project", Vec::new()).await;
+    let project = hya_proto::ProjectId::new();
+    for (project, kind) in [
+        (Some(project), hya_proto::SessionKind::Project),
+        (None, hya_proto::SessionKind::Temporary),
+    ] {
+        let source = fx
+            .engine
+            .create(hya_core::CreateSession {
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: fx.dir.to_string_lossy().into_owned(),
+                project,
+                kind,
+            })
+            .await
+            .unwrap();
+
+        let (status, forked) = fx.fork(&source.to_string(), json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{forked}");
+        let fork: SessionId = forked["session"]["id"].as_str().unwrap().parse().unwrap();
+        let projection = fx.engine.read_projection(fork).await.unwrap();
+        assert_eq!(projection.session.project, project);
+        assert_eq!(projection.session.kind, kind);
+    }
+}

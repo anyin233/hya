@@ -100,6 +100,7 @@ fn ctx_with_components(
         lsp,
         formatter,
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel,
     }

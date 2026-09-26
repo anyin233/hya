@@ -59,6 +59,7 @@ fn ctx_with_formatter(workdir: PathBuf, formatter: FormatterPlane) -> ToolCtx {
         lsp: LspPlane::default(),
         formatter,
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }

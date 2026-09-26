@@ -71,6 +71,8 @@ async fn new_session(engine: &SessionEngine) -> hya_proto::SessionId {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap()

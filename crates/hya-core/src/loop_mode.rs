@@ -486,6 +486,8 @@ impl IterationExecutor for WorkerSessionExecutor {
                 agent: self.agent.name.clone(),
                 model: self.agent.model.clone(),
                 workdir: self.agent.workdir.to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await?;
         self.engine
