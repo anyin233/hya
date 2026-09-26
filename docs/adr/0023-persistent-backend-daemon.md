@@ -141,3 +141,42 @@ stream was down, backing off, at that moment) treats the stop as a crash and
 starts the next daemon; clients older than this amendment ignore the frame
 and do the same. A SIGKILL (`stop --force` after the timeout) comes after the
 SIGTERM, so the frame was already sent.
+
+## Amendment (2026-09-26): how a client leaves its session
+
+With the daemon, a session outlives the client that shows it. How the client
+exits now says what should happen to the session, so sessions a user is done
+with do not pile up in the list and sessions left to work keep working.
+
+- **Graceful exit archives.** Ctrl+C twice, `/exit`, or `/quit` in a TUI
+  archives the open session at once (`PATCH {archived:true}`; the root when a
+  subagent's read-only view is open). Archiving is only a flag
+  (docs/protocol/README.md "Archived sessions"): a running turn finishes on
+  the daemon.
+- **Background exit keeps running.** Ctrl+D on an empty input or
+  `/to-background` quits the terminal TUI at once and leaves the session as
+  is, running on the daemon.
+- **Abnormal exit keeps running.** A signal (the WebUI host's SIGHUP when a
+  tab closes, SIGTERM, SIGINT), a kill, or a crash never archives.
+- **Switching is not an exit.** Opening another session leaves the previous
+  one running.
+- **Empty stays deleted.** In every case an empty session the client created
+  and never used is deleted instead (the rule above).
+- **Resume unarchives.** `--resume [id]` (TUI and bare `hya`), `/resume
+  [id]`, and opening an archived row of the `/sessions` picker (Ctrl+A shows
+  them) unarchive the session and open it. `--continue` picks the newest
+  session that is not archived. A WebUI tab cannot pass flags, so `/resume`
+  is how tabs and the terminal resume each other's sessions.
+- **WebUI tabs.** Closing the tab is a tab's background exit, so a tab's TUI
+  does not offer `/to-background`, and its Ctrl+D only shows `Close the tab
+  to leave this session running`. The TUI learns it runs in a tab from a
+  flag, `--web-tab`, that bare `hya` puts in its web host's tab command; the
+  host stays generic (it runs its fixed command), and a host started by hand
+  passes the flag in its command. A generic host environment variable was
+  considered and rejected: it would put a frontend-specific contract into the
+  host, which knows nothing about hya.
+
+Consequences: an archived session is out of the sidebar and `--continue`
+until something resumes it or a prompt reaches it (a prompt unarchives on
+the backend). A TUI killed while its session is still empty leaves nothing
+behind only if its exit handler runs; a SIGKILL leaves the empty session.

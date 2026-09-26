@@ -68,14 +68,14 @@ export function defaultDatabase(env: Record<string, string | undefined>): string
 
 /**
  * The session to open at start: `--session <id>` as given, `--continue` the
- * most recently updated top-level session of `directory` (list order breaks
- * ties), else none (a new session is created by the first prompt).
+ * most recently updated top-level session of `directory` that is not
+ * archived (list order breaks ties), else none.
  */
 export function initialSessionId(sessions: readonly SessionInfo[], startup: { continue: boolean; session?: string }, directory: string): string | undefined {
   if (startup.session) return startup.session
   if (!startup.continue) return undefined
   const time = (session: SessionInfo): number => Date.parse(session.timeUpdated ?? "") || 0
-  const candidates = sessions.filter((session) => !session.parent && (!session.workdir || session.workdir === directory))
+  const candidates = sessions.filter((session) => !session.parent && !session.archived && (!session.workdir || session.workdir === directory))
   return candidates.reduce<SessionInfo | undefined>((best, session) => (!best || time(session) > time(best) ? session : best), undefined)?.id
 }
 

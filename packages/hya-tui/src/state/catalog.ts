@@ -63,10 +63,34 @@ export function sessionRows(sessions: readonly SessionInfo[], current: string | 
     return {
       id: session.id,
       label: depth ? `${"  ".repeat(depth - 1)}↳ ${session.title || session.id}` : (session.title || session.id),
-      tag: depth ? "subagent" : "",
+      tag: depth ? "subagent" : session.archived ? "archived" : "",
       detail,
       current: session.id === current,
     }
   })
   return [newRow, ...rows]
+}
+
+/**
+ * The `--resume` / `/resume` picker: root sessions of `directory` (a session
+ * without a workdir counts as this directory's), archived ones included and
+ * tagged `archived`, most recently updated first.
+ */
+export function resumeRows(sessions: readonly SessionInfo[], directory: string, current: string | undefined, now: number = Date.now()): PickerRow[] {
+  const time = (session: SessionInfo): number => Date.parse(session.timeUpdated ?? "") || 0
+  return sessions
+    .filter((session) => !session.parent && (!session.workdir || session.workdir === directory))
+    .sort((a, b) => time(b) - time(a))
+    .map((session): PickerRow => ({
+      id: session.id,
+      label: session.title || session.id,
+      tag: session.archived ? "archived" : "",
+      detail: [
+        session.agent,
+        modelReference(session) || "default",
+        relativeTime(session.timeUpdated, now) || undefined,
+        session.busy ? "● running" : undefined,
+      ].filter(Boolean).join(" · "),
+      current: session.id === current,
+    }))
 }

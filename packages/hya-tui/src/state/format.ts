@@ -75,6 +75,9 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
  * top-level session is two lines (title, agent) with a blank line between
  * groups; a subagent session is one indented `↳ N. agent` line under it.
  */
+/** `/to-background` and Ctrl+D in a WebUI tab (`--web-tab`): closing the tab already leaves the session running. */
+export const webTabBackgroundNotice = "Close the tab to leave this session running"
+
 export function sessionListText(state: AppState, width?: number): string {
   if (!state.ready) return "Loading…"
   if (!state.sessions.length) return "No sessions. Type a prompt or /new."
@@ -86,7 +89,7 @@ export function sessionListText(state: AppState, width?: number): string {
     if (depth === 0) {
       groups.push([
         truncate(`${mark} ${index + 1}. ${session.title || session.id}`, width),
-        truncate(`   ${session.agent}${running}`, width),
+        truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width),
       ])
     } else {
       groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${index + 1}. ${session.title || session.agent}${running}`, width))

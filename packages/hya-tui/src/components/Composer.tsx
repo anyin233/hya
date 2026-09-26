@@ -52,8 +52,9 @@ interface CmdMenu {
  * a shown prompt takes digits, Up/Down, Enter, and Esc while the input is
  * empty; with text in the input a question takes Enter as its answer
  * (state/prompts.ts `promptKey`). Other keys always reach the editor.
- * Ctrl+C clears (or hints) and quits on a second press within 2 s; Ctrl+D
- * quits on an empty input. `!command` input shows a shell-mode border; an
+ * Ctrl+C clears (or hints) and quits (archiving the session) on a second
+ * press within 2 s; Ctrl+D on an empty input quits and leaves the session
+ * running (in a WebUI tab it only shows a notice). `!command` input shows a shell-mode border; an
  * `@text` token opens a file suggestion list from `FindFiles`.
  *
  * Vim mode (`/vim`, composer/vim.ts): the state machine sees keys after the
@@ -536,7 +537,8 @@ export function Composer() {
         consume()
         const outcome = quitGuard.press(!value())
         if (outcome === "quit") {
-          controller.quit()
+          // A graceful exit: the open session is archived (app/sessionKeeper.ts).
+          controller.quit("archive")
           return
         }
         if (outcome === "clear") {
@@ -548,7 +550,8 @@ export function Composer() {
       }
       case "eof":
         consume()
-        controller.quit()
+        // Quit and leave the session running; in a WebUI tab only a notice.
+        controller.toBackground()
         return
       case "complete":
         consume()

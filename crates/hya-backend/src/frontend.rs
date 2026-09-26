@@ -11,10 +11,14 @@
 //! 2. the web host (`packages/hya-tui-web`) serves the WebUI on
 //!    `127.0.0.1:<port>`; every browser tab runs the TUI against the backend;
 //! 3. the terminal TUI (`packages/hya-tui`) runs on this terminal with
-//!    `--web-url <url>` or `--web-error <reason>`.
+//!    `--web-url <url>` or `--web-error <reason>` (and `--resume [id]` when
+//!    `hya --resume [id]` asked for it).
 //!
 //! Both TUIs also get `--db <db> --hya <this binary>` (not with `--backend`),
 //! so when the backend stops or crashes they find (or start) the next one.
+//! The tab command also carries `--web-tab`: a tab's TUI then does not offer
+//! `/to-background` and Ctrl+D does not quit it (closing the tab already
+//! leaves the session running). The host itself stays generic.
 //!
 //! When the terminal TUI exits (or `hya` gets SIGINT/SIGTERM/SIGHUP) the web
 //! host is stopped (SIGTERM, SIGKILL after a grace period; it stops its tabs'
@@ -209,7 +213,17 @@ pub(crate) struct BackendLink {
     pub(crate) hya: Option<PathBuf>,
 }
 
-/// argv of the web host: every browser tab runs the TUI against `backend`.
+/// `hya --resume [id]`: what the terminal TUI opens at start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Resume {
+    /// `--resume`: the TUI's picker of the directory's sessions.
+    Pick,
+    /// `--resume <id>`: that session.
+    Session(String),
+}
+
+/// argv of the web host: every browser tab runs the TUI against `backend`,
+/// marked `--web-tab`.
 pub(crate) fn web_host_argv(
     bun: &Path,
     web_dir: &Path,
@@ -230,6 +244,7 @@ pub(crate) fn web_host_argv(
         "--".into(),
     ];
     argv.extend(tui_base_argv(bun, tui_dir, backend, cwd));
+    argv.push("--web-tab".into());
     argv
 }
 
@@ -267,11 +282,17 @@ pub(crate) fn tui_argv(
     backend: &BackendLink,
     cwd: &Path,
     web: &WebStatus,
+    resume: Option<&Resume>,
 ) -> Vec<OsString> {
     let mut argv = tui_base_argv(bun, tui_dir, backend, cwd);
     match web {
         WebStatus::Ready(url) => argv.extend(["--web-url".into(), url.into()]),
         WebStatus::Failed(reason) => argv.extend(["--web-error".into(), reason.into()]),
+    }
+    match resume {
+        Some(Resume::Pick) => argv.push("--resume".into()),
+        Some(Resume::Session(id)) => argv.extend(["--resume".into(), id.into()]),
+        None => {}
     }
     argv
 }
@@ -353,6 +374,8 @@ pub(crate) struct LaunchRequest {
     pub(crate) db: String,
     /// `--backend <url>`: use this backend instead of the database's daemon.
     pub(crate) backend: Option<String>,
+    /// `--resume [id]`: passed to the terminal TUI.
+    pub(crate) resume: Option<Resume>,
     pub(crate) model: Option<String>,
     pub(crate) yolo: bool,
     pub(crate) pure: bool,
@@ -418,7 +441,15 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
     for note in notes {
         eprintln!("{note}");
     }
-    let outcome = run_frontends(request.port, &resolved, &backend, &terminal, &mut signals).await;
+    let outcome = run_frontends(
+        request.port,
+        &resolved,
+        &backend,
+        request.resume.as_ref(),
+        &terminal,
+        &mut signals,
+    )
+    .await;
     terminal.restore();
     match outcome {
         Ok(code) => {
@@ -436,6 +467,7 @@ async fn run_frontends(
     port: u16,
     resolved: &Resolved,
     backend: &BackendLink,
+    resume: Option<&Resume>,
     terminal: &Terminal,
     signals: &mut StopSignals,
 ) -> anyhow::Result<i32> {
@@ -450,7 +482,7 @@ async fn run_frontends(
         Err(reason) => (None, WebStatus::Failed(reason)),
     };
     eprintln!("hya: WebUI {web_status:?}");
-    let argv = tui_argv(bun, tui, backend, cwd, &web_status);
+    let argv = tui_argv(bun, tui, backend, cwd, &web_status, resume);
     let code = match spawn_tui(&argv, cwd, terminal) {
         Ok(mut child) => {
             tokio::select! {
@@ -885,8 +917,32 @@ mod tests {
                 "/state/hya/sessions.db",
                 "--hya",
                 "/bin/hya",
+                // Tab TUIs know they run in a WebUI tab (no /to-background, Ctrl+D does not quit).
+                "--web-tab",
             ])
         );
+    }
+
+    #[test]
+    fn the_terminal_tui_gets_resume_and_never_web_tab() {
+        let web = WebStatus::Ready("http://127.0.0.1:3250/".into());
+        let tail = |resume: Option<&Resume>| {
+            let argv = tui_argv(
+                Path::new("/b/bun"),
+                Path::new("/lib/tui"),
+                &daemon_link(),
+                Path::new("/work"),
+                &web,
+                resume,
+            );
+            assert!(!argv.contains(&OsString::from("--web-tab")));
+            argv[10..].to_vec()
+        };
+        let mut expected = os(&["--web-url", "http://127.0.0.1:3250/", "--resume"]);
+        assert_eq!(tail(Some(&Resume::Pick)), expected);
+        expected.push("hysec_1".into());
+        assert_eq!(tail(Some(&Resume::Session("hysec_1".into()))), expected);
+        assert_eq!(tail(None), os(&["--web-url", "http://127.0.0.1:3250/"]));
     }
 
     #[test]
@@ -909,6 +965,7 @@ mod tests {
             &daemon_link(),
             Path::new("/work"),
             &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            None,
         );
         let mut expected = os(&base);
         expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
@@ -919,6 +976,7 @@ mod tests {
             &daemon_link(),
             Path::new("/work"),
             &WebStatus::Failed("port 3250 is in use".into()),
+            None,
         );
         let mut expected = os(&base);
         expected.extend(os(&["--web-error", "port 3250 is in use"]));
@@ -935,6 +993,7 @@ mod tests {
             &explicit,
             Path::new("/work"),
             &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            None,
         );
         let mut expected = os(&base[..6]);
         expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
@@ -966,6 +1025,7 @@ mod tests {
             port: 0,
             db: "/nonexistent/hya/sessions.db".into(),
             backend,
+            resume: None,
             model: None,
             yolo: false,
             pure: false,

@@ -1,5 +1,14 @@
 # 0.41.0
 
+## Quit and archive, or quit and keep running; `--resume`
+
+- Ctrl+C twice, `/exit`, or `/quit` quits the TUI and archives its session at once (from a subagent's view, the root session). A running turn still finishes on the backend.
+- Ctrl+D on an empty input, or `/to-background`, quits without archiving, and the session keeps running on the backend. In a WebUI tab both only show `Close the tab to leave this session running`; closing the tab leaves the session running.
+- A killed or signalled TUI, including a closed tab, never archives. Switching sessions isn't quitting. Whichever way you leave, an empty session you never used is deleted.
+- `--resume [id]` (TUI) and `hya --resume [id]` open a session and unarchive it. Without an id, they show a picker of the directory's sessions, archived ones marked `[archived]`. `/resume` does the same inside the TUI, so the terminal and the WebUI can resume each other's sessions. `--continue` skips archived sessions.
+- In `/sessions`, Ctrl+A shows or hides archived sessions, and opening an archived one resumes it. When another client archives or unarchives the open session, the TUI updates right away.
+- Bare `hya` starts WebUI tabs with the new TUI flag `--web-tab`; add it yourself when you run the WebUI host by hand. See [TUI](docs/tui.md).
+
 ## Session list changes reach every client
 
 - The global stream now reports every change to a root session:

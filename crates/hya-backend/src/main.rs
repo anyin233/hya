@@ -899,6 +899,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let web_port = cli_args::bare_web_port(&cli)?;
     let backend = cli_args::bare_backend(&cli)?;
+    let resume = cli_args::bare_resume(&cli)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let pure = cli.pure;
@@ -929,6 +930,7 @@ async fn main() -> anyhow::Result<()> {
                     port: web_port,
                     db: absolute_db(resolve_interactive_db(&db)),
                     backend,
+                    resume,
                     model,
                     yolo,
                     pure,
