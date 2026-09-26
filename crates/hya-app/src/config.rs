@@ -705,9 +705,14 @@ fn key(name: &str) -> Value {
     Value::String(name.to_string())
 }
 
-/// Read `config.yaml` as a YAML value (the default document when the file is
-/// missing or blank).
-fn read_config_value(config_path: &Path) -> anyhow::Result<Value> {
+/// `config.yaml` text (the default document when the file is missing or
+/// blank) and its parsed value.
+struct ConfigSource {
+    raw: String,
+    root: Value,
+}
+
+fn read_config_source(config_path: &Path) -> anyhow::Result<ConfigSource> {
     let existing = if config_path.exists() {
         std::fs::read_to_string(config_path)
             .with_context(|| format!("read {}", config_path.display()))?
@@ -715,16 +720,22 @@ fn read_config_value(config_path: &Path) -> anyhow::Result<Value> {
         String::new()
     };
     let raw = if existing.trim().is_empty() {
-        DEFAULT_CONFIG_YAML
+        DEFAULT_CONFIG_YAML.to_string()
     } else {
-        existing.as_str()
+        existing
     };
     let root: Value =
-        serde_norway::from_str(raw).with_context(|| format!("parse {}", config_path.display()))?;
+        serde_norway::from_str(&raw).with_context(|| format!("parse {}", config_path.display()))?;
     if root.as_mapping().is_none() {
         anyhow::bail!("config root must be a mapping");
     }
-    Ok(root)
+    Ok(ConfigSource { raw, root })
+}
+
+/// Read `config.yaml` as a YAML value (the default document when the file is
+/// missing or blank).
+fn read_config_value(config_path: &Path) -> anyhow::Result<Value> {
+    read_config_source(config_path).map(|source| source.root)
 }
 
 /// Borrow `providers:` as a mapping, creating it when absent.
@@ -744,12 +755,50 @@ fn providers_mapping(root: &mut Value) -> anyhow::Result<&mut Mapping> {
 
 /// Validate and atomically write an edited config document.
 ///
-/// The rendered YAML must parse and its providers must validate (secrets are
-/// not expanded). The file is replaced through a temp file in the same
-/// directory that inherits the old file's permissions. YAML comments are not
-/// preserved (the document is re-rendered).
-fn write_config_value(config_path: &Path, root: &Value) -> Result<(), ConfigEditError> {
-    let rendered = serde_norway::to_string(root).context("render updated hya config.yaml")?;
+/// `target` is the whole new document. The file text is edited minimally
+/// ([`crate::config_edit`]): only the entries whose values change are
+/// rewritten, so comments, blank lines, key order, quoting, and indentation
+/// elsewhere are kept. The edited text must parse back to exactly `target`,
+/// otherwise the edit is aborted and the file left untouched. When the file
+/// uses YAML the minimal editor does not handle (anchors, aliases, tags,
+/// several documents, multi-line flow or quoted values, …) the document is
+/// re-rendered whole instead, dropping comments, and a warning is logged.
+///
+/// The result must parse and its providers must validate (secrets are not
+/// expanded). The file is replaced through a temp file in the same directory
+/// that inherits the old file's permissions.
+fn write_config_value(
+    config_path: &Path,
+    source: &ConfigSource,
+    target: &Value,
+) -> Result<(), ConfigEditError> {
+    let rendered = match crate::config_edit::minimal_edit(&source.raw, &source.root, target) {
+        Ok(text) => {
+            let reparsed: Value = serde_norway::from_str(&text).with_context(|| {
+                format!(
+                    "comment-preserving edit of {} produced invalid YAML; file left untouched",
+                    config_path.display()
+                )
+            })?;
+            if &reparsed != target {
+                return Err(ConfigEditError::Io(anyhow::anyhow!(
+                    "comment-preserving edit of {} did not match the intended change; \
+                     file left untouched",
+                    config_path.display()
+                )));
+            }
+            text
+        }
+        Err(crate::config_edit::Unsupported(reason)) => {
+            tracing::warn!(
+                path = %config_path.display(),
+                %reason,
+                "config.yaml uses YAML the minimal editor does not handle; \
+                 rewriting the whole file (comments and formatting are not kept)"
+            );
+            serde_norway::to_string(target).context("render updated hya config.yaml")?
+        }
+    };
     let file = parse_config(&rendered).map_err(|error| {
         ConfigEditError::Invalid(format!("edit would make config.yaml invalid: {error:#}"))
     })?;
@@ -767,8 +816,12 @@ fn write_config_value(config_path: &Path, root: &Value) -> Result<(), ConfigEdit
     if let Ok(meta) = std::fs::metadata(config_path) {
         let _ = std::fs::set_permissions(&tmp, meta.permissions());
     }
-    std::fs::rename(&tmp, config_path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), config_path.display()))?;
+    if let Err(error) = std::fs::rename(&tmp, config_path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(ConfigEditError::Io(anyhow::Error::from(error).context(
+            format!("rename {} -> {}", tmp.display(), config_path.display()),
+        )));
+    }
     Ok(())
 }
 
@@ -793,7 +846,8 @@ pub fn upsert_provider_entry(
             PROVIDER_KIND_LABELS.join(", ")
         )));
     }
-    let mut root = read_config_value(config_path)?;
+    let source = read_config_source(config_path)?;
+    let mut root = source.root.clone();
     let providers = providers_mapping(&mut root)?;
     let created = !providers.contains_key(key(provider_id));
     let entry = providers
@@ -810,7 +864,7 @@ pub fn upsert_provider_entry(
     if !provider.contains_key(key("models")) {
         provider.insert(key("models"), Value::Sequence(Vec::new()));
     }
-    write_config_value(config_path, &root)?;
+    write_config_value(config_path, &source, &root)?;
     Ok(created)
 }
 
@@ -861,7 +915,8 @@ pub fn set_model_entry(
     model_id: &str,
     metadata: &ModelEntryOverride,
 ) -> Result<(), ConfigEditError> {
-    let mut root = read_config_value(config_path)?;
+    let source = read_config_source(config_path)?;
+    let mut root = source.root.clone();
     let models = provider_models(&mut root, provider_id)?;
     let position = models
         .iter()
@@ -925,7 +980,7 @@ pub fn set_model_entry(
         Some(index) => models[index] = value,
         None => models.push(value),
     }
-    write_config_value(config_path, &root)
+    write_config_value(config_path, &source, &root)
 }
 
 /// Remove every `providers.<provider_id>.models` entry with `model_id`.
@@ -938,14 +993,15 @@ pub fn remove_model_entry(
     provider_id: &str,
     model_id: &str,
 ) -> Result<bool, ConfigEditError> {
-    let mut root = read_config_value(config_path)?;
+    let source = read_config_source(config_path)?;
+    let mut root = source.root.clone();
     let models = provider_models(&mut root, provider_id)?;
     let before = models.len();
     models.retain(|entry| model_entry_id(entry) != Some(model_id));
     if models.len() == before {
         return Ok(false);
     }
-    write_config_value(config_path, &root)?;
+    write_config_value(config_path, &source, &root)?;
     Ok(true)
 }
 

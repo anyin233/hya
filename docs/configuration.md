@@ -493,11 +493,53 @@ mapping when fields are added and turns back into a string when none remain;
 override calls `DELETE /v1/providers/{id}/models?modelId=…`. Adding a
 provider calls `PUT /v1/providers/{id}`, which writes `kind` and `base_url`
 (a new provider gets `models: []`) and saves the key to `auth/<id>.yaml`.
-These writers keep every other key but re-render the file, so YAML comments
-are not preserved; an edit that would make the config invalid is rejected and
-leaves the file unchanged. Every change applies to the running server
-immediately. Routes and schemas: [Protocol guide — Providers and
+An edit that would make the config invalid is rejected and leaves the file
+unchanged. Every change applies to the running server immediately. See
+[How hya edits `config.yaml`](#how-hya-edits-configyaml) for what the writers
+change in the file text. Routes and schemas: [Protocol guide — Providers and
 keys](protocol/README.md#providers-and-keys).
+
+### How hya edits `config.yaml`
+
+Some commands write `config.yaml` for you: the Provider View routes (`PUT
+/v1/providers/{id}`, `PUT /v1/providers/{id}/models`, `DELETE
+/v1/providers/{id}/models`) and OAuth login (`hya login`). These writers
+change only the lines of the entries they touch and keep everything else in
+the file as you wrote it: comments (whole-line and `key: value  # note`),
+blank lines, key order, quoting, indentation, CRLF line endings, and a
+leading byte-order mark.
+
+| Edit | What changes in the file |
+| --- | --- |
+| New provider | A `<id>:` block (`kind`, `base_url`, `models: []`) is appended after the last provider. `providers:` is added at the end of the file when missing; `providers: {}` becomes a block. |
+| Existing provider | The `kind` and `base_url` values are replaced on their own lines (a quoted value stays quoted); `models: []` is added when the provider has no `models` key. Other keys are untouched. |
+| Set a model field | The field's value is replaced in place, or the field is added after the entry's last field. A plain `- <id>` entry becomes `- id: <id>` with the new fields below it; an inline comment on it stays on the first line. |
+| Clear a model field | The field's lines are removed (`limit:` goes when its last limit is cleared). An entry left with only `id` turns back into `- <id>`. |
+| New model | `- <id>` is appended after the provider's last model entry; `models: []` becomes a block list. |
+| Remove a model | Only the entry's own lines are removed (its `- ` line through its last field, including comments inside it). Comments above it stay. Removing the last entry writes `models: []`. |
+
+New lines follow the file's indentation: the nesting step and whether list
+items are indented under their key (`models:\n  - a`) or not
+(`models:\n- a`) are taken from the existing file (default: two spaces,
+indented lists).
+
+A value the writer cannot edit in place — a flow-style provider such as `gw:
+{kind: openai, …}`, a `models: [a, b]` flow list, or a block scalar — is
+rewritten in block style for that one entry only; the rest of the file is kept.
+
+The writer falls back to rewriting the **whole** file (which drops comments
+and normalizes formatting) only when the file uses YAML it cannot map to
+lines safely: anchors (`&name`), aliases (`*name`), tags (`!tag`), merge keys
+(`<<:`), YAML directives or several documents, quoted or plain values that
+span several lines, multi-line flow collections, tab indentation, or mixed
+line endings. The server logs a warning (`config.yaml uses YAML the minimal
+editor does not handle`) with the reason when this happens.
+
+Every edit is checked before the file is replaced: the edited text must parse
+to exactly the configuration the change intends (otherwise the edit fails and
+the file is left untouched) and must pass config validation. The file is
+replaced atomically (a temporary file in the same directory, then a rename)
+and keeps its permissions.
 
 ### Provider retry
 
@@ -720,7 +762,9 @@ On success hya:
    [Auth Tokens](#auth-tokens)).
 2. Optionally fetches a catalog only to improve login confirmation output.
 3. Upserts the non-secret Hya provider declaration (`kind`, `base_url`) and
-   preserves any existing `models` and inline `api_key` fields.
+   preserves any existing `models` and inline `api_key` fields. Only those
+   lines change; comments and formatting in `config.yaml` are kept (see
+   [How hya edits `config.yaml`](#how-hya-edits-configyaml)).
 
 Login never writes fetched or guessed model IDs and never changes
 `default_model`. A new provider gets `models: []`, so the next startup performs

@@ -1,5 +1,12 @@
 # 0.41.0
 
+## `config.yaml` edits keep your comments and formatting
+
+- When hya writes `config.yaml` (Provider View, the provider and model routes, OAuth login), it now changes only the affected lines. Comments, blank lines, key order, quoting, indentation, CRLF line endings, a BOM, and a leading `---` stay as they were.
+- New lines follow the file's own indentation. An entry that can't be edited in place, such as a flow-style `{}` map, is rewritten on its own, in block style.
+- Before writing, hya parses the edited text again and checks it gives exactly the intended config. If not, the file is left untouched.
+- Files that use anchors, aliases, tags, multi-line scalars, or tab indentation fall back to a full rewrite, which drops comments, and the server logs a warning. See [Configuration](docs/configuration.md).
+
 ## TUI follows server-side catalog changes and new compaction names
 
 - The TUI's global stream now uses `interactionsOnly=true`, so it no longer receives every session's live text. The model list and providers reload on `catalogUpdated`, so a provider added by another client, or through the API, shows up in the `/model` picker without a restart.
