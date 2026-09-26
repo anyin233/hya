@@ -58,7 +58,11 @@ message GetHealthResponse {
   string version = 2;
 }
 
-message GetLocationRequest {}
+message GetLocationRequest {
+  // Directory scope (absolute), echoed in `LocationInfo.directory`.
+  // Optional: empty answers an empty `directory`.
+  string directory = 1;
+}
 
 // Where this backend runs and which directory it serves.
 message LocationInfo {
@@ -102,7 +106,7 @@ message UpgradeProcessResponse {
 }
 
 message GetBootstrapRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // Directory scope (absolute). Optional:
   // empty lists the global view (no project sources).
   string directory = 1;
 }

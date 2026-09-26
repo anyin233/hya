@@ -71,7 +71,7 @@ message ListShellsResponse {
 }
 
 message CreatePtyRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required
+  // Directory scope (absolute). Required
   // when `cwd` is empty: without either the rpc fails with invalid_argument.
   string directory = 1;
   // Shell binary name or path; empty picks the default shell.

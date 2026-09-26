@@ -35,7 +35,7 @@ service Files {
 }
 
 message ReadFileRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -55,7 +55,7 @@ message ReadFileResponse {
 }
 
 message ListDirectoryRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -93,7 +93,7 @@ message ListDirectoryResponse {
 }
 
 message FindFilesRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -109,7 +109,7 @@ message FindFilesResponse {
 }
 
 message SearchTextRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -137,7 +137,7 @@ message SearchTextResponse {
 }
 
 message SearchSymbolsRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;

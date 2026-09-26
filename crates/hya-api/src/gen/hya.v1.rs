@@ -564,7 +564,7 @@ pub struct ModelRef {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListAgentsRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// Directory scope (absolute). Optional:
     /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
@@ -887,7 +887,7 @@ pub struct TestProviderModelResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// Directory scope (absolute). Optional:
     /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
@@ -937,7 +937,7 @@ pub struct ListCommandsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// Directory scope (absolute). Optional:
     /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
@@ -1009,7 +1009,7 @@ pub struct ListToolsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListPermissionModesRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// Directory scope (absolute). Optional:
     /// with neither it nor `session`, the global view is listed.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
@@ -3132,7 +3132,7 @@ pub mod auth_server {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListBundleApisRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// Directory scope (absolute). Optional:
     /// with neither it nor `session`, the global view (installed and
     /// first-party bundles; no Project bundle) is listed.
     #[prost(string, tag = "1")]
@@ -7463,7 +7463,7 @@ pub mod events_server {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadFileRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -7489,7 +7489,7 @@ pub struct ReadFileResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListDirectoryRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -7522,7 +7522,7 @@ pub struct ListDirectoryResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FindFilesRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -7542,7 +7542,7 @@ pub struct FindFilesResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchTextRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -7578,7 +7578,7 @@ pub struct SearchTextResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchSymbolsRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -9637,8 +9637,13 @@ pub struct GetHealthResponse {
     #[prost(string, tag = "2")]
     pub version: ::prost::alloc::string::String,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct GetLocationRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetLocationRequest {
+    /// Directory scope (absolute), echoed in `LocationInfo.directory`.
+    /// Optional: empty answers an empty `directory`.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+}
 /// Where this backend runs and which directory it serves.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocationInfo {
@@ -9691,7 +9696,7 @@ pub struct UpgradeProcessResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetBootstrapRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// Directory scope (absolute). Optional:
     /// empty lists the global view (no project sources).
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
@@ -10565,7 +10570,8 @@ pub struct ListProjectsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetCurrentProjectRequest {
-    /// Directory scope; the `x-hya-directory` header overrides it.
+    /// Directory scope (absolute). Required: without one the rpc fails with
+    /// invalid_argument.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
 }
@@ -10658,7 +10664,7 @@ pub struct InitProjectGitResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetVcsStatusRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -10698,7 +10704,7 @@ pub struct VcsFileChange {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetVcsDiffRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -10722,7 +10728,7 @@ pub struct GetVcsDiffResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ApplyPatchRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -10907,9 +10913,8 @@ pub mod project_client {
                 .insert(GrpcMethod::new("hya.v1.Project", "ListProjects"));
             self.inner.unary(req, path, codec).await
         }
-        /// The Project whose root contains the request's directory scope (the
-        /// `x-hya-directory` header, else `directory`), matched like
-        /// `ResolveProject`. `invalid_argument` without a scope or for a relative
+        /// The Project whose root contains the request's directory scope (its
+        /// `directory` field), matched like `ResolveProject`. `invalid_argument` without a scope or for a relative
         /// scope; `not_found` when no Project contains it.
         ///
         /// hya.http: GET /v1/projects/current
@@ -11258,9 +11263,8 @@ pub mod project_server {
             tonic::Response<super::ListProjectsResponse>,
             tonic::Status,
         >;
-        /// The Project whose root contains the request's directory scope (the
-        /// `x-hya-directory` header, else `directory`), matched like
-        /// `ResolveProject`. `invalid_argument` without a scope or for a relative
+        /// The Project whose root contains the request's directory scope (its
+        /// `directory` field), matched like `ResolveProject`. `invalid_argument` without a scope or for a relative
         /// scope; `not_found` when no Project contains it.
         ///
         /// hya.http: GET /v1/projects/current
@@ -12118,7 +12122,7 @@ pub struct ListShellsResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreatePtyRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required
+    /// Directory scope (absolute). Required
     /// when `cwd` is empty: without either the rpc fails with invalid_argument.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
@@ -15895,7 +15899,7 @@ pub struct Worktree {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListWorktreesRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -15909,7 +15913,7 @@ pub struct ListWorktreesResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateWorktreeRequest {
-    /// Directory scope (absolute; or the x-hya-directory header). Required:
+    /// Directory scope (absolute). Required:
     /// without one the rpc fails with invalid_argument (the backend has no
     /// working directory of its own).
     #[prost(string, tag = "1")]
@@ -15929,6 +15933,10 @@ pub struct DeleteWorktreeRequest {
     /// Also delete the checked-out branch.
     #[prost(bool, tag = "2")]
     pub delete_branch: bool,
+    /// Directory scope (absolute): the repository the worktree belongs to.
+    /// Required: without one the rpc fails with invalid_argument.
+    #[prost(string, tag = "3")]
+    pub directory: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct DeleteWorktreeResponse {}
@@ -15937,6 +15945,10 @@ pub struct ResetWorktreeRequest {
     /// Worktree identifier to reset.
     #[prost(string, tag = "1")]
     pub worktree: ::prost::alloc::string::String,
+    /// Directory scope (absolute): the repository the worktree belongs to.
+    /// Required: without one the rpc fails with invalid_argument.
+    #[prost(string, tag = "2")]
+    pub directory: ::prost::alloc::string::String,
 }
 /// Generated client implementations.
 pub mod worktrees_client {

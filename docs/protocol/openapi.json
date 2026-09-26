@@ -480,7 +480,7 @@
     "/v1/projects/current": {
       "get": {
         "operationId": "Project.GetCurrentProject",
-        "summary": "The Project whose root contains the request's directory scope (the",
+        "summary": "The Project whose root contains the request's directory scope (its",
         "tags": [
           "Project"
         ],
@@ -3546,6 +3546,15 @@
           }
         }
       },
+      "GetLocationRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
       "LocationInfo": {
         "type": "object",
         "description": "Where this backend runs and which directory it serves.",
@@ -5058,6 +5067,9 @@
           },
           "delete_branch": {
             "type": "boolean"
+          },
+          "directory": {
+            "type": "string"
           }
         }
       },
@@ -5066,6 +5078,9 @@
         "description": "",
         "properties": {
           "worktree": {
+            "type": "string"
+          },
+          "directory": {
             "type": "string"
           }
         }
