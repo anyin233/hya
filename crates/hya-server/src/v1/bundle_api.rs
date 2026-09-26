@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 
@@ -122,13 +122,12 @@ pub(crate) fn parse_method(method: &str) -> Result<ApiMethod, BundleApiError> {
 async fn list_bundle_apis(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListBundleApisResponse>, V1Error> {
     let request: pb::ListBundleApisRequest = super::query_request(&[], &query)?;
     let published = match super::scope_session(&st, &request.session).await? {
         Some(session) => st.engine.session_bundle_apis(session).await?,
         None => {
-            let place = super::catalog_scope(&st, &headers, &request.directory).await?;
+            let place = super::catalog_scope(&st, &request.directory).await?;
             if matches!(place.scope(), hya_core::CatalogScope::Global) {
                 st.engine.bundle_apis().await
             } else {

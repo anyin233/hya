@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::HeaderMap;
 use axum::routing::{get, put};
 
 use super::Json;
@@ -98,7 +97,6 @@ async fn parse_scope_session(session: &str) -> Result<Option<SessionId>, V1Error
 /// (project-less) binding.
 async fn model_binding(
     st: &ServerState,
-    headers: &HeaderMap,
     directory: &str,
     session: Option<SessionId>,
 ) -> Result<hya_core::TurnBinding, V1Error> {
@@ -110,22 +108,18 @@ async fn model_binding(
             let workdir = crate::support::reference::session_workdir(st, session).await?;
             Ok(st.engine.bind_session_runtime(session, &workdir).await?)
         }
-        None => Ok(catalog_scope(st, headers, directory)
-            .await?
-            .bind(st)
-            .await?),
+        None => Ok(catalog_scope(st, directory).await?.bind(st).await?),
     }
 }
 
 async fn list_agent_models(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListAgentModelsResponse>, V1Error> {
     ensure_available(&st)?;
     let request: pb::ListAgentModelsRequest = super::query_request(&[], &query)?;
     let session = parse_scope_session(&request.session).await?;
-    let binding = model_binding(&st, &headers, &request.directory, session).await?;
+    let binding = model_binding(&st, &request.directory, session).await?;
     let rows = st
         .agent_model_control
         .list(binding, st.agent.model.clone())
@@ -156,12 +150,22 @@ fn validate_identity(selection: &pb::AgentModelSelection) -> Result<(), V1Error>
 async fn set_agent_model(
     State(st): State<ServerState>,
     AxumPath(agent_id): AxumPath<String>,
-    Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
     body: Option<Json<serde_json::Value>>,
 ) -> Result<Json<pb::AgentModelState>, V1Error> {
     ensure_available(&st)?;
-    let scope: pb::ListAgentModelsRequest = super::query_request(&[], &query)?;
+    // `directory` and `session` are body fields of this PUT (protojson
+    // mapping); the query string is not consulted.
+    let body_text = |name: &str| -> Result<String, V1Error> {
+        match body.as_ref().and_then(|Json(value)| value.get(name)) {
+            None | Some(serde_json::Value::Null) => Ok(String::new()),
+            Some(serde_json::Value::String(text)) => Ok(text.clone()),
+            Some(_) => Err(V1Error::invalid_argument(format!(
+                "invalid request body: `{name}` must be a string"
+            ))),
+        }
+    };
+    let directory = body_text("directory")?;
+    let session = body_text("session")?;
     let preference = match body.as_ref().and_then(|Json(value)| value.as_object()) {
         Some(map) => match map.get("preference") {
             None | Some(serde_json::Value::Null) => None,
@@ -181,8 +185,8 @@ async fn set_agent_model(
         },
         _ => None,
     };
-    let session = parse_scope_session(&scope.session).await?;
-    let binding = model_binding(&st, &headers, &scope.directory, session).await?;
+    let session = parse_scope_session(&session).await?;
+    let binding = model_binding(&st, &directory, session).await?;
     let row = st
         .agent_model_control
         .set(binding, agent_id, preference, st.agent.model.clone())

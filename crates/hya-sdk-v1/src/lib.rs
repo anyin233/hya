@@ -6,8 +6,9 @@
 //! curated `StreamFrame`s into a transcript view. gRPC clients can use
 //! `hya-api`'s generated clients directly against the same contract.
 //!
-//! Every request carries the directory scope via the `x-hya-directory`
-//! header (D6).
+//! Scoped calls name the client's directory in the request's `directory`
+//! field (a query parameter on GET/DELETE, a body field otherwise); the
+//! server refuses the removed `x-hya-directory` header.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -18,9 +19,6 @@ use hya_api::v1 as pb;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-/// Directory scope header shared with the HTTP binding.
-pub const DIRECTORY_HEADER: &str = "x-hya-directory";
 
 /// One failed SDK call.
 #[derive(Debug, thiserror::Error)]
@@ -75,7 +73,8 @@ impl V1Sdk {
         }
     }
 
-    /// The directory scope this client sends on every request.
+    /// The directory scope this client names in scoped calls' `directory`
+    /// field (empty: no scope, the global view).
     #[must_use]
     pub fn directory(&self) -> &str {
         &self.directory
@@ -93,10 +92,7 @@ impl V1Sdk {
             url.push('?');
             url.push_str(&query);
         }
-        let mut request = self
-            .http
-            .request(method, url)
-            .header(DIRECTORY_HEADER, &self.directory);
+        let mut request = self.http.request(method, url);
         if let Some(body) = body {
             request = request.json(body);
         }
@@ -124,13 +120,25 @@ impl V1Sdk {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    /// `GET /v1/bootstrap` — the one-round-trip startup snapshot.
+    /// `GET /v1/bootstrap` — the one-round-trip startup snapshot of the
+    /// client's directory scope (the global view without one).
     ///
     /// # Errors
     /// Returns [`SdkError`] on transport or API failure.
     pub async fn bootstrap(&self) -> Result<pb::Bootstrap, SdkError> {
-        self.call(reqwest::Method::GET, "/v1/bootstrap", None, None::<&Value>)
-            .await
+        self.call(
+            reqwest::Method::GET,
+            "/v1/bootstrap",
+            self.directory_query(),
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `directory=<scope>` for a scoped GET, `None` without a scope.
+    fn directory_query(&self) -> Option<String> {
+        (!self.directory.is_empty())
+            .then(|| format!("directory={}", encode_component(&self.directory)))
     }
 
     /// `POST /v1/sessions` — create a session.
@@ -567,7 +575,6 @@ impl V1Sdk {
                 "{}/v1/sessions/{session}/events/stream?sinceSeq={since_seq}",
                 self.base
             ))
-            .header(DIRECTORY_HEADER, &self.directory)
             .send()
             .await?;
         let stream = response

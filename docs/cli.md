@@ -784,7 +784,7 @@ directory it was started in ([ADR-0024](adr/0024-project-model-and-client-chosen
 Clients say where to work: a session's workdir comes from `CreateSession`
 (a `workdir`, a Project, or a temporary scratch directory), and rpcs that work
 on a directory (files, VCS, worktrees, PTY) need an absolute
-`x-hya-directory` header or `directory` field, else they fail with
+`directory` field in the request, else they fail with
 `invalid_argument`. Catalog listings without one show the global view (see
 [the protocol guide](protocol/README.md#base-url-and-scoping)). The only
 startup-directory reads left are project bundles and plugins under

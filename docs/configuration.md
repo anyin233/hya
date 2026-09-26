@@ -1929,8 +1929,7 @@ git clones). They power `@` alias autocomplete, turn-scoped
 **no** `config.yaml` key and **no** on-disk file for this map: the only way to
 declare them is the process-local runtime config bag —
 
-- `PATCH /v1/config` (scope with the `directory` body field or
-  `x-hya-directory` header)
+- `PATCH /v1/config` (scope with the `directory` body field)
 - bag key: `references` **or** `reference` (object of alias → entry)
 
 `PATCH /v1/config` **deep-merges** objects and replaces non-object leaves, so

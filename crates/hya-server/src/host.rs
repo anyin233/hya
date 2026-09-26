@@ -19,6 +19,10 @@
 //!
 //! Both refusals answer `403 {"error":{"code":"permission_denied",…}}` (the
 //! stable error table; gRPC `PERMISSION_DENIED`).
+//!
+//! [`GrpcHostGuard`] also refuses a gRPC call carrying the removed
+//! `x-hya-directory` metadata (`INVALID_ARGUMENT`), like the HTTP router's
+//! [`crate::v1::directory_header_guard`] answers `400 invalid_argument`.
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -325,11 +329,18 @@ where
                     )
                 }),
         };
-        if let Some(message) = refusal {
+        // Admitted, but still sending the removed scope header: refused as
+        // `INVALID_ARGUMENT` (3), like the HTTP router answers 400.
+        let refusal = refusal.map(|message| ("7", message)).or_else(|| {
+            crate::v1::removed_directory_header(request.headers())
+                .err()
+                .map(|_| ("3", crate::v1::REMOVED_DIRECTORY_HEADER_MESSAGE.to_owned()))
+        });
+        if let Some((status, message)) = refusal {
             let mut response = axum::http::Response::new(RB::default());
             let headers = response.headers_mut();
             headers.insert("content-type", HeaderValue::from_static("application/grpc"));
-            headers.insert("grpc-status", HeaderValue::from_static("7"));
+            headers.insert("grpc-status", HeaderValue::from_static(status));
             if let Ok(value) = HeaderValue::from_str(&percent_encode(&message)) {
                 headers.insert("grpc-message", value);
             }

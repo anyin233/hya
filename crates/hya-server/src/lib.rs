@@ -92,6 +92,7 @@ pub fn router(state: AppState) -> Router {
     let state = state.server_state();
     v1::router()
         .with_state(state)
+        .layer(axum::middleware::from_fn(v1::directory_header_guard))
         .layer(cors())
         .layer(axum::middleware::from_fn(move |request, next| {
             host::guard(hosts.clone(), request, next)

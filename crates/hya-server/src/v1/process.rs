@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
 use axum::routing::get;
 
 use super::Json;
@@ -42,8 +41,11 @@ async fn health(State(st): State<ServerState>) -> Result<Json<pb::GetHealthRespo
     }))
 }
 
-async fn location(headers: HeaderMap) -> Result<Json<pb::LocationInfo>, V1Error> {
-    let scope = request_scope(&headers, "")?;
+async fn location(
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::LocationInfo>, V1Error> {
+    let request: pb::GetLocationRequest = super::query_request(&[], &query)?;
+    let scope = request_scope(&request.directory)?;
     Ok(Json(location_info(scope.as_deref())))
 }
 
@@ -143,11 +145,10 @@ async fn upgrade(
 async fn bootstrap(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::Bootstrap>, V1Error> {
     let request: pb::GetBootstrapRequest = super::query_request(&[], &query)?;
     // Without a scope the catalog rows are the global (project-less) view.
-    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let place = catalog_scope(&st, &request.directory).await?;
 
     let agents = super::catalog::agent_rows(&st, &place).await?;
     let models = super::catalog::model_rows(&st);

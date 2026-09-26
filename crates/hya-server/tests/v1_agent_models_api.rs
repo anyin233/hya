@@ -281,3 +281,57 @@ async fn v1_agent_models_unavailable_without_installed_control() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], json!("unavailable"));
 }
+
+/// `SetAgentModel` is a PUT: its `directory` and `session` scope come from
+/// the JSON body (protojson mapping), never from the query string.
+#[tokio::test]
+async fn v1_set_agent_model_reads_its_scope_from_the_body() {
+    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl);
+    let app = app(Some(control)).await;
+    let preference = json!({"providerId": "fake", "modelId": "model"});
+
+    let (status, body) = request(
+        app.clone(),
+        Method::PUT,
+        "/v1/agent-models/general",
+        json!({"directory": "relative/dir", "preference": preference}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("absolute path")),
+        "{body}"
+    );
+
+    let (status, body) = request(
+        app.clone(),
+        Method::PUT,
+        "/v1/agent-models/general",
+        json!({"session": "not-a-session", "preference": preference}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], json!("invalid_argument"));
+
+    let dir = support::tempdir("agent-models-body-scope");
+    let (status, body) = request(
+        app.clone(),
+        Method::PUT,
+        "/v1/agent-models/general",
+        json!({"directory": dir.to_string_lossy(), "preference": preference}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // A query `directory` is not this rpc's mapping: ignored.
+    let (status, body) = request(
+        app,
+        Method::PUT,
+        "/v1/agent-models/general?directory=relative",
+        json!({"preference": preference}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

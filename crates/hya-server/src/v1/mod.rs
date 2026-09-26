@@ -42,8 +42,38 @@ use serde_json::{Value, json};
 use crate::ServerState;
 use hya_api::error::{ApiError, Code};
 
-/// Directory scope header (D6): overrides the `directory` request field.
-pub(crate) const DIRECTORY_HEADER: &str = "x-hya-directory";
+/// The removed directory scope header. The scope comes only from the
+/// request's `directory` field; a request (or gRPC call) that still sends
+/// this header is refused with [`removed_directory_header`] before any route
+/// runs, so an old client never silently loses its scope.
+pub(crate) const REMOVED_DIRECTORY_HEADER: &str = "x-hya-directory";
+
+/// The refusal of a request carrying [`REMOVED_DIRECTORY_HEADER`].
+pub(crate) const REMOVED_DIRECTORY_HEADER_MESSAGE: &str =
+    "the x-hya-directory header is no longer supported; set the request's directory field";
+
+/// Router middleware refusing the removed [`REMOVED_DIRECTORY_HEADER`] on
+/// every route — JSON, SSE, WebSocket, and the gRPC binding's in-process
+/// dispatch — before any handler runs. It sits inside the CORS layer, so a
+/// browser can read the `400 invalid_argument` answer.
+pub(crate) async fn directory_header_guard(
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Err(error) = removed_directory_header(request.headers()) {
+        return error.into_response();
+    }
+    next.run(request).await
+}
+
+/// `invalid_argument` when `headers` (HTTP headers or gRPC metadata) still
+/// carry the removed [`REMOVED_DIRECTORY_HEADER`], whatever its value.
+pub(crate) fn removed_directory_header(headers: &axum::http::HeaderMap) -> Result<(), V1Error> {
+    if headers.contains_key(REMOVED_DIRECTORY_HEADER) {
+        return Err(V1Error::invalid_argument(REMOVED_DIRECTORY_HEADER_MESSAGE));
+    }
+    Ok(())
+}
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -210,26 +240,20 @@ impl IntoResponse for V1Error {
     }
 }
 
-/// The directory scope a request names, if any.
+/// The directory scope a request names, if any: its `directory` field
+/// (a query parameter on GET/DELETE, a body field otherwise; gRPC sets the
+/// message field). Headers are never consulted — the removed
+/// `x-hya-directory` header is refused before any route runs.
 ///
-/// Precedence: the `x-hya-directory` header, then the request's `directory`
-/// field. `hya serve` has no working directory of its own (ADR-0024), so
-/// there is no fallback: `Ok(None)` means the request named no scope. A
-/// relative scope would resolve against the server process's cwd, so it is
+/// `hya serve` has no working directory of its own (ADR-0024), so there is
+/// no fallback: `Ok(None)` means the request named no scope. A relative
+/// scope would resolve against the server process's cwd, so it is
 /// `invalid_argument`.
-pub(crate) fn request_scope(
-    headers: &axum::http::HeaderMap,
-    requested: &str,
-) -> Result<Option<std::path::PathBuf>, V1Error> {
-    let named = headers
-        .get(DIRECTORY_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|header| !header.is_empty())
-        .or_else(|| Some(requested.trim()).filter(|field| !field.is_empty()));
-    let Some(named) = named else {
+pub(crate) fn request_scope(requested: &str) -> Result<Option<std::path::PathBuf>, V1Error> {
+    let named = requested.trim();
+    if named.is_empty() {
         return Ok(None);
-    };
+    }
     let path = std::path::PathBuf::from(named);
     if !path.is_absolute() {
         return Err(V1Error::invalid_argument(format!(
@@ -250,10 +274,9 @@ pub(crate) fn request_scope(
 /// global view.
 pub(crate) async fn catalog_scope(
     st: &crate::ServerState,
-    headers: &axum::http::HeaderMap,
     requested: &str,
 ) -> Result<crate::support::catalog_place::CatalogPlace, V1Error> {
-    let directory = request_scope(headers, requested)?;
+    let directory = request_scope(requested)?;
     Ok(crate::support::catalog_place::CatalogPlace::for_directory(st, directory).await)
 }
 
@@ -281,15 +304,12 @@ pub(crate) async fn scope_session(
 ///
 /// Fails with `invalid_argument` when the request names none; the server
 /// never substitutes its own working directory.
-pub(crate) fn scope_directory(
-    headers: &axum::http::HeaderMap,
-    requested: &str,
-) -> Result<std::path::PathBuf, V1Error> {
-    request_scope(headers, requested)?.ok_or_else(|| {
-        V1Error::invalid_argument(format!(
-            "this rpc needs a directory scope: send the `{DIRECTORY_HEADER}` header or \
-             the request's `directory` field (hya serve has no working directory)"
-        ))
+pub(crate) fn scope_directory(requested: &str) -> Result<std::path::PathBuf, V1Error> {
+    request_scope(requested)?.ok_or_else(|| {
+        V1Error::invalid_argument(
+            "this rpc needs a directory scope: set the request's `directory` field \
+             (hya serve has no working directory)",
+        )
     })
 }
 

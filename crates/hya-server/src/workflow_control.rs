@@ -82,10 +82,9 @@ pub trait WorkflowControl: Send + Sync {
 
     /// List the Workflow catalog for an optional directory scope.
     ///
-    /// `scope` is the exact directory the caller named (the `x-hya-directory`
-    /// header first, then the request's `directory` field). `None` means the
-    /// caller named no directory: the project-less global
-    /// catalog (user and bundle rows only, `hya serve` has no working
+    /// `scope` is the exact directory the caller named in the request's
+    /// `directory` field. `None` means the caller named no directory: the
+    /// project-less global catalog (user and bundle rows only, `hya serve` has no working
     /// directory of its own, ADR-0024). The default answers empty so tests
     /// and callers without an installed control still see a valid response.
     fn list(

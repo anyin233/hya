@@ -781,7 +781,7 @@ async fn v1_list_workflows_forwards_the_named_directory_scope() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
-    // The `x-hya-directory` header wins over a field naming a different scope.
+    // The removed `x-hya-directory` header is refused, never forwarded.
     let header_dir = std::env::temp_dir().join("hya-v1-list-workflows-header");
     let response = app
         .clone()
@@ -798,8 +798,8 @@ async fn v1_list_workflows_forwards_the_named_directory_scope() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let seen = control.seen.lock().unwrap().clone();
-    assert_eq!(seen, vec![None, Some(field_dir), Some(header_dir)]);
+    assert_eq!(seen, vec![None, Some(field_dir)]);
 }

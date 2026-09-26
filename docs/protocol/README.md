@@ -24,22 +24,30 @@ live events and the same `serverStopping` frame at shutdown.
 
 All HTTP routes live under `/v1`. The backend has **no working directory**
 of its own (ADR-0024): the client says which directory a request works on.
-Requests that accept a scope take a `directory` field (query parameter for
-GETs, body field otherwise); the `x-hya-directory` request header overrides
-the field on any HTTP request. gRPC clients set the request's `directory`
-field. A scope must be an absolute path on the backend machine; a relative
-one is `invalid_argument`.
+A request names its scope **only** in its `directory` field, following the
+rpc's protojson mapping: a query parameter on GET and DELETE
+(`?directory=/abs/dir`), a JSON body field on POST, PUT, and PATCH. gRPC
+clients set the request message's `directory` field. A scope must be an
+absolute path on the backend machine; a relative one is `invalid_argument`.
+
+The `x-hya-directory` header is removed. A request that still sends it
+(any value, on any route: JSON, SSE, WebSocket) is refused with `400
+invalid_argument` and the message `the x-hya-directory header is no longer
+supported; set the request's directory field`; gRPC metadata
+`x-hya-directory` is refused the same way (`InvalidArgument`, unary and
+streaming). An old client therefore fails loudly instead of silently losing
+its scope.
 
 Each rpc either needs a scope, prefers one, reads it from its session, or
 ignores it:
 
 | Scope | Rpcs | Without a scope |
 |---|---|---|
-| Required | `ReadFile`, `ListDirectory`, `FindFiles`, `SearchText`, `SearchSymbols`; `GetVcsStatus`, `GetVcsDiff`, `ApplyPatch`; `ListWorktrees`, `CreateWorktree`, `DeleteWorktree`, `ResetWorktree`; `GetCurrentProject`; `CreatePty` (its `cwd`, else the scope) | `invalid_argument` ("this rpc needs a directory scope") |
+| Required | `ReadFile`, `ListDirectory`, `FindFiles`, `SearchText`, `SearchSymbols`; `GetVcsStatus`, `GetVcsDiff`, `ApplyPatch`; `ListWorktrees`, `CreateWorktree`, `DeleteWorktree` (query), `ResetWorktree` (body); `GetCurrentProject`; `CreatePty` (its `cwd`, else its `directory`) | `invalid_argument` ("this rpc needs a directory scope") |
 | Optional | `ListAgents`, `ListCommands`, `ListSkills`, `GetBootstrap`, `ListAgentModels`, `SetAgentModel`, `ListPermissionModes`, `ListBundleApis` (each without `session`), `ListWorkflows` | The global view: builtins, installed bundles, and user skills (`~/.config/hya/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`); no `.hya/commands`, `.hya/skills`, or `.agents/skills` of any project and no Project bundle (permission modes and bundle APIs of the base catalog only); builtin command templates keep `${path}` unexpanded. For `ListWorkflows`: the user and bundle Workflow tiers, with no project tier. |
 | From the session | turns (`CreateTurn` prompt, command, and shell), `ForkSession`, `ListAgentModels`/`SetAgentModel`/`ListPermissionModes`/`ListBundleApis` with `session` (wins over `directory`), workflow commands (`SubmitWorkflowCommand`, `GetWorkflowState`) | Always the session's recorded workdir and its catalog scope (its Project's roots for tools, commands, skills, and bundles); the request scope is not consulted |
 | From the request body | `CreateSession` (`workdir`, `projectId`, or `kind: temporary`; see [Projects and session placement](#projects-and-session-placement)), `ResolveProject`/`EnsureProjectForPath` (`path`) | As documented for each rpc |
-| Ignored | `GetLocation` (echoes the scope in `directory`, empty without one), `GetConfig`, `UpdateConfig`, `ListModels`, `ListProviders`, `GetProvider` and the provider/auth writes, `ListTools`, `ListSavedRules`, MCP rpcs, `ListInteractions`, `StreamGlobalEvents` | Works the same with or without a scope |
+| Ignored | `GetLocation` (echoes its `directory` field in `LocationInfo.directory`, empty without one), `GetConfig`, `UpdateConfig`, `ListModels`, `ListProviders`, `GetProvider` and the provider/auth writes, `ListTools`, `ListSavedRules`, MCP rpcs, `ListInteractions`, `StreamGlobalEvents` | Works the same with or without a scope |
 
 **Catalog scope of a directory.** An Optional catalog rpc resolves its
 directory through the Projects (the registered, unarchived Project whose
@@ -232,7 +240,7 @@ are CRUD records (not events); sessions record their Project and **kind**
 | `DeleteProject` | `DELETE /v1/projects/{id}` | `failed_precondition` while a non-archived root session belongs to it. |
 | `ResolveProject` | `GET /v1/projects/resolve?path=` | `{project?}`: the Project whose root contains `path` (component-wise; longest root wins). Never creates. |
 | `EnsureProjectForPath` | `POST /v1/projects/ensure` `{path}` | `{project, created}`: `ResolveProject`, else a new Project named after the last path component with `path` as its only root. |
-| `GetCurrentProject` | `GET /v1/projects/current` | `ResolveProject` of the `x-hya-directory` scope (or `directory`); `invalid_argument` without one, `not_found` when no Project contains it. |
+| `GetCurrentProject` | `GET /v1/projects/current?directory=` | `ResolveProject` of the `directory` scope; `invalid_argument` without one, `not_found` when no Project contains it. |
 | `ListProjectDirectories` | `GET /v1/projects/{id}/directories` | The roots. |
 | `InitProjectGit` | `POST /v1/projects/{id}/init-git` | `git init` in the primary root. |
 
@@ -908,7 +916,7 @@ selectable modes as `{modes: [{id, title, description, source}]}`: the
 built-in `manual` and `yolo` (`source: "builtin"`), then each bundle's modes
 as `<bundle-id>/<mode-id>` (`source`: the bundle id). Pass `session` for the
 modes that session accepts (its own catalog scope, its Project's bundles
-included), or `directory` (or `x-hya-directory`) for that directory's
+included), or `directory` for that directory's
 [catalog scope](#base-url-and-scoping); with neither, the global view lists only
 installed and first-party bundles' modes. Set one
 with `PATCH /v1/sessions/{session}` and `{"permissionMode": "yolo"}`
@@ -1134,7 +1142,7 @@ the bundle id percent-encoded as one path segment
   the declared template (`/items/{id}`); the schemas are the declared JSON
   Schema documents. Optional `session` lists the endpoints of that
   session's catalog scope (its Project's bundles included); optional
-  `directory` (or `x-hya-directory`) those of the directory's catalog scope;
+  `directory` those of the directory's catalog scope;
   with neither, only installed and first-party bundles' endpoints (a
   Project bundle's endpoints are never listed globally).
 - Session scope — `GET|POST|PUT|PATCH|DELETE
@@ -1179,7 +1187,7 @@ PUT /v1/bundles/acme%2Fnotes/api/notes/todo   {"text":"ship it"}
 ## Terminal (PTY)
 
 `POST /v1/pty` creates a session. The shell starts in the request's `cwd`
-(absolute), else in the directory scope; with neither the call is
+(absolute), else in its `directory` body field; with neither the call is
 `invalid_argument`. `POST /v1/pty/{id}/connect-token` mints a
 one-time ticket. `GET /v1/pty/{id}/connect?ticket=...` upgrades to a
 WebSocket speaking the same frames as the gRPC `StreamPty` rpc:
@@ -1280,7 +1288,7 @@ characters (it may carry the relay's text).
 
 ```
 1. GET  /v1/health                                  → verify liveness
-2. GET  /v1/bootstrap  (x-hya-directory: <abs dir>) → config + catalogs of that directory
+2. GET  /v1/bootstrap?directory=<abs dir>           → config + catalogs of that directory
 3. POST /v1/sessions        {agent, model, workdir} → {session: {id, projectId}}
 4. GET  /v1/sessions/{id}/events/stream             → SSE subscribe
 5. POST /v1/sessions/{id}/turns {prompt: {text, attachments?}} → {turn: {id, state}}

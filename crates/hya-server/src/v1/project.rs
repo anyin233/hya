@@ -6,7 +6,6 @@ use std::path::PathBuf;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::HeaderMap;
 use axum::routing::{get, post};
 
 use super::Json;
@@ -132,10 +131,9 @@ async fn list_projects(
 async fn current_project(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ProjectInfo>, V1Error> {
     let request: pb::GetCurrentProjectRequest = super::query_request(&[], &query)?;
-    let scope = scope_directory(&headers, &request.directory)?;
+    let scope = scope_directory(&request.directory)?;
     let scope = scope.to_string_lossy();
     let project = st
         .engine
@@ -275,10 +273,9 @@ async fn init_project_git(
 async fn get_vcs_status(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::VcsStatus>, V1Error> {
     let request: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &request.directory)?;
+    let workdir = scope_directory(&request.directory)?;
     let branch = crate::support::git::branch(&workdir);
     let head = tokio::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -339,11 +336,10 @@ fn file_status(file: &crate::support::git::FileStatus) -> i32 {
 async fn get_vcs_diff(
     State(_st): State<ServerState>,
     Query(query): Query<Vec<(String, String)>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::GetVcsDiffResponse>, V1Error> {
     let request: pb::GetVcsDiffRequest =
         super::query_request_pairs(&[], query.iter().map(|(k, v)| (k, v)), &["paths"])?;
-    let workdir = scope_directory(&headers, &request.directory)?;
+    let workdir = scope_directory(&request.directory)?;
     let paths = diff_paths(&request.paths)?;
     // `raw` is accepted and ignored: the diff is always git's unified patch.
     let diff = if crate::support::git::is_repo(&workdir) {
@@ -383,13 +379,9 @@ fn diff_paths(paths: &[String]) -> Result<Vec<String>, V1Error> {
 
 async fn apply_patch(
     State(_st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
     Json(request): Json<pb::ApplyPatchRequest>,
 ) -> Result<Json<pb::ApplyPatchResponse>, V1Error> {
-    let scope: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &scope.directory)?;
-    let _ = &request.directory;
+    let workdir = scope_directory(&request.directory)?;
     if !crate::support::git::is_repo(&workdir) {
         return Err(V1Error::invalid_argument(
             "patch cannot be applied: the directory is not a git repository",

@@ -199,12 +199,15 @@ pub(crate) struct Call {
 }
 
 /// The headers a gRPC call's dispatch forwards (besides `host`): the
-/// browser markers the relay guard and the relay-control rpcs check.
-const FORWARDED_HEADERS: [&str; 4] = [
+/// browser markers the relay guard and the relay-control rpcs check, and the
+/// removed `x-hya-directory` scope header, so the router's guard refuses it
+/// on a binding used without [`crate::GrpcHostLayer`] too.
+const FORWARDED_HEADERS: [&str; 5] = [
     "origin",
     "sec-fetch-site",
     "sec-fetch-mode",
     "sec-fetch-dest",
+    super::REMOVED_DIRECTORY_HEADER,
 ];
 
 impl Call {
@@ -1376,12 +1379,18 @@ impl pb::worktrees_server::Worktrees for V1Grpc {
     ) -> Result<GrpcResponse<pb::DeleteWorktreeResponse>, Status> {
         let (ctx, inner) = split(request);
         let worktree = field(&inner, "worktree");
+        // A DELETE carries its fields (`directory`, `deleteBranch`) as
+        // query parameters; the path names the worktree.
+        let query = query_of(&pb::DeleteWorktreeRequest {
+            worktree: String::new(),
+            ..inner
+        });
         into_response(
             self.dispatch::<_, _>(
                 &ctx,
                 "DELETE",
                 &format!("/v1/worktrees/{worktree}"),
-                BTreeMap::new(),
+                query,
                 &pb::DeleteWorktreeRequest::default(),
             )
             .await?,
@@ -1398,7 +1407,10 @@ impl pb::worktrees_server::Worktrees for V1Grpc {
             self.post(
                 &ctx,
                 &format!("/v1/worktrees/{worktree}/reset"),
-                &pb::ResetWorktreeRequest::default(),
+                &pb::ResetWorktreeRequest {
+                    worktree: String::new(),
+                    directory: inner.directory,
+                },
             )
             .await?,
         )

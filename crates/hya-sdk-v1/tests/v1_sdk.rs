@@ -207,3 +207,25 @@ async fn sdk_manages_projects_and_project_sessions() {
         "{error:?}"
     );
 }
+
+/// The SDK names its directory scope in the request's `directory` field
+/// (the server refuses the removed `x-hya-directory` header).
+#[tokio::test]
+async fn sdk_scopes_bootstrap_by_the_directory_field() {
+    let base = serve().await;
+    let scope = std::env::temp_dir().canonicalize().unwrap();
+    let scope = scope.to_string_lossy().into_owned();
+    let sdk = V1Sdk::new(base.clone(), scope.clone());
+    let bootstrap = sdk.bootstrap().await.expect("bootstrap");
+    assert_eq!(
+        bootstrap.location.expect("location").directory,
+        scope,
+        "bootstrap answers for the SDK's directory"
+    );
+    // No scope: the global view, without a directory.
+    let bootstrap = V1Sdk::new(base, "")
+        .bootstrap()
+        .await
+        .expect("unscoped bootstrap");
+    assert!(bootstrap.location.expect("location").directory.is_empty());
+}

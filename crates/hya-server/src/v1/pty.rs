@@ -64,15 +64,12 @@ async fn list_shells() -> Result<Json<pb::ListShellsResponse>, V1Error> {
 
 async fn create_pty(
     State(st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
     Json(request): Json<pb::CreatePtyRequest>,
 ) -> Result<Json<pb::PtySession>, V1Error> {
-    let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    // The shell starts in the request's `cwd`, else the directory scope;
+    // The shell starts in the request's `cwd`, else its `directory` scope;
     // never in the server's own working directory (ADR-0024).
     let cwd = if request.cwd.trim().is_empty() {
-        scope_directory(&headers, &scope.directory)?
+        scope_directory(&request.directory)?
             .to_string_lossy()
             .into_owned()
     } else if std::path::Path::new(request.cwd.trim()).is_absolute() {

@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::HeaderMap;
 use axum::routing::{get, post};
 
 use super::Json;
@@ -33,10 +32,9 @@ fn worktree_info(value: serde_json::Value) -> pb::Worktree {
 async fn list_worktrees(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListWorktreesResponse>, V1Error> {
     let request: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &request.directory)?;
+    let source = scope_directory(&request.directory)?;
     let infos = crate::support::worktree_git::infos(&source)
         .await
         .map_err(V1Error::internal)?;
@@ -50,12 +48,9 @@ async fn list_worktrees(
 
 async fn create_worktree(
     State(_st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
     Json(request): Json<pb::CreateWorktreeRequest>,
 ) -> Result<Json<pb::Worktree>, V1Error> {
-    let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &scope.directory)?;
+    let source = scope_directory(&request.directory)?;
     let requested = if request.name.is_empty() {
         None
     } else {
@@ -72,11 +67,11 @@ async fn create_worktree(
 async fn delete_worktree(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::DeleteWorktreeResponse>, V1Error> {
-    let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &scope.directory)?;
+    let request: pb::DeleteWorktreeRequest =
+        super::query_request(&[("worktree", id.as_str())], &query)?;
+    let source = scope_directory(&request.directory)?;
     let removed = crate::support::worktree_git::remove(&source, &id)
         .await
         .map_err(V1Error::internal)?;
@@ -91,12 +86,11 @@ async fn delete_worktree(
 
 async fn reset_worktree(
     State(_st): State<ServerState>,
-    Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
+    body: Option<Json<pb::ResetWorktreeRequest>>,
 ) -> Result<Json<pb::Worktree>, V1Error> {
-    let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &scope.directory)?;
+    let request = body.map(|Json(request)| request).unwrap_or_default();
+    let source = scope_directory(&request.directory)?;
     let reset = crate::support::worktree_git::reset(&source, &id)
         .await
         .map_err(V1Error::internal)?;

@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::HeaderMap;
 use axum::routing::{delete, get, post, put};
 
 use super::Json;
@@ -51,10 +50,9 @@ pub(crate) fn router() -> Router<ServerState> {
 async fn list_agents(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListAgentsResponse>, V1Error> {
     let request: pb::ListAgentsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let place = catalog_scope(&st, &request.directory).await?;
     let agents = agent_rows(&st, &place).await?;
     Ok(Json(paginated_agents(agents, &request.page)))
 }
@@ -364,10 +362,9 @@ async fn get_provider(
 async fn list_commands(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListCommandsResponse>, V1Error> {
     let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let place = catalog_scope(&st, &request.directory).await?;
     let commands = command_rows(&place);
     let (commands, page) = paginate(commands, &request.page);
     Ok(Json(pb::ListCommandsResponse {
@@ -397,10 +394,9 @@ pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
 async fn list_skills(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListSkillsResponse>, V1Error> {
     let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
-    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let place = catalog_scope(&st, &request.directory).await?;
     let skills = skill_rows(&place);
     let (skills, page) = paginate(skills, &request.page);
     Ok(Json(pb::ListSkillsResponse {
@@ -440,13 +436,12 @@ async fn list_tools(
 async fn list_permission_modes(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListPermissionModesResponse>, V1Error> {
     let request: pb::ListPermissionModesRequest = super::query_request(&[], &query)?;
     let modes = match super::scope_session(&st, &request.session).await? {
         Some(session) => st.engine.session_permission_modes(session).await?,
         None => {
-            let place = catalog_scope(&st, &headers, &request.directory).await?;
+            let place = catalog_scope(&st, &request.directory).await?;
             if matches!(place.scope(), hya_core::CatalogScope::Global) {
                 // Q7: the global view is the base catalog only.
                 st.engine.permission_modes().await

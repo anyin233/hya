@@ -6,7 +6,6 @@ use std::str::FromStr;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::HeaderMap;
 use axum::routing::get;
 
 use super::Json;
@@ -33,10 +32,9 @@ pub(crate) fn router() -> Router<ServerState> {
 async fn list_workflows(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListWorkflowsResponse>, V1Error> {
     let request: pb::ListWorkflowsRequest = super::query_request(&[], &query)?;
-    let scope = request_scope(&headers, &request.directory)?;
+    let scope = request_scope(&request.directory)?;
     let rows = st
         .workflow_control
         .list(scope)
