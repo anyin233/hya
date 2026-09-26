@@ -92,9 +92,10 @@ pub use output_cap::{
     MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_spilling, cap_tool_output_with_policy,
 };
 pub use permission::{
-    Action, AskRequest, Decision, ExactSubject, Invocation, InvocationDecision, InvocationPolicy,
-    InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,
-    PermissionRules, PermissionTarget, RememberScope, Resource, Rule, glob_match,
+    Action, AskRequest, Decision, ExactSubject, GrantScope, Invocation, InvocationDecision,
+    InvocationPolicy, InvocationRule, Mode, PermissionError, PermissionInterceptor,
+    PermissionModel, PermissionPlane, PermissionRules, PermissionTarget, RememberScope, Resource,
+    Rule, glob_match,
 };
 pub use project_scope::ProjectScope;
 pub use skill::{SkillError, SkillInfo, SkillPlane};
