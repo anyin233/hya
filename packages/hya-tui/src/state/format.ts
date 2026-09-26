@@ -1,6 +1,6 @@
 /** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
 import type { WebInfo } from "../cli"
-import type { Interaction, SessionInfo, TodoItem, TokenUsage } from "../client"
+import type { Interaction, ModelSummary, SessionInfo, TodoItem, TokenUsage } from "../client"
 import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
@@ -11,6 +11,14 @@ import type { AppState } from "./store"
 export function modelReference(session: SessionInfo): string {
   const model = session.model
   return model?.providerId && model.modelId ? `${model.providerId}/${model.modelId}` : ""
+}
+
+/** The open session's model catalog row (`ModelSummary.id` is `providerId/modelId`), or `undefined` when it is not in the catalog (unknown capabilities, so nothing is refused on its account). */
+export function currentModel(state: Pick<AppState, "selected" | "models">): ModelSummary | undefined {
+  const session = state.selected
+  if (!session) return undefined
+  const ref = modelReference(session)
+  return ref ? state.models.find((model) => model.id === ref) : undefined
 }
 
 /** Cut `text` to `width` columns with a trailing `…` (no-op when it fits or width is unset). */

@@ -29,6 +29,7 @@ import type {
   MemberInfo,
   MessageInfo,
   ModelSummary,
+  PromptAttachment,
   StreamEvent,
   ProviderSummary,
   SavedRule,
@@ -62,6 +63,8 @@ export interface QueuedPrompt {
   text: string
   /** A `!command`: sent as a `ShellTurn`. */
   shell?: boolean
+  /** Resolved `@path` image attachments (composer/attachments.ts), sent with the prompt on `CreateTurn`. */
+  attachments?: PromptAttachment[]
   /** `sending` while its CreateTurn is in flight (hidden from the transcript). */
   state: "queued" | "sending"
 }
@@ -566,8 +569,10 @@ export function createAppStore() {
     /** A `resync` dropped frames: see `TranscriptOverlay.markLiveLost`. */
     markLiveLost(): void { fold.markLiveLost() },
 
-    enqueue(text: string, session: string, shell = false): QueuedPrompt {
-      const item: QueuedPrompt = { id: ++queueIds, session, text, ...(shell ? { shell: true } : {}), state: "queued" }
+    enqueue(text: string, session: string, shell = false, attachments?: PromptAttachment[]): QueuedPrompt {
+      const item: QueuedPrompt = {
+        id: ++queueIds, session, text, ...(shell ? { shell: true } : {}), ...(attachments?.length ? { attachments } : {}), state: "queued",
+      }
       set("queued", [...state.queued, item])
       return item
     },

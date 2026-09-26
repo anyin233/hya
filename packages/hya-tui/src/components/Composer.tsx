@@ -4,6 +4,7 @@ import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
 import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
+import { attachmentLabel, imageMentionPaths, pastedImagePath, type AttachmentPreview } from "../composer/attachments"
 import { escapeAction } from "../composer/escape"
 import { InputHistory } from "../composer/history"
 import { insertMention, mentionAt, type MentionToken } from "../composer/mention"
@@ -85,6 +86,8 @@ export function Composer() {
   const [rows, setRows] = createSignal(1)
   const [menu, setMenu] = createSignal<FileMenu | undefined>()
   const [cmdMenu, setCmdMenu] = createSignal<CmdMenu | undefined>()
+  /** Pending `@path` image attachments of the current text (composer/attachments.ts), shown above the input; an `error` entry blocks submit. */
+  const [attachments, setAttachments] = createSignal<AttachmentPreview[]>([])
   const history = new InputHistory()
   const quitGuard = createQuitGuard()
   let choices: string[] = []
@@ -100,6 +103,8 @@ export function Composer() {
   let dismissed: string | undefined
   let lookupTimer: ReturnType<typeof setTimeout> | undefined
   let lookupTicket = 0
+  let attachmentTimer: ReturnType<typeof setTimeout> | undefined
+  let attachmentTicket = 0
   let hintTimer: ReturnType<typeof setTimeout> | undefined
   /** The Provider View is open: keys and pastes go to it (the editor keeps its text). */
   const providersOpen = () => store.state.providerView !== undefined
@@ -128,8 +133,26 @@ export function Composer() {
 
   onCleanup(() => {
     if (lookupTimer) clearTimeout(lookupTimer)
+    if (attachmentTimer) clearTimeout(attachmentTimer)
     if (hintTimer) clearTimeout(hintTimer)
   })
+
+  /** Refresh the pending-attachment row for the current text (debounced like `@file` lookups). */
+  function updateAttachments(text: string): void {
+    if (attachmentTimer) clearTimeout(attachmentTimer)
+    if (!imageMentionPaths(text).length) {
+      attachmentTicket++
+      setAttachments([])
+      return
+    }
+    const ticket = ++attachmentTicket
+    attachmentTimer = setTimeout(() => {
+      attachmentTimer = undefined
+      void controller.previewAttachments(text).then((items) => {
+        if (ticket === attachmentTicket) setAttachments(items)
+      })
+    }, mentionDebounceMs)
+  }
 
   /** Rows the text needs at the editor's width (wrapped lines counted), capped at `composerMaxRows`. */
   function measure(): void {
@@ -254,6 +277,7 @@ export function Composer() {
     }
     updateCommandMenu()
     updateMention()
+    updateAttachments(text)
   }
 
   function complete(): void {
@@ -598,7 +622,26 @@ export function Composer() {
     }
     // A bracketed paste never submits: its line breaks (CR from xterm.js) become newlines.
     // eslint-disable-next-line no-control-regex
-    editor?.insertText(text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n"))
+    const cleaned = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n")
+    // A terminal pastes a file dragged into the window as its path (quoted or
+    // escaped when it has spaces): turn it into an `@path ` mention instead
+    // of raw text when the path exists, so it resolves like a typed mention.
+    const candidate = pastedImagePath(cleaned)
+    if (candidate && editor) {
+      const cursor = editor.cursorOffset
+      const token: MentionToken = { start: cursor, end: cursor, query: "" }
+      void controller.fileExists(candidate).then((exists) => {
+        if (!editor) return
+        if (exists) {
+          const next = insertMention(editor.plainText, token, candidate)
+          replace(next.text, next.cursor)
+        } else {
+          editor.insertText(cleaned)
+        }
+      })
+      return
+    }
+    editor?.insertText(cleaned)
   })
 
   return (
@@ -630,6 +673,13 @@ export function Composer() {
             <text height={1} wrapMode="none" fg={colors.muted}>Up/Down select · Tab/Enter insert · Esc closes</text>
           </box>
         )}
+      </Show>
+      <Show when={attachments().length > 0}>
+        <box width="100%" flexShrink={0} flexDirection="column">
+          <For each={attachments()}>
+            {(item) => <text height={1} wrapMode="none" fg={item.error ? colors.warning : colors.muted}>{attachmentLabel(item)}</text>}
+          </For>
+        </box>
       </Show>
       <box
         width="100%"

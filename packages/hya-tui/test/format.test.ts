@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { askSessionLabel, compactionText, contextText, otherAskNotice, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { askSessionLabel, compactionText, contextText, currentModel, otherAskNotice, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -201,4 +201,14 @@ test("the context box names the session a fork came from", () => {
   store.setSessions([{ id: "hysec_src", agent: "build", workdir: "/w", title: "Parser" }])
   store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", forkedFrom: { session: "hysec_src", messageId: "m" } })
   expect(contextText(store.state, server, 30).split("\n")[1]).toBe("Forked   from Parser")
+})
+
+test("currentModel looks up the open session's model in the catalog by providerId/modelId; unknown when absent", () => {
+  const store = createAppStore()
+  expect(currentModel(store.state)).toBeUndefined()
+  store.applyBootstrap({ models: [{ id: "openai/gpt-4o", imageInput: false }, { id: "anthropic/claude", imageInput: true }] })
+  store.setSelected({ id: "s1", agent: "main", workdir: "/tmp", model: { providerId: "openai", modelId: "gpt-4o" } })
+  expect(currentModel(store.state)?.imageInput).toBe(false)
+  store.setSelected({ id: "s1", agent: "main", workdir: "/tmp", model: { providerId: "unknown", modelId: "x" } })
+  expect(currentModel(store.state)).toBeUndefined()
 })

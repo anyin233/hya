@@ -14,6 +14,7 @@
 import { TextAttributes } from "@opentui/core"
 import { createMemo, For, Match, Show, Switch, type JSX } from "solid-js"
 import { useApp } from "../app/context"
+import { formatBytes } from "../composer/attachments"
 import { childStatus, taskLink, type ChildStatus } from "../state/members"
 import { waitingKind } from "../state/prompts"
 import { reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
@@ -66,12 +67,20 @@ function NoticeMessage(props: { view: MessageView }) {
   return <text width="100%" wrapMode="word" fg={props.view.tone === "warning" ? colors.warning : colors.muted}>{text()}</text>
 }
 
+/** `↳ attachment · name · mime · 240 KB` (mime/size omitted when unknown): shared by user messages (the prompt's own attachments) and assistant blocks. */
+function attachmentText(block: Extract<Block, { kind: "attachment" }>): string {
+  const bytes = block.size !== undefined ? Number(block.size) : undefined
+  const detail = [block.mime, bytes !== undefined && Number.isFinite(bytes) ? formatBytes(bytes) : undefined].filter(Boolean).join(" · ")
+  return `↳ attachment · ${block.name}${detail ? ` · ${detail}` : ""}`
+}
+
 function UserMessage(props: { view: MessageView }) {
   const text = () => props.view.blocks.map((block) => (block.kind === "text" ? block.text : "")).filter(Boolean).join("\n")
+  const attachments = () => props.view.blocks.filter((block): block is Extract<Block, { kind: "attachment" }> => block.kind === "attachment")
   return (
     <box
       width="100%"
-      flexDirection="row"
+      flexDirection="column"
       border={["left"]}
       borderStyle="heavy"
       borderColor={props.view.queued ? colors.muted : colors.accent}
@@ -79,10 +88,15 @@ function UserMessage(props: { view: MessageView }) {
       paddingLeft={1}
       paddingRight={1}
     >
-      <text flexGrow={1} wrapMode="word" fg={props.view.queued ? colors.muted : colors.fg}>{text()}</text>
-      <Show when={props.view.queued}>
-        <text flexShrink={0} fg={colors.muted}> queued</text>
-      </Show>
+      <box width="100%" flexDirection="row">
+        <text flexGrow={1} wrapMode="word" fg={props.view.queued ? colors.muted : colors.fg}>{text()}</text>
+        <Show when={props.view.queued}>
+          <text flexShrink={0} fg={colors.muted}> queued</text>
+        </Show>
+      </box>
+      <For each={attachments()}>
+        {(block) => <text wrapMode="word" fg={colors.muted}>{attachmentText(block)}</text>}
+      </For>
     </box>
   )
 }
@@ -139,7 +153,7 @@ function BlockView(props: { block: Block; streaming: boolean }) {
         {(block) => <ToolCard block={block()} />}
       </Match>
       <Match when={props.block.kind === "attachment" && props.block}>
-        {(block) => <text fg={colors.muted}>{`↳ attachment · ${block().name}`}</text>}
+        {(block) => <text fg={colors.muted}>{attachmentText(block())}</text>}
       </Match>
     </Switch>
   )

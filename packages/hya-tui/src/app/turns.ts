@@ -23,7 +23,7 @@
  *   shows `Cancelling…` until the turn ends, then `Cancelled · Ready`.
  */
 import { batch } from "solid-js"
-import { HttpError, type HyaClient } from "../client"
+import { HttpError, type HyaClient, type PromptAttachment } from "../client"
 import { assistantRole, toolCallsFinish, type FinishedInfo, type OverlayEffect } from "../state/overlay"
 import type { AppStore, QueuedPrompt } from "../state/store"
 
@@ -137,7 +137,7 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
     for (let attempt = 0; ; attempt++) {
       if (store.state.selected?.id !== item.session) return true
       try {
-        const turn = await client.createTurn(item.session, item.text)
+        const turn = await client.createTurn(item.session, item.text, item.attachments)
         if (store.state.selected?.id !== item.session) return true
         store.dequeue(item.id)
         // The whole turn may already have streamed past before the response.
@@ -189,10 +189,10 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
 
   return {
     /** Queue a prompt (or, with `shell`, a shell command) for the selected session and send it when the session is free. */
-    async submit(text: string, options: { shell?: boolean } = {}): Promise<void> {
+    async submit(text: string, options: { shell?: boolean; attachments?: PromptAttachment[] } = {}): Promise<void> {
       const session = store.state.selected?.id
       if (!session) throw new Error("No session is open")
-      store.enqueue(text, session, options.shell)
+      store.enqueue(text, session, options.shell, options.attachments)
       if (store.state.running || active) {
         status(store.state.turnId ? runningStatus() : `Queued · ${waiting().length} waiting`)
         return
