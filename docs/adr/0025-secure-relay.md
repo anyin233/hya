@@ -66,9 +66,10 @@ Implemented with the `snow` crate.
   byte is decrypted or delivered to the router.
 - **Forward secrecy** from fresh ephemeral keys per stream.
 - **Framing:** Noise messages are at most 65535 bytes; application data is
-  chunked (default 16 KiB, configurable) and each record is length-prefixed
-  inside the relay message's `bytes` payload. Any decryption failure closes
-  the stream.
+  chunked (default 16 KiB, configurable) and each record is exactly one
+  relay `Chunk.data` payload (the protobuf field is the length prefix). An
+  encrypted empty record marks the end of a direction, so a bare close is
+  detected as truncation. Any decryption failure closes the stream.
 
 ### D3 — Room identity and ownership
 

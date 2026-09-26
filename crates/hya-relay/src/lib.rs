@@ -14,9 +14,14 @@
 //!   gRPC or WebSocket binding, plus an in-memory pair for tests.
 //! - [`link`] — [`link::RelayLink`], the `hya://` relay link (the client
 //!   credential), and [`link::RoomId`] derivation.
+//! - [`keys`] — the Noise static X25519 keypair and the PSK.
+//! - [`tunnel`] — [`tunnel::NoiseStream`], the Noise `NKpsk0` tunnel over a
+//!   data stream, exposed as a tokio byte stream.
 //!
 //! This crate deliberately depends on no hya runtime crate.
 
+pub mod keys;
 pub mod link;
 pub mod proto;
 pub mod transport;
+pub mod tunnel;

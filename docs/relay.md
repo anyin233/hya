@@ -102,6 +102,81 @@ the local direction (half-close); sending after the peer is gone fails with
 pair for tests; `MemoryTransport::inject_error` delivers a failure to the
 peer.
 
+### Tunnel encryption
+
+Every data stream carries one end-to-end encrypted tunnel,
+`hya_relay::tunnel::NoiseStream`. It runs the Noise handshake over the
+stream's `Chunk` frames and then behaves as a plain tokio byte stream
+(`AsyncRead + AsyncWrite`), so the backend can serve HTTP over it with
+`hyper` and a client bridge can splice a TCP connection into it.
+
+| Property | Value |
+| --- | --- |
+| Pattern | `Noise_NKpsk0_25519_ChaChaPoly_BLAKE2s` (`snow`, pure-Rust primitives) |
+| Initiator | The client: knows the backend's static X25519 public key and the 32-byte PSK (both from the link fragment) |
+| Responder | The backend: holds the static X25519 keypair and the PSK |
+| Prologue | `"hya.relay.v1/noise\0"` followed by the room id (ASCII), binding the session to its room (`tunnel::prologue`) |
+| Handshake | Two messages, each one `Chunk.data`: `-> psk, e, es` (sent as soon as the initiator is constructed), `<- e, ee`. Empty payloads. |
+| Records | Every Noise transport message is exactly one `Chunk.data`; the protobuf field is its length. At most 65535 bytes of ciphertext: plaintext is split into records of at most 16 KiB by default (`TunnelConfig::with_max_record_plaintext`, 1..=65519) plus a 16-byte tag. |
+| End of direction | An encrypted empty record (the close record), then `Chunk.close{}` |
+
+Usage (the host connector and bridge wire this up; shown with an in-memory
+transport):
+
+```rust
+use hya_relay::keys::{Psk, StaticKeypair};
+use hya_relay::tunnel::{NoiseStream, TunnelConfig};
+
+// Backend (responder), per accepted stream:
+let tunnel = NoiseStream::respond(accept_transport, &room_id, &keypair, &psk, TunnelConfig::default()).await?;
+// Client (initiator), per opened stream:
+let tunnel = NoiseStream::initiate_link(open_transport, &link, TunnelConfig::default()).await?;
+```
+
+`NoiseStream::initiate(transport, room_id, server_public, psk, config)` is
+the same without a link. Handshakes have no built-in timeout; wrap them in
+`tokio::time::timeout`.
+
+Behavior:
+
+- **Authentication.** A client with the wrong PSK, the wrong server key, or a
+  different room fails at the first handshake message on the backend
+  (`TunnelError::Handshake`), before any application byte exists. The
+  backend then sends `Chunk.close{}` (best effort) and drops the stream; the
+  client's handshake fails with `TunnelError::Handshake` too.
+- **Half-close.** `shutdown()` sends the close record and `Chunk.close{}`.
+  The peer's reads then return EOF, and the peer can keep writing until it
+  shuts down its own direction. Writing after `shutdown()` fails with
+  `BrokenPipe`.
+- **Truncation.** A `Chunk.close{}` or end of stream that is not preceded by
+  the close record fails the read with `UnexpectedEof`
+  (`TunnelError::Truncated`), so a hop cannot silently cut a response short.
+- **Tampering.** A record that fails authentication (modified, replayed,
+  dropped, or reordered — Noise nonces are implicit counters) fails the read
+  with `InvalidData` (`TunnelError::Decrypt`). No plaintext from that record
+  is returned, and every later read and write on the stream fails.
+- **Relay errors.** A `Chunk.error` frame or a transport status fails the
+  stream with `TunnelError::Relay { code, message }` (I/O kind derived from
+  the code: `NOT_FOUND` → `NotFound`, `UNAVAILABLE`/`CANCELLED` →
+  `ConnectionReset`, `DEADLINE_EXCEEDED` → `TimedOut`, …).
+- **Heartbeats.** `Chunk.heartbeat` frames are invisible to the byte stream,
+  during and after the handshake. A probe (`pong=false`) is answered with a
+  pong echoing its `seq`, also after the local direction is shut down. The
+  tunnel does not send probes itself. Other frame kinds (for example a proxy
+  acknowledgement) are ignored.
+- **Backpressure.** A record is encrypted only when the transport can accept
+  it, so a slow peer blocks `write` instead of growing a buffer.
+- **Errors.** Data-path failures are `std::io::Error`s whose inner error
+  (`get_ref()`) is a `TunnelError`: `InvalidConfig`, `Handshake`,
+  `Transport`, `Relay{code, message}`, `Decrypt`, `Truncated`, `Protocol`.
+  Messages never contain key material or payload bytes.
+
+Keys (`hya_relay::keys`): `StaticKeypair::generate()` /
+`StaticKeypair::from_secret([u8; 32])` (derives the public key; `secret()`,
+`public()`), and `Psk::generate()` / `Psk::from_bytes([u8; 32])`
+(`as_bytes()`). Secrets are zeroized on drop and redacted in `Debug`;
+persisting them is the host connector's job.
+
 ### Relay link grammar
 
 A relay link is the one string a client needs, and it is the credential:
