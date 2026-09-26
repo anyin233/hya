@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
 use axum::routing::get;
 
 use super::Json;
@@ -63,10 +62,9 @@ async fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
 async fn read_file(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ReadFileResponse>, V1Error> {
     let request: pb::ReadFileRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory)?;
+    let root = scope_directory(&request.directory)?;
     let path = resolve_under(&root, &request.path)?;
     let bytes = read_capped(&path, request.max_bytes)
         .await
@@ -84,10 +82,9 @@ async fn read_file(
 async fn list_directory(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListDirectoryResponse>, V1Error> {
     let request: pb::ListDirectoryRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory)?;
+    let root = scope_directory(&request.directory)?;
     let dir = resolve_under(&root, &request.path)?;
     let mut entries = Vec::new();
     let mut read_dir = tokio::fs::read_dir(&dir)
@@ -129,10 +126,9 @@ async fn list_directory(
 async fn find_files(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::FindFilesResponse>, V1Error> {
     let request: pb::FindFilesRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory)?;
+    let root = scope_directory(&request.directory)?;
     let limit = if request.limit == 0 {
         500
     } else {
@@ -157,10 +153,9 @@ async fn find_files(
 async fn search_text(
     State(_st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::SearchTextResponse>, V1Error> {
     let request: pb::SearchTextRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory)?;
+    let root = scope_directory(&request.directory)?;
     let limit = if request.limit == 0 {
         200
     } else {
@@ -206,10 +201,9 @@ async fn search_text(
 async fn search_symbols(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::SearchSymbolsResponse>, V1Error> {
     let request: pb::SearchSymbolsRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory)?;
+    let root = scope_directory(&request.directory)?;
     let symbols = st
         .engine
         .lsp()

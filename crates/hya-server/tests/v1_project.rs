@@ -130,13 +130,22 @@ async fn call_with(
     } else {
         Body::from(body.to_string())
     };
-    let mut request = Request::builder()
+    // The scope travels in the request's `directory` field (a query
+    // parameter on these GETs).
+    let uri = match directory {
+        Some(directory) => {
+            let separator = if uri.contains('?') { '&' } else { '?' };
+            format!(
+                "{uri}{separator}directory={}",
+                directory.replace('/', "%2F")
+            )
+        }
+        None => uri.to_owned(),
+    };
+    let request = Request::builder()
         .method(method)
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/json");
-    if let Some(directory) = directory {
-        request = request.header("x-hya-directory", directory);
-    }
     let resp = app
         .clone()
         .oneshot(request.body(body).unwrap())

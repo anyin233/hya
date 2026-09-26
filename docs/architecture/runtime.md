@@ -82,8 +82,8 @@ the server process's cwd:
   resident revival, fork, command expansion, and workflow runs read it from
   the projection; a projection without one is a missing session
   (`CoreError::Invalid` / `session_not_found`), never a fallback to `.`.
-- An rpc that works on a directory takes it from the request (`x-hya-directory`
-  or `directory`, absolute) or from the session it names; without either it
+- An rpc that works on a directory takes it from the request's `directory`
+  field (absolute) or from the session it names; without either it
   fails with `invalid_argument` (per-rpc table in
   [the protocol guide](../protocol/README.md#base-url-and-scoping)).
 - Catalog listings that only prefer a directory (agents, commands, skills,
