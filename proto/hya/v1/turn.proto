@@ -43,6 +43,27 @@ service Turn {
 message PromptTurn {
   // User text recorded as the next user message.
   string text = 1;
+  // Images sent to the model with the text (at most 10 MiB each and 20 MiB
+  // per turn). Recorded atomically with the user message; listed back as
+  // `AttachmentPart`s without their bytes. A bad attachment, or one for a
+  // model that declares no image input, fails the call with
+  // `invalid_argument` and admits nothing.
+  repeated PromptAttachment attachments = 2;
+}
+
+// One image attached to a prompt turn.
+message PromptAttachment {
+  // File name shown in the transcript and sent to the model (required).
+  string name = 1;
+  // MIME type: `image/png`, `image/jpeg`, `image/gif`, or `image/webp`.
+  // Empty lets the server detect it from the bytes; when set it must match
+  // them.
+  string mime = 2;
+  // The image bytes (standard base64 in protojson).
+  bytes data = 3;
+  // Where the client read the file from; recorded for display only, never
+  // read by the server.
+  string path = 4;
 }
 
 // A slash-command turn.

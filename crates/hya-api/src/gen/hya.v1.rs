@@ -640,6 +640,11 @@ pub struct ModelSummary {
     /// `offline` (the built-in `hya/offline` row).
     #[prost(string, tag = "9")]
     pub source: ::prost::alloc::string::String,
+    /// Whether the model accepts image input (config `modalities.input`
+    /// contains `image`); unset when unknown. Prompt turns with attachments
+    /// are refused only when this is `false`.
+    #[prost(bool, optional, tag = "10")]
+    pub image_input: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListModelsResponse {
@@ -4578,7 +4583,8 @@ pub struct ToolResultPart {
     #[prost(string, tag = "4")]
     pub error_message: ::prost::alloc::string::String,
 }
-/// A binary or file attachment on a message.
+/// A binary or file attachment on a message (for example an image attached
+/// to a prompt turn).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AttachmentPart {
     /// Attachment file name.
@@ -4587,12 +4593,17 @@ pub struct AttachmentPart {
     /// MIME type when known.
     #[prost(string, tag = "2")]
     pub mime: ::prost::alloc::string::String,
-    /// Inline payload when the backend stored it inline; empty otherwise.
+    /// Inline payload. Transcript reads (`ListMessages`, `GetMessage`, the
+    /// `partsAdded` stream frame) leave it empty: prompt images are stored
+    /// once in the session's blob store and only sent to the model.
     #[prost(bytes = "vec", tag = "3")]
     pub data: ::prost::alloc::vec::Vec<u8>,
-    /// Path reference when the attachment is stored on disk.
+    /// The client-side path the attachment was read from, when it sent one.
     #[prost(string, tag = "4")]
     pub path: ::prost::alloc::string::String,
+    /// Size of the attachment in bytes.
+    #[prost(uint64, tag = "5")]
+    pub size: u64,
 }
 /// One part of a message body.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -6458,7 +6469,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -6536,7 +6547,22 @@ pub mod stream_event {
         /// brings them back. A later `messageStarted` commits a pending revert.
         #[prost(message, tag = "23")]
         SessionReverted(super::SessionReverted),
+        /// Complete parts were added to a message in one step (durable): the
+        /// images attached to a prompt turn, as `AttachmentPart`s without their
+        /// bytes. Append them to the message after its text.
+        #[prost(message, tag = "24")]
+        PartsAdded(super::PartsAdded),
     }
+}
+/// Complete parts added to a message in one step.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartsAdded {
+    /// Owning message identifier.
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+    /// The added parts, in message order.
+    #[prost(message, repeated, tag = "2")]
+    pub parts: ::prost::alloc::vec::Vec<PartInfo>,
 }
 /// A session revert or its undo.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -13549,6 +13575,32 @@ pub struct PromptTurn {
     /// User text recorded as the next user message.
     #[prost(string, tag = "1")]
     pub text: ::prost::alloc::string::String,
+    /// Images sent to the model with the text (at most 10 MiB each and 20 MiB
+    /// per turn). Recorded atomically with the user message; listed back as
+    /// `AttachmentPart`s without their bytes. A bad attachment, or one for a
+    /// model that declares no image input, fails the call with
+    /// `invalid_argument` and admits nothing.
+    #[prost(message, repeated, tag = "2")]
+    pub attachments: ::prost::alloc::vec::Vec<PromptAttachment>,
+}
+/// One image attached to a prompt turn.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PromptAttachment {
+    /// File name shown in the transcript and sent to the model (required).
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// MIME type: `image/png`, `image/jpeg`, `image/gif`, or `image/webp`.
+    /// Empty lets the server detect it from the bytes; when set it must match
+    /// them.
+    #[prost(string, tag = "2")]
+    pub mime: ::prost::alloc::string::String,
+    /// The image bytes (standard base64 in protojson).
+    #[prost(bytes = "vec", tag = "3")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+    /// Where the client read the file from; recorded for display only, never
+    /// read by the server.
+    #[prost(string, tag = "4")]
+    pub path: ::prost::alloc::string::String,
 }
 /// A slash-command turn.
 #[derive(Clone, PartialEq, ::prost::Message)]

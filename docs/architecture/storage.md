@@ -155,7 +155,8 @@ paid lazily by the first read of that session.
 ### `0012_file_blob.sql`
 
 Adds `file_blob`, the content store behind session revert
-([Runtime — File snapshots and revert](runtime.md#file-snapshots-and-revert)):
+([Runtime — File snapshots and revert](runtime.md#file-snapshots-and-revert))
+and, since R4 of 0.41.0, prompt image attachments (no schema change):
 
 | Column | Constraint |
 | --- | --- |
@@ -172,8 +173,13 @@ missing row only makes that one file unrestorable (the revert reports it as
 `failed`).
 
 Store API: `put_file_blob(session, hash, content)` (`INSERT OR IGNORE`),
-`file_blob(session, hash) -> Option<Vec<u8>>`, and
-`file_blob_bytes(session) -> u64` (the engine's per-session cap check).
+`file_blob(session, hash) -> Option<Vec<u8>>`,
+`file_blob_bytes(session) -> u64` (the engine's per-session cap check), and
+`append_events_with_blobs(session, blobs, events)`, which inserts blobs and
+appends events in one transaction (an image prompt: its images and its user
+message). Prompt images are referenced from `user_prompt_context_recorded`
+by hash, so the event log and projection snapshots stay small and replay is
+unchanged: the fold never reads blobs; only a model request does.
 
 ### `0005_resident_actor_claim.sql` (claim table)
 

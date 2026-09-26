@@ -169,16 +169,21 @@ message ToolResultPart {
   string error_message = 4;
 }
 
-// A binary or file attachment on a message.
+// A binary or file attachment on a message (for example an image attached
+// to a prompt turn).
 message AttachmentPart {
   // Attachment file name.
   string name = 1;
   // MIME type when known.
   string mime = 2;
-  // Inline payload when the backend stored it inline; empty otherwise.
+  // Inline payload. Transcript reads (`ListMessages`, `GetMessage`, the
+  // `partsAdded` stream frame) leave it empty: prompt images are stored
+  // once in the session's blob store and only sent to the model.
   bytes data = 3;
-  // Path reference when the attachment is stored on disk.
+  // The client-side path the attachment was read from, when it sent one.
   string path = 4;
+  // Size of the attachment in bytes.
+  uint64 size = 5;
 }
 
 // One part of a message body.

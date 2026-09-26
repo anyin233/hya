@@ -9,10 +9,26 @@ use crate::runtime_registry::CompiledResourceView;
 
 use hya_provider::COMPACT_CONTEXT_MARKER;
 
+/// Prompt image data by blob hash (`data:` URLs), loaded from the session's
+/// blob table for the messages a request sends.
+pub(super) type AttachmentData = std::collections::HashMap<String, String>;
+
+/// Blob hashes (with their image type) of the prompt images in the messages
+/// a request sends (after the latest compaction).
+pub(super) fn attachment_blobs(projection: &Projection) -> Vec<(String, String)> {
+    compacted_messages(projection)
+        .iter()
+        .filter(|message| message.role == Role::User)
+        .flat_map(|message| crate::attachments::recorded_attachments(&message.files))
+        .map(|attachment| (attachment.blob, attachment.mime))
+        .collect()
+}
+
 pub(super) fn projection_to_messages(
     agent: &AgentSpec,
     projection: &Projection,
     model: &ModelRef,
+    attachments: &AttachmentData,
 ) -> Vec<Message> {
     compacted_messages(projection)
         .iter()
@@ -20,7 +36,7 @@ pub(super) fn projection_to_messages(
         .map(|m| match m.role {
             Role::User => Message::User {
                 id: m.id,
-                parts: user_parts(m),
+                parts: user_parts(m, attachments),
             },
             Role::Assistant => Message::Assistant {
                 id: m.id,
@@ -142,13 +158,35 @@ fn collect_text(parts: &[PartProjection]) -> String {
     s
 }
 
-fn user_parts(message: &MessageProjection) -> Vec<Part> {
+fn user_parts(message: &MessageProjection, attachments: &AttachmentData) -> Vec<Part> {
     let mut parts = map_parts(&message.parts);
-    parts.extend(message.files.iter().filter_map(media_part));
+    parts.extend(
+        message
+            .files
+            .iter()
+            .filter_map(|file| media_part(file, attachments)),
+    );
     parts
 }
 
-fn media_part(file: &Value) -> Option<Part> {
+fn media_part(file: &Value, attachments: &AttachmentData) -> Option<Part> {
+    if let Some(attachment) = crate::attachments::RecordedAttachment::from_entry(file) {
+        // A prompt image: its bytes live in the session blob table.
+        let Some(data) = attachments.get(&attachment.blob) else {
+            tracing::warn!(
+                blob = %attachment.blob,
+                name = %attachment.name,
+                "prompt image blob missing; the image is left out of the request"
+            );
+            return None;
+        };
+        return Some(Part::Media {
+            id: attachment.part.parse().unwrap_or_else(|_| PartId::new()),
+            media_type: attachment.mime,
+            data: data.clone(),
+            filename: Some(attachment.name),
+        });
+    }
     let media_type = file.get("mime").and_then(Value::as_str)?;
     let data = file
         .get("uri")

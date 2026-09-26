@@ -134,6 +134,23 @@ empty — a prompt with no `@mentions` leaves no context event in the log, and
 consumers must not expect one per user message. When present, that metadata is
 replayed through the projection and provider request builder.
 
+`admit_user_prompt_with_attachments(session, text, attachments)` admits a
+prompt with images ([`attachments.rs`](../../crates/hya-core/src/attachments.rs)):
+it validates them (PNG/JPEG/GIF/WebP by signature, 10 MiB each, 20 MiB per
+turn), then in **one** store transaction
+(`SessionStore::append_events_with_blobs`) writes each image to the session's
+`file_blob` table under its sha256 and appends `message_started`, the text
+part, `user_prompt_context_recorded` (one `image_attachment` entry per image,
+naming the blob) and `message_finished`. A crash or error leaves either the
+whole prompt or nothing. When a round builds its request, the engine loads the
+blobs of the images in the messages it sends (after the latest compaction)
+and turns each entry into a `Part::Media` `data:` URL, which the provider
+routes encode as their native image blocks. A missing blob drops that image
+from the request (logged) rather than failing the turn. A fork copies the
+blobs of the copied messages into the new session. The server checks the
+turn's model first (`root_turn_model` + `Capabilities::image_input`) and
+refuses images for a model that declares no image input.
+
 ## Session-state mutators
 
 These methods are thin single-event emitters (append + publish) with no other
@@ -964,7 +981,11 @@ Limits, so snapshots never grow without bound:
 | bash pre-capture: bytes read | 16 MiB (`MAX_DIRTY_BYTES`) | `omitted` / `snapshot_budget` |
 | each git call | 10 s | the bash call is not captured |
 
-Blobs are deduplicated by hash within a session and deleted with it. A
+Blobs are deduplicated by hash within a session and deleted with it. Prompt
+images (see [Prompt Admission](#prompt-admission)) share the table: they are always
+stored (their own limits are 10 MiB each, 20 MiB per turn), and they count
+toward the 256 MiB session total, so a session with many images keeps fewer
+file snapshots. A
 capture problem never fails the tool call; an `omitted` file is simply not
 restored. The bash capture compares the tree before and after the command,
 so a file some other process changed while the command ran is recorded too.

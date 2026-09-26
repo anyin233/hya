@@ -466,6 +466,7 @@ async fn grpc_session_stream_delivers_live_assistant_deltas() {
             session: session.clone(),
             kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
                 text: "stream please".into(),
+                ..Default::default()
             })),
         })
         .await

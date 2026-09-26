@@ -1013,6 +1013,7 @@ One selectable model.
 | `context_limit` (7) | `uint64` | Context window of the route in tokens: the configured `limit.context`, else the route's advertised default. 0 when unknown. |
 | `output_limit` (8) | `uint64` | Maximum output tokens (`limit.output`); 0 when unknown. |
 | `source` (9) | `string` | Where the row comes from: `remote` (the provider's remote model list, via the model cache), `config` (only a `models:` entry in `config.yaml`), `override` (both; config fields win field by field), or `offline` (the built-in `hya/offline` row). |
+| `image_input` (10) | `optional bool` | Whether the model accepts image input (config `modalities.input` contains `image`); unset when unknown. Prompt turns with attachments are refused only when this is `false`. |
 
 ### `ListModelsResponse`
 
@@ -1374,6 +1375,16 @@ One curated projected event from the event log.
 | `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
 | `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
 | `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
+| `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
+
+### `PartsAdded`
+
+Complete parts added to a message in one step.
+
+| Field | Type | Description |
+|---|---|---|
+| `message` (1) | `string` | Owning message identifier. |
+| `parts` (2) | `repeated PartInfo` | The added parts, in message order. |
 
 ### `SessionReverted`
 
@@ -1958,14 +1969,16 @@ The outcome of a tool invocation.
 
 ### `AttachmentPart`
 
-A binary or file attachment on a message.
+A binary or file attachment on a message (for example an image attached
+to a prompt turn).
 
 | Field | Type | Description |
 |---|---|---|
 | `name` (1) | `string` | Attachment file name. |
 | `mime` (2) | `string` | MIME type when known. |
-| `data` (3) | `bytes` | Inline payload when the backend stored it inline; empty otherwise. |
-| `path` (4) | `string` | Path reference when the attachment is stored on disk. |
+| `data` (3) | `bytes` | Inline payload. Transcript reads (`ListMessages`, `GetMessage`, the `partsAdded` stream frame) leave it empty: prompt images are stored once in the session's blob store and only sent to the model. |
+| `path` (4) | `string` | The client-side path the attachment was read from, when it sent one. |
+| `size` (5) | `uint64` | Size of the attachment in bytes. |
 
 ### `PartInfo`
 
@@ -2582,6 +2595,18 @@ A plain user prompt turn.
 | Field | Type | Description |
 |---|---|---|
 | `text` (1) | `string` | User text recorded as the next user message. |
+| `attachments` (2) | `repeated PromptAttachment` | Images sent to the model with the text (at most 10 MiB each and 20 MiB per turn). Recorded atomically with the user message; listed back as `AttachmentPart`s without their bytes. A bad attachment, or one for a model that declares no image input, fails the call with `invalid_argument` and admits nothing. |
+
+### `PromptAttachment`
+
+One image attached to a prompt turn.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` (1) | `string` | File name shown in the transcript and sent to the model (required). |
+| `mime` (2) | `string` | MIME type: `image/png`, `image/jpeg`, `image/gif`, or `image/webp`. Empty lets the server detect it from the bytes; when set it must match them. |
+| `data` (3) | `bytes` | The image bytes (standard base64 in protojson). |
+| `path` (4) | `string` | Where the client read the file from; recorded for display only, never read by the server. |
 
 ### `CommandTurn`
 

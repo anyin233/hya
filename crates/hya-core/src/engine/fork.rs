@@ -106,7 +106,8 @@ impl SessionEngine {
             if before.is_some_and(|id| id == message.id) {
                 break;
             }
-            self.copy_message(target, message).await?;
+            self.copy_message(target, source.session.id, message)
+                .await?;
         }
         Ok(())
     }
@@ -114,8 +115,20 @@ impl SessionEngine {
     async fn copy_message(
         &self,
         session: SessionId,
+        from: Option<SessionId>,
         source: &MessageProjection,
     ) -> Result<(), CoreError> {
+        // Prompt images live in the source session's blob table; the copy
+        // needs its own (blobs are removed with their session).
+        if let Some(from) = from {
+            for attachment in crate::attachments::recorded_attachments(&source.files) {
+                if let Some(bytes) = self.store.file_blob(from, &attachment.blob).await? {
+                    self.store
+                        .put_file_blob(session, &attachment.blob, &bytes)
+                        .await?;
+                }
+            }
+        }
         let message = MessageId::new();
         self.emit(
             session,

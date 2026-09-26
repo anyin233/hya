@@ -44,6 +44,17 @@ pub use provider_control::{
 pub use state::AppState;
 pub(crate) use state::ServerState;
 pub use v1::V1Grpc;
+
+/// Largest `CreateTurn` HTTP JSON body the server reads: room for the 20 MiB
+/// prompt-attachment budget after base64 (4/3) plus the rest of the request.
+/// A larger body fails in the transport (HTTP 413) before any validation.
+pub const MAX_TURN_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+
+/// Largest `CreateTurn` gRPC message (`TurnServer::max_decoding_message_size`):
+/// binary bytes that still fit [`MAX_TURN_REQUEST_BYTES`] once the binding
+/// re-encodes them as protojson (base64) for the shared router. A larger
+/// message fails with gRPC `out_of_range` before any validation.
+pub const MAX_TURN_GRPC_MESSAGE_BYTES: usize = MAX_TURN_REQUEST_BYTES / 4 * 3;
 pub use workflow_control::{
     WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
 };
