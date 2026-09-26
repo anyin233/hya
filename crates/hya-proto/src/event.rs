@@ -97,12 +97,24 @@ pub enum Event {
         /// Full permission rule list after the set.
         permission: Vec<serde_json::Value>,
     },
-    /// Session archived stamp applied.
+    /// A root session was archived (hidden from default session lists).
+    ///
+    /// Folds `SessionProjection.archived` to the stamp. Archiving never
+    /// cancels a running turn. A zero stamp (written by the deleted Compat
+    /// surface to clear the archive) folds as not archived.
     SessionArchived {
         /// Session this event belongs to.
         session: SessionId,
-        /// Archive marker (compat numeric stamp).
+        /// Unix epoch milliseconds when the session was archived.
         archived: serde_json::Number,
+    },
+    /// A root session left the archive: explicitly, or implicitly because a
+    /// new prompt or shell turn was admitted on it. Folds
+    /// `SessionProjection.archived` to `None`. An older binary folds it as
+    /// `Unknown`.
+    SessionUnarchived {
+        /// Session this event belongs to.
+        session: SessionId,
     },
     /// Share URL recorded for the session.
     SessionShareSet {
@@ -1136,6 +1148,7 @@ impl Event {
             | Event::SessionMetadataSet { session, .. }
             | Event::SessionPermissionSet { session, .. }
             | Event::SessionArchived { session, .. }
+            | Event::SessionUnarchived { session, .. }
             | Event::SessionShareSet { session, .. }
             | Event::SessionShareCleared { session, .. }
             | Event::AgentSwitched { session, .. }

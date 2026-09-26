@@ -72,27 +72,68 @@ impl SessionEngine {
         .await
     }
 
-    /// Mark the session archived or active.
+    /// Archive a root session: hide it from default session lists.
     ///
-    /// Archiving (a nonzero flag) is the session-close signal, so it notifies
-    /// the `session.end` hook best-effort.
-    pub async fn set_archived(
-        &self,
-        session: SessionId,
-        archived: serde_json::Number,
-    ) -> Result<(), CoreError> {
-        self.emit(session, Event::SessionArchived { session, archived })
-            .await?;
-        if self
-            .read_projection(session)
-            .await
-            .ok()
-            .and_then(|projection| projection.session.archived)
-            .is_some_and(|stamp| stamp != serde_json::Number::from(0))
-        {
+    /// Appends `SessionArchived` stamped with the current time and returns
+    /// `true`, or returns `false` without appending when the session is
+    /// already archived (the first stamp is kept). A running turn is not
+    /// cancelled; it finishes on the archived session. Archiving is the
+    /// session-close signal, so it notifies the `session.end` hook
+    /// best-effort.
+    ///
+    /// # Errors
+    /// `CoreError::Invalid` for an unknown session (`"session not found"`) or
+    /// a subagent child session, plus store failures.
+    pub async fn archive_session(&self, session: SessionId) -> Result<bool, CoreError> {
+        if !self.set_session_archived(session, true).await? {
+            return Ok(false);
+        }
+        if self.turn_active(session) {
+            // The running turn still reads the session's captured bundle
+            // hooks and channel policy: fire `session.end` without the
+            // teardown that drops them.
+            self.notify_session_end_keeping_state(session).await;
+        } else {
             self.notify_session_lifecycle(session, false).await;
         }
-        Ok(())
+        Ok(true)
+    }
+
+    /// Unarchive a session; returns whether `SessionUnarchived` was
+    /// appended (`false` when it was not archived, including every subagent
+    /// child). Notifies the `session.start` hook best-effort when it was.
+    ///
+    /// # Errors
+    /// `CoreError::Invalid("session not found")` for an unknown session, plus
+    /// store failures.
+    pub async fn unarchive_session(&self, session: SessionId) -> Result<bool, CoreError> {
+        let changed = self.set_session_archived(session, false).await?;
+        if changed {
+            self.notify_session_lifecycle(session, true).await;
+        }
+        Ok(changed)
+    }
+
+    async fn set_session_archived(
+        &self,
+        session: SessionId,
+        archived: bool,
+    ) -> Result<bool, CoreError> {
+        let projection = self.read_projection_shared(session).await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+            });
+        let event = hya_proto::session_archive_event(&projection, archived, now)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        match event {
+            Some(event) => {
+                self.emit(session, event).await?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     /// Record a share URL for the session.

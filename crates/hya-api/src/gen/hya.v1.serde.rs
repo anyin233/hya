@@ -12942,6 +12942,12 @@ impl serde::Serialize for ListSessionsRequest {
         if self.page.is_some() {
             len += 1;
         }
+        if self.include_archived {
+            len += 1;
+        }
+        if self.archived_only {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ListSessionsRequest", len)?;
         if !self.directory.is_empty() {
             struct_ser.serialize_field("directory", &self.directory)?;
@@ -12951,6 +12957,12 @@ impl serde::Serialize for ListSessionsRequest {
         }
         if let Some(v) = self.page.as_ref() {
             struct_ser.serialize_field("page", v)?;
+        }
+        if self.include_archived {
+            struct_ser.serialize_field("includeArchived", &self.include_archived)?;
+        }
+        if self.archived_only {
+            struct_ser.serialize_field("archivedOnly", &self.archived_only)?;
         }
         struct_ser.end()
     }
@@ -12965,6 +12977,10 @@ impl<'de> serde::Deserialize<'de> for ListSessionsRequest {
             "directory",
             "parent",
             "page",
+            "include_archived",
+            "includeArchived",
+            "archived_only",
+            "archivedOnly",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -12972,6 +12988,8 @@ impl<'de> serde::Deserialize<'de> for ListSessionsRequest {
             Directory,
             Parent,
             Page,
+            IncludeArchived,
+            ArchivedOnly,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12996,6 +13014,8 @@ impl<'de> serde::Deserialize<'de> for ListSessionsRequest {
                             "directory" => Ok(GeneratedField::Directory),
                             "parent" => Ok(GeneratedField::Parent),
                             "page" => Ok(GeneratedField::Page),
+                            "includeArchived" | "include_archived" => Ok(GeneratedField::IncludeArchived),
+                            "archivedOnly" | "archived_only" => Ok(GeneratedField::ArchivedOnly),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13018,6 +13038,8 @@ impl<'de> serde::Deserialize<'de> for ListSessionsRequest {
                 let mut directory__ = None;
                 let mut parent__ = None;
                 let mut page__ = None;
+                let mut include_archived__ = None;
+                let mut archived_only__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Directory => {
@@ -13038,12 +13060,26 @@ impl<'de> serde::Deserialize<'de> for ListSessionsRequest {
                             }
                             page__ = map_.next_value()?;
                         }
+                        GeneratedField::IncludeArchived => {
+                            if include_archived__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeArchived"));
+                            }
+                            include_archived__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ArchivedOnly => {
+                            if archived_only__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archivedOnly"));
+                            }
+                            archived_only__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ListSessionsRequest {
                     directory: directory__.unwrap_or_default(),
                     parent: parent__.unwrap_or_default(),
                     page: page__,
+                    include_archived: include_archived__.unwrap_or_default(),
+                    archived_only: archived_only__.unwrap_or_default(),
                 })
             }
         }
@@ -21894,6 +21930,12 @@ impl serde::Serialize for SessionInfo {
         if self.revert.is_some() {
             len += 1;
         }
+        if self.archived {
+            len += 1;
+        }
+        if self.archived_at.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -21945,6 +21987,12 @@ impl serde::Serialize for SessionInfo {
         if let Some(v) = self.revert.as_ref() {
             struct_ser.serialize_field("revert", v)?;
         }
+        if self.archived {
+            struct_ser.serialize_field("archived", &self.archived)?;
+        }
+        if let Some(v) = self.archived_at.as_ref() {
+            struct_ser.serialize_field("archivedAt", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -21976,6 +22024,9 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "forked_from",
             "forkedFrom",
             "revert",
+            "archived",
+            "archived_at",
+            "archivedAt",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -21996,6 +22047,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             Usage,
             ForkedFrom,
             Revert,
+            Archived,
+            ArchivedAt,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22033,6 +22086,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "usage" => Ok(GeneratedField::Usage),
                             "forkedFrom" | "forked_from" => Ok(GeneratedField::ForkedFrom),
                             "revert" => Ok(GeneratedField::Revert),
+                            "archived" => Ok(GeneratedField::Archived),
+                            "archivedAt" | "archived_at" => Ok(GeneratedField::ArchivedAt),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22068,6 +22123,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut usage__ = None;
                 let mut forked_from__ = None;
                 let mut revert__ = None;
+                let mut archived__ = None;
+                let mut archived_at__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -22168,6 +22225,18 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             revert__ = map_.next_value()?;
                         }
+                        GeneratedField::Archived => {
+                            if archived__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archived"));
+                            }
+                            archived__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ArchivedAt => {
+                            if archived_at__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archivedAt"));
+                            }
+                            archived_at__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -22187,6 +22256,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     usage: usage__,
                     forked_from: forked_from__,
                     revert: revert__,
+                    archived: archived__.unwrap_or_default(),
+                    archived_at: archived_at__,
                 })
             }
         }
@@ -22721,6 +22792,9 @@ impl serde::Serialize for SessionUpdated {
         if self.permission_mode.is_some() {
             len += 1;
         }
+        if self.archived.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionUpdated", len)?;
         if let Some(v) = self.title.as_ref() {
             struct_ser.serialize_field("title", v)?;
@@ -22736,6 +22810,9 @@ impl serde::Serialize for SessionUpdated {
         }
         if let Some(v) = self.permission_mode.as_ref() {
             struct_ser.serialize_field("permissionMode", v)?;
+        }
+        if let Some(v) = self.archived.as_ref() {
+            struct_ser.serialize_field("archived", v)?;
         }
         struct_ser.end()
     }
@@ -22753,6 +22830,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
             "background",
             "permission_mode",
             "permissionMode",
+            "archived",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22762,6 +22840,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
             Agent,
             Background,
             PermissionMode,
+            Archived,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22788,6 +22867,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                             "agent" => Ok(GeneratedField::Agent),
                             "background" => Ok(GeneratedField::Background),
                             "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
+                            "archived" => Ok(GeneratedField::Archived),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22812,6 +22892,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                 let mut agent__ = None;
                 let mut background__ = None;
                 let mut permission_mode__ = None;
+                let mut archived__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Title => {
@@ -22844,6 +22925,12 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                             }
                             permission_mode__ = map_.next_value()?;
                         }
+                        GeneratedField::Archived => {
+                            if archived__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archived"));
+                            }
+                            archived__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(SessionUpdated {
@@ -22852,6 +22939,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                     agent: agent__,
                     background: background__,
                     permission_mode: permission_mode__,
+                    archived: archived__,
                 })
             }
         }
@@ -28416,6 +28504,9 @@ impl serde::Serialize for UpdateSessionRequest {
         if self.permission_mode.is_some() {
             len += 1;
         }
+        if self.archived.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.UpdateSessionRequest", len)?;
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
@@ -28435,6 +28526,9 @@ impl serde::Serialize for UpdateSessionRequest {
         if let Some(v) = self.permission_mode.as_ref() {
             struct_ser.serialize_field("permissionMode", v)?;
         }
+        if let Some(v) = self.archived.as_ref() {
+            struct_ser.serialize_field("archived", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -28452,6 +28546,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
             "background",
             "permission_mode",
             "permissionMode",
+            "archived",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -28462,6 +28557,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
             Agent,
             Background,
             PermissionMode,
+            Archived,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -28489,6 +28585,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                             "agent" => Ok(GeneratedField::Agent),
                             "background" => Ok(GeneratedField::Background),
                             "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
+                            "archived" => Ok(GeneratedField::Archived),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -28514,6 +28611,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                 let mut agent__ = None;
                 let mut background__ = None;
                 let mut permission_mode__ = None;
+                let mut archived__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Session => {
@@ -28552,6 +28650,12 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                             }
                             permission_mode__ = map_.next_value()?;
                         }
+                        GeneratedField::Archived => {
+                            if archived__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archived"));
+                            }
+                            archived__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(UpdateSessionRequest {
@@ -28561,6 +28665,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                     agent: agent__,
                     background: background__,
                     permission_mode: permission_mode__,
+                    archived: archived__,
                 })
             }
         }

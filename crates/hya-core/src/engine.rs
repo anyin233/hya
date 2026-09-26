@@ -1707,6 +1707,24 @@ impl SessionEngine {
         }
     }
 
+    /// `session.end` for a session whose turn is still running (archived
+    /// mid-turn): fires the startup and captured bundle hooks but keeps the
+    /// captured hooks and channel policy the turn still reads.
+    async fn notify_session_end_keeping_state(&self, session: SessionId) {
+        if let Some(hooks) = &self.hooks {
+            hooks.session_end(SessionLifecycleInput { session }).await;
+        }
+        let bundle_hooks = self
+            .session_bundle_hooks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
+            .cloned();
+        if let Some(hooks) = bundle_hooks {
+            hooks.session_end(SessionLifecycleInput { session }).await;
+        }
+    }
+
     pub(crate) async fn capture_session_bundle_hooks(
         &self,
         session: SessionId,

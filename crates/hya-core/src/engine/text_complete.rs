@@ -32,6 +32,7 @@ impl TextPartAccumulator {
             | Event::SessionPermissionModeSet { .. }
             | Event::SessionPermissionSet { .. }
             | Event::SessionArchived { .. }
+            | Event::SessionUnarchived { .. }
             | Event::SessionShareSet { .. }
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }

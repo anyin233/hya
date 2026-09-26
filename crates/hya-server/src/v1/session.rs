@@ -136,9 +136,17 @@ async fn list_sessions(
         }
         // The list query already carries each log's bounds; re-listing every
         // session per row made this O(sessions x events).
-        infos.push(
-            projection_info_at(&st, row.session, row.started_millis, row.updated_millis).await?,
-        );
+        let info =
+            projection_info_at(&st, row.session, row.started_millis, row.updated_millis).await?;
+        // Archived root sessions are hidden unless asked for.
+        let listed = if request.archived_only {
+            info.archived
+        } else {
+            request.include_archived || !info.archived
+        };
+        if listed {
+            infos.push(info);
+        }
     }
     infos.reverse();
     let (sessions, page) = super::catalog::paginate(infos, &request.page);
@@ -163,6 +171,20 @@ async fn update_session(
         return Err(V1Error::invalid_argument(format!(
             "unknown permission mode: {mode:?}"
         )));
+    }
+    // Only root sessions are archived: reject a child before any write.
+    if request.archived == Some(true)
+        && st
+            .engine
+            .read_projection_shared(session)
+            .await?
+            .session
+            .parent
+            .is_some()
+    {
+        return Err(V1Error::invalid_argument(
+            hya_proto::SessionArchiveError::NotRoot.to_string(),
+        ));
     }
     if let Some(title) = request.title
         && !title.is_empty()
@@ -198,7 +220,39 @@ async fn update_session(
             st.permission_requests.allow_tree_once(root).await;
         }
     }
+    match request.archived {
+        Some(true) => {
+            st.engine
+                .archive_session(session)
+                .await
+                .map_err(archive_error)?;
+        }
+        Some(false) => {
+            st.engine
+                .unarchive_session(session)
+                .await
+                .map_err(archive_error)?;
+        }
+        None => {}
+    }
     Ok(Json(projection_info(&st, session).await?))
+}
+
+fn archive_error(error: hya_core::CoreError) -> V1Error {
+    match error {
+        hya_core::CoreError::Invalid(message) => V1Error::invalid_argument(message),
+        other => V1Error::from(other),
+    }
+}
+
+/// Unarchive `session` because a new prompt, command, or shell turn was
+/// admitted on it (appends `SessionUnarchived` only when it was archived).
+pub(crate) async fn unarchive_for_turn(
+    st: &ServerState,
+    session: SessionId,
+) -> Result<(), V1Error> {
+    st.engine.unarchive_session(session).await?;
+    Ok(())
 }
 
 async fn delete_session(

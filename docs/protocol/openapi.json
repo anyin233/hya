@@ -690,7 +690,7 @@
       },
       "patch": {
         "operationId": "Session.UpdateSession",
-        "summary": "Update mutable session fields: title, agent, model, background flag.",
+        "summary": "Update mutable session fields: title, agent, model, background flag,",
         "tags": [
           "Session"
         ],
@@ -2226,6 +2226,9 @@
           },
           "permission_mode": {
             "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
           }
         }
       },
@@ -3955,6 +3958,13 @@
           },
           "revert": {
             "$ref": "#/components/schemas/SessionRevert"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "archived_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -4046,6 +4056,12 @@
           },
           "page": {
             "$ref": "#/components/schemas/PageRequest"
+          },
+          "include_archived": {
+            "type": "boolean"
+          },
+          "archived_only": {
+            "type": "boolean"
           }
         }
       },
@@ -4085,6 +4101,9 @@
           },
           "permission_mode": {
             "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
           }
         }
       },

@@ -165,7 +165,6 @@ side effects:
 | `set_workdir` | `SessionMoved` |
 | `set_metadata` | `SessionMetadataSet` |
 | `set_permission` | `SessionPermissionSet` |
-| `set_archived` | `SessionArchived` |
 | `set_share` | `SessionShareSet` |
 | `clear_share` | `SessionShareCleared` |
 | `delete_message` | `MessageDeleted` |
@@ -173,6 +172,14 @@ side effects:
 | `replace_text_part` | `TextReplace` |
 | `replace_reasoning_part` | `ReasoningReplace` |
 | `update_tool_part` | `ToolPartUpdated` |
+
+`archive_session` / `unarchive_session` append `SessionArchived` (stamped
+with the current time) / `SessionUnarchived` on a root session only when the
+archived state changes (both return whether they appended), and notify the
+`session.end` / `session.start` hooks. Archiving a subagent child session is
+`CoreError::Invalid`. Archiving a session whose turn is still running fires
+`session.end` but keeps the captured bundle hooks and channel policy the turn
+reads; the turn finishes normally.
 
 ## Durable Workflow Control
 

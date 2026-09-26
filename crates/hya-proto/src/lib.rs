@@ -57,7 +57,7 @@ pub use projection::{
     ArchivedEntry, ChannelProjection, ChannelResolveError, ContextStatusProjection,
     HandoffProjection, MailMessage, MemberProjection, MessageError, MessageProjection,
     PROJECTION_REDUCER_VERSION, PartProjection, Projection, ResidentWorkProjection, RosterEntry,
-    ScopedRoster, SessionProjection, TeamProjection,
+    ScopedRoster, SessionArchiveError, SessionProjection, TeamProjection, session_archive_event,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use revert::{FileChange, FileChangeRecord, FileRestore, FileState, RevertProjection};

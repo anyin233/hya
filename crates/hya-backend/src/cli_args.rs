@@ -150,11 +150,22 @@ pub(crate) enum Command {
         #[arg(long)]
         refresh: bool,
     },
-    /// List sessions stored in a database.
+    /// List sessions stored in a database (archived root sessions only with
+    /// `--all` or `--archived`), or archive/unarchive one.
     Sessions {
-        /// Override global SQLite database path for listing.
-        #[arg(long)]
+        /// Override global SQLite database path (also after `archive` and
+        /// `unarchive`).
+        #[arg(long, global = true)]
         db: Option<String>,
+        /// List archived root sessions too.
+        #[arg(long, conflicts_with = "archived")]
+        all: bool,
+        /// List only archived root sessions.
+        #[arg(long)]
+        archived: bool,
+        /// Archive or unarchive a session instead of listing.
+        #[command(subcommand)]
+        action: Option<crate::sessions_cmd::SessionsAction>,
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,

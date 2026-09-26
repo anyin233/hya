@@ -196,6 +196,8 @@ pub(crate) fn session_info(
             hidden_messages: u32::try_from(revert.hidden.len()).unwrap_or(u32::MAX),
             files: revert.files.iter().map(reverted_file).collect(),
         }),
+        archived: session.is_archived(),
+        archived_at: session.archived_at_millis().and_then(timestamp),
     }
 }
 
@@ -413,6 +415,18 @@ fn part(part: &PartProjection) -> Option<pb::PartInfo> {
     })
 }
 
+/// `sessionUpdated` carrying only the archived flag.
+fn archived_update(archived: bool) -> hya_api::v1::stream_event::Payload {
+    hya_api::v1::stream_event::Payload::SessionUpdated(pb::SessionUpdated {
+        title: None,
+        model: None,
+        agent: None,
+        background: None,
+        permission_mode: None,
+        archived: Some(archived),
+    })
+}
+
 /// Project one envelope onto the curated wire event stream.
 ///
 /// Returns `None` for internal-only events that the v1 surface does not
@@ -446,6 +460,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             agent: None,
             background: None,
             permission_mode: None,
+            archived: None,
         }),
         Event::AgentSwitched { agent, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
@@ -453,6 +468,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             agent: Some(agent.to_string()),
             background: None,
             permission_mode: None,
+            archived: None,
         }),
         Event::ModelSwitched { model, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
@@ -460,6 +476,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             agent: None,
             background: None,
             permission_mode: None,
+            archived: None,
         }),
         Event::SessionPermissionModeSet { mode, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
@@ -467,7 +484,13 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             agent: None,
             background: None,
             permission_mode: Some(mode.clone()),
+            archived: None,
         }),
+        // A legacy zero stamp cleared the archive.
+        Event::SessionArchived { archived, .. } => {
+            archived_update(archived.as_f64().is_some_and(|stamp| stamp != 0.0))
+        }
+        Event::SessionUnarchived { .. } => archived_update(false),
         Event::MessageStarted {
             message,
             role,

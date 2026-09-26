@@ -1,5 +1,12 @@
 # 0.41.0
 
+## Archived sessions
+
+- Root sessions can be archived and unarchived with `PATCH /v1/sessions/{id} {"archived": true|false}`. Archiving never cancels a running turn. A new prompt, command, or shell turn unarchives the session.
+- `SessionInfo` has `archived` and `archivedAt`. `ListSessions` hides archived sessions unless you pass `includeArchived=true` or `archivedOnly=true`. `sessionUpdated` carries the flag, so other clients update live.
+- `hya sessions --all` / `--archived` list archived sessions too, or only them. `hya sessions archive|unarchive <id>` changes one; while a server holds the database, the change goes through that server.
+- New durable event `session_unarchived`. The existing `session_archived` now carries a timestamp in milliseconds, and a zero stamp means unarchived. The projection reducer version is 7. See [Protocol guide](docs/protocol/README.md#archived-sessions).
+
 ## `config.yaml` edits keep your comments and formatting
 
 - When hya writes `config.yaml` (Provider View, the provider and model routes, OAuth login), it now changes only the affected lines. Comments, blank lines, key order, quoting, indentation, CRLF line endings, a BOM, and a leading `---` stay as they were.

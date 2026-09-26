@@ -54,6 +54,8 @@ pub(crate) async fn intercept_slash(
     st.engine
         .admit_command_prompt(session, request.command.clone(), arguments, text)
         .await?;
+    // Like any new command turn, `/workflow` brings an archived session back.
+    st.engine.unarchive_session(session).await?;
     let result = match execute_reserved(st, session, command, WorkflowDelivery::Started).await {
         Ok(result) => result,
         Err(error) => {

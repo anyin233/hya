@@ -97,7 +97,7 @@ their original typed values therefore remain visible in replay. Live-only
 fresh replay uses the persisted final state rather than reconstructing live
 stream deltas.
 
-### Full `Event` catalog (70 variants)
+### Full `Event` catalog (71 variants)
 
 Reducer effects:
 
@@ -117,7 +117,8 @@ Reducer effects:
 | `session_titled` | `session`, `title: String` | Fold: title |
 | `session_metadata_set` | `session`, `metadata: Value` | Fold: replaces metadata |
 | `session_permission_set` | `session`, `permission: Vec<Value>` | Fold: **replaces** the whole permission list (does not merge) |
-| `session_archived` | `session`, `archived: Number` | Fold: archived stamp |
+| `session_archived` | `session`, `archived: Number` | Fold: `archived` = the stamp (unix epoch milliseconds when the root session was archived). A zero stamp (the deleted Compat surface's "clear archive") folds as `None`. Appended by `SessionEngine::archive_session` only on a root session that is not archived (idempotent; the first stamp is kept). Archiving never cancels a running turn. v1: `SessionInfo.archived`/`archivedAt`, `sessionUpdated.archived: true`. Zero-stamp folding and `session_unarchived` arrived in projection reducer version 7. |
+| `session_unarchived` | `session` | Fold: `archived` → `None`. Appended by `SessionEngine::unarchive_session` when the session is archived: an explicit unarchive (`UpdateSession.archived: false`, `hya sessions unarchive`), or implicitly when the v1 surface admits a new prompt, command (including `/workflow`), or shell turn on it (before the turn's user message). Engine-internal continuations (goal/loop rounds, member wake-ups) do not unarchive. Older binaries fold it as `unknown`. v1: `sessionUpdated.archived: false`. |
 | `session_share_set` | `session`, `url: String` | Fold: share url |
 | `session_share_cleared` | `session` | Fold: share → `None` |
 | `agent_switched` | `session`, `message: Option<MessageId>`, `agent: AgentName` | Fold: session agent only (`message` is **not** stored on the session row). Engine emit always sets `message: Some(MessageId::new())` — a **fresh** id that is **not** a pointer into existing `SessionProjection.messages`. (The deleted Compat surface used that id as the identity of a **synthetic** switch pseudo-message in its message list, not as a transcript anchor.) |
@@ -597,7 +598,7 @@ Projection {
 | `title` | `session_titled` |
 | `metadata` | `session_metadata_set` |
 | `permission` | `session_permission_set` (replace) |
-| `archived` | `session_archived` |
+| `archived` | `session_archived` / `session_unarchived` (`None` when not archived; only root sessions are archived) |
 | `share` | `session_share_set` / `session_share_cleared` |
 | `messages` | message lifecycle + part events |
 | `members` | member lifecycle (parent log) |
