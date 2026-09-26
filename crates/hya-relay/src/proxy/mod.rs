@@ -47,7 +47,8 @@ use tokio_util::task::TaskTracker;
 
 pub use limits::{
     DEFAULT_ACCEPT_TIMEOUT, DEFAULT_EARLY_DATA_LIMIT, DEFAULT_HANDSHAKE_TIMEOUT,
-    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_ROOMS, DEFAULT_MAX_STREAMS_PER_PEER,
+    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
+    DEFAULT_MAX_ROOMS, DEFAULT_MAX_ROOMS_PER_PEER, DEFAULT_MAX_STREAMS_PER_PEER,
     DEFAULT_MAX_STREAMS_PER_ROOM, DEFAULT_STREAM_RATE_BURST_BYTES,
     DEFAULT_STREAM_RATE_BYTES_PER_SEC, ProxyLimits,
 };
@@ -151,7 +152,7 @@ impl ProxyCore {
         &self,
         transport: ProxyControlTransport,
         peer: PeerInfo,
-    ) -> impl Future<Output = ()> + Send + 'static {
+    ) -> impl Future<Output = ()> + Send + 'static + use<> {
         self.inner
             .tracker
             .track_future(host::run_host(self.inner.clone(), transport, peer))
@@ -162,7 +163,7 @@ impl ProxyCore {
         &self,
         transport: ChunkTransport,
         peer: PeerInfo,
-    ) -> impl Future<Output = ()> + Send + 'static {
+    ) -> impl Future<Output = ()> + Send + 'static + use<> {
         self.inner
             .tracker
             .track_future(stream::run_open(self.inner.clone(), transport, peer))
@@ -176,7 +177,7 @@ impl ProxyCore {
         &self,
         transport: ChunkTransport,
         peer: PeerInfo,
-    ) -> impl Future<Output = ()> + Send + 'static {
+    ) -> impl Future<Output = ()> + Send + 'static + use<> {
         self.inner
             .tracker
             .track_future(stream::run_accept(self.inner.clone(), transport, peer))
@@ -204,6 +205,10 @@ struct State {
     rooms: HashMap<String, Arc<Room>>,
     pending: HashMap<String, PendingOpen>,
     peer_streams: HashMap<PeerInfo, usize>,
+    /// Rooms currently registered per client identity.
+    peer_rooms: HashMap<PeerInfo, usize>,
+    /// Control streams per client identity still in registration.
+    peer_pending_registrations: HashMap<PeerInfo, usize>,
     streams: usize,
     next_generation: u64,
 }
@@ -212,6 +217,8 @@ struct State {
 pub(crate) struct Room {
     id: String,
     generation: u64,
+    /// The client identity that registered this room.
+    peer: PeerInfo,
     /// Cancelled when the room goes away (host gone, replaced, shutdown);
     /// a child of [`Inner::shutdown`].
     pub(crate) token: CancellationToken,
@@ -244,9 +251,34 @@ impl Drop for RoomRegistration {
                 .is_some_and(|room| room.generation == self.room.generation);
             if current {
                 state.rooms.remove(&self.room.id);
+                decrement(&mut state.peer_rooms, &self.room.peer);
             }
         }
         self.room.token.cancel();
+    }
+}
+
+/// Holds one client's slot among the control streams still in
+/// registration; dropping it frees the slot.
+pub(crate) struct PendingRegistration {
+    inner: Arc<Inner>,
+    peer: PeerInfo,
+}
+
+impl Drop for PendingRegistration {
+    fn drop(&mut self) {
+        let mut state = self.inner.state();
+        decrement(&mut state.peer_pending_registrations, &self.peer);
+    }
+}
+
+/// Decrease a per-client count, dropping the entry at zero.
+fn decrement(counts: &mut HashMap<PeerInfo, usize>, peer: &PeerInfo) {
+    if let Some(count) = counts.get_mut(peer) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            counts.remove(peer);
+        }
     }
 }
 
@@ -264,12 +296,7 @@ impl Drop for StreamSlot {
         state.pending.remove(&self.stream_id);
         self.room.streams.fetch_sub(1, Ordering::Relaxed);
         state.streams = state.streams.saturating_sub(1);
-        if let Some(count) = state.peer_streams.get_mut(&self.peer) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                state.peer_streams.remove(&self.peer);
-            }
-        }
+        decrement(&mut state.peer_streams, &self.peer);
     }
 }
 
@@ -278,10 +305,34 @@ impl Inner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Register (or replace) the room owned by `room_id`.
+    /// Take a slot among `peer`'s control streams still in registration.
+    pub(crate) fn begin_registration(
+        self: &Arc<Self>,
+        peer: &PeerInfo,
+    ) -> Result<PendingRegistration, RelayError> {
+        let mut state = self.state();
+        let pending = state
+            .peer_pending_registrations
+            .entry(peer.clone())
+            .or_default();
+        if *pending >= self.limits.max_pending_registrations_per_peer {
+            return Err(RelayError::new(
+                RelayErrorCode::ResourceExhausted,
+                "this client has the maximum number of pending registrations",
+            ));
+        }
+        *pending += 1;
+        Ok(PendingRegistration {
+            inner: self.clone(),
+            peer: peer.clone(),
+        })
+    }
+
+    /// Register (or replace) the room owned by `room_id` for `peer`.
     pub(crate) fn register_room(
         self: &Arc<Self>,
         room_id: &RoomId,
+        peer: &PeerInfo,
     ) -> Result<(RoomRegistration, mpsc::Receiver<String>), RelayError> {
         let mut state = self.state();
         if self.shutdown.is_cancelled() {
@@ -294,17 +345,30 @@ impl Inner {
                 "the proxy serves the maximum number of rooms",
             ));
         }
+        let replaces_own = previous.as_ref().is_some_and(|room| room.peer == *peer);
+        let held = state.peer_rooms.get(peer).copied().unwrap_or(0);
+        if !replaces_own && held >= self.limits.max_rooms_per_peer {
+            return Err(RelayError::new(
+                RelayErrorCode::ResourceExhausted,
+                "this client has the maximum number of rooms",
+            ));
+        }
         state.next_generation += 1;
         let (tx, rx) = mpsc::channel(self.limits.max_streams_per_room.max(1));
         let room = Arc::new(Room {
             id: room_id.as_str().to_owned(),
             generation: state.next_generation,
+            peer: peer.clone(),
             token: self.shutdown.child_token(),
             replaced: AtomicBool::new(false),
             incoming: tx,
             streams: AtomicUsize::new(0),
         });
         state.rooms.insert(room.id.clone(), room.clone());
+        if let Some(old) = &previous {
+            decrement(&mut state.peer_rooms, &old.peer);
+        }
+        *state.peer_rooms.entry(peer.clone()).or_default() += 1;
         drop(state);
         if let Some(old) = previous {
             old.replaced.store(true, Ordering::SeqCst);

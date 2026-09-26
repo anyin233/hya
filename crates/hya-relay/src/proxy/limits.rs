@@ -19,6 +19,15 @@ pub struct ProxyLimits {
     /// Maximum concurrent streams opened by one client identity
     /// ([`PeerInfo`](super::PeerInfo)). Over the limit: `RESOURCE_EXHAUSTED`.
     pub max_streams_per_peer: usize,
+    /// Maximum rooms registered by one client identity. Replacing a room
+    /// the same client already holds needs no new slot. Over the limit:
+    /// `RESOURCE_EXHAUSTED`.
+    pub max_rooms_per_peer: usize,
+    /// Maximum host control streams from one client identity that have not
+    /// finished registration yet (challenge sent, no valid `register`).
+    /// Over the limit the new control stream gets `RESOURCE_EXHAUSTED`
+    /// instead of a challenge.
+    pub max_pending_registrations_per_peer: usize,
     /// A stream leg or host control stream that delivers no frame at all
     /// (heartbeats count) for this long is closed with `DEADLINE_EXCEEDED`.
     /// Also bounds how long the proxy waits for a peer to take a frame.
@@ -49,6 +58,10 @@ pub const DEFAULT_MAX_ROOMS: usize = 1024;
 pub const DEFAULT_MAX_STREAMS_PER_ROOM: usize = 64;
 /// Default [`ProxyLimits::max_streams_per_peer`].
 pub const DEFAULT_MAX_STREAMS_PER_PEER: usize = 256;
+/// Default [`ProxyLimits::max_rooms_per_peer`].
+pub const DEFAULT_MAX_ROOMS_PER_PEER: usize = 16;
+/// Default [`ProxyLimits::max_pending_registrations_per_peer`].
+pub const DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER: usize = 8;
 /// Default [`ProxyLimits::idle_timeout`] (8 missed 15 s heartbeats).
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Default [`ProxyLimits::stream_rate_bytes_per_sec`] (8 MiB/s).
@@ -70,6 +83,8 @@ impl Default for ProxyLimits {
             max_rooms: DEFAULT_MAX_ROOMS,
             max_streams_per_room: DEFAULT_MAX_STREAMS_PER_ROOM,
             max_streams_per_peer: DEFAULT_MAX_STREAMS_PER_PEER,
+            max_rooms_per_peer: DEFAULT_MAX_ROOMS_PER_PEER,
+            max_pending_registrations_per_peer: DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             stream_rate_bytes_per_sec: DEFAULT_STREAM_RATE_BYTES_PER_SEC,
             stream_rate_burst_bytes: DEFAULT_STREAM_RATE_BURST_BYTES,

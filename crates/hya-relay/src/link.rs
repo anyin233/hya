@@ -643,7 +643,7 @@ fn parse_host(host: &str) -> Result<String, LinkError> {
 
 /// Validate a path prefix (with or without a leading `/`) and normalize it
 /// to `""` or `/seg[/seg…]`.
-fn parse_prefix(prefix: &str) -> Result<String, LinkError> {
+pub(crate) fn parse_prefix(prefix: &str) -> Result<String, LinkError> {
     let trimmed = prefix.strip_prefix('/').unwrap_or(prefix);
     if trimmed.is_empty() {
         return Ok(String::new());

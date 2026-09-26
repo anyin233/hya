@@ -105,7 +105,12 @@ fn register_frame(key: &SigningKey, nonce: &[u8]) -> HostFrame {
 
 /// Register `key` and return the host end after `registered`.
 async fn register(core: &ProxyCore, key: &SigningKey) -> HostEnd {
-    let mut host = start_host(core, "host");
+    register_as(core, key, "host").await
+}
+
+/// Register `key` from client identity `who`.
+async fn register_as(core: &ProxyCore, key: &SigningKey, who: &str) -> HostEnd {
+    let mut host = start_host(core, who);
     let nonce = challenge(&mut host).await;
     host.send(register_frame(key, &nonce)).await.unwrap();
     match recv_host(&mut host).await {
@@ -703,6 +708,88 @@ async fn max_streams_per_peer_is_enforced() {
 }
 
 #[tokio::test]
+async fn max_rooms_per_peer_is_enforced() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_rooms_per_peer: 1,
+        ..ProxyLimits::default()
+    });
+    let k1 = key(1);
+    let _first = register_as(&core, &k1, "10.0.0.1").await;
+    let mut second = start_host(&core, "10.0.0.1");
+    let nonce = challenge(&mut second).await;
+    second.send(register_frame(&key(2), &nonce)).await.unwrap();
+    assert_eq!(
+        host_error(&mut second).await,
+        RelayErrorCode::ResourceExhausted
+    );
+    // The same client may replace its own room.
+    let _again = register_as(&core, &k1, "10.0.0.1").await;
+    // Another client is not affected.
+    let _other = register_as(&core, &key(3), "10.0.0.2").await;
+}
+
+#[tokio::test]
+async fn room_slots_per_peer_follow_replacement_and_eviction() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_rooms_per_peer: 1,
+        ..ProxyLimits::default()
+    });
+    // Client A's room is taken over by client B: A's slot is free again.
+    let mut a = register_as(&core, &key(1), "10.0.0.1").await;
+    let _b = register_as(&core, &key(1), "10.0.0.2").await;
+    assert_eq!(host_error(&mut a).await, RelayErrorCode::AlreadyExists);
+    let a2 = register_as(&core, &key(2), "10.0.0.1").await;
+    // Eviction frees the slot too.
+    drop(a2);
+    let deadline = Instant::now() + WAIT;
+    while core.stats().rooms > 1 {
+        assert!(Instant::now() < deadline, "room not evicted");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let _a3 = register_as(&core, &key(3), "10.0.0.1").await;
+}
+
+#[tokio::test]
+async fn max_pending_registrations_per_peer_is_enforced() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_pending_registrations_per_peer: 2,
+        ..ProxyLimits::default()
+    });
+    let mut p1 = start_host(&core, "10.0.0.1");
+    let mut p2 = start_host(&core, "10.0.0.1");
+    let _ = challenge(&mut p1).await;
+    let nonce2 = challenge(&mut p2).await;
+    // A third unregistered control stream from the same client is refused.
+    let mut p3 = start_host(&core, "10.0.0.1");
+    assert_eq!(host_error(&mut p3).await, RelayErrorCode::ResourceExhausted);
+    // Another client is not affected.
+    let mut other = start_host(&core, "10.0.0.2");
+    let _ = challenge(&mut other).await;
+    // Completing a registration frees its pending slot.
+    let k = key(1);
+    p2.send(register_frame(&k, &nonce2)).await.unwrap();
+    match recv_host(&mut p2).await {
+        proxy_to_host::Frame::Registered(_) => {}
+        other => panic!("expected registered, got {other:?}"),
+    }
+    let mut p4 = start_host(&core, "10.0.0.1");
+    let _ = challenge(&mut p4).await;
+}
+
+#[tokio::test]
+async fn failed_registrations_free_their_pending_slot() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_pending_registrations_per_peer: 1,
+        ..ProxyLimits::default()
+    });
+    let mut p1 = start_host(&core, "10.0.0.1");
+    let _ = challenge(&mut p1).await;
+    p1.send(HostFrame { frame: None }).await.unwrap();
+    assert_eq!(host_error(&mut p1).await, RelayErrorCode::InvalidArgument);
+    let _registered = register_as(&core, &key(1), "10.0.0.1").await;
+}
+
+#[tokio::test]
 async fn stream_slots_are_released_when_streams_end() {
     let core = ProxyCore::new(ProxyLimits {
         max_streams_per_room: 1,
@@ -869,6 +956,8 @@ fn limits_have_documented_defaults() {
     assert_eq!(l.max_rooms, 1024);
     assert_eq!(l.max_streams_per_room, 64);
     assert_eq!(l.max_streams_per_peer, 256);
+    assert_eq!(l.max_rooms_per_peer, 16);
+    assert_eq!(l.max_pending_registrations_per_peer, 8);
     assert_eq!(l.idle_timeout, Duration::from_secs(120));
     assert_eq!(l.stream_rate_bytes_per_sec, 8 * 1024 * 1024);
     assert_eq!(l.stream_rate_burst_bytes, 1024 * 1024);

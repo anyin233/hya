@@ -7,7 +7,9 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use futures::{SinkExt, StreamExt};
 use tokio::time::{Instant, sleep, timeout};
 
-use super::{Inner, PeerInfo, random_bytes, shutting_down};
+use tokio::sync::mpsc;
+
+use super::{Inner, PeerInfo, RoomRegistration, random_bytes, shutting_down};
 use crate::link::RoomId;
 use crate::proto::{
     Challenge, Heartbeat, HostFrame, Incoming, ProxyToHost, Register, Registered, RelayError,
@@ -77,51 +79,69 @@ async fn fail(transport: &mut ProxyControlTransport, error: RelayError) {
     .await;
 }
 
-pub(crate) async fn run_host(
-    inner: Arc<Inner>,
-    mut transport: ProxyControlTransport,
-    _peer: PeerInfo,
-) {
-    if inner.shutdown.is_cancelled() {
-        return fail(&mut transport, shutting_down()).await;
-    }
+/// Challenge the host and register its room.
+///
+/// `Err(None)` means the host went away (nothing to report).
+async fn register(
+    inner: &Arc<Inner>,
+    transport: &mut ProxyControlTransport,
+    peer: &PeerInfo,
+) -> Result<(RoomRegistration, mpsc::Receiver<String>, RoomId), Option<RelayError>> {
     let nonce = random_bytes::<32>();
     let challenge = proxy_to_host::Frame::Challenge(Challenge {
         nonce: nonce.to_vec(),
     });
-    if send(&inner, &mut transport, challenge).await.is_err() {
-        return;
+    if send(inner, transport, challenge).await.is_err() {
+        return Err(None);
     }
 
     let first = tokio::select! {
         biased;
-        () = inner.shutdown.cancelled() => return fail(&mut transport, shutting_down()).await,
+        () = inner.shutdown.cancelled() => return Err(Some(shutting_down())),
         first = timeout(inner.limits.handshake_timeout, transport.next()) => first,
     };
     let register = match first {
         Err(_) => {
-            let error = RelayError::new(RelayErrorCode::DeadlineExceeded, "registration timed out");
-            return fail(&mut transport, error).await;
+            return Err(Some(RelayError::new(
+                RelayErrorCode::DeadlineExceeded,
+                "registration timed out",
+            )));
         }
-        Ok(None | Some(Err(_))) => return,
+        Ok(None | Some(Err(_))) => return Err(None),
         Ok(Some(Ok(HostFrame {
             frame: Some(host_frame::Frame::Register(register)),
         }))) => register,
         Ok(Some(Ok(_))) => {
-            let error = RelayError::new(
+            return Err(Some(RelayError::new(
                 RelayErrorCode::InvalidArgument,
                 "the first host frame must be `register`",
-            );
-            return fail(&mut transport, error).await;
+            )));
         }
     };
-    let room_id = match verify_registration(&nonce, &register) {
-        Ok(room_id) => room_id,
+    let room_id = verify_registration(&nonce, &register)?;
+    let (registration, incoming) = inner.register_room(&room_id, peer)?;
+    Ok((registration, incoming, room_id))
+}
+
+pub(crate) async fn run_host(
+    inner: Arc<Inner>,
+    mut transport: ProxyControlTransport,
+    peer: PeerInfo,
+) {
+    if inner.shutdown.is_cancelled() {
+        return fail(&mut transport, shutting_down()).await;
+    }
+    let pending = match inner.begin_registration(&peer) {
+        Ok(pending) => pending,
         Err(error) => return fail(&mut transport, error).await,
     };
-    let (registration, mut incoming) = match inner.register_room(&room_id) {
+    let registered = register(&inner, &mut transport, &peer).await;
+    // The registration is decided: free the pending slot before reporting.
+    drop(pending);
+    let (registration, mut incoming, room_id) = match registered {
         Ok(registered) => registered,
-        Err(error) => return fail(&mut transport, error).await,
+        Err(Some(error)) => return fail(&mut transport, error).await,
+        Err(None) => return,
     };
     let room = registration.room.clone();
     let registered = proxy_to_host::Frame::Registered(Registered {

@@ -16,6 +16,9 @@
 //!   credential), and [`link::RoomId`] derivation.
 //! - [`proxy`] — [`proxy::ProxyCore`], the binding-independent proxy state
 //!   machine (rooms, registration, open/accept splicing, limits).
+//! - [`server`] — [`server::RelayServer`], the gRPC and WebSocket bindings
+//!   on one listener (path prefix, optional TLS, forwarded client IPs,
+//!   graceful shutdown).
 //! - [`keys`] — the Noise static X25519 keypair and the PSK.
 //! - [`tunnel`] — [`tunnel::NoiseStream`], the Noise `NKpsk0` tunnel over a
 //!   data stream, exposed as a tokio byte stream.
@@ -26,5 +29,6 @@ pub mod keys;
 pub mod link;
 pub mod proto;
 pub mod proxy;
+pub mod server;
 pub mod transport;
 pub mod tunnel;
