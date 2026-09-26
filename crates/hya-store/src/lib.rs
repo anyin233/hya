@@ -16,6 +16,7 @@ mod file_blob;
 mod mailbox;
 mod materialize;
 mod permission;
+mod project;
 mod projection_cache;
 mod recovery;
 mod resident_claim;
@@ -32,7 +33,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hya_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
+use hya_proto::{Envelope, Event, EventSeq, ProjectId, Projection, SessionId, now_millis};
 use projection_cache::ProjectionCache;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -55,6 +56,7 @@ pub use error::StoreError;
 pub use hya_proto::{ActorClaim, OwnerRunId};
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use permission::SavedPermission;
+pub use project::{Project, ProjectSummary, normalize_project_path};
 pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
 pub use resident_claim::RecoveredActorClaim;
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
@@ -484,22 +486,29 @@ impl SessionStore {
         )
         .fetch_all(&self.pool)
         .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            let key: Vec<u8> = r.try_get("session_id")?;
-            let started: i64 = r.try_get("started")?;
-            let updated: i64 = r.try_get("updated")?;
-            let n: i64 = r.try_get("n")?;
-            if let Some(session) = decode_session_key(&key) {
-                out.push(SessionInfo {
-                    session,
-                    started_millis: started,
-                    updated_millis: updated,
-                    events: n.max(0) as u64,
-                });
-            }
-        }
-        Ok(out)
+        session_infos(rows)
+    }
+
+    /// [`SessionStore::list_sessions`], optionally narrowed to the sessions
+    /// (root and subagent) whose `session_created` named `project`
+    /// (ADR-0024). `None` lists every session.
+    pub async fn list_sessions_in(
+        &self,
+        project: Option<ProjectId>,
+    ) -> Result<Vec<SessionInfo>, StoreError> {
+        let Some(project) = project else {
+            return self.list_sessions().await;
+        };
+        let rows = sqlx::query(
+            "SELECT e.session_id, MIN(e.ts) AS started, MAX(e.ts) AS updated, COUNT(*) AS n \
+             FROM event_log e JOIN session s ON s.id = e.session_id \
+             WHERE s.project_id = ? \
+             GROUP BY e.session_id ORDER BY updated DESC, e.session_id DESC",
+        )
+        .bind(project.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        session_infos(rows)
     }
 
     /// One session's [`SessionInfo`] (log bounds and event count), without
@@ -618,6 +627,27 @@ pub(crate) async fn replay_projection(
     let base = projection_cache::transaction_base(cache, tx, session).await?;
     let folded = projection_cache::fold(tx, session, base).await?;
     Ok(Arc::unwrap_or_clone(folded.projection))
+}
+
+/// Decode `list_sessions`-shaped rows (`session_id`, `started`, `updated`,
+/// `n`), skipping undecodable session keys.
+fn session_infos(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<SessionInfo>, StoreError> {
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let key: Vec<u8> = r.try_get("session_id")?;
+        let started: i64 = r.try_get("started")?;
+        let updated: i64 = r.try_get("updated")?;
+        let n: i64 = r.try_get("n")?;
+        if let Some(session) = decode_session_key(&key) {
+            out.push(SessionInfo {
+                session,
+                started_millis: started,
+                updated_millis: updated,
+                events: n.max(0) as u64,
+            });
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn decode_session_key(key: &[u8]) -> Option<SessionId> {

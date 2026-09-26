@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use hya_proto::{OperationId, SessionId};
+use hya_proto::{OperationId, ProjectId, SessionId};
 
 /// All errors returned by [`crate::SessionStore`] and [`crate::BundleRegistry`].
 #[derive(Clone, Error, Debug)]
@@ -167,6 +167,43 @@ pub enum StoreError {
     /// Mail append rejected by roster / permission / validation rules.
     #[error("mailbox rejected: {0}")]
     MailboxRejected(String),
+    /// A Project name is empty or only whitespace.
+    #[error("PROJECT_NAME_EMPTY: a project needs a non-empty name")]
+    ProjectNameEmpty,
+    /// A Project was given no roots; a Project has at least one.
+    #[error("PROJECT_ROOTS_EMPTY: a project needs at least one root")]
+    ProjectRootsEmpty,
+    /// A Project root (or a path to resolve) is not an absolute path.
+    #[error("PROJECT_ROOT_NOT_ABSOLUTE: {path:?} is not an absolute path")]
+    ProjectRootNotAbsolute {
+        /// Path as given.
+        path: String,
+    },
+    /// A Project root (or a path to resolve) cannot be normalized lexically.
+    #[error("PROJECT_ROOT_INVALID: {path:?}: {reason}")]
+    ProjectRootInvalid {
+        /// Path as given.
+        path: String,
+        /// Why the path was rejected.
+        reason: &'static str,
+    },
+    /// No Project with this id exists.
+    #[error("PROJECT_NOT_FOUND: project {project} does not exist")]
+    ProjectNotFound {
+        /// Requested Project.
+        project: ProjectId,
+    },
+    /// A Project cannot be deleted while non-archived root sessions use it.
+    #[error("PROJECT_IN_USE: project {project} has {sessions} non-archived session(s)")]
+    ProjectInUse {
+        /// Project whose delete was refused.
+        project: ProjectId,
+        /// Non-archived root sessions that reference it.
+        sessions: u64,
+    },
+    /// Corrupt `project` / `project_root` row data.
+    #[error("project data: {0}")]
+    ProjectData(String),
 }
 
 impl From<sqlx::Error> for StoreError {

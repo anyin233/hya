@@ -54,7 +54,7 @@ The current runtime read path is **event-log based**. Tables such as
 
 | Table | Columns | Keys / indexes |
 | --- | --- | --- |
-| `session` | `id BLOB PK`, `parent_id BLOB` FK → `session(id)`, `agent TEXT NOT NULL`, `model TEXT NOT NULL`, `workdir TEXT NOT NULL`, `title TEXT`, `permission TEXT NOT NULL DEFAULT '{}'`, `created_at`, `updated_at` | Index `session_parent` on `parent_id` |
+| `session` | `id BLOB PK`, `parent_id BLOB` FK → `session(id)`, `agent TEXT NOT NULL`, `model TEXT NOT NULL`, `workdir TEXT NOT NULL`, `title TEXT`, `permission TEXT NOT NULL DEFAULT '{}'`, `created_at`, `updated_at` (+ `project_id`, `kind` from [`0014`](#0014_projectsql)) | Index `session_parent` on `parent_id` |
 | `message` | `id BLOB PK`, `session_id` FK → `session(id)` **ON DELETE CASCADE**, `role`, `agent`, `model`, `finish`, `cost_json`, `tokens_json`, `created_at` | Index `message_session` |
 | `part` | `id BLOB PK`, `message_id` FK → `message(id)` **ON DELETE CASCADE**, `seq`, `kind`, `body_json` | **UNIQUE** `(message_id, seq)` |
 | `event_log` | see [Event Log](#event-log) | |
@@ -182,6 +182,46 @@ appends events in one transaction (an image prompt: its images and its user
 message). Prompt images are referenced from `user_prompt_context_recorded`
 by hash, so the event log and projection snapshots stay small and replay is
 unchanged: the fold never reads blobs; only a model request does.
+
+### `0014_project.sql`
+
+Adds Projects (ADR-0024): a named, ordered, non-empty list of absolute
+workspace roots on the backend machine. They are mutable configuration
+managed with CRUD like `saved_permission`, never events; a session names its
+Project in `session_created` (see [Event model](event-model.md)), and the
+materializer mirrors that on the `session` row.
+
+| Table / column | Definition |
+| --- | --- |
+| `project` | `id TEXT PK` (`prj_<uuid-simple>`), `name TEXT NOT NULL` (non-blank), `created_at`, `updated_at` (unix ms), `archived INTEGER NOT NULL DEFAULT 0` (0/1) |
+| `project_root` | `project_id TEXT NOT NULL` FK → `project(id)` **ON DELETE CASCADE**, `path TEXT NOT NULL`, `ord INTEGER NOT NULL` (`0` = primary root); PK `(project_id, ord)`, **UNIQUE** `(project_id, path)` |
+| `session.project_id` | `TEXT NULL`, no FK (the event log keeps the id after its Project is deleted); index `session_project` |
+| `session.kind` | `TEXT NOT NULL DEFAULT 'project'`, `project` \| `temporary` |
+
+Sessions from before the migration read as `kind = project` with no Project;
+no backfill is needed.
+
+Store API ([`project.rs`](../../crates/hya-store/src/project.rs)):
+
+| Method | Behavior |
+| --- | --- |
+| `create_project(name, roots) -> Project` | Validates the name and roots, assigns a fresh `ProjectId` |
+| `get_project(id) -> Option<Project>` | One Project, archived or not, roots in order |
+| `list_projects() -> Vec<ProjectSummary>` | Non-archived Projects, most recently updated first; `session_count` = root sessions of the Project that still have an event log (archived ones included, subagent sessions not) |
+| `rename_project(id, name) -> Project` | Bumps `updated_at` (strictly increasing) |
+| `replace_project_roots(id, roots) -> Project` | Replaces the whole ordered list; bumps `updated_at`. Running sessions see the new roots from their next turn |
+| `delete_project(id) -> bool` | Deletes the Project and (by cascade) its roots; `false` when absent. Refused with `ProjectInUse` while a non-archived root session with an event log belongs to it |
+| `resolve_project_by_path(path) -> Option<Project>` | The non-archived Project with a root that contains `path`, component-wise (`/a/b` contains `/a/b/c`, not `/a/bc`). Longest matching root wins; among equal lengths, the most recently updated Project |
+| `list_sessions_in(project: Option<ProjectId>)` | `list_sessions`, narrowed to sessions (root and subagent) whose `session_created` named the Project; `None` lists all |
+| `normalize_project_path(path)` (free fn) | Root and resolve-path normalization, below |
+
+Roots are normalized lexically, never canonicalized, and need not exist: the
+path must be absolute; `.` components and repeated or trailing separators are
+dropped; a `..` component is rejected (`ProjectRootInvalid`), because resolving
+it lexically can disagree with the filesystem when a symlink precedes it.
+Duplicates are removed keeping the first occurrence. An empty list is
+`ProjectRootsEmpty`, a relative path `ProjectRootNotAbsolute`, a blank name
+`ProjectNameEmpty`.
 
 ### `0005_resident_actor_claim.sql` (claim table)
 
@@ -416,7 +456,7 @@ resident-mutation batch):
 
 | Event | Materialized rows |
 | --- | --- |
-| `session_created` | `session` (authoritative row; `INSERT OR IGNORE`) |
+| `session_created` | `session` (authoritative row; `INSERT OR IGNORE`, then `project_id` / `kind` set from the event, also on a placeholder row) |
 | `agent_registered` | `team_run` ensure (the orchestration root's log session is the run) + `team_member` |
 | `mail_sent` | `mail` (`from_ep`/`to_ep`/`kind`/`body_json`, `delivered_at` = append time; `acked_at` stays NULL) |
 | `member_spawned` | `task_board` row (`status: pending`) |
@@ -596,6 +636,13 @@ migrations live under
 | `RuntimeOwnerLock` | Runtime-owner lock file I/O failed |
 | `WorkflowData` | Malformed or inconsistent Workflow control mutation |
 | `MailboxRejected` | Mailbox write rejected |
+| `ProjectNameEmpty` | Blank Project name |
+| `ProjectRootsEmpty` | Project with no roots |
+| `ProjectRootNotAbsolute` | Relative or empty root (or resolve path) |
+| `ProjectRootInvalid` | Root (or resolve path) with a `..` component |
+| `ProjectNotFound` | Rename / root replacement of a missing Project |
+| `ProjectInUse` | Delete refused: non-archived root sessions still belong to the Project |
+| `ProjectData` | Corrupt `project` row (unparseable id) |
 
 ## Replay Surfaces
 

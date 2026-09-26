@@ -82,6 +82,18 @@
   `delete_session` does. See `docs/architecture/storage.md#projection-cache`.
 - `saved_permission.time_created` (0013) is a nullable ms timestamp added by
   `ALTER TABLE`; rows from before it keep `NULL` and report no time.
+- `project` / `project_root` (0014, ADR-0024) are mutable configuration
+  tables like `saved_permission`, not events and not a projection. A session's
+  membership lives in its `session_created` event (`project`, `kind`) and is
+  mirrored by the materializer into `session.project_id` / `session.kind`
+  (`ALTER TABLE`; older rows read as `kind = 'project'`, no Project). Session
+  existence and archive state still come from the log and the projection:
+  Project session counts and `list_sessions_in` join `session` against
+  `event_log`, and `delete_project` folds candidate roots to skip archived
+  ones. `session.project_id` has no FK, because the log keeps the id after a
+  Project is deleted. Roots are validated in Rust (absolute, lexically
+  normalized, no `..`, de-duplicated, non-empty) with typed `StoreError`
+  variants; `resolve_project_by_path` matches whole path components.
 - `file_blob` (0012) holds the per-session, content-addressed file contents
   behind session revert (`files_changed` / `session_reverted` events carry
   only the sha256 hash). It is auxiliary content, not a projection: write the
