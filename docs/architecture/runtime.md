@@ -603,6 +603,40 @@ and its sources alive regardless. Set the limits with
 (evictions are not reported to invalidation subscribers: the catalog does not
 change).
 
+Captured session hooks follow the scope. Outside a turn, a session's bundle
+and scope-plugin hooks (`session.start`, `session.end`, live events) go to the
+chain captured from its last bind; inside a turn, the turn's own activation
+chain handles events. The captured chain never outlives the scope snapshot
+it came from:
+
+- **Own bind swaps.** Every `bind_session_runtime` (so admission, each turn
+  and round rebind, shell, title, summary, residents) and every explicit
+  capture (create, subagent/resident/loop spawn) replaces the session's chain
+  with the new binding's chain for the session's agent, in one map write, at
+  bind time, before anything bound to it is published. An event published
+  before the swap goes to the old chain, after it to the new one, never to
+  both or neither.
+- **Identity decides.** Entries are compared by their retained source
+  dispatcher (the process) and the owner-bundle hook filter, not by
+  generation. A rebind with unchanged entries (a base-only publish that kept
+  the processes, a bundle edit that kept the project plugins) changes
+  nothing. Otherwise dispatchers new to the session get `session.start` right
+  after the swap, kept ones get nothing, and dropped ones get no
+  `session.end` (the session did not end); they are released, so a retired
+  process exits once no binding or overlay holds it.
+- **Idle sessions never pin a retired process.** When any bind of a scope
+  yields a new generation, other sessions' chains from that scope whose
+  entries the new snapshot no longer has are released at once. Each
+  recaptures at its own next bind, where only processes new to it get
+  `session.start`.
+- **Invalidation and eviction release at once.** `invalidate_catalog_scope`
+  and cache eviction release every captured chain from that scope, so its
+  processes exit even if the sessions stay idle (a turn in flight keeps its
+  binding, and so its processes, until it ends).
+- A released session's out-of-turn events and lifecycle hooks reach no
+  bundle or scope hooks until its next bind. Process-wide (config) plugin
+  hooks are separate and unaffected.
+
 #### `ToolRegistrySnapshot` and dispatch identity
 
 A turn takes an immutable, lock-free `ToolRegistrySnapshot` of the tool

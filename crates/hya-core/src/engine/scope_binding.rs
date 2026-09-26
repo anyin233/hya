@@ -19,7 +19,9 @@
 //! [`TurnBinding`] still retains (a turn in flight) is never evicted (turns
 //! rebind every round, which refreshes its last-bind time); even if it were
 //! dropped, bindings keep their snapshot and its sources alive, and the next
-//! bind republishes the overlay.
+//! bind republishes the overlay. Captured session hook chains never pin an
+//! evicted or invalidated scope: they are released with it (see
+//! [`super::session_hooks`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -179,11 +181,26 @@ impl SessionEngine {
         scope: &CatalogScope,
         workdir: &Path,
     ) -> Result<TurnBinding, CoreError> {
+        self.bind_scope_runtime_for(scope, workdir, None).await
+    }
+
+    /// [`Self::bind_scope_runtime`] on behalf of session `own`: after the
+    /// bind, `own`'s captured hook chain follows the new binding and other
+    /// sessions of the scope release retired processes
+    /// ([`super::session_hooks`]).
+    pub(crate) async fn bind_scope_runtime_for(
+        &self,
+        scope: &CatalogScope,
+        workdir: &Path,
+        own: Option<SessionId>,
+    ) -> Result<TurnBinding, CoreError> {
         if let Some(refresh) = &self.catalog_refresh {
             let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
             let _ = refresh.refresh_scope(self.runtime.as_ref(), scope).await?;
         }
-        self.bind_scope_unrefreshed(scope, workdir)
+        let binding = self.bind_scope_unrefreshed(scope, workdir)?;
+        self.follow_scope_session_hooks(&binding, own).await;
+        Ok(binding)
     }
 
     /// [`Self::bind_scope_runtime`] whose refresh failures are only logged
@@ -202,7 +219,9 @@ impl SessionEngine {
                 tracing::warn!(scope = %scope.key(), "catalog scope refresh failed: {error:#}");
             }
         }
-        self.bind_scope_unrefreshed(scope, workdir)
+        let binding = self.bind_scope_unrefreshed(scope, workdir)?;
+        self.follow_scope_session_hooks(&binding, None).await;
+        Ok(binding)
     }
 
     /// The binding of `session`'s own scope for a catalog read in its
@@ -243,9 +262,12 @@ impl SessionEngine {
     /// changed) and tell subscribers of
     /// [`Self::subscribe_catalog_scope_invalidations`]. Existing bindings
     /// keep their snapshot; the next bind of the Project rebuilds it.
+    /// Sessions' captured hook chains from the Project are released now and
+    /// recaptured at each session's next bind.
     pub fn invalidate_catalog_scope(&self, project: ProjectId) {
         let key = ScopeKey::Project(project);
         self.runtime.drop_scope(&key);
+        self.release_scope_session_hooks(&key);
         self.scope_cache
             .last_bound
             .lock()
@@ -336,6 +358,7 @@ impl SessionEngine {
         for key in victims {
             tracing::debug!(scope = %key, "evicting cached catalog scope");
             self.runtime.drop_scope(&key);
+            self.release_scope_session_hooks(&key);
         }
     }
 }

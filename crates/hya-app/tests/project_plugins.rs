@@ -460,3 +460,136 @@ async fn dropping_or_evicting_the_project_scope_stops_its_plugins() {
         "the evicted Project's process {beta} must exit"
     );
 }
+
+/// A plugin that appends `<pid> start <session>` for `session.start`,
+/// `<pid> end <session>` for `session.end`, and `<pid> event <envelope json>`
+/// for each live event to `hooks.log` in its cwd.
+const LIFECYCLE_SCRIPT: &str = r#"import json,os,sys
+def log(line):
+ with open('hooks.log','a') as out: out.write(str(os.getpid()) + ' ' + line + '\n')
+for line in sys.stdin:
+ r=json.loads(line)
+ m=r.get('method')
+ p=r.get('params') or {}
+ if m == 'initialize':
+  result={'protocol_version':1,'plugin':{'id':'watcher','version':'1.0.0','kind':'rust'},'hooks':[{'name':'session.start'},{'name':'session.end'},{'name':'event'}],'tools':[{'name':'echo','description':'origin=watcher;pid=' + str(os.getpid()) + ';cwd=' + os.getcwd(),'inputSchema':{'type':'object'}}]}
+ elif m == 'hook/session.start':
+  log('start ' + str(p.get('session'))); result={}
+ elif m == 'hook/session.end':
+  log('end ' + str(p.get('session'))); result={}
+ elif m == 'event':
+  log('event ' + json.dumps(p.get('envelope'))); result={}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+
+fn hook_log(root: &Path) -> Vec<(u32, String)> {
+    std::fs::read_to_string(root.join("hooks.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            let (pid, rest) = line.split_once(' ').unwrap();
+            (pid.parse().unwrap(), rest.to_string())
+        })
+        .collect()
+}
+
+/// Pids that logged an event whose envelope mentions `marker`, once the
+/// asynchronous event notifications have landed.
+async fn event_pids(root: &Path, marker: &str) -> Vec<u32> {
+    for _ in 0..100 {
+        let pids = hook_log(root)
+            .into_iter()
+            .filter(|(_, line)| line.starts_with("event ") && line.contains(marker))
+            .map(|(pid, _)| pid)
+            .collect::<Vec<_>>();
+        if !pids.is_empty() {
+            return pids;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Vec::new()
+}
+
+fn lifecycle_count(root: &Path, pid: u32, kind: &str, session: SessionId) -> usize {
+    let wanted = format!("{kind} {session}");
+    hook_log(root)
+        .into_iter()
+        .filter(|(logged, line)| *logged == pid && *line == wanted)
+        .count()
+}
+
+#[tokio::test]
+async fn session_hooks_follow_a_respawn_and_release_on_invalidation() {
+    let state = temp_path("state");
+    let root = temp_path("follow");
+    let plugin_dir = root.join(".hya/plugins/watcher");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::write(plugin_dir.join("plugin.py"), LIFECYCLE_SCRIPT).unwrap();
+    write_manifest(&root, "watcher", "watcher", "");
+    let harness = harness(&state).await;
+    let engine = &harness.engine;
+    let project = engine
+        .store()
+        .create_project("follow", &[root.display().to_string()])
+        .await
+        .unwrap()
+        .id;
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: hya_proto::AgentName::new("build"),
+            model: hya_proto::ModelRef::new("fake"),
+            workdir: root.display().to_string(),
+            project: Some(project),
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let scope = CatalogScope::Project {
+        id: project,
+        roots: vec![root.clone()],
+    };
+    let before = echo(&harness.bind(&scope).await, "watcher__echo").pid;
+    assert_eq!(lifecycle_count(&root, before, "start", session), 1);
+    engine
+        .admit_user_prompt(session, "marker-before-edit".to_string())
+        .await
+        .unwrap();
+    assert_eq!(event_pids(&root, "marker-before-edit").await[0], before);
+
+    // plugin.toml edit: the session's next bind (this admission) swaps its
+    // captured hooks to the respawned process before publishing anything.
+    write_manifest(&root, "watcher", "watcher", "timeout_ms = 4000\n");
+    engine
+        .admit_user_prompt(session, "marker-after-edit".to_string())
+        .await
+        .unwrap();
+    let after = echo(&harness.bind(&scope).await, "watcher__echo").pid;
+    assert_ne!(after, before, "the manifest edit respawned");
+    assert!(
+        wait_until_exited(before).await,
+        "the session must not keep the replaced process {before} alive"
+    );
+    let pids = event_pids(&root, "marker-after-edit").await;
+    assert!(
+        !pids.is_empty() && pids.iter().all(|pid| *pid == after),
+        "post-swap events reach only the new process: {pids:?}"
+    );
+    assert!(
+        event_pids(&root, "marker-before-edit")
+            .await
+            .iter()
+            .all(|pid| *pid == before),
+        "pre-swap events stay with the old process"
+    );
+    assert_eq!(lifecycle_count(&root, after, "start", session), 1);
+    assert_eq!(lifecycle_count(&root, before, "end", session), 0);
+
+    // Invalidation releases the idle session's hooks at once: no bind needed.
+    engine.invalidate_catalog_scope(project);
+    assert!(
+        wait_until_exited(after).await,
+        "an idle session must not keep the invalidated Project's process {after} alive"
+    );
+}

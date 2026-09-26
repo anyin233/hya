@@ -199,5 +199,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
             .await
             .expect("delete session")
     );
-    assert_eq!(ends.load(Ordering::SeqCst), 1);
+    // The fresh admission's bind released the session's captured chain of
+    // the removed source: a retired process gets no `session.end`.
+    assert_eq!(ends.load(Ordering::SeqCst), 0);
 }
