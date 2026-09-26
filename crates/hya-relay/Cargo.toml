@@ -10,8 +10,11 @@ description = "hya secure relay: hya.relay.v1 rendezvous protocol, transport abs
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
+data-encoding = { workspace = true }
 futures = { workspace = true }
 prost = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 

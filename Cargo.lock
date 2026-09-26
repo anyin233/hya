@@ -1550,8 +1550,11 @@ dependencies = [
 name = "hya-relay"
 version = "0.41.0"
 dependencies = [
+ "base64 0.22.1",
+ "data-encoding",
  "futures",
  "prost",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "tonic",
