@@ -119,6 +119,8 @@ import { createSessionKeeper, type ExitMode } from "./sessionKeeper"
 import { createResumer } from "./resume"
 import { probeHealth } from "../launch"
 import { tuiVersion } from "../version"
+import { containsRelayLink, parseConnectRemote, redactRelayLinks, type Bridge, type BridgeFlags } from "../bridge"
+import { SecretEntry } from "../completion"
 
 /** Overlay flush interval: coalesces stream deltas into one render per display frame. */
 const flushMs = 16
@@ -165,6 +167,18 @@ export interface ControllerOptions {
   find?: () => Promise<ServerSwitch | undefined>
   /** Health probe of a server URL (default src/launch.ts `probeHealth`). */
   probe?: (url: string) => Promise<boolean>
+  /**
+   * `/connect-remote`: start a relay bridge child for `link` (app/run.tsx:
+   * `hya bridge`, src/bridge.ts `startBridge`) and resolve once it is ready;
+   * `onLine` gets its status lines. Unset: `/connect-remote` is unavailable.
+   */
+  bridge?: (link: string, flags: BridgeFlags, onLine: (line: string) => void) => Promise<Bridge>
+  /**
+   * `/disconnect-remote`: the local backend to go back to (the database's
+   * daemon, found or started, or a fixed `--server`). Unset when this TUI has
+   * none (started by bare `hya --connect`).
+   */
+  home?: () => Promise<ServerSwitch>
 }
 
 /** What the controller needs from the renderer (CliRenderer in app/run.tsx; a fake in tests). */
@@ -195,7 +209,9 @@ const helpMaxRows = 40
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url) }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url), bridge: startRemoteBridge, home }: ControllerOptions) {
+  /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
+  let remote = startedRemote
   let streamAbort: AbortController | undefined
   let globalAbort: AbortController | undefined
   /** Asks a desktop notification was considered for: the open tree's asks arrive on both streams. */
@@ -213,7 +229,27 @@ export function createController({ client, store, directory, remote = false, reg
   let childAgain = false
   let lastChildRead = 0
   let unsubscribeFocus: (() => void) | undefined
-  const status = (text: string): void => store.setStatus(text)
+  /** The relay bridge child of `/connect-remote` while it runs (app/run.tsx; src/bridge.ts). */
+  let remoteBridge: Bridge | undefined
+  /** The bridge child exited on its own: the TUI stays on the (dead) remote until `/connect-remote` or `/disconnect-remote`. */
+  let bridgeDown = false
+  let connectingRemote = false
+  /** The catalogs could not be read when the remote was entered (backend offline): read them when the global stream opens. */
+  let catalogStale = false
+  /** `/connect-remote` without a link: the concealed entry's text (never in the store). */
+  const secret = new SecretEntry()
+  let secretFlags: BridgeFlags = {}
+  /** A remote backend reached through `/connect-remote`'s bridge (running or exited). */
+  const viaBridge = (): boolean => remoteBridge !== undefined || bridgeDown || connectingRemote
+  /** The server as the user should see it: a label (the remote) replaces the loopback bridge URL. */
+  function shownServerText(text: string): string {
+    const label = store.state.serverLabel
+    if (!label) return text
+    const url = (client.baseUrl ?? "").replace(/\/+$/, "")
+    return url ? text.split(url).join(label) : text
+  }
+  /** Status line text never carries the loopback bridge URL (a label replaces it) or a relay link's secret. */
+  const status = (text: string): void => store.setStatus(redactRelayLinks(shownServerText(text)))
 
   /** Desktop notifications (src/notify.ts): only while unfocused and the preference is on. */
   function sendNotification(kind: NotifyKind, detail: string): void {
@@ -476,8 +512,21 @@ export function createController({ client, store, directory, remote = false, reg
   /** `serverStopping` (live, empty `session`): the last frame before the server ends this stream. */
   function onStopping(event: StreamEvent | undefined): boolean {
     if (!event?.serverStopping) return false
-    reconnector?.stopping(client.baseUrl, event.serverStopping.reason ?? "")
+    // A remote backend stopping: its host brings it back; nothing local is found or started.
+    if (viaBridge()) status(`Remote backend stopping (${event.serverStopping.reason || "no reason"}) · the TUI reconnects when it is back`)
+    else reconnector?.stopping(client.baseUrl, event.serverStopping.reason ?? "")
     return true
+  }
+
+  /**
+   * A stream failed or ended. A local server may be gone: the reconnector
+   * checks and replaces it. Through the relay bridge the URL is fixed (the
+   * bridge answers 503 while the remote is offline): the streams keep
+   * retrying it, and no local daemon is ever found or started.
+   */
+  function serverLost(): void {
+    if (viaBridge()) return
+    void reconnector?.lost()
   }
 
   async function onFrame(frame: StreamFrame, sessionId: string): Promise<void> {
@@ -521,11 +570,11 @@ export function createController({ client, store, directory, remote = false, reg
         } catch (error) {
           if (!controller.signal.aborted && !reconnector?.busy()) store.setConnected(false)
           // A stopped TUI keeps its `Backend stopped` notice while the stream retries.
-          if (!controller.signal.aborted && !reconnector?.busy() && !reconnector?.stopped()) status(`Stream reconnecting: ${String(error)}`)
+          if (!controller.signal.aborted && !reconnector?.busy() && !reconnector?.stopped() && !bridgeDown) status(`Stream reconnecting: ${String(error)}`)
         }
         ready()
         // Ended or failed: the server may be gone (stopped, restarted, crashed).
-        if (!controller.signal.aborted && !closing) void reconnector?.lost()
+        if (!controller.signal.aborted && !closing) serverLost()
         if (!controller.signal.aborted) await Bun.sleep(800)
       }
     })()
@@ -629,6 +678,11 @@ export function createController({ client, store, directory, remote = false, reg
         try {
           await client.streamGlobal((frame) => onGlobalFrame(frame), controller.signal, async () => {
             delay = globalRetryMs
+            // A remote that was offline when it was entered: its catalogs now.
+            if (catalogStale) {
+              catalogStale = false
+              await refresh().catch(() => { catalogStale = true })
+            }
             // Asks raised before this subscription are not replayed: list them once.
             await refreshInteractions().catch(() => undefined)
           })
@@ -637,7 +691,7 @@ export function createController({ client, store, directory, remote = false, reg
         }
         if (controller.signal.aborted) break
         // With no session open this is the only stream: it notices a lost server too.
-        if (!closing) void reconnector?.lost()
+        if (!closing) serverLost()
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, delay)
           controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve() }, { once: true })
@@ -909,6 +963,8 @@ export function createController({ client, store, directory, remote = false, reg
     redo: () => revert.redo(),
     fork: () => revert.fork(),
     reconnect: () => reconnectNow(),
+    connectRemote: (args) => connectRemoteCommand(args),
+    disconnectRemote: () => disconnectRemote(),
     cancelTurn: () => turns.cancel(),
     quit,
     resume: (id) => resumer.resume(id),
@@ -967,6 +1023,11 @@ export function createController({ client, store, directory, remote = false, reg
     const text = value.trim()
     if (!text) return
     try {
+      // A relay link is a credential: only `/connect-remote` takes it, nothing else sends it anywhere.
+      if (containsRelayLink(text) && !/^\/connect-remote(\s|$)/.test(text)) {
+        status(relayLinkRefusedStatus)
+        return
+      }
       if (text.startsWith("/")) {
         await registry.dispatch(text, { store, client, actions })
         return
@@ -975,8 +1036,12 @@ export function createController({ client, store, directory, remote = false, reg
         status(readOnlyStatus)
         return
       }
-      if (reconnector?.stopped()) {
+      if (reconnector?.stopped() && !viaBridge()) {
         status(stoppedPromptStatus)
+        return
+      }
+      if (bridgeDown) {
+        status(bridgeDownPromptStatus)
         return
       }
       const command = shellCommand(text)
@@ -1125,8 +1190,240 @@ export function createController({ client, store, directory, remote = false, reg
     })
     : undefined
 
+  /** Leave the open session of the server being left: drop it when this client created it and never used it (bounded wait). */
+  async function leaveOpenSession(): Promise<void> {
+    const previous = store.state.selected?.id
+    streamAbort?.abort()
+    streamAbort = undefined
+    if (previous) await Promise.race([keeper.dropIfEmpty(previous).catch(() => undefined), Bun.sleep(dropOnExitMs)])
+    store.closeSession()
+  }
+
+  /**
+   * Point the client at `url` and load it like a start: bootstrap, the
+   * Project of `--dir` unless remote, catalogs, the global stream. A remote
+   * opens the Project view (no session is created); a local backend opens a
+   * new session in the ensured Project, like a plain start.
+   */
+  async function enterServer(url: string): Promise<{ ok: boolean; detail: string }> {
+    client.setBaseUrl(url)
+    store.setServerUrl(url)
+    client.setDirectory(directory)
+    store.setActiveProject(undefined)
+    let detail = ""
+    let ok = true
+    try {
+      store.applyBootstrap(await client.bootstrap())
+      let ensured: ProjectInfo | undefined
+      if (!remote) {
+        ensured = await client.ensureProjectForPath(directory).then((result) => result.project, (error: unknown) => {
+          detail += ` · no project for ${directory}: ${String(error)}`
+          return undefined
+        })
+      }
+      await refresh()
+      if (ensured) activateProject(ensured)
+    } catch (error) {
+      ok = false
+      catalogStale = true
+      detail += ` · ${String(error)}`
+    }
+    startGlobalStream()
+    if (remote) {
+      if (!store.state.activeProjectId) projectView.open()
+    } else if (ok) {
+      void refreshVcs()
+      await newSession().catch(() => undefined)
+    }
+    return { ok, detail }
+  }
+
+  /** The bridge child exited without `/disconnect-remote` asking it to. */
+  function bridgeExited(child: Bridge, code: number): void {
+    if (child !== remoteBridge || child.stopping || closing) return
+    remoteBridge = undefined
+    bridgeDown = true
+    store.setConnected(false)
+    const last = child.lastLine()?.replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
+    status(`Remote bridge exited (${last ? last : `code ${code}`}) · ${bridgeExitedStatus(home !== undefined)}`)
+  }
+
+  /**
+   * `/connect-remote <link>`: tear down a previous bridge child, start a new
+   * one (src/bridge.ts; the link goes to its stdin only), wait for it
+   * (status shows the progress and the bridge's lines), then move to its
+   * loopback URL as a remote start: label in the header, no Project ensured,
+   * no local reconnects, the Project view open.
+   */
+  async function connectRemote(link: string, flags: BridgeFlags = {}): Promise<void> {
+    if (!startRemoteBridge) {
+      status("/connect-remote is not available here (no hya binary to run hya bridge)")
+      return
+    }
+    if (connectingRemote) {
+      status("Already connecting to a remote backend…")
+      return
+    }
+    const wasRemote = viaBridge()
+    connectingRemote = true
+    const started = Date.now()
+    let latest = ""
+    const progress = (): void => status(`Connecting to the relay… ${Math.round((Date.now() - started) / 1000)}s${latest ? ` · ${latest}` : ""}`)
+    const ticker = setInterval(progress, 1000)
+    try {
+      const previous = remoteBridge
+      remoteBridge = undefined
+      bridgeDown = false
+      if (previous) {
+        status("Closing the previous relay bridge…")
+        await previous.stop()
+      }
+      progress()
+      let child: Bridge | undefined
+      child = await startRemoteBridge(link, flags, (line) => {
+        latest = line.replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
+        // After start-up the bridge only reports changes (online, offline, relay unreachable).
+        if (child && child === remoteBridge) status(line)
+        else progress()
+      })
+      clearInterval(ticker)
+      await leaveOpenSession()
+      remoteBridge = child
+      const running = child
+      void child.exited.then((code) => bridgeExited(running, code))
+      remote = true
+      store.setRemote(true)
+      store.setServerLabel(child.label)
+      store.setBackend({ remoteBridge: true })
+      const entered = await enterServer(child.url)
+      status(entered.ok
+        ? `Connected to ${child.label} · choose a project, or t for a temporary session`
+        : `Connected to the relay, but the remote backend did not answer${entered.detail} · the TUI loads it when it comes online`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // Still pointed at a remote (the previous bridge is gone): never fall back to a local daemon by itself.
+      if (wasRemote) {
+        bridgeDown = true
+        store.setConnected(false)
+      }
+      status(`Remote connection failed: ${message} · /connect-remote to try again${wasRemote && home ? " · /disconnect-remote goes back to the local backend" : ""}`)
+    } finally {
+      clearInterval(ticker)
+      connectingRemote = false
+    }
+  }
+
+  /**
+   * `/disconnect-remote`: close the bridge child's stdin (SIGTERM after 2 s),
+   * drop the label, and go back to the local backend (\`home\`: the
+   * database's daemon, found or started) with the Project of `--dir` and a
+   * new session, like a local start.
+   */
+  async function disconnectRemote(): Promise<void> {
+    if (!viaBridge()) {
+      status(store.state.serverLabel
+        ? `No local backend to go back to: this TUI was started on ${store.state.serverLabel} (hya --connect) · quit and run hya for a local one`
+        : "Not connected to a remote backend · /connect-remote <link> connects to one")
+      return
+    }
+    if (!home) {
+      status("No local backend to go back to: this TUI was started by hya --connect · quit and run hya for a local one")
+      return
+    }
+    await leaveOpenSession()
+    globalAbort?.abort()
+    const child = remoteBridge
+    remoteBridge = undefined
+    bridgeDown = false
+    status("Closing the relay bridge…")
+    await child?.stop()
+    if (store.state.projectView) projectView.close()
+    remote = startedRemote
+    store.setRemote(remote)
+    store.setServerLabel(undefined)
+    catalogStale = false
+    status("Switching back to the local backend…")
+    let next: ServerSwitch
+    try {
+      next = await home()
+    } catch (error) {
+      status(`Local backend unavailable: ${error instanceof Error ? error.message : String(error)} · /reconnect tries again`)
+      return
+    }
+    // Whatever the local server said before (`hya serve stop`) no longer holds for this one.
+    reconnector?.reset()
+    const entered = await enterServer(next.url)
+    status(entered.ok ? `Back on the local backend${next.pid ? ` · pid ${next.pid}` : ""}${entered.detail}` : `Local backend did not answer${entered.detail} · /reconnect tries again`)
+  }
+
+  /** `/connect-remote` without a link: a concealed entry replaces the composer (the text stays in `secret`). */
+  function openSecretEntry(flags: BridgeFlags): void {
+    secret.clear()
+    secretFlags = flags
+    store.setSecretEntry({ title: "Relay link", length: 0, hint: secretEntryHint })
+    // The entry's own hint says what to do; a completion hint from typing the command is stale.
+    status("")
+  }
+
+  function closeSecretEntry(): void {
+    secret.clear()
+    secretFlags = {}
+    store.setSecretEntry(undefined)
+  }
+
+  /** One key while the concealed entry is open: printable keys append, Backspace deletes, Enter connects, Esc cancels. */
+  function secretKey(key: KeyLike): void {
+    if (!store.state.secretEntry) return
+    if (key.name === "escape") {
+      closeSecretEntry()
+      status("Not connected · /connect-remote cancelled")
+      return
+    }
+    if ((key.name === "return" || key.name === "kpenter") && !key.meta) {
+      const link = secret.take()
+      const flags = secretFlags
+      closeSecretEntry()
+      if (!link) {
+        status("Not connected · no relay link was entered")
+        return
+      }
+      void connectRemote(link, flags)
+      return
+    }
+    if (key.name === "backspace") secret.backspace()
+    else if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " " && key.sequence !== "\x7f") secret.append(key.sequence)
+    else return
+    store.setSecretEntry({ ...store.state.secretEntry, length: secret.length })
+  }
+
+  /** A paste while the concealed entry is open. */
+  function secretPaste(text: string): void {
+    if (!store.state.secretEntry) return
+    secret.append(text)
+    store.setSecretEntry({ ...store.state.secretEntry, length: secret.length })
+  }
+
+  /** `/connect-remote [<link>] [flags]` (commands/native.ts). */
+  async function connectRemoteCommand(args: readonly string[]): Promise<void> {
+    const { link, flags } = parseConnectRemote(args)
+    if (link === undefined) openSecretEntry(flags)
+    else await connectRemote(link, flags)
+  }
+
   /** `/reconnect`: find or start the database's server now; a fixed `--server` only resubscribes. */
   async function reconnectNow(): Promise<void> {
+    if (bridgeDown) {
+      status(bridgeExitedStatus(home !== undefined))
+      return
+    }
+    if (viaBridge() || store.state.serverLabel) {
+      // The bridge's URL is fixed; never find or start a local daemon from here.
+      status(`Reconnecting to ${store.state.serverLabel ?? client.baseUrl}…`)
+      startGlobalStream()
+      const selected = store.state.selected
+      if (selected) startStream(selected.id)
+      return
+    }
     if (reconnector) return reconnector.reconnectNow()
     status(`Reconnecting to ${client.baseUrl} (--server without --db: no backend to find or start)`)
     startGlobalStream()
@@ -1143,6 +1440,10 @@ export function createController({ client, store, directory, remote = false, reg
   async function close(mode: ExitMode = "signal"): Promise<void> {
     const selected = store.state.selected?.id
     if (selected) await Promise.race([keeper.leave(selected, mode).catch(() => undefined), Bun.sleep(dropOnExitMs)])
+    // The bridge child also exits when this process dies (its stdin closes); close it cleanly first.
+    const child = remoteBridge
+    remoteBridge = undefined
+    await child?.stop(500).catch(() => undefined)
     dispose()
   }
 
@@ -1161,6 +1462,7 @@ export function createController({ client, store, directory, remote = false, reg
     rules.dispose()
     agentModels.dispose()
     unsubscribeFocus?.()
+    secret.clear()
   }
 
   /** Merged, deduplicated command list for the `/` command menu (commands/menu.ts). */
@@ -1207,6 +1509,10 @@ export function createController({ client, store, directory, remote = false, reg
     closeRules: () => rules.close(),
     agentModelsKey: (key: KeyLike) => agentModels.key(key),
     closeAgentModels: () => agentModels.close(),
+    /** One key / a paste while the concealed `/connect-remote` entry is open (components/Composer.tsx routes them). */
+    secretKey,
+    secretPaste,
+    closeSecretEntry: () => { closeSecretEntry(); status("Not connected · /connect-remote cancelled") },
     /** One key while the Project view is open (components/Composer.tsx routes it with the other full-screen views). */
     projectViewKey: (key: KeyLike) => projectView.key(key),
     closeProjectView: () => projectView.close(),
@@ -1230,6 +1536,20 @@ export class NoProjectError extends Error {
     this.name = "NoProjectError"
   }
 }
+
+/** Hint of the concealed `/connect-remote` entry. */
+export const secretEntryHint = "paste or type the relay link (hidden) · Enter connects · Esc cancels"
+
+/** Status shown when an input other than `/connect-remote` holds a relay link: it is never sent. */
+export const relayLinkRefusedStatus = "Not sent · the input holds a relay link, which is a secret · /connect-remote takes it"
+
+/** What to do after the relay bridge child exited on its own. */
+export function bridgeExitedStatus(local: boolean): string {
+  return `/connect-remote <link> connects again${local ? " · /disconnect-remote goes back to the local backend" : ""}`
+}
+
+/** Status shown when a prompt is submitted while the relay bridge is down. */
+export const bridgeDownPromptStatus = "Not sent · the relay bridge exited · /connect-remote <link> connects again"
 
 /** Status shown when a prompt or shell command is submitted while the backend is stopped on purpose. */
 export const stoppedPromptStatus = "Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again"

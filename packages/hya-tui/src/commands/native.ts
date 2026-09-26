@@ -44,6 +44,7 @@ export function toBackground({ store, actions }: CommandContext): void {
  * `serverPid` (bootstrap) fills in a pid nothing else named.
  */
 export function backendText(backend: BackendInfo | undefined, serverPid?: number, now = Date.now()): string {
+  if (backend?.remoteBridge) return "remote · through this TUI's relay bridge (/disconnect-remote leaves it)"
   const pid = backend?.pid ?? serverPid
   const parts = ["daemon"]
   if (pid) parts.push(`pid ${pid}`)
@@ -542,6 +543,18 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/reconnect",
     description: "Find or start the backend now (after hya serve stop)",
     run: ({ actions }) => actions.reconnect(),
+  },
+  {
+    name: "/connect-remote",
+    description: "Connect to a remote backend through a relay link (hidden entry without one; the link is never shown or kept in history)",
+    argumentHint: "[link] [--transport auto|grpc|ws] [--relay-ca <pem>]",
+    complete: ({ current, head }) => current.startsWith("--") ? matchValues(head, current, ["--transport", "--relay-ca"]) : [],
+    run: ({ actions }, { args }) => actions.connectRemote(args),
+  },
+  {
+    name: "/disconnect-remote",
+    description: "Stop the relay bridge and go back to the local backend",
+    run: ({ actions }) => actions.disconnectRemote(),
   },
   {
     name: "/sidebar",

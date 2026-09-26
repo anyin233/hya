@@ -3,6 +3,8 @@ import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
+import { historyEntry } from "../bridge"
+import { secretMask } from "../state/format"
 import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
 import { attachmentLabel, imageMentionPaths, pastedImagePath, type AttachmentPreview } from "../composer/attachments"
 import { escapeAction } from "../composer/escape"
@@ -306,7 +308,8 @@ export function Composer() {
       store.setStatus(readOnlyStatus)
       return
     }
-    history.push(text)
+    // A relay link is a secret: history keeps the input without it (src/bridge.ts).
+    history.push(historyEntry(text))
     closeMenu()
     closeCmdMenu()
     replace("")
@@ -385,6 +388,13 @@ export function Composer() {
     const consume = (): void => {
       key.preventDefault()
       key.stopPropagation()
+    }
+    // The concealed `/connect-remote` entry takes every key; Ctrl+C cancels it.
+    if (store.state.secretEntry) {
+      consume()
+      if (key.ctrl && !key.meta && key.name === "c") controller.closeSecretEntry()
+      else controller.secretKey(key)
+      return
     }
     // The modal picker (components/Picker.tsx) takes every key but Ctrl+C,
     // which closes it and keeps its quit meaning.
@@ -505,7 +515,7 @@ export function Composer() {
         else {
           if (draft.trim()) {
             // The typed text was the answer: keep it in history, clear the input.
-            history.push(draft)
+            history.push(historyEntry(draft))
             replace("")
           }
           controller.answer(shown.interaction, result.choice)
@@ -643,6 +653,10 @@ export function Composer() {
     event.preventDefault()
     event.stopPropagation()
     const text = new TextDecoder().decode(event.bytes)
+    if (store.state.secretEntry) {
+      controller.secretPaste(text)
+      return
+    }
     if (overlayViewOpen() && !store.state.picker) {
       if (providersOpen()) controller.providerPaste(text)
       return
@@ -708,6 +722,14 @@ export function Composer() {
           </For>
         </box>
       </Show>
+      <Show when={store.state.secretEntry}>
+        {(entry) => (
+          <box width="100%" height={4} flexShrink={0} border borderColor={colors.accent} title={entry().title} backgroundColor={colors.panel} paddingX={1} flexDirection="column">
+            <text height={1} wrapMode="none" fg={colors.fg}>{secretMask(entry().length)}</text>
+            <text height={1} wrapMode="none" fg={colors.muted}>{entry().hint}</text>
+          </box>
+        )}
+      </Show>
       <box
         width="100%"
         height={rows() + 2}
@@ -717,6 +739,7 @@ export function Composer() {
         title={shell() ? "! shell" : undefined}
         backgroundColor={colors.panel}
         paddingX={1}
+        visible={!store.state.secretEntry}
       >
         <textarea
           ref={(element: TextareaRenderable) => (editor = element)}
@@ -729,7 +752,7 @@ export function Composer() {
           cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
-          focused={!overlayViewOpen() && !store.state.picker}
+          focused={!overlayViewOpen() && !store.state.picker && !store.state.secretEntry}
           onSubmit={submit}
           onContentChange={sync}
           onCursorChange={() => updateMention()}

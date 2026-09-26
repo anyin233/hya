@@ -306,6 +306,99 @@ stream was down at the moment of a stop never gets the reason and treats the
 stop as a crash. A TUI with a fixed `--server` and no `--db` never moves; it
 keeps retrying that URL.
 
+### Remote backends (`/connect-remote`)
+
+A backend that joined a secure relay (`hya serve --relay <url>`, see
+[relay.md](relay.md#hosting-a-backend-on-a-relay)) prints a **relay link**,
+`hya://…#<key>.<psk>`. `/connect-remote` moves a running TUI onto that
+backend without restarting it; `/disconnect-remote` brings it back. Bare
+`hya --connect` does the same for a whole `hya` start
+([relay.md](relay.md#connecting-from-a-client)).
+
+```text
+/connect-remote hya://relay.example.com/eh7ddx5bksrgcytl7bkai36se4#…   # inline
+/connect-remote --transport ws                                          # asks for the link, hidden
+/disconnect-remote
+```
+
+**Connecting.** The TUI runs `<hya> bridge - --json --exit-with-stdin
+[--transport T] [--relay-ca PEM]` (the same binary lookup as the daemon start:
+`--hya`, `HYA_BIN`, `hya` on PATH; a TUI started by bare `hya --connect` gets
+no `--hya`, so there it needs `HYA_BIN` or `hya` on PATH), writes the link and a newline to the
+child's stdin, and keeps that pipe open. The status line counts
+`Connecting to the relay… Ns · <the bridge's latest line>` for up to 20 s.
+When the bridge prints its readiness line (`{"url","room","proxy","label"}`),
+the TUI:
+
+1. drops the open session when this client created it and never used it
+   (on the server it leaves; a used one keeps running there),
+2. switches every request to the bridge's loopback URL, and shows the label
+   (`remote: <relay>/<room>`) instead of that URL in the header, the sidebar
+   `Context` box, `/status` (`Server      <label> · via <url>`, `Backend
+   remote · through this TUI's relay bridge …`), and every status line,
+3. behaves like a `--remote` start: no Project is ensured for `--dir`, no
+   session is created, and the [Project view](#project-view) opens so you
+   choose (or create) a Project on the remote, or press `t` for a temporary
+   session,
+4. never replaces the server by itself: a failing stream does not start or
+   look for a local daemon ([When the server goes away](#when-the-server-goes-away)
+   does not apply); the streams keep retrying the bridge, which answers
+   `503 unavailable: remote backend is offline` while the remote is down, and
+   the TUI picks up where it was when it comes back. The bridge's state
+   changes (`hya bridge: remote backend online …`, `… offline`, `relay
+   unreachable`) appear on the status line. `/reconnect` only resubscribes.
+
+`Connected to remote: <relay>/<room> · choose a project, or t for a temporary
+session` confirms it. A failure leaves the TUI where it was:
+`Remote connection failed: <reason> · /connect-remote to try again`, where
+the reason is the bridge's one-line error (for example `the remote backend
+rejected the relay link … (rotated or wrong link); ask for a new one`,
+`cannot reach the relay …`) or `no answer from the relay within 20 s`. A
+second `/connect-remote` stops the running bridge first.
+
+**When the bridge exits on its own** (it was killed, or failed), the status
+line says `Remote bridge exited (<its last line>) · /connect-remote <link>
+connects again · /disconnect-remote goes back to the local backend`, the
+status bar shows the connection as lost, and prompts are refused (`Not sent
+· the relay bridge exited · /connect-remote <link> connects again`). Nothing
+local is started.
+
+**Disconnecting.** `/disconnect-remote` drops the remote's unused session,
+closes the bridge's stdin (SIGTERM after 2 s if it is still running), clears
+the label, and runs the local start again: the database's daemon (found, or
+started with `hya serve start`) or the fixed local `--server`, the Project
+of `--dir`, and a new session; `Back on the local backend · pid <pid>`. A
+TUI started by bare `hya --connect` has no local backend (no `--db`, no local
+`--server`): it says `No local backend to go back to: … · quit and run hya
+for a local one` and stays on the remote. Quitting the TUI closes the pipe,
+so the bridge exits with it.
+
+**The link is a secret** (ADR-0025: whoever holds it controls the backend):
+
+- It goes to the bridge's stdin only, never into argv (process listings).
+- `/connect-remote` without a link opens a concealed entry in place of the
+  composer: typed or pasted characters are shown as bullets (at most 32, then
+  `…`) with a count (`145 characters`); Enter connects, Esc or Ctrl+C cancel.
+  The text is held outside the store and the screen, like a provider key in
+  the [Provider View](#provider-view). The composer itself has no masking:
+  a link typed inline after `/connect-remote ` is visible while you type it,
+  and cleared from the screen when you press Enter.
+- The input history keeps `/connect-remote` without the link (flags stay),
+  so Up never brings it back.
+- An input that holds a relay link and is not `/connect-remote` (a prompt, a
+  mistyped command that would run as a backend command) is refused and never
+  sent: `Not sent · the input holds a relay link, which is a secret ·
+  /connect-remote takes it`.
+- Status lines show relay links only in their redacted form (`hya://host/room#…`);
+  the bridge itself only prints the redacted form.
+- Each WebUI tab is its own TUI process: `/connect-remote` in one tab moves
+  only that tab. The WebUI shows exactly what the TUI draws.
+
+Remote workspaces live on the backend machine: `@file` suggestions come from
+the backend (`GET /v1/fs/find`), but image attachments and a pasted path's
+`@path` conversion still read this machine's files (see
+[Attachments](#attachments)).
+
 To add a provider or set its API key, type `/key`: the full-screen
 [Provider View](#provider-view) lists the providers, adds one through a short
 pop-up (name, protocol, base URL, key), and fetches and tests its models.
@@ -434,7 +527,9 @@ A second, narrower sidebar on the left lists every Project live
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
-| `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db` it only resubscribes to that URL. |
+| `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
+| `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
+| `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |

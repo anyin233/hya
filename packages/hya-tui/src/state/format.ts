@@ -410,3 +410,9 @@ export function mainContent(state: AppState): string {
     case "status": return state.statusText
   }
 }
+
+/** The concealed entry's line: at most 32 bullets (fits 80 columns) and the character count. */
+export function secretMask(length: number): string {
+  if (!length) return " "
+  return `${"•".repeat(Math.min(length, 32))}${length > 32 ? "…" : ""}  ${length} character${length === 1 ? "" : "s"}`
+}

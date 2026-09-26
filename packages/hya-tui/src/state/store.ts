@@ -163,6 +163,12 @@ export interface AppState {
   readonly serverUrl: string
   /** Shown instead of `serverUrl` when set (`--server-label`: a remote backend behind the local bridge). */
   readonly serverLabel: string | undefined
+  /**
+   * A concealed one-line entry replacing the composer (`/connect-remote`
+   * without a link): only its title and the number of characters typed; the
+   * text itself stays in the controller's `SecretEntry`.
+   */
+  readonly secretEntry: SecretEntryState | undefined
   /** The open session's todo list (`/todos`, `GetSessionTodo`). */
   readonly todos: TodoItem[]
   /** Text of the `/status` view. */
@@ -238,6 +244,17 @@ export interface BackendInfo {
   startedAt?: number
   /** The URL came from `--server` (bare `hya --backend`), not from the database's discovery file. */
   explicit?: boolean
+  /** A remote backend reached through this TUI's relay bridge child (`/connect-remote`). */
+  remoteBridge?: boolean
+}
+
+/** The concealed entry shown in place of the composer (`AppState.secretEntry`). */
+export interface SecretEntryState {
+  /** Border title, e.g. `Relay link`. */
+  title: string
+  /** Characters typed so far (shown as bullets). */
+  length: number
+  hint: string
 }
 
 /**
@@ -324,6 +341,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     serverPid: undefined,
     serverUrl: "",
     serverLabel: undefined,
+    secretEntry: undefined,
     todos: [],
     statusText: "",
     promptSelection: undefined,
@@ -567,6 +585,32 @@ export function createAppStore() {
     setSelected(session: SessionInfo): void { set("selected", session) },
 
     /**
+     * No session open (`/connect-remote`, `/disconnect-remote`: the open
+     * session belongs to the server being left): the chat view empties like
+     * `openSession` does for a new one.
+     */
+    closeSession(): void {
+      fold.reset("0")
+      noticedMode = manualMode
+      batch(() => {
+        set("selected", undefined)
+        set("view", "chat")
+        set("cursor", fold.lastSeq)
+        set("messages", [])
+        set("overlay", [])
+        set("queued", [])
+        set("running", false)
+        set("turnId", "")
+        set("turnStartedAt", undefined)
+        set("members", [])
+        set("children", new Map())
+        set("dividers", [])
+        set("liveRound", undefined)
+        set("todos", [])
+      })
+    },
+
+    /**
      * The open session after a revert or redo (`RevertSession`'s `session`):
      * its row (with or without `revert`) replaces the open one, and the
      * streaming overlay is dropped — no turn runs during a revert, and the
@@ -682,6 +726,8 @@ export function createAppStore() {
     setServerUrl(url: string): void { set("serverUrl", url) },
     /** `--server-label` (src/cli.ts); `undefined` shows the URL again. */
     setServerLabel(label: string | undefined): void { set("serverLabel", label) },
+    /** Open, update, or (`undefined`) close the concealed entry (`/connect-remote` without a link). */
+    setSecretEntry(entry: SecretEntryState | undefined): void { set("secretEntry", entry) },
     /** The WebUI state from bare `hya` (status bar, sidebar, `/status`). */
     setWeb(info: WebInfo | undefined): void { set("web", info) },
     /** `--web-tab` (src/cli.ts). */

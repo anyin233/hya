@@ -21,8 +21,9 @@ the client library (`hya_relay::client`, see
 `hya relay doctor` exist, and so do the client side, `hya bridge` and
 `hya --connect <link>` ([Connecting from a client](#connecting-from-a-client)),
 and the backend side, `hya serve --relay` and `hya serve relay …`
-([Hosting a backend on a relay](#hosting-a-backend-on-a-relay)).
-*Coming in a later step:* the TUI's `/connect-remote`.
+([Hosting a backend on a relay](#hosting-a-backend-on-a-relay)), and the
+TUI's `/connect-remote` / `/disconnect-remote`
+([From a running TUI](#from-a-running-tui-connect-remote)).
 
 ### `hya proxy`
 
@@ -325,6 +326,40 @@ terminal is touched), then the WebUI host and the terminal TUI exactly like
 ([cli.md](cli.md#bare-hya)). `--connect` conflicts with `--backend`; without
 a value it reads `HYA_RELAY_LINK`. The bridge lives as long as that `hya`;
 its status lines go to `hya.log`.
+
+#### From a running TUI (`/connect-remote`)
+
+A TUI that is already running (bare `hya`, or `bun packages/hya-tui/src/main.ts`)
+moves to a remote backend with `/connect-remote <link>`, or `/connect-remote`
+alone, which asks for the link in a concealed entry (bullets and a count;
+Enter connects, Esc cancels). `--transport auto|grpc|ws` and `--relay-ca
+<pem>` pass through to the bridge.
+
+```text
+/connect-remote --transport ws          # then paste the link; it is not shown
+/disconnect-remote                      # back to the local daemon
+```
+
+The TUI runs its own bridge child, `<hya> bridge - --json --exit-with-stdin
+[--transport T] [--relay-ca PEM]` (the `hya` of `--hya`, `HYA_BIN`, or PATH),
+writes the link and a newline to its stdin and holds the pipe open, so the
+bridge exits 0 when the TUI closes it or dies. It waits up to 20 s for the
+JSON readiness line, then uses `url` as its server and `label` in the header,
+sidebar, `/status`, and status lines; stderr lines (`hya bridge: …`) are shown
+on the status line; a start-up failure (exit 1) is shown as `Remote
+connection failed: <the bridge's reason>`. On the remote the TUI behaves like
+a `--remote` start (the Project view opens, no session is created) and never
+starts or looks for a local daemon; while the remote is offline its requests
+get the bridge's `503 unavailable: remote backend is offline` and its streams
+keep retrying. `/disconnect-remote` closes the bridge's stdin (SIGTERM after
+2 s) and goes back to the local backend (the database's daemon, found or
+started); a TUI started by bare `hya --connect` has none to go back to.
+
+The link stays a secret throughout: never in argv, never on screen after it is
+submitted, not kept in the input history (`/connect-remote` is kept without
+it), and any other input holding a link is refused rather than sent. See
+[docs/tui.md](tui.md#remote-backends-connect-remote) for the status lines and
+keys.
 
 ## Interfaces
 
