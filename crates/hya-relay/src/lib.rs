@@ -14,6 +14,8 @@
 //!   gRPC or WebSocket binding, plus an in-memory pair for tests.
 //! - [`link`] — [`link::RelayLink`], the `hya://` relay link (the client
 //!   credential), and [`link::RoomId`] derivation.
+//! - [`proxy`] — [`proxy::ProxyCore`], the binding-independent proxy state
+//!   machine (rooms, registration, open/accept splicing, limits).
 //! - [`keys`] — the Noise static X25519 keypair and the PSK.
 //! - [`tunnel`] — [`tunnel::NoiseStream`], the Noise `NKpsk0` tunnel over a
 //!   data stream, exposed as a tokio byte stream.
@@ -23,5 +25,6 @@
 pub mod keys;
 pub mod link;
 pub mod proto;
+pub mod proxy;
 pub mod transport;
 pub mod tunnel;
