@@ -14,6 +14,14 @@ async function at(term: Tui, needle: string) {
   return found!
 }
 
+/** The diff's last line (`+ added 80`) is on screen, on its own row above the key hint. */
+async function expectLastLineVisible(term: Tui) {
+  await term.waitForText("+ added 80")
+  const last = await at(term, "+ added 80")
+  const hint = await at(term, "↑↓ scroll")
+  expect(last.row, "the last diff line sits above the hint").toBeLessThan(hint.row)
+}
+
 test.describe("hya TUI Diff view", () => {
   test("not a git repository: the empty state", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
@@ -86,15 +94,23 @@ test.describe("hya TUI Diff view", () => {
     await term.waitForText(/\+ added \d\d/)
 
     await term.press("End")
-    // The last lines of a long file: End jumps further than a single PgDn did.
-    await term.waitForText("+ added 79")
+    // End reaches the true last line of the file, fully visible above the
+    // key hint (the hint used to overlap the scrollbox's last row).
+    await expectLastLineVisible(term)
     await expect.poll(async () => (await term.text()).includes("+ added 01")).toBe(false)
 
     await term.press("Home")
     await term.waitForText("+ added 01")
     await expect.poll(async () => (await term.text()).includes("+ added 79")).toBe(false)
 
-    await term.press("PageDown")
+    // Paging down all the way stops on the last line too.
+    for (let page = 0; page < 8; page++) await term.press("PageDown")
+    await expectLastLineVisible(term)
+
+    await term.press("Home")
+    await term.waitForText("+ added 01")
+    // One page down from the top: a view in the middle of the file (a single
+    // key, so the screen read below cannot catch an intermediate frame).
     await term.press("PageDown")
     await expect.poll(async () => (await term.text()).includes("+ added 01")).toBe(false)
     const midMatch = (await term.text()).match(/\+ added \d\d/)!
@@ -103,10 +119,20 @@ test.describe("hya TUI Diff view", () => {
     const size = await term.size()
     await term.page.mouse.move(box.x + box.width / 2, box.y + ((midRow.row + 0.5) / size.rows) * box.height)
     await term.page.mouse.wheel(0, -600)
-    // Scrolling up with the wheel moves the view away from where it was
-    // (a longer poll: the wheel event's round trip through the PTY can lag
-    // under heavy parallel load).
-    await expect.poll(async () => (await term.text()).includes(midMatch[0]), { timeout: 15_000 }).toBe(false)
+    // Scrolling up with the wheel moves the view: the first visible line is
+    // an earlier one (a longer poll: the wheel event's round trip through
+    // the PTY can lag under heavy parallel load).
+    const firstShown = async () => (await term.text()).match(/\+ added \d\d/)?.[0] ?? ""
+    await expect.poll(async () => (await firstShown()) < midMatch[0], { timeout: 15_000, message: "the wheel scrolled up" }).toBe(true)
+
+    // Wheel-scrolling down to the end shows the last line as well.
+    // One wheel event moves a few rows, so keep wheeling until the end shows.
+    await expect.poll(async () => {
+      if ((await term.text()).includes("+ added 80")) return true
+      await term.page.mouse.wheel(0, 600)
+      return false
+    }, { timeout: 15_000, intervals: [50] }).toBe(true)
+    await expectLastLineVisible(term)
 
     await term.press("Escape")
     await term.waitForText("Enter a prompt · /new creates a session")

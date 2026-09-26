@@ -36,7 +36,7 @@ function BusyLine(props: { busy: DiffBusy }) {
   onCleanup(() => clearInterval(timer))
   const seconds = () => Math.max(0, Math.floor((now() - props.busy.startedAt) / 1000))
   return (
-    <text height={1} wrapMode="none">
+    <text height={1} flexShrink={0} wrapMode="none">
       <span style={{ fg: colors.accent }}>{frame()}</span>
       <span style={{ fg: colors.fg }}>{` ${props.busy.label}… ${seconds()}s`}</span>
       <span style={{ fg: colors.muted }}>{" · Esc cancels"}</span>
@@ -106,7 +106,10 @@ export function DiffView() {
                   )}
                 </Show>
               </scrollbox>
-              <Show when={open().busy} fallback={<text width="100%" wrapMode="word" fg={open().notice ? noticeColor(open().notice!) : colors.muted}>{diffViewHint(open())}</text>}>
+              {/* The hint keeps its rows (flexShrink 0): otherwise Yoga shrinks it to
+                  zero height beside the overflowing scrollbox, and it draws over the
+                  scrollbox's last row, so End never showed the file's last line. */}
+              <Show when={open().busy} fallback={<text width="100%" flexShrink={0} wrapMode="word" fg={open().notice ? noticeColor(open().notice!) : colors.muted}>{diffViewHint(open())}</text>}>
                 {(busy) => <BusyLine busy={busy()} />}
               </Show>
             </box>

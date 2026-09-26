@@ -1,5 +1,9 @@
 # 0.41.0
 
+## Fix: `/diff` shows its last line
+
+- In a diff longer than the screen, End, paging down, and scrolling down with the mouse wheel now reach the last line. Before, the key hint was drawn over it.
+
 ## TUI sidebar follows other clients live
 
 - The sidebar's session list now changes as soon as any client creates, renames, archives, deletes, or runs a session. It also follows another client's agent, model, and permission-mode switches. The TUI re-lists after a `resync`.
