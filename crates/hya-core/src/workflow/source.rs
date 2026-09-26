@@ -4,13 +4,24 @@ use std::path::{Path, PathBuf};
 
 use super::{CompiledWorkflow, WorkflowError};
 
+/// The project-tier Workflow directory under one root (a Project root, a
+/// plain directory, or a Session workdir).
+#[must_use]
+pub fn workflow_project_dir(root: &Path) -> PathBuf {
+    root.join(".hya/workflows")
+}
+
+/// The user-tier Workflow directory, when the process has a home directory.
+#[must_use]
+pub fn workflow_user_dir() -> Option<PathBuf> {
+    std::env::home_dir().map(|home| home.join(".config/hya/workflows"))
+}
+
 /// Return Workflow discovery roots in project-before-user precedence order.
 #[must_use]
 pub fn workflow_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![workdir.join(".hya/workflows")];
-    if let Some(home) = std::env::home_dir() {
-        dirs.push(home.join(".config/hya/workflows"));
-    }
+    let mut dirs = vec![workflow_project_dir(workdir)];
+    dirs.extend(workflow_user_dir());
     dirs
 }
 
@@ -124,5 +135,17 @@ flowchart TD
     fn project_root_precedes_user_root() {
         let dirs = workflow_dirs_for_workdir(Path::new("/tmp/project"));
         assert_eq!(dirs[0], PathBuf::from("/tmp/project/.hya/workflows"));
+    }
+
+    /// `workflow_project_dir` is the exact join `workflow_dirs_for_workdir`
+    /// uses for its own project root, so a multi-root caller can derive one
+    /// discovery directory per Project root without going through a workdir.
+    #[test]
+    fn project_dir_matches_the_project_tier_of_workflow_dirs_for_workdir() {
+        let root = Path::new("/tmp/one-of-several-roots");
+        assert_eq!(
+            workflow_project_dir(root),
+            workflow_dirs_for_workdir(root)[0]
+        );
     }
 }

@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hya_core::{
-    AgentSpec, CategoryRegistry, CompiledWorkflow, ResidentSupervisor, SessionEngine, TurnBinding,
-    WorkflowError, WorkflowRoutingContext, WorkflowRunContext, WorkflowStatus,
+    AgentSpec, CatalogScope, CategoryRegistry, CompiledWorkflow, ResidentSupervisor, SessionEngine,
+    TurnBinding, WorkflowError, WorkflowRoutingContext, WorkflowRunContext, WorkflowStatus,
     discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run_for_actor,
-    workflow_dirs_for_workdir,
+    workflow_project_dir, workflow_user_dir,
 };
 use hya_proto::{
     Envelope, Event, ModelRef, OwnerRunId, SessionId, WorkflowAvailability, WorkflowCommand,
@@ -46,28 +46,51 @@ pub enum WorkflowCatalogOwner {
 }
 
 /// Explicit filesystem roots used by one immutable Workflow catalog build.
+///
+/// `project` lists every Project root's Workflow directory in precedence
+/// order (first root wins on a source id or name collision, F2 multi-root).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowCatalogRoots {
-    project: PathBuf,
+    project: Vec<PathBuf>,
     user: Option<PathBuf>,
 }
 
 impl WorkflowCatalogRoots {
     /// Construct roots from Workflow directories, not their parent workdirs.
     #[must_use]
-    pub fn new(project: PathBuf, user: Option<PathBuf>) -> Self {
+    pub fn new(project: Vec<PathBuf>, user: Option<PathBuf>) -> Self {
         Self { project, user }
     }
 
-    /// Derive the production project/user roots for one workdir.
+    /// Derive the production roots for a bound catalog scope and workdir.
+    ///
+    /// `Global` lists user and bundle rows only (no project root, `hya
+    /// serve` has no working directory of its own, ADR-0024).
+    /// `Directory(dir)` lists that one directory. `Project { roots, .. }`
+    /// lists `workdir` first (it may be the Project root itself, a
+    /// registered subdirectory, or the caller's Session workdir), then each
+    /// registered root in declaration order, deduped (first root wins).
     #[must_use]
-    pub fn for_workdir(workdir: &Path) -> Self {
-        let mut roots = workflow_dirs_for_workdir(workdir).into_iter();
+    pub fn for_scope(scope: &CatalogScope, workdir: &Path) -> Self {
+        let project = match scope {
+            CatalogScope::Global => Vec::new(),
+            CatalogScope::Directory(dir) => vec![workflow_project_dir(dir)],
+            CatalogScope::Project { roots, .. } => {
+                let mut seen = BTreeSet::new();
+                let mut project = Vec::new();
+                for candidate in std::iter::once(workdir).chain(roots.iter().map(PathBuf::as_path))
+                {
+                    let root = workflow_project_dir(candidate);
+                    if seen.insert(root.clone()) {
+                        project.push(root);
+                    }
+                }
+                project
+            }
+        };
         Self {
-            project: roots
-                .next()
-                .unwrap_or_else(|| workdir.join(".hya/workflows")),
-            user: roots.next(),
+            project,
+            user: workflow_user_dir(),
         }
     }
 
@@ -75,16 +98,14 @@ impl WorkflowCatalogRoots {
     ///
     /// `hya serve` has no working directory of its own (ADR-0024), so an
     /// unscoped `ListWorkflows` must not read any project-relative path.
-    /// The project root is empty (discovery finds nothing there); only the
-    /// user-level Workflow directory is scanned, alongside the bound
+    /// The project root list is empty (discovery finds nothing there); only
+    /// the user-level Workflow directory is scanned, alongside the bound
     /// runtime's installed/first-party bundles.
     #[must_use]
     pub fn user_only() -> Self {
-        let mut roots = workflow_dirs_for_workdir(Path::new("")).into_iter();
-        let _project = roots.next();
         Self {
-            project: PathBuf::new(),
-            user: roots.next(),
+            project: Vec::new(),
+            user: workflow_user_dir(),
         }
     }
 }
@@ -137,6 +158,55 @@ enum WorkflowCatalogRow {
     Invalid(InvalidWorkflowSource),
 }
 
+/// One resolved filesystem Workflow row, not yet admitted to a catalog.
+enum FilesystemRow {
+    Valid(ResolvedWorkflow),
+    Invalid(InvalidWorkflowSource),
+}
+
+/// Resolve one filesystem path below `root` to its source id and row.
+///
+/// `tier` is `"project"` or `"user"`: a project source id is the path
+/// relative to its own root (so the same root produces the same id across
+/// process restarts); a user source id is the absolute path (there is only
+/// ever one user root).
+fn filesystem_row(path: PathBuf, root: &Path, tier: &str) -> (String, FilesystemRow) {
+    let relative = path.strip_prefix(root).map_or_else(
+        |_| path.display().to_string(),
+        |value| value.display().to_string(),
+    );
+    let source_value = if tier == "project" {
+        relative
+    } else {
+        path.display().to_string()
+    };
+    let source = WorkflowSourceId::new(format!("{tier}:{source_value}"));
+    let source_id = source.as_str().to_string();
+    let row = match load_workflow_file(&path) {
+        Ok(workflow) => FilesystemRow::Valid(ResolvedWorkflow {
+            identity: WorkflowIdentity {
+                source,
+                name: workflow.definition().name().to_string(),
+                revision: WorkflowRevision::from_bytes(workflow.revision().as_bytes()),
+            },
+            workflow: Arc::new(workflow),
+            display_path: path.display().to_string(),
+            owner: if tier == "project" {
+                WorkflowCatalogOwner::Project
+            } else {
+                WorkflowCatalogOwner::User
+            },
+        }),
+        Err(error) => FilesystemRow::Invalid(InvalidWorkflowSource {
+            name: source_stem(&path),
+            source,
+            path: path.display().to_string(),
+            error: bounded_error(&error.to_string()),
+        }),
+    };
+    (source_id, row)
+}
+
 /// Immutable resolver over project, user, installed, and first-party sources.
 pub struct WorkflowCatalog {
     entries: Vec<ResolvedWorkflow>,
@@ -160,7 +230,7 @@ impl WorkflowCatalog {
             entries: Vec::new(),
             rows: Vec::new(),
         };
-        catalog.append_filesystem_root(&roots.project, "project");
+        catalog.append_project_roots(&roots.project);
         if let Some(user) = roots.user.as_deref() {
             catalog.append_filesystem_root(user, "user");
         }
@@ -363,45 +433,57 @@ impl WorkflowCatalog {
     /// Append valid and invalid filesystem rows below one explicit root.
     fn append_filesystem_root(&mut self, root: &Path, tier: &str) {
         for path in discover_workflow_files_in_root(root) {
-            let relative = path.strip_prefix(root).map_or_else(
-                |_| path.display().to_string(),
-                |value| value.display().to_string(),
-            );
-            let source_value = if tier == "project" {
-                relative
-            } else {
-                path.display().to_string()
-            };
-            let source = WorkflowSourceId::new(format!("{tier}:{source_value}"));
-            match load_workflow_file(&path) {
-                Ok(workflow) => {
-                    let entry = ResolvedWorkflow {
-                        identity: WorkflowIdentity {
-                            source,
-                            name: workflow.definition().name().to_string(),
-                            revision: WorkflowRevision::from_bytes(workflow.revision().as_bytes()),
-                        },
-                        workflow: Arc::new(workflow),
-                        display_path: path.display().to_string(),
-                        owner: if tier == "project" {
-                            WorkflowCatalogOwner::Project
-                        } else {
-                            WorkflowCatalogOwner::User
-                        },
-                    };
-                    self.entries.push(entry);
-                    self.rows
-                        .push(WorkflowCatalogRow::Valid(self.entries.len() - 1));
+            let (_, row) = filesystem_row(path, root, tier);
+            self.push_filesystem_row(row);
+        }
+    }
+
+    /// Append filesystem rows below every Project root, in order.
+    ///
+    /// Every root's Workflow directory is discovered; a later root's file
+    /// whose `project:<path relative to its root>` source id or compiled
+    /// Workflow name collides with an earlier root's is skipped (first root
+    /// wins) with a warning. A later root's invalid source with a distinct
+    /// id is always kept: it is still worth surfacing as a diagnostic row.
+    fn append_project_roots(&mut self, roots: &[PathBuf]) {
+        let mut seen_source_ids = BTreeSet::new();
+        let mut seen_names = BTreeSet::new();
+        for root in roots {
+            for path in discover_workflow_files_in_root(root) {
+                let (source_id, row) = filesystem_row(path, root, "project");
+                if !seen_source_ids.insert(source_id.clone()) {
+                    tracing::warn!(
+                        root = %root.display(),
+                        source = %source_id,
+                        "skipped a project Workflow source: another root already publishes this source id"
+                    );
+                    continue;
                 }
-                Err(error) => self
-                    .rows
-                    .push(WorkflowCatalogRow::Invalid(InvalidWorkflowSource {
-                        name: source_stem(&path),
-                        source,
-                        path: path.display().to_string(),
-                        error: bounded_error(&error.to_string()),
-                    })),
+                if let FilesystemRow::Valid(entry) = &row
+                    && !seen_names.insert(entry.identity.name.clone())
+                {
+                    tracing::warn!(
+                        root = %root.display(),
+                        name = %entry.identity.name,
+                        source = %source_id,
+                        "skipped a project Workflow source: another root already publishes this name"
+                    );
+                    continue;
+                }
+                self.push_filesystem_row(row);
             }
+        }
+    }
+
+    /// Push one already-resolved filesystem row into the catalog.
+    fn push_filesystem_row(&mut self, row: FilesystemRow) {
+        match row {
+            FilesystemRow::Valid(entry) => {
+                self.entries.push(entry);
+                self.rows
+                    .push(WorkflowCatalogRow::Valid(self.entries.len() - 1));
+            }
+            FilesystemRow::Invalid(invalid) => self.rows.push(WorkflowCatalogRow::Invalid(invalid)),
         }
     }
 }
@@ -606,16 +688,20 @@ impl WorkflowControl {
         match command {
             WorkflowCommand::List => {
                 let (workdir, binding) = self.session_binding(session, invocation.binding).await?;
-                let catalog =
-                    WorkflowCatalog::build(WorkflowCatalogRoots::for_workdir(&workdir), &binding)?;
+                let catalog = WorkflowCatalog::build(
+                    WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+                    &binding,
+                )?;
                 Ok(WorkflowCommandResult::List {
                     workflows: catalog.list(),
                 })
             }
             WorkflowCommand::Info { name } => {
                 let (workdir, binding) = self.session_binding(session, invocation.binding).await?;
-                let catalog =
-                    WorkflowCatalog::build(WorkflowCatalogRoots::for_workdir(&workdir), &binding)?;
+                let catalog = WorkflowCatalog::build(
+                    WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+                    &binding,
+                )?;
                 Ok(WorkflowCommandResult::Info {
                     workflow: catalog.info(&name)?,
                 })
@@ -662,11 +748,12 @@ impl WorkflowControl {
 
     /// List the effective Workflow catalog for an optional directory scope.
     ///
-    /// A named directory binds the root runtime and lists project, user, and
-    /// bundle rows for that workdir (catalog precedence: project shadows
-    /// user shadows bundle). No scope binds the project-less global runtime
-    /// (`hya serve` has no working directory of its own, ADR-0024) and lists
-    /// only user and bundle rows.
+    /// A named directory binds `catalog_scope_for_directory` (a registered
+    /// Project lists every one of its roots, first root wins; a plain
+    /// directory lists just itself) plus the user and bundle rows (catalog
+    /// precedence: project shadows user shadows bundle). No scope binds the
+    /// project-less global runtime (`hya serve` has no working directory of
+    /// its own, ADR-0024) and lists only user and bundle rows.
     ///
     /// # Errors
     /// Returns a control error when runtime binding or catalog build fails.
@@ -674,16 +761,11 @@ impl WorkflowControl {
         &self,
         scope: Option<&Path>,
     ) -> Result<Vec<WorkflowSummary>, WorkflowControlError> {
-        let (roots, binding) = match scope {
-            Some(dir) => (
-                WorkflowCatalogRoots::for_workdir(dir),
-                self.engine.bind_root_runtime(dir).await?,
-            ),
-            None => (
-                WorkflowCatalogRoots::user_only(),
-                self.engine.bind_global_runtime().await?,
-            ),
+        let (workdir, binding) = match scope {
+            Some(dir) => (dir.to_path_buf(), self.engine.bind_root_runtime(dir).await?),
+            None => (PathBuf::new(), self.engine.bind_global_runtime().await?),
         };
+        let roots = WorkflowCatalogRoots::for_scope(binding.scope(), &workdir);
         let catalog = WorkflowCatalog::build(roots, &binding)?;
         Ok(catalog.list())
     }
@@ -702,8 +784,10 @@ impl WorkflowControl {
         mut state: WorkflowProjection,
     ) -> Result<WorkflowProjection, WorkflowControlError> {
         let (workdir, binding) = self.session_binding(session, None).await?;
-        let catalog =
-            WorkflowCatalog::build(WorkflowCatalogRoots::for_workdir(&workdir), &binding)?;
+        let catalog = WorkflowCatalog::build(
+            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+            &binding,
+        )?;
         decorate_projection(&catalog, &mut state);
         Ok(state)
     }
@@ -718,8 +802,10 @@ impl WorkflowControl {
         captured_binding: Option<TurnBinding>,
     ) -> Result<WorkflowProjection, WorkflowControlError> {
         let (workdir, binding) = self.session_binding(session, captured_binding).await?;
-        let catalog =
-            WorkflowCatalog::build(WorkflowCatalogRoots::for_workdir(&workdir), &binding)?;
+        let catalog = WorkflowCatalog::build(
+            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+            &binding,
+        )?;
         let entry = catalog.resolve(name)?;
         if let Some(run) = self.active_run(session)? {
             return Err(WorkflowControlError::Busy { session, run });
@@ -765,8 +851,10 @@ impl WorkflowControl {
             return Err(WorkflowControlError::SessionNotFound { session });
         }
         let (workdir, binding) = self.session_binding(session, captured_binding).await?;
-        let catalog =
-            WorkflowCatalog::build(WorkflowCatalogRoots::for_workdir(&workdir), &binding)?;
+        let catalog = WorkflowCatalog::build(
+            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+            &binding,
+        )?;
         let mut state = projection.session.workflow.unwrap_or_default();
         decorate_projection(&catalog, &mut state);
         Ok(state)
@@ -820,8 +908,10 @@ impl WorkflowControl {
         let (workdir, binding) = self
             .session_binding(session, invocation.binding.clone())
             .await?;
-        let catalog =
-            WorkflowCatalog::build(WorkflowCatalogRoots::for_workdir(&workdir), &binding)?;
+        let catalog = WorkflowCatalog::build(
+            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
+            &binding,
+        )?;
         let entry = catalog.resolve(workflow_name)?;
         let selected_same_name = selected
             .as_ref()
