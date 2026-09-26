@@ -396,6 +396,36 @@
     "streaming": false
   },
   {
+    "method": "POST",
+    "path": "/v1/relay/connect",
+    "operationId": "RelayControl.ConnectRelay",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/relay/disconnect",
+    "operationId": "RelayControl.DisconnectRelay",
+    "streaming": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/relay/link",
+    "operationId": "RelayControl.GetRelayLink",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/relay/rotate",
+    "operationId": "RelayControl.RotateRelayKey",
+    "streaming": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/relay/status",
+    "operationId": "RelayControl.GetRelayStatus",
+    "streaming": false
+  },
+  {
     "method": "GET",
     "path": "/v1/sessions",
     "operationId": "Session.ListSessions",

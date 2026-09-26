@@ -707,6 +707,61 @@
         "x-server-streaming": false
       }
     },
+    "/v1/relay/connect": {
+      "post": {
+        "operationId": "RelayControl.ConnectRelay",
+        "summary": "Join a relay: load (or create) the relay identity and keep a host",
+        "tags": [
+          "RelayControl"
+        ],
+        "x-grpc-method": "hya.v1.RelayControl.ConnectRelay",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/relay/disconnect": {
+      "post": {
+        "operationId": "RelayControl.DisconnectRelay",
+        "summary": "Leave the relay: close the control stream (the proxy releases the room)",
+        "tags": [
+          "RelayControl"
+        ],
+        "x-grpc-method": "hya.v1.RelayControl.DisconnectRelay",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/relay/link": {
+      "get": {
+        "operationId": "RelayControl.GetRelayLink",
+        "summary": "The full relay link — a secret: whoever holds it controls this backend.",
+        "tags": [
+          "RelayControl"
+        ],
+        "x-grpc-method": "hya.v1.RelayControl.GetRelayLink",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/relay/rotate": {
+      "post": {
+        "operationId": "RelayControl.RotateRelayKey",
+        "summary": "Issue a new pre-shared key: every earlier link fails its next",
+        "tags": [
+          "RelayControl"
+        ],
+        "x-grpc-method": "hya.v1.RelayControl.RotateRelayKey",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/relay/status": {
+      "get": {
+        "operationId": "RelayControl.GetRelayStatus",
+        "summary": "The connector's state. Never contains key material.",
+        "tags": [
+          "RelayControl"
+        ],
+        "x-grpc-method": "hya.v1.RelayControl.GetRelayStatus",
+        "x-server-streaming": false
+      }
+    },
     "/v1/sessions": {
       "post": {
         "operationId": "Session.CreateSession",
@@ -4067,6 +4122,89 @@
           }
         }
       },
+      "ConnectRelayRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "proxy_url": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "extra_ca_path": {
+            "type": "string"
+          },
+          "ephemeral": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConnectRelayResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/RelayStatus"
+          },
+          "link": {
+            "type": "string"
+          }
+        }
+      },
+      "RelayStatus": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/RelayState"
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "room_id": {
+            "type": "string"
+          },
+          "redacted_link": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "binding": {
+            "type": "string"
+          },
+          "binding_reason": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "connected_since": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "active_streams": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ephemeral": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RelayLinkResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "link": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RelayStatus"
+          }
+        }
+      },
       "SessionRef": {
         "type": "object",
         "description": "Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on input; canonical form on output).",
@@ -5060,6 +5198,17 @@
           "VCS_FILE_STATUS_DELETED",
           "VCS_FILE_STATUS_RENAMED",
           "VCS_FILE_STATUS_UNTRACKED"
+        ]
+      },
+      "RelayState": {
+        "type": "string",
+        "description": "The host connector's state.",
+        "enum": [
+          "RELAY_STATE_UNSPECIFIED",
+          "RELAY_STATE_DISCONNECTED",
+          "RELAY_STATE_CONNECTING",
+          "RELAY_STATE_CONNECTED",
+          "RELAY_STATE_BACKOFF"
         ]
       },
       "SessionKind": {

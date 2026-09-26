@@ -1105,6 +1105,27 @@ clients of a database do that through `<db>.server.json`
 resubscribe with `sinceSeq` and gap-fill with `ListEvents` as after any
 disconnect.
 
+## Relay control (loopback only)
+
+The `RelayControl` service joins, leaves, inspects, and re-keys the secure
+relay the backend is hosted on ([ADR-0025](../adr/0025-secure-relay.md),
+[relay.md](../relay.md#hosting-a-backend-on-a-relay)):
+
+| Rpc | HTTP | Response |
+| --- | --- | --- |
+| `ConnectRelay{proxyUrl, transport?, extraCaPath?, ephemeral?}` | `POST /v1/relay/connect` | `{status, link}` |
+| `DisconnectRelay{}` | `POST /v1/relay/disconnect` | `RelayStatus` |
+| `GetRelayStatus{}` | `GET /v1/relay/status` | `RelayStatus` (never key material) |
+| `GetRelayLink{}` | `GET /v1/relay/link` | `{link, status}` — the full link, a secret; `failed_precondition` when not joined |
+| `RotateRelayKey{}` | `POST /v1/relay/rotate` | `{link, status}` — earlier links are revoked and open relay streams closed |
+
+**Request origin.** A request that arrived through the relay carries the
+server-side extension `Origin::Relay`. Such requests may use every rpc except
+`RelayControl` and `Process.DisposeProcess` / `Process.UpgradeProcess`, which
+answer `permission_denied`. `RelayControl` also answers `permission_denied`
+to a non-loopback TCP (or gRPC) peer and to a browser request (an `Origin` or
+`Sec-Fetch-Site` header). Field reference: [api-reference.md](api-reference.md).
+
 ## Minimal client walkthrough
 
 ```

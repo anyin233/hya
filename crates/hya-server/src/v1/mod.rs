@@ -22,6 +22,7 @@ mod process;
 mod project;
 mod providers;
 mod pty;
+mod relay;
 mod session;
 mod turn;
 mod workflow;
@@ -63,6 +64,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(worktree::router())
         .merge(mcp::router())
         .merge(pty::router())
+        .merge(relay::router())
 }
 
 /// The v1 JSON body extractor and response: `axum::Json`, except that a body

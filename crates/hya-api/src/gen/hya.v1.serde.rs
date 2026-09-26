@@ -3432,6 +3432,258 @@ impl<'de> serde::Deserialize<'de> for ConnectMcpRequest {
         deserializer.deserialize_struct("hya.v1.ConnectMcpRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ConnectRelayRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.proxy_url.is_empty() {
+            len += 1;
+        }
+        if !self.transport.is_empty() {
+            len += 1;
+        }
+        if !self.extra_ca_path.is_empty() {
+            len += 1;
+        }
+        if self.ephemeral {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ConnectRelayRequest", len)?;
+        if !self.proxy_url.is_empty() {
+            struct_ser.serialize_field("proxyUrl", &self.proxy_url)?;
+        }
+        if !self.transport.is_empty() {
+            struct_ser.serialize_field("transport", &self.transport)?;
+        }
+        if !self.extra_ca_path.is_empty() {
+            struct_ser.serialize_field("extraCaPath", &self.extra_ca_path)?;
+        }
+        if self.ephemeral {
+            struct_ser.serialize_field("ephemeral", &self.ephemeral)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ConnectRelayRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "proxy_url",
+            "proxyUrl",
+            "transport",
+            "extra_ca_path",
+            "extraCaPath",
+            "ephemeral",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProxyUrl,
+            Transport,
+            ExtraCaPath,
+            Ephemeral,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "proxyUrl" | "proxy_url" => Ok(GeneratedField::ProxyUrl),
+                            "transport" => Ok(GeneratedField::Transport),
+                            "extraCaPath" | "extra_ca_path" => Ok(GeneratedField::ExtraCaPath),
+                            "ephemeral" => Ok(GeneratedField::Ephemeral),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ConnectRelayRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ConnectRelayRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ConnectRelayRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut proxy_url__ = None;
+                let mut transport__ = None;
+                let mut extra_ca_path__ = None;
+                let mut ephemeral__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProxyUrl => {
+                            if proxy_url__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proxyUrl"));
+                            }
+                            proxy_url__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Transport => {
+                            if transport__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transport"));
+                            }
+                            transport__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ExtraCaPath => {
+                            if extra_ca_path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extraCaPath"));
+                            }
+                            extra_ca_path__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Ephemeral => {
+                            if ephemeral__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ephemeral"));
+                            }
+                            ephemeral__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ConnectRelayRequest {
+                    proxy_url: proxy_url__.unwrap_or_default(),
+                    transport: transport__.unwrap_or_default(),
+                    extra_ca_path: extra_ca_path__.unwrap_or_default(),
+                    ephemeral: ephemeral__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ConnectRelayRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ConnectRelayResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.status.is_some() {
+            len += 1;
+        }
+        if !self.link.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ConnectRelayResponse", len)?;
+        if let Some(v) = self.status.as_ref() {
+            struct_ser.serialize_field("status", v)?;
+        }
+        if !self.link.is_empty() {
+            struct_ser.serialize_field("link", &self.link)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ConnectRelayResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "status",
+            "link",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Status,
+            Link,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "status" => Ok(GeneratedField::Status),
+                            "link" => Ok(GeneratedField::Link),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ConnectRelayResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ConnectRelayResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ConnectRelayResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut status__ = None;
+                let mut link__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Status => {
+                            if status__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("status"));
+                            }
+                            status__ = map_.next_value()?;
+                        }
+                        GeneratedField::Link => {
+                            if link__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("link"));
+                            }
+                            link__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ConnectRelayResponse {
+                    status: status__,
+                    link: link__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ConnectRelayResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for CreateConnectTokenRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -5953,6 +6205,77 @@ impl<'de> serde::Deserialize<'de> for DisconnectMcpRequest {
             }
         }
         deserializer.deserialize_struct("hya.v1.DisconnectMcpRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for DisconnectRelayRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.DisconnectRelayRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for DisconnectRelayRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = DisconnectRelayRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.DisconnectRelayRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<DisconnectRelayRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(DisconnectRelayRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.DisconnectRelayRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for DiscoveryOutcome {
@@ -8608,6 +8931,148 @@ impl<'de> serde::Deserialize<'de> for GetPtyRequest {
             }
         }
         deserializer.deserialize_struct("hya.v1.GetPtyRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetRelayLinkRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.GetRelayLinkRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetRelayLinkRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetRelayLinkRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.GetRelayLinkRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetRelayLinkRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(GetRelayLinkRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.GetRelayLinkRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for GetRelayStatusRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.GetRelayStatusRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetRelayStatusRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetRelayStatusRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.GetRelayStatusRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetRelayStatusRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(GetRelayStatusRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.GetRelayStatusRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for GetSessionRequest {
@@ -20502,6 +20967,465 @@ impl<'de> serde::Deserialize<'de> for RefreshProviderRequest {
         deserializer.deserialize_struct("hya.v1.RefreshProviderRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for RelayLinkResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.link.is_empty() {
+            len += 1;
+        }
+        if self.status.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.RelayLinkResponse", len)?;
+        if !self.link.is_empty() {
+            struct_ser.serialize_field("link", &self.link)?;
+        }
+        if let Some(v) = self.status.as_ref() {
+            struct_ser.serialize_field("status", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for RelayLinkResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "link",
+            "status",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Link,
+            Status,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "link" => Ok(GeneratedField::Link),
+                            "status" => Ok(GeneratedField::Status),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = RelayLinkResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.RelayLinkResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<RelayLinkResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut link__ = None;
+                let mut status__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Link => {
+                            if link__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("link"));
+                            }
+                            link__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Status => {
+                            if status__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("status"));
+                            }
+                            status__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(RelayLinkResponse {
+                    link: link__.unwrap_or_default(),
+                    status: status__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.RelayLinkResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for RelayState {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "RELAY_STATE_UNSPECIFIED",
+            Self::Disconnected => "RELAY_STATE_DISCONNECTED",
+            Self::Connecting => "RELAY_STATE_CONNECTING",
+            Self::Connected => "RELAY_STATE_CONNECTED",
+            Self::Backoff => "RELAY_STATE_BACKOFF",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for RelayState {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "RELAY_STATE_UNSPECIFIED",
+            "RELAY_STATE_DISCONNECTED",
+            "RELAY_STATE_CONNECTING",
+            "RELAY_STATE_CONNECTED",
+            "RELAY_STATE_BACKOFF",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = RelayState;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "RELAY_STATE_UNSPECIFIED" => Ok(RelayState::Unspecified),
+                    "RELAY_STATE_DISCONNECTED" => Ok(RelayState::Disconnected),
+                    "RELAY_STATE_CONNECTING" => Ok(RelayState::Connecting),
+                    "RELAY_STATE_CONNECTED" => Ok(RelayState::Connected),
+                    "RELAY_STATE_BACKOFF" => Ok(RelayState::Backoff),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for RelayStatus {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.state != 0 {
+            len += 1;
+        }
+        if !self.proxy.is_empty() {
+            len += 1;
+        }
+        if !self.room_id.is_empty() {
+            len += 1;
+        }
+        if !self.redacted_link.is_empty() {
+            len += 1;
+        }
+        if !self.transport.is_empty() {
+            len += 1;
+        }
+        if !self.binding.is_empty() {
+            len += 1;
+        }
+        if !self.binding_reason.is_empty() {
+            len += 1;
+        }
+        if !self.last_error.is_empty() {
+            len += 1;
+        }
+        if self.connected_since.is_some() {
+            len += 1;
+        }
+        if self.active_streams != 0 {
+            len += 1;
+        }
+        if self.ephemeral {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.RelayStatus", len)?;
+        if self.state != 0 {
+            let v = RelayState::try_from(self.state)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.state)))?;
+            struct_ser.serialize_field("state", &v)?;
+        }
+        if !self.proxy.is_empty() {
+            struct_ser.serialize_field("proxy", &self.proxy)?;
+        }
+        if !self.room_id.is_empty() {
+            struct_ser.serialize_field("roomId", &self.room_id)?;
+        }
+        if !self.redacted_link.is_empty() {
+            struct_ser.serialize_field("redactedLink", &self.redacted_link)?;
+        }
+        if !self.transport.is_empty() {
+            struct_ser.serialize_field("transport", &self.transport)?;
+        }
+        if !self.binding.is_empty() {
+            struct_ser.serialize_field("binding", &self.binding)?;
+        }
+        if !self.binding_reason.is_empty() {
+            struct_ser.serialize_field("bindingReason", &self.binding_reason)?;
+        }
+        if !self.last_error.is_empty() {
+            struct_ser.serialize_field("lastError", &self.last_error)?;
+        }
+        if let Some(v) = self.connected_since.as_ref() {
+            struct_ser.serialize_field("connectedSince", v)?;
+        }
+        if self.active_streams != 0 {
+            struct_ser.serialize_field("activeStreams", &self.active_streams)?;
+        }
+        if self.ephemeral {
+            struct_ser.serialize_field("ephemeral", &self.ephemeral)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for RelayStatus {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "state",
+            "proxy",
+            "room_id",
+            "roomId",
+            "redacted_link",
+            "redactedLink",
+            "transport",
+            "binding",
+            "binding_reason",
+            "bindingReason",
+            "last_error",
+            "lastError",
+            "connected_since",
+            "connectedSince",
+            "active_streams",
+            "activeStreams",
+            "ephemeral",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            State,
+            Proxy,
+            RoomId,
+            RedactedLink,
+            Transport,
+            Binding,
+            BindingReason,
+            LastError,
+            ConnectedSince,
+            ActiveStreams,
+            Ephemeral,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "state" => Ok(GeneratedField::State),
+                            "proxy" => Ok(GeneratedField::Proxy),
+                            "roomId" | "room_id" => Ok(GeneratedField::RoomId),
+                            "redactedLink" | "redacted_link" => Ok(GeneratedField::RedactedLink),
+                            "transport" => Ok(GeneratedField::Transport),
+                            "binding" => Ok(GeneratedField::Binding),
+                            "bindingReason" | "binding_reason" => Ok(GeneratedField::BindingReason),
+                            "lastError" | "last_error" => Ok(GeneratedField::LastError),
+                            "connectedSince" | "connected_since" => Ok(GeneratedField::ConnectedSince),
+                            "activeStreams" | "active_streams" => Ok(GeneratedField::ActiveStreams),
+                            "ephemeral" => Ok(GeneratedField::Ephemeral),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = RelayStatus;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.RelayStatus")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<RelayStatus, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut state__ = None;
+                let mut proxy__ = None;
+                let mut room_id__ = None;
+                let mut redacted_link__ = None;
+                let mut transport__ = None;
+                let mut binding__ = None;
+                let mut binding_reason__ = None;
+                let mut last_error__ = None;
+                let mut connected_since__ = None;
+                let mut active_streams__ = None;
+                let mut ephemeral__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::State => {
+                            if state__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("state"));
+                            }
+                            state__ = Some(map_.next_value::<RelayState>()? as i32);
+                        }
+                        GeneratedField::Proxy => {
+                            if proxy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("proxy"));
+                            }
+                            proxy__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::RoomId => {
+                            if room_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("roomId"));
+                            }
+                            room_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::RedactedLink => {
+                            if redacted_link__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("redactedLink"));
+                            }
+                            redacted_link__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Transport => {
+                            if transport__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("transport"));
+                            }
+                            transport__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Binding => {
+                            if binding__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("binding"));
+                            }
+                            binding__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BindingReason => {
+                            if binding_reason__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bindingReason"));
+                            }
+                            binding_reason__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::LastError => {
+                            if last_error__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("lastError"));
+                            }
+                            last_error__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ConnectedSince => {
+                            if connected_since__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("connectedSince"));
+                            }
+                            connected_since__ = map_.next_value()?;
+                        }
+                        GeneratedField::ActiveStreams => {
+                            if active_streams__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("activeStreams"));
+                            }
+                            active_streams__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Ephemeral => {
+                            if ephemeral__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ephemeral"));
+                            }
+                            ephemeral__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(RelayStatus {
+                    state: state__.unwrap_or_default(),
+                    proxy: proxy__.unwrap_or_default(),
+                    room_id: room_id__.unwrap_or_default(),
+                    redacted_link: redacted_link__.unwrap_or_default(),
+                    transport: transport__.unwrap_or_default(),
+                    binding: binding__.unwrap_or_default(),
+                    binding_reason: binding_reason__.unwrap_or_default(),
+                    last_error: last_error__.unwrap_or_default(),
+                    connected_since: connected_since__,
+                    active_streams: active_streams__.unwrap_or_default(),
+                    ephemeral: ephemeral__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.RelayStatus", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for RemoveMcpAuthRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -22053,6 +22977,77 @@ impl<'de> serde::Deserialize<'de> for Role {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for RotateRelayKeyRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.RotateRelayKeyRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for RotateRelayKeyRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = RotateRelayKeyRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.RotateRelayKeyRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<RotateRelayKeyRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(RotateRelayKeyRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.RotateRelayKeyRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for RulePermission {

@@ -17,8 +17,14 @@ hya-proto = { workspace = true }
 hya-provider = { workspace = true }
 hya-store = { workspace = true }
 hya-tool = { workspace = true }
+hya-relay = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+rand_core = { workspace = true }
+zeroize = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -40,4 +46,5 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 tower = { workspace = true }
 http-body-util = "0.1"
+hyper = { workspace = true, features = ["client"] }
 tokio-tungstenite = { workspace = true }
