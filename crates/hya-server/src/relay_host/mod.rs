@@ -54,6 +54,10 @@ pub const DEFAULT_MAX_STREAMS: usize = 64;
 pub const DEFAULT_MAX_HANDSHAKES: usize = 16;
 /// Default time open relay streams get to finish at a graceful shutdown.
 pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// How long [`RelayHost::shutdown`] lingers after the relay streams it was
+/// serving finished, so their final frames (`serverStopping`) leave the
+/// relay transport's writer tasks before the room is released.
+const FLUSH_LINGER: Duration = Duration::from_millis(200);
 
 /// Settings of the connector's host side.
 #[derive(Clone, Debug)]
@@ -598,21 +602,30 @@ impl RelayHost {
         }
     }
 
-    /// Leave the relay for good (server shutdown): stop the control stream
-    /// (the proxy releases the room), let open relay streams finish for at
-    /// most [`RelayHostConfig::shutdown_grace`] — the live event streams
-    /// already sent their `serverStopping` frame — then close the rest.
-    /// Does not call the settings hook. Idempotent.
+    /// Leave the relay for good (server shutdown): stop accepting relay
+    /// streams, let the open ones finish for at most
+    /// [`RelayHostConfig::shutdown_grace`] — the live event streams already
+    /// sent their `serverStopping` frame — then stop the control stream (the
+    /// proxy releases the room, which cuts every stream of it, so it goes
+    /// last: a final frame still on its way would be lost) and close the
+    /// rest. Does not call the settings hook. Idempotent.
     pub async fn shutdown(&self) {
         let inner = &self.inner;
         let mut control = inner.control.lock().await;
         inner.stopped.store(true, Ordering::SeqCst);
-        if let Some(session) = control.take() {
-            stop_session(session).await;
-        }
+        let serving = inner.active.load(Ordering::SeqCst) > 0;
         inner.graceful.cancel();
         inner.tasks.close();
         let _ = tokio::time::timeout(inner.config.shutdown_grace, inner.tasks.wait()).await;
+        if serving {
+            // A finished stream's last bytes are still queued in the relay
+            // transport's writer tasks: let them reach the proxy before the
+            // room goes (and the process exits).
+            tokio::time::sleep(FLUSH_LINGER).await;
+        }
+        if let Some(session) = control.take() {
+            stop_session(session).await;
+        }
         let streams = {
             let mut shared = lock(&inner.shared);
             shared.state = RelayState::Disconnected;
@@ -813,6 +826,10 @@ async fn session(
 /// The handshake runs on a handshake slot; the stream takes a serving slot
 /// only once it is authenticated.
 fn spawn_stream(inner: &Arc<Inner>, client: &RelayClient, room: &RoomId, stream_id: String) {
+    // Shutting down: the room is about to be released.
+    if inner.stopped.load(Ordering::SeqCst) {
+        return;
+    }
     let too_many_streams = || {
         tracing::warn!(
             max = inner.config.max_streams,
