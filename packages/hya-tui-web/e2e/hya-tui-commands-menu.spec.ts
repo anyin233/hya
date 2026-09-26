@@ -53,12 +53,18 @@ async function writeSkill(dir: string, name: string, description: string, body: 
   await writeFile(join(skillDir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n${body}\n`)
 }
 
-/** Type `/new`, run it (its argument hint means the first Enter only completes the name), then submit it. */
+/**
+ * Type `/new`, then Enter: its argument hint (`[agent] [model]`) is
+ * bracketed/optional (commands/menu.ts `requiresArgument`), so the menu's
+ * Enter runs it immediately — replacing the composer text and submitting in
+ * the same call (Composer.tsx `acceptCommandEntry`). The composer showing
+ * "/new" is a one-frame transient on the way to submitting, not a stable
+ * state to poll for (it can already be gone by the first check under load),
+ * so wait for the actual outcome instead.
+ */
 async function createSessionViaMenu(term: Tui): Promise<void> {
   await term.type("/new")
   await term.waitForText("▸ /new")
-  await term.press("Enter")
-  await expect.poll(() => composerText(term)).toBe("/new")
   await term.press("Enter")
   await term.waitForText(/^Created/m)
 }

@@ -12,6 +12,7 @@
  * only turns them into `scroll` outcomes for the component to act on.
  */
 import type { KeyLike } from "../keys/bindings"
+import { pickerWindow } from "./picker"
 import { diffLines, type ToolLine } from "./tools"
 
 export interface DiffFile {
@@ -149,6 +150,27 @@ export function fileLine(file: DiffFile, open: boolean, width: number): string {
   const line = `${marker}${file.path}`
   const gap = Math.max(1, width - Bun.stringWidth(line) - Bun.stringWidth(counts))
   return `${line}${" ".repeat(gap)}${counts}`
+}
+
+export interface DiffFileWindow {
+  start: number
+  end: number
+  /** Files hidden above the window (0 when the window starts at the top). */
+  moreAbove: number
+  /** Files hidden below the window (0 when the window reaches the last file). */
+  moreBelow: number
+}
+
+/**
+ * The slice of `files` to show around the open file, plus how many files are
+ * hidden on each side (a `N more` indicator; components/DiffView.tsx renders
+ * it). Many changed files would otherwise overflow the file list with no way
+ * to see the rest.
+ */
+export function diffFileWindow(files: readonly DiffFile[], current: string | undefined, visible: number): DiffFileWindow {
+  const at = Math.max(0, files.findIndex((file) => file.path === current))
+  const { start, end } = pickerWindow(files.length, at, Math.max(1, visible))
+  return { start, end, moreAbove: start, moreBelow: files.length - end }
 }
 
 /** The footer hint. */

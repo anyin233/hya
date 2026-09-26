@@ -163,14 +163,16 @@ any model the first prompt creates it instead), so the header names it before
 you type. A `--remote` start without an active Project creates none: it opens
 the [Project view](#project-view) instead.
 `/sessions` (or the sidebar) reaches the earlier ones. Empty sessions do not
-pile up: a session this TUI created and never used is deleted when the TUI
-leaves it — `/new`, `/open`, `/sessions`, a `/fork` switch, or the TUI
-exiting (a WebUI tab closing too; the delete waits at most 2 s). Right before
-the delete the TUI re-reads the session from the server and keeps it if it
-has any message, a running turn, a title (a `/rename`, or the automatic title
-after a first prompt), or a parent. Sessions other clients created are never
-deleted. The re-check and the delete are two requests, so a prompt another
-client sends into that empty session in between is lost with it.
+pile up: the TUI creates that session (and every `/new` one) *ephemeral*,
+and the backend daemon deletes it about 5 s after no TUI shows it any more
+while it is still unused — after `/new`, `/open`, `/sessions`, a `/fork`
+switch, `/exit`, a WebUI tab closing, or the TUI being killed. The first
+prompt or `!` shell command (from any client), a title (a `/rename`, or the
+automatic title after a first prompt), archiving, or a `/fork` from it keeps
+it for good. A session another TUI still shows is never deleted, whichever
+TUI created it, and quitting never waits for a delete (see
+[Ephemeral sessions](protocol/README.md#ephemeral-sessions) and ADR-0023).
+Other TUIs drop its row when the daemon deletes it.
 
 Two TUIs on the same database share one daemon, so they see the same
 sessions live; give one `--db` for a separate store. The backend's offline
@@ -206,9 +208,10 @@ cancels a running turn, which finishes on the daemon.
 | Closing a WebUI tab, SIGTERM/SIGHUP/SIGINT, a kill or crash | Left as is: it keeps running on the daemon, not archived. |
 | Switching sessions (`/new`, `/open`, `/sessions`, `/resume`, a `/fork` switch) | Not an exit: the previous session keeps running. |
 
-In every case an empty session this TUI created and never used is deleted
-instead (the rule above). The exit waits at most 2 s for the archive or the
-delete.
+In every case a session that is still unused (no prompt, title, archive,
+or fork yet) is never archived: the daemon deletes it once no TUI shows it
+(the rule above), so quitting sends nothing for it and does not wait. The
+graceful exit waits at most 2 s for the archive of a used session.
 
 In a WebUI tab (`--web-tab`) `/to-background` is not offered (it is left
 out of the command menu, completion, and `/help`); typing it, or Ctrl+D on
@@ -366,8 +369,8 @@ status bar shows the connection as lost, and prompts are refused (`Not sent
 · the relay bridge exited · /connect-remote <link> connects again`). Nothing
 local is started.
 
-**Disconnecting.** `/disconnect-remote` drops the remote's unused session,
-closes the bridge's stdin (SIGTERM after 2 s if it is still running), clears
+**Disconnecting.** `/disconnect-remote` closes the remote session's stream
+(an unused one is ephemeral, so the remote daemon drops it), closes the bridge's stdin (SIGTERM after 2 s if it is still running), clears
 the label, and runs the local start again: the database's daemon (found, or
 started with `hya serve start`) or the fixed local `--server`, the Project
 of `--dir`, and a new session; `Back on the local backend · pid <pid>`. A
@@ -522,7 +525,7 @@ A second, narrower sidebar on the left lists every Project live
 | Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
 | Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
-| `/exit`, `/quit` | Quit and archive the session (an empty one is deleted). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
+| `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
 | `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
@@ -2296,15 +2299,19 @@ A failed call shows the server's `code: message` (for example
 `/diff` opens a full-screen view of the working tree diff: `git diff HEAD`
 plus every untracked file, split back into one entry per file. The file list
 sits on the left (path and `+N -M`), the highlighted file's colored diff on
-the right — same line colors as a tool card's diff (add/remove/hunk).
+the right — same line colors as a tool card's diff (add/remove/hunk). The
+file list windows around the open file (a `N more` marker above/below it
+when the change touches more files than fit), so a large change never draws
+past the list.
 
 ### Keys
 
 Up/Down, PgUp/PgDn, Home/End, and the mouse wheel scroll the open file's
-body. `n` / `p` (or `]` / `[`) move to the next / previous file. `r` reloads
-the diff (after editing files outside the TUI, for example). Esc closes the
-view; Ctrl+C closes it too and keeps its quit meaning. The help overlay
-(`?`, group `diff`) lists the same keys.
+body. `n` / `p` (or `]` / `[`) move to the next / previous file, scrolling
+the file list to keep it in view. `r` reloads the diff (after editing files
+outside the TUI, for example). Esc closes the view; Ctrl+C closes it too and
+keeps its quit meaning. The help overlay (`?`, group `diff`) lists the same
+keys.
 
 With no changes the body says `No changes`; outside a git repository (or
 when the backend directory is not one) it says `Not a git repository` — the
@@ -2324,21 +2331,28 @@ connection state, tool count, and (when failed) its error.
 
 ### Keys
 
-Up/Down move the highlight; Enter opens the highlighted server's tool list
-(`MCP › <name>`); `c` connects it now, `x` disconnects it; `r` refreshes;
-`/` filters by name or state. `a` starts a login for a server that needs one
-(`authRequired`): the authorization URL is copied to the clipboard (OSC 52,
-the same action `/copy` uses) and shown, then a one-line pop-up takes the
-callback code — Enter completes the login, Esc cancels the pop-up only (the
-server keeps needing a login). Esc on the list closes the view; Ctrl+C
-closes it too and keeps its quit meaning. The help overlay (`?`, group
-`mcp`) lists the same keys.
+Up/Down move the highlight over the server list; Enter opens the
+highlighted server's tool list (`MCP › <name>`), each tool under the
+server's own name (`tool_01` for the model-facing `mcp__many__tool_01`;
+"No tools" while the server is not connected). On that detail screen,
+Up/Down/PgUp/PgDn/Home/End move a highlight over the server's tools instead
+— the tool list windows around it (a `N more` marker above/below when a
+server has more tools than fit), so a server with many tools never draws
+past the view. `c` connects the server now, `x` disconnects it; `r`
+refreshes; `/` filters the server list by name or state. `a` starts a login
+for a server that needs one (`authRequired`): the authorization URL is
+copied to the clipboard (OSC 52, the same action `/copy` uses) and shown,
+then a one-line pop-up takes the callback code — Enter completes the login,
+Esc cancels the pop-up only (the server keeps needing a login). Esc/Left on
+the detail screen backs out to the list; Esc on the list closes the view;
+Ctrl+C closes it too and keeps its quit meaning. The help overlay (`?`,
+group `mcp`) lists the same keys.
 
 ### MCP view interfaces
 
 | Action | Call | Reads |
 | --- | --- | --- |
-| Open, `r` refresh | `GET /v1/mcp?directory=<dir>` | `McpServerStatus[]` (`name`, `state`, `tools`, `error`, `authRequired`) |
+| Open, `r` refresh | `GET /v1/mcp?directory=<dir>` | `McpServerStatus[]` (`name`, `state`, `tools` — `mcp__<server>__<tool>` names, set while `CONNECTED` — `error`, `authRequired`) |
 | `c` connect | `POST /v1/mcp/{name}/connect` | `McpServerStatus` |
 | `x` disconnect | `POST /v1/mcp/{name}/disconnect` | `McpServerStatus` |
 | `a` start login | `POST /v1/mcp/{name}/auth` | `{authorizationUrl}` |

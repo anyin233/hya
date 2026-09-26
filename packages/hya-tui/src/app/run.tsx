@@ -23,12 +23,14 @@
  * so no child (editor, shell, bridge) inherits either.
  *
  * Lifecycle: every way out runs `shutdown()` once: restore the terminal,
- * settle the open session (app/sessionKeeper.ts, at most 2 s), then exit.
+ * settle the open session (app/sessionKeeper.ts: archive a used one on a
+ * graceful exit, at most 2 s), then exit.
  * The backend daemon keeps running. The way out decides the session's fate:
  * Ctrl+C twice or `/exit` archive it (graceful); Ctrl+D or `/to-background`
  * leave it running; a signal (SIGINT, SIGTERM, SIGHUP; the WebUI host sends
- * SIGHUP when its tab closes) never archives. An empty session this client
- * created is deleted on every way out. A backend that
+ * SIGHUP when its tab closes) never archives. An unused session this client
+ * created costs nothing on the way out: the daemon drops it once no client
+ * watches it (a kill included). A backend that
  * cannot be reached or started is reported on stderr with the tail of its
  * output, and the TUI exits with status 1 before it takes over the terminal.
  */

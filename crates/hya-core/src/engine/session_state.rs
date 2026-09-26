@@ -114,6 +114,39 @@ impl SessionEngine {
         Ok(changed)
     }
 
+    /// Mark a root session ephemeral (`true`: the server deletes it once
+    /// it is still unused and no client watches it) or keep it (`false`).
+    /// Appends `SessionEphemeralSet` only when the mark changes; returns
+    /// whether it did. Marking a subagent child, or a session that is already
+    /// used (a message, a title, archived), ephemeral is a no-op: only unused
+    /// root sessions are ephemeral.
+    ///
+    /// # Errors
+    /// `CoreError::Invalid("session not found")` for an unknown session, plus
+    /// store failures.
+    pub async fn set_session_ephemeral(
+        &self,
+        session: SessionId,
+        ephemeral: bool,
+    ) -> Result<bool, CoreError> {
+        let projection = self.read_projection_shared(session).await?;
+        if projection.session.id.is_none() {
+            return Err(CoreError::Invalid("session not found".to_owned()));
+        }
+        let used = !projection.session.messages.is_empty()
+            || projection.session.revert.is_some()
+            || projection.session.title.is_some()
+            || projection.session.archived.is_some();
+        if projection.session.ephemeral == ephemeral
+            || (ephemeral && (used || projection.session.parent.is_some()))
+        {
+            return Ok(false);
+        }
+        self.emit(session, Event::SessionEphemeralSet { session, ephemeral })
+            .await?;
+        Ok(true)
+    }
+
     async fn set_session_archived(
         &self,
         session: SessionId,

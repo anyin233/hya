@@ -252,3 +252,53 @@ async fn session_info_matches_the_listed_row() {
     assert_eq!(store.session_info(listed).await.unwrap(), Some(row));
     assert_eq!(store.session_info(SessionId::new()).await.unwrap(), None);
 }
+
+/// `delete_session_at` deletes only a log that did not grow past the
+/// sequence the caller checked (the server's drop of an unused ephemeral
+/// session: a write that lands after the check keeps the session).
+#[tokio::test]
+async fn delete_session_at_keeps_a_log_that_grew_since_the_check() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let session = SessionId::new();
+    let other = SessionId::new();
+    let created = Event::SessionCreated {
+        session,
+        parent: None,
+        agent: "build".into(),
+        model: "fake".into(),
+        workdir: "/tmp".into(),
+        project: None,
+        kind: hya_proto::SessionKind::Project,
+    };
+    let (checked, _) = store.append_event(session, &created).await.unwrap();
+    // Another session's writes move the global sequence, not this log's.
+    store
+        .append_event(
+            other,
+            &Event::SessionTitled {
+                session: other,
+                title: "other".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let (grown, _) = store
+        .append_event(
+            session,
+            &Event::SessionTitled {
+                session,
+                title: "renamed".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(!store.delete_session_at(session, checked).await.unwrap());
+    assert_eq!(store.replay(session).await.unwrap().len(), 2);
+    assert!(store.delete_session_at(session, grown).await.unwrap());
+    assert!(store.replay(session).await.unwrap().is_empty());
+    assert!(!store.session_exists(session).await.unwrap());
+    // A missing session is not deleted twice.
+    assert!(!store.delete_session_at(session, grown).await.unwrap());
+    assert_eq!(store.replay(other).await.unwrap().len(), 1);
+}

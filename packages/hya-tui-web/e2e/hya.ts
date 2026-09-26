@@ -95,6 +95,25 @@ type BackendSetup = {
   contextLimit?: number
   /** `modalities.input` per model id (docs/configuration.md), e.g. `{ model: ["text"] }` to make a model refuse image attachments. */
   modelModalities?: Record<string, string[]>
+  mcpServers?: Record<string, McpServerOption>
+}
+
+/** One stdio MCP server of the backend config's `mcp:` map (docs/configuration.md). */
+export type McpServerOption = {
+  /** argv of the server process, e.g. `mcpToolsServer(40)`. */
+  command: string[]
+}
+
+/** argv of the fixture stdio MCP server (e2e/fixtures/mcp-tools-server.ts) listing `count` tools `tool_01`…. */
+export function mcpToolsServer(count: number): string[] {
+  return ["bun", fileURLToPath(new URL("./fixtures/mcp-tools-server.ts", import.meta.url)), String(count)]
+}
+
+/** The backend config's `mcp:` map; JSON arrays and strings are valid YAML flow values. */
+function mcpYaml(servers: Record<string, McpServerOption> | undefined): string {
+  const entries = Object.entries(servers ?? {})
+  if (entries.length === 0) return "mcp: {}\n"
+  return "mcp:\n" + entries.map(([name, server]) => `  ${JSON.stringify(name)}:\n    command: ${JSON.stringify(server.command)}\n`).join("")
 }
 
 /**
@@ -103,7 +122,7 @@ type BackendSetup = {
  * the environment a `hya` process needs to use them.
  */
 async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir: string; env: Record<string, string> }> {
-  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit, modelModalities } = setup
+  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit, modelModalities, mcpServers } = setup
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -131,13 +150,18 @@ async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir:
         "    api_key: e2e-test-key\n" +
         "    models:\n" +
         modelsYaml +
-        "mcp: {}\n" +
+        mcpYaml(mcpServers) +
         "plugins: {}\n" +
         "permission:\n" +
         `  model: ${permission}\n` +
         "  rules: []\n",
     )
     await writeFile(join(hyaCfgDir, "auth", "fake.yaml"), "token: e2e-test-key\n")
+  } else if (mcpServers) {
+    // No fake model: the offline echo model, plus the MCP servers.
+    const hyaCfgDir = join(env.config!, "hya")
+    await mkdir(hyaCfgDir, { recursive: true })
+    await writeFile(join(hyaCfgDir, "config.yaml"), mcpYaml(mcpServers))
   }
   return {
     dir,
@@ -240,9 +264,16 @@ type Options = {
    * default) writes none.
    */
   projectBundles: Record<string, BundleFiles> | undefined
+  /**
+   * Stdio MCP servers for the isolated backend's config `mcp:` map, by
+   * server name (`test.use({ mcpServers: { many: { command: mcpToolsServer(40) } } })`);
+   * `hya serve` connects them at startup. Unset (the default) writes
+   * `mcp: {}`.
+   */
+  mcpServers: Record<string, McpServerOption> | undefined
 }
 
-const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | undefined, projectBundles: Record<string, BundleFiles> | undefined): BackendSetup => ({
+const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | undefined, projectBundles: Record<string, BundleFiles> | undefined, mcpServers?: Record<string, McpServerOption>): BackendSetup => ({
   fakeModel,
   protocol: model?.protocol ?? "chat",
   permission: model?.permission ?? "default",
@@ -250,6 +281,7 @@ const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | unde
   ...(model?.models ? { modelIds: model.models } : {}),
   ...(model?.contextLimit ? { contextLimit: model.contextLimit } : {}),
   ...(model?.modelModalities ? { modelModalities: model.modelModalities } : {}),
+  ...(mcpServers ? { mcpServers } : {}),
 })
 
 function requireHya(): void {
@@ -261,6 +293,7 @@ function requireHya(): void {
 const withOptions = base.extend<{ fakeModel: FakeModel | undefined } & Options>({
   model: [undefined, { option: true }],
   projectBundles: [undefined, { option: true }],
+  mcpServers: [undefined, { option: true }],
   fakeModel: async ({ model }, use) => {
     if (!model) {
       await use(undefined)
@@ -297,10 +330,10 @@ export const launchTest = withOptions.extend<{ workspace: Workspace }>({
 })
 
 export const test = withOptions.extend<Fixtures>({
-  backend: async ({ fakeModel, model, projectBundles }, use) => {
+  backend: async ({ fakeModel, model, projectBundles, mcpServers }, use) => {
     requireHya()
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, setupOf(fakeModel, model, projectBundles))
+    const { child, backend } = await startBackend(root, setupOf(fakeModel, model, projectBundles, mcpServers))
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))

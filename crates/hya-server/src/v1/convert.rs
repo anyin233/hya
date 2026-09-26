@@ -198,6 +198,7 @@ pub(crate) fn session_info(
         }),
         archived: session.is_archived(),
         archived_at: session.archived_at_millis().and_then(timestamp),
+        ephemeral: session.ephemeral,
         project_id: session
             .project
             .as_ref()

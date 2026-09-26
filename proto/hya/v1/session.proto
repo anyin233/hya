@@ -127,12 +127,16 @@ message SessionInfo {
   bool archived = 17;
   // When the session was archived; unset when it is not archived.
   google.protobuf.Timestamp archived_at = 18;
+  // Whether this root session was created `ephemeral` and is still unused
+  // (no message, title, archive, or fork from it yet): the server deletes
+  // it once no client has a `StreamSessionEvents` stream open on it.
+  bool ephemeral = 19;
   // Project the session belongs to (a subagent session carries its root's);
   // empty for a temporary session or one created before Projects existed.
   // The id may name a Project that was deleted since.
-  string project_id = 19;
+  string project_id = 20;
   // Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
-  SessionKind kind = 20;
+  SessionKind kind = 21;
 }
 
 // Kind of a session (ADR-0024).
@@ -204,10 +208,16 @@ message CreateSessionRequest {
   bool initialize = 5;
   // Initial title; empty lets the backend derive one.
   string title = 6;
+  // Create the session ephemeral: the server deletes it while it is still
+  // unused (no message, title, archive, or fork from it) once no client has
+  // a `StreamSessionEvents` stream open on it, after a short grace. For
+  // sessions a client opens before the user asked for one (the TUI's
+  // session on connect). Ignored with `parent` or `title` set.
+  bool ephemeral = 7;
   // Project of the new root session.
-  string project_id = 7;
+  string project_id = 8;
   // Kind of the new root session; unset means `SESSION_KIND_PROJECT`.
-  SessionKind kind = 8;
+  SessionKind kind = 9;
 }
 
 message CreateSessionResponse {

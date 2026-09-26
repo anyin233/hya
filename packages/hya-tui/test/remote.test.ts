@@ -172,8 +172,8 @@ test("/connect-remote <link> starts the bridge and moves to it as a remote start
   expect(h.store.state.selected).toBeUndefined()
   expect(h.store.state.projectView).toBeDefined()
   expect(h.store.state.projects.map((row) => row.id)).toEqual(["prj_remote"])
-  // The empty local session this client created is dropped on the local server.
-  expect(h.named("deleteSession")).toEqual([["deleteSession", localUrl, "s1"]])
+  // The unused local session is left to the local daemon (ephemeral): no client-side delete.
+  expect(h.named("deleteSession")).toEqual([])
   // Remote: no Project ensured, no session created there.
   expect(h.named("ensureProjectForPath").filter((call) => call[1] === bridgeUrl)).toEqual([])
   expect(h.named("createSession").filter((call) => call[1] === bridgeUrl)).toEqual([])

@@ -108,8 +108,9 @@ The host stays generic either way: it runs the one fixed command, and the
 TUI finds its backend.
 
 Each browser tab gets its own process. Closing the tab sends the process
-SIGHUP (the hya TUI then leaves its session running, not archived, and
-deletes it only if it was empty and never used). When the process exits, the page shows
+SIGHUP (the hya TUI then leaves its session running, not archived; the
+backend daemon drops it a few seconds later if it is still unused and no
+other tab or TUI shows it). When the process exits, the page shows
 `[process exited with code N]`.
 
 SIGINT, SIGTERM, or SIGHUP to the host stops it: it sends every tab's

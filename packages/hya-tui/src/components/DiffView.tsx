@@ -10,7 +10,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { pageStep } from "../state/scroll"
-import { currentDiffFile, diffViewHint, fileLine, type DiffBusy, type DiffNotice, type DiffViewState } from "../state/diff"
+import { currentDiffFile, diffFileWindow, diffViewHint, fileLine, type DiffBusy, type DiffNotice, type DiffViewState } from "../state/diff"
 import { colors, diffColors } from "../theme"
 import type { Tone } from "../state/tools"
 import { useSpinner } from "./Spinner"
@@ -36,7 +36,7 @@ function BusyLine(props: { busy: DiffBusy }) {
   onCleanup(() => clearInterval(timer))
   const seconds = () => Math.max(0, Math.floor((now() - props.busy.startedAt) / 1000))
   return (
-    <text height={1} wrapMode="none">
+    <text height={1} flexShrink={0} wrapMode="none">
       <span style={{ fg: colors.accent }}>{frame()}</span>
       <span style={{ fg: colors.fg }}>{` ${props.busy.label}… ${seconds()}s`}</span>
       <span style={{ fg: colors.muted }}>{" · Esc cancels"}</span>
@@ -62,6 +62,23 @@ export function DiffView() {
         const fileListWidth = () => Math.min(36, Math.max(16, Math.floor(size().width * 0.28)))
         const file = () => currentDiffFile(open())
         const empty = () => (store.state.gitBranch ? "No changes" : "Not a git repository")
+        // The file list panel's own border (2) + the outer border (2) + the
+        // "N files changed" line (1) reserve 5 rows; 2 more cover the
+        // `↑/↓ N more` indicators (both can show when scrolled to the
+        // middle) so the window never overflows past the panel's border.
+        // A flatter guess here used to leave a blank band above the border
+        // (T1f, following the same fix on the /mcp detail tool list).
+        // The file list panel's own border (2) + the outer border (2) + the
+        // "N files changed" line (1) reserve 5 rows; 2 more cover the
+        // `↑/↓ N more` indicators (both can show when scrolled to the
+        // middle) so the window never overflows past the panel's border.
+        // A flatter guess here used to leave a blank band above the border
+        // (T1f, following the same fix on the /mcp detail tool list).
+        const fileWindow = () => diffFileWindow(open().files, open().current, Math.max(1, size().height - 7))
+        const shownFiles = () => {
+          const window = fileWindow()
+          return open().files.slice(window.start, window.end)
+        }
         return (
           <box
             position="absolute"
@@ -77,15 +94,21 @@ export function DiffView() {
             flexDirection="row"
           >
             <box width={fileListWidth()} flexShrink={0} flexDirection="column" paddingX={1} border borderColor={colors.border}>
-              <text height={1} wrapMode="none" fg={colors.fg}>{`${open().files.length} file${open().files.length === 1 ? "" : "s"} changed`}</text>
+              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${open().files.length} file${open().files.length === 1 ? "" : "s"} changed`}</text>
               <box flexGrow={1} flexDirection="column">
-                <For each={open().files}>
+                <Show when={fileWindow().moreAbove > 0}>
+                  <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`↑ ${fileWindow().moreAbove} more`}</text>
+                </Show>
+                <For each={shownFiles()}>
                   {(row) => (
                     <text height={1} wrapMode="none" fg={row.path === open().current ? colors.accent : colors.fg}>
                       {fileLine(row, row.path === open().current, fileListWidth() - 4)}
                     </text>
                   )}
                 </For>
+                <Show when={fileWindow().moreBelow > 0}>
+                  <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`↓ ${fileWindow().moreBelow} more`}</text>
+                </Show>
                 <Show when={open().files.length === 0}>
                   <text height={1} wrapMode="none" fg={colors.muted}>{empty()}</text>
                 </Show>
@@ -106,7 +129,10 @@ export function DiffView() {
                   )}
                 </Show>
               </scrollbox>
-              <Show when={open().busy} fallback={<text width="100%" wrapMode="word" fg={open().notice ? noticeColor(open().notice!) : colors.muted}>{diffViewHint(open())}</text>}>
+              {/* The hint keeps its rows (flexShrink 0): otherwise Yoga shrinks it to
+                  zero height beside the overflowing scrollbox, and it draws over the
+                  scrollbox's last row, so End never showed the file's last line. */}
+              <Show when={open().busy} fallback={<text width="100%" flexShrink={0} wrapMode="word" fg={open().notice ? noticeColor(open().notice!) : colors.muted}>{diffViewHint(open())}</text>}>
                 {(busy) => <BusyLine busy={busy()} />}
               </Show>
             </box>

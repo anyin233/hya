@@ -1,5 +1,22 @@
 # 0.41.0
 
+## The daemon removes unused sessions
+
+- A client can create a session with `ephemeral: true` (`CreateSession`; `SessionInfo.ephemeral` reports it). The flag is ignored for subagent sessions and sessions created with a title. The first prompt, command, shell turn, rename, archive, or fork makes the session permanent.
+- The daemon deletes an ephemeral session that is still unused once nobody watches it: 5 s after the last session stream closes, or 30 s after creation if nobody ever watched it. At startup it also clears leftovers after 30 s. Each deletion sends `sessionDeleted`.
+- The TUI creates its start-up and `/new` sessions as ephemeral and no longer deletes them itself. Quitting no longer waits for that cleanup, which could lose the delete under load. A killed TUI no longer leaves its empty session behind, and one client quitting no longer deletes an empty session that another client is still viewing.
+- New durable event `session_ephemeral_set`; the projection reducer version is 8. See [Protocol guide](docs/protocol/README.md) and [ADR-0023](docs/adr/0023-persistent-backend-daemon.md).
+
+## `/v1/mcp` lists a connected server's tools
+
+- `McpServerStatus.tools` now holds a connected server's tools as their namespaced `mcp__<server>__<tool>` names, in the server's order. The list comes from `GET /v1/mcp` and from the add, connect, and disconnect answers. Servers that aren't connected report none. The list is read at connect time; the server's `tools/list_changed` notices aren't followed.
+- The TUI's `/mcp` detail screen shows the tools under the server's own names. See [Protocol guide](docs/protocol/README.md).
+
+## Fix: `/diff` shows its last line
+
+- In a diff longer than the screen, End, paging down, and scrolling down with the mouse wheel now reach the last line. Before, the key hint was drawn over it.
+- The `/diff` file list and the `/mcp` server's tool list now show only what fits, marked `↑/↓ N more`, instead of spilling over the lines below. In the `/mcp` tool list, Up/Down/PgUp/PgDn/Home/End move through the tools. Both lists fill the available rows, with no blank band above the hint.
+
 ## TUI sidebar follows other clients live
 
 - The sidebar's session list now changes as soon as any client creates, renames, archives, deletes, or runs a session. It also follows another client's agent, model, and permission-mode switches. The TUI re-lists after a `resync`.
