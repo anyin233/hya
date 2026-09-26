@@ -660,7 +660,46 @@ fn runtime_for_catalogs(
 
 /// Build explicit project/user roots for the immutable Workflow catalog seam.
 fn catalog_roots(project: &Path, user: &Path) -> WorkflowCatalogRoots {
-    WorkflowCatalogRoots::new(project.join(".hya/workflows"), Some(user.to_path_buf()))
+    WorkflowCatalogRoots::new(
+        vec![project.join(".hya/workflows")],
+        Some(user.to_path_buf()),
+    )
+}
+
+/// Write one compiled Workflow at an explicit filename, decoupled from its
+/// declared name (used to isolate a source id collision from a name
+/// collision across two Project roots).
+fn write_named_workflow(directory: &Path, file_stem: &str, name: &str, directive: &str) {
+    std::fs::create_dir_all(directory).expect("create Workflow directory");
+    std::fs::write(
+        directory.join(format!("{file_stem}.hya.md")),
+        format!(
+            r#"---
+kind: Workflow
+name: {name}
+description: {name} precedence fixture.
+nodes:
+  run:
+    agent: general
+    directive: {directive}
+---
+flowchart TD
+  run
+"#
+        ),
+    )
+    .expect("write Workflow");
+}
+
+/// A runtime snapshot with no bundles at all, for catalog tests that only
+/// exercise the filesystem tiers.
+fn empty_runtime() -> Arc<RuntimeRegistry> {
+    let bundles = BundleCatalog::from_verified_catalogs(&[]).expect("empty bundle catalog");
+    let agents = AgentCatalog::new(Arc::new(bundles)).expect("empty Agent catalog");
+    Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        Arc::new(agents),
+    ))
 }
 
 /// Catalog resolution honors all source tiers, folds bundle content into
@@ -1001,6 +1040,200 @@ async fn list_answers_each_directorys_own_catalog_and_falls_back_to_global() {
             .collect::<Vec<_>>(),
         ["plan-impl-review"],
         "no directory named: only user/bundle rows, never a project tier"
+    );
+
+    built.shutdown().await.expect("shutdown control engine");
+    let _ = std::fs::remove_dir_all(root_a);
+    let _ = std::fs::remove_dir_all(root_b);
+}
+
+/// F2 multi-root: a later root's Workflow whose `project:<relative path>`
+/// source id or declared name collides with an earlier root's is skipped;
+/// the earlier (first) root wins in both cases.
+#[tokio::test]
+async fn multi_root_catalog_dedupes_by_source_id_and_by_name_first_root_wins() {
+    let root_a = temp_path("multi-root-a");
+    let root_b = temp_path("multi-root-b");
+    let workflows_a = root_a.join(".hya/workflows");
+    let workflows_b = root_b.join(".hya/workflows");
+
+    // Same relative path (`same.hya.md`) in both roots -> same source id
+    // `project:same.hya.md`. Root B's distinct declared name must not
+    // surface: its whole file is skipped once root A claims that id.
+    write_named_workflow(&workflows_a, "same", "root-a-same", "ROOT A SAME");
+    write_named_workflow(&workflows_b, "same", "root-b-same", "ROOT B SAME");
+
+    // Distinct relative paths declaring the same Workflow name: a name
+    // collision independent of the source id. Root A's file must win.
+    write_named_workflow(&workflows_a, "unique-a", "shared-name", "ROOT A SHARED");
+    write_named_workflow(&workflows_b, "unique-b", "shared-name", "ROOT B SHARED");
+
+    let runtime = empty_runtime();
+    let binding = runtime.bind_turn(&root_a).expect("bind runtime");
+    let roots = WorkflowCatalogRoots::new(vec![workflows_a.clone(), workflows_b.clone()], None);
+    let catalog = WorkflowCatalog::build(roots, &binding).expect("build multi-root catalog");
+
+    let names = catalog
+        .list()
+        .into_iter()
+        .map(|item| item.name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["root-a-same", "shared-name"],
+        "root B's colliding source id and colliding name must not add rows"
+    );
+
+    let same = catalog
+        .resolve("root-a-same")
+        .expect("root A's Workflow must win the source id collision");
+    assert!(
+        same.display_path()
+            .starts_with(workflows_a.display().to_string().as_str()),
+        "the winning entry must come from root A"
+    );
+    assert!(
+        matches!(
+            catalog.resolve("root-b-same"),
+            Err(WorkflowControlError::NotFound { .. })
+        ),
+        "root B's colliding source id must never surface, under any name"
+    );
+
+    let shared = catalog
+        .resolve("shared-name")
+        .expect("root A's Workflow must win the name collision");
+    assert!(
+        shared
+            .display_path()
+            .starts_with(workflows_a.display().to_string().as_str()),
+        "the winning entry must come from root A"
+    );
+
+    let _ = std::fs::remove_dir_all(root_a);
+    let _ = std::fs::remove_dir_all(root_b);
+}
+
+/// F2 multi-root: a session bound to a Project lists every registered root's
+/// Workflow catalog, and a selection made against the primary root's
+/// Workflow stays resolvable across a fresh bind (a new catalog rebuilt from
+/// scratch on the next command, not the binding captured at selection time).
+#[tokio::test]
+async fn project_scope_session_lists_every_root_and_keeps_the_primary_selection_resolvable() {
+    let root_a = project_root();
+    let root_b = project_root();
+    write_workflow(&root_a, "alpha", "ALPHA");
+    write_workflow(&root_b, "gamma", "GAMMA");
+    let (router, model) = offline_router(None);
+    let agent = agent_with_model(&model, None);
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.expect("store"),
+        router,
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (WebSearchConfig::default(), InvocationPolicy::default()),
+    )
+    .await
+    .expect("build engine");
+    let engine = built.engine();
+    let control = built.workflow_control();
+    let project = engine
+        .store()
+        .create_project(
+            "multi-root",
+            &[root_a.display().to_string(), root_b.display().to_string()],
+        )
+        .await
+        .expect("create multi-root Project");
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: root_a.display().to_string(),
+            project: Some(project.id),
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .expect("create Session bound to the multi-root Project");
+
+    let list = match control
+        .execute(
+            session,
+            WorkflowInvocation::default(),
+            WorkflowCommand::List,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("list Workflows across every root")
+    {
+        WorkflowCommandResult::List { workflows } => workflows,
+        result => panic!("unexpected list result: {result:?}"),
+    };
+    assert_eq!(
+        list.iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "gamma", "plan-impl-review"],
+        "Project scope must merge every registered root's Workflow catalog"
+    );
+
+    let alpha = match control
+        .execute(
+            session,
+            WorkflowInvocation::default(),
+            WorkflowCommand::Info {
+                name: "alpha".to_string(),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("alpha info")
+    {
+        WorkflowCommandResult::Info { workflow } => workflow,
+        result => panic!("unexpected info result: {result:?}"),
+    };
+
+    let selected = match control
+        .execute(
+            session,
+            WorkflowInvocation::default(),
+            WorkflowCommand::Select {
+                name: "alpha".to_string(),
+                expected_revision: Some(alpha.identity.revision),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("select the primary root's Workflow")
+    {
+        WorkflowCommandResult::Selected { state } => state,
+        result => panic!("unexpected select result: {result:?}"),
+    };
+    assert_eq!(
+        selected.availability,
+        Some(WorkflowAvailability::Available),
+        "the primary root's selected identity must resolve immediately"
+    );
+
+    let state = match control
+        .execute(
+            session,
+            WorkflowInvocation::default(),
+            WorkflowCommand::State,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("read state from a fresh bind")
+    {
+        WorkflowCommandResult::State { state } => state,
+        result => panic!("unexpected state result: {result:?}"),
+    };
+    assert_eq!(
+        state.availability,
+        Some(WorkflowAvailability::Available),
+        "the primary root's persisted identity must stay resolvable across binds"
     );
 
     built.shutdown().await.expect("shutdown control engine");

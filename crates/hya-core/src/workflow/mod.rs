@@ -21,7 +21,10 @@ pub use run::{
     PreparedWorkflowRun, StageReport, StageStatus, WorkflowRunContext, WorkflowRunReport,
     WorkflowStatus, prepare_workflow_run, prepare_workflow_run_for_actor, run_workflow,
 };
-pub use source::{discover_workflow_files_in_root, load_workflow_file, workflow_dirs_for_workdir};
+pub use source::{
+    discover_workflow_files_in_root, load_workflow_file, workflow_dirs_for_workdir,
+    workflow_project_dir, workflow_user_dir,
+};
 
 /// One runtime-resolved candidate in an explicit Workflow route.
 #[derive(Clone, Debug, Eq, PartialEq)]

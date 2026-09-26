@@ -8,9 +8,22 @@ runtime creates a child Session or sends mail.
 
 | Precedence | Source |
 | --- | --- |
-| Project | `<workdir>/.hya/workflows/*.hya.md` |
+| Project | `<root>/.hya/workflows/*.hya.md` for every root of the bound catalog scope |
 | User | `$HOME/.config/hya/workflows/*.hya.md` |
 | Bundle catalog | Installed and read-only first-party `WorkflowBundle` payloads |
+
+A Session's catalog scope decides which roots the Project tier reads: a
+Session inside a registered Project reads `<workdir>/.hya/workflows` first,
+then every one of the Project's registered roots in declaration order
+(deduped); a Session in a plain directory (no Project) reads just that
+directory; the project-less global scope (`hya serve` with no directory
+named) reads no project root at all.
+
+Across multiple Project roots, a Workflow's source id stays
+`project:<path relative to its own root>`. A later root's file is skipped
+(with a warning) when either its source id or its declared Workflow name
+was already published by an earlier root — the first root to publish a
+given source id or name wins.
 
 Project sources take precedence over user and bundle sources with the same declared name. User sources take precedence over bundle sources. Two bundle sources with the same bare name are ambiguous; use the exact `bundle:<bundle-id>/workflow/<workflow-id>` source id. YAML-only Workflow documents and the removed `stages:`/`needs:` format are not accepted.
 

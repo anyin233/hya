@@ -170,6 +170,7 @@ pub use workflow::{
     WorkflowModelRouteCandidate, WorkflowPlan, WorkflowRevision, WorkflowRoutingContext,
     WorkflowRunContext, WorkflowRunReport, WorkflowStage, WorkflowStatus,
     discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run,
-    prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir,
+    prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir, workflow_project_dir,
+    workflow_user_dir,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};
