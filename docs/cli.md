@@ -15,7 +15,7 @@ standalone `hya-updater` binary are gone.
 | Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
 | Self-update TCB | `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
-| Secure relay | `proxy` (see [`docs/relay.md`](relay.md)) |
+| Secure relay | `proxy`, `relay doctor` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
 cargo build -p hya-backend --bin hya   # ./target/debug/hya
@@ -940,10 +940,31 @@ empty. Source: [`proxy_cmd.rs`](../crates/hya-backend/src/proxy_cmd.rs).
 existing relay streams (`UNAVAILABLE`), and exits **0**.
 
 Deployment recipes for Cloudflare Tunnel, nginx, Caddy, Tailscale, and direct
-TLS are in [docs/relay.md](relay.md).
+TLS are in [docs/relay.md](relay.md#deployment-recipes).
+
+## `hya relay doctor`
+
+```sh
+hya relay doctor https://relay.example.com/hya
+```
+
+Probes a relay path (a proxy URL or a `hya://`/`hya+insecure://` link — a
+link's secret is never printed) and recommends a `t=` value. See
+[docs/relay.md](relay.md#hya-relay-doctor) for the full report shape and the
+advice table per failure kind.
+
+| Flag | Meaning |
+| --- | --- |
+| `--relay-ca <PEM>` | Extra trusted CA certificates. |
+| `--timeout <SECS>` | Deadline for each probe (default 5). |
+| `--measure-idle` | Bounded (130s) idle-cut measurement; needs a link with a live room. |
+| `--json` | Emit the report as JSON. |
+
+**Exit codes:** **0** when at least one binding (gRPC or WebSocket) works,
+**1** when neither does.
 
 ## Exit Codes
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `proxy` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, `proxy` graceful SIGINT/SIGTERM shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path; `hya relay doctor` also exits **1** (with its report still printed) when neither relay binding works. |

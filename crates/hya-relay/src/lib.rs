@@ -34,5 +34,7 @@ pub mod link;
 pub mod proto;
 pub mod proxy;
 pub mod server;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod transport;
 pub mod tunnel;

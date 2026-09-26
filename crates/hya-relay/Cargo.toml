@@ -9,6 +9,13 @@ description = "hya secure relay: hya.relay.v1 rendezvous protocol, transport abs
 [lints]
 workspace = true
 
+[features]
+# A tiny in-process HTTP/1.1-only hop (`testing::Http1OnlyHop`) for crates
+# outside `hya-relay` that need a real intermediary in front of a
+# `RelayServer` in their own tests (for example `hya relay doctor`). Not part
+# of the stable API; doc(hidden).
+testing = ["hyper/client"]
+
 [dependencies]
 axum = { workspace = true }
 base64 = { workspace = true }

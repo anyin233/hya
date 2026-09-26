@@ -1362,6 +1362,7 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "clap",
+ "futures",
  "hya-api",
  "hya-app",
  "hya-bundle",

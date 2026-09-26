@@ -21,6 +21,7 @@ mod exec_stream;
 mod frontend;
 mod models_cmd;
 mod proxy_cmd;
+mod relay_doctor;
 mod rpc;
 mod serve;
 mod sessions_cmd;
@@ -1015,6 +1016,11 @@ async fn main() -> anyhow::Result<()> {
         // The proxy composes no runtime either: no config, providers, MCP,
         // or session store — it only opens network connections.
         Some(Command::Proxy { args }) => proxy_cmd::cmd_proxy(args).await,
+        // The doctor also composes no runtime: it only probes the relay.
+        Some(Command::Relay { command }) => {
+            let code = relay_doctor::run(command).await?;
+            std::process::exit(code);
+        }
         Some(Command::Loop {
             target,
             budget,
