@@ -114,7 +114,7 @@ pub fn run(_args: Vec<String>) -> Result<()> {
 /// `--include_imports` pulls in the well-known types so pbjson can resolve
 /// them; `--include_source_info` preserves the `//` comments that prost and
 /// tonic copy into the generated Rust docs.
-fn run_protoc_descriptor(
+pub(crate) fn run_protoc_descriptor(
     protoc: &Path,
     proto_dir: &Path,
     protos: &[PathBuf],
@@ -146,7 +146,7 @@ fn run_protoc_descriptor(
     fs::read(descriptor_out).context("read generated descriptor set")
 }
 
-fn workspace_root() -> Result<PathBuf> {
+pub(crate) fn workspace_root() -> Result<PathBuf> {
     let dir = std::env::var("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));

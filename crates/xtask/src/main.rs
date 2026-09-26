@@ -16,12 +16,15 @@
 //! - `release-rehearsal` — validate and smoke the non-publishing release asset.
 //! - `gen-api` — regenerate the `hya.v1` contract crate and its docs from
 //!   `proto/hya/v1` (Rust codegen + API reference + OpenAPI).
+//! - `gen-relay` — regenerate the `hya.relay.v1` rendezvous types in
+//!   `crates/hya-relay/src/gen/` from `proto/hya/relay/v1`.
 //!
 //! An unknown or missing task prints usage and exits successfully, so the binary
 //! is safe to invoke from a wrapper that does not know the task list.
 
 mod first_party_release;
 mod gen_api;
+mod gen_relay;
 mod matrix_check;
 mod package_bundle;
 mod release_rehearsal;
@@ -41,9 +44,10 @@ fn main() {
         Some("startup-bench") => startup_bench::run(args.collect()),
         Some("matrix-check") => matrix_check::run(args.collect()),
         Some("gen-api") => gen_api::run(args.collect()),
+        Some("gen-relay") => gen_relay::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <startup-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api>"
+                "usage: cargo xtask <startup-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api|gen-relay>"
             );
             Ok(())
         }

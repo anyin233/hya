@@ -1,0 +1,185 @@
+// hya relay v1 — the blind rendezvous protocol spoken by `hya proxy`.
+//
+// This package is separate from `hya.v1`: it is not part of the backend
+// contract and carries no hya semantics. A backend ("host") registers a
+// room it owns; a client ("opener") opens a stream to that room; the proxy
+// splices the two byte streams together. Everything inside `Chunk.data` is
+// end-to-end Noise ciphertext; the proxy only ever sees room ids, stream ids,
+// and opaque bytes.
+//
+// One protocol, two bindings. The same messages are carried by:
+//
+// - gRPC (HTTP/2): the `Relay` service below. Errors end the stream with a
+//   gRPC status.
+// - WebSocket (HTTP/1.1+): `GET <prefix>/hya.relay.v1/ws/host`,
+//   `.../ws/accept` and `.../ws/open`. Every binary frame is one encoded
+//   message: `HostFrame` (client to proxy) and `ProxyToHost` (proxy to
+//   client) on `ws/host`, `Chunk` both ways on `ws/accept` and `ws/open`.
+//   WebSocket has no trailers, so a failure is sent as a final frame whose
+//   `error` field is set (a `RelayError`), followed by a close.
+//
+// The `error` variants below exist for the WebSocket binding; a gRPC peer
+// normally reports the same failure as the stream status instead, and a
+// receiver must accept either form.
+syntax = "proto3";
+
+package hya.relay.v1;
+
+// Rendezvous service served by `hya proxy`.
+service Relay {
+  // Host control stream. The proxy first sends `challenge`; the host answers
+  // with `register` (its Ed25519 key and a signature over the challenge
+  // nonce); the proxy answers with `registered`. From then on the proxy
+  // sends one `incoming` per client stream, and both sides exchange
+  // heartbeats. The room is online while this stream is open.
+  rpc Host(stream HostFrame) returns (stream ProxyToHost);
+
+  // Host side of one data stream. The first client frame must be `accept`
+  // naming an `Incoming.stream_id`; afterwards both directions carry `data`,
+  // `heartbeat`, and a final `close`.
+  rpc Accept(stream Chunk) returns (stream Chunk);
+
+  // Client side of one data stream. The first client frame must be `open`
+  // naming the room; afterwards both directions carry `data`, `heartbeat`,
+  // and a final `close`. An offline room fails with `NOT_FOUND`.
+  rpc Open(stream Chunk) returns (stream Chunk);
+}
+
+// A frame sent by the host on its control stream.
+message HostFrame {
+  // The frame kind.
+  oneof frame {
+    // Room registration, sent once in answer to `ProxyToHost.challenge`.
+    Register register = 1;
+    // Liveness probe or reply.
+    Heartbeat heartbeat = 2;
+  }
+}
+
+// A frame sent by the proxy on a host control stream.
+message ProxyToHost {
+  // The frame kind.
+  oneof frame {
+    // Registration challenge; always the first frame.
+    Challenge challenge = 1;
+    // Registration accepted; the room is online.
+    Registered registered = 2;
+    // Liveness probe or reply.
+    Heartbeat heartbeat = 3;
+    // A client opened a stream to this room; the host should call `Accept`.
+    Incoming incoming = 4;
+    // Terminal failure (WebSocket binding); the proxy closes after it.
+    RelayError error = 5;
+  }
+}
+
+// Registration challenge from the proxy.
+message Challenge {
+  // Fresh random nonce (32 bytes) the host must sign.
+  bytes nonce = 1;
+}
+
+// Host registration: proves ownership of the room derived from the key.
+message Register {
+  // Raw Ed25519 public key (32 bytes). The room id is
+  // `base32(sha256(ed25519_pubkey))`, lowercase, unpadded, first 26 chars.
+  bytes ed25519_pubkey = 1;
+  // Ed25519 signature (64 bytes) over the bytes
+  // `"hya.relay.v1/register\0" || challenge.nonce`.
+  bytes signature = 2;
+}
+
+// Registration accepted.
+message Registered {
+  // The room id now served by this control stream.
+  string room_id = 1;
+}
+
+// Application-level liveness frame, valid in both directions on every
+// stream. It keeps idle-cutting intermediaries from closing the stream.
+message Heartbeat {
+  // Sender-chosen sequence number; a reply echoes it.
+  uint64 seq = 1;
+  // False for a probe, true for the reply to a probe.
+  bool pong = 2;
+}
+
+// Notification that a client opened a stream to the host's room.
+message Incoming {
+  // Proxy-generated, unguessable id of the waiting stream; the host passes
+  // it in `Chunk.accept` on a new `Accept` stream.
+  string stream_id = 1;
+}
+
+// First frame of an `Open` stream.
+message Open {
+  // Room to connect to.
+  string room_id = 1;
+}
+
+// First frame of an `Accept` stream.
+message Accept {
+  // Id from `Incoming.stream_id`.
+  string stream_id = 1;
+}
+
+// Orderly end of the sender's data direction.
+message Close {}
+
+// One frame on a data stream (`Accept` or `Open`).
+message Chunk {
+  // The frame kind.
+  oneof frame {
+    // Open handshake (client to proxy, first frame of `Open`).
+    Open open = 1;
+    // Accept handshake (host to proxy, first frame of `Accept`).
+    Accept accept = 2;
+    // Opaque payload bytes (end-to-end encrypted by the endpoints).
+    bytes data = 3;
+    // Orderly end of the sender's data direction.
+    Close close = 4;
+    // Liveness probe or reply.
+    Heartbeat heartbeat = 5;
+    // Terminal failure (WebSocket binding); the sender closes after it.
+    RelayError error = 6;
+  }
+}
+
+// Relay failure codes. Values equal the gRPC status codes they mirror, so a
+// WebSocket `RelayError` and a gRPC status carry the same meaning.
+enum RelayErrorCode {
+  // Unset sentinel; treated as `UNKNOWN`.
+  RELAY_ERROR_CODE_UNSPECIFIED = 0;
+  // The stream was cancelled by the other side.
+  RELAY_ERROR_CODE_CANCELLED = 1;
+  // Unclassified failure.
+  RELAY_ERROR_CODE_UNKNOWN = 2;
+  // Malformed or out-of-order frame.
+  RELAY_ERROR_CODE_INVALID_ARGUMENT = 3;
+  // A handshake or idle deadline passed.
+  RELAY_ERROR_CODE_DEADLINE_EXCEEDED = 4;
+  // The room is offline or the stream id is unknown.
+  RELAY_ERROR_CODE_NOT_FOUND = 5;
+  // The room is already registered by another control stream.
+  RELAY_ERROR_CODE_ALREADY_EXISTS = 6;
+  // The request is refused by policy.
+  RELAY_ERROR_CODE_PERMISSION_DENIED = 7;
+  // A proxy limit (rooms, streams, rate) was hit.
+  RELAY_ERROR_CODE_RESOURCE_EXHAUSTED = 8;
+  // The frame is valid but not allowed in the current state.
+  RELAY_ERROR_CODE_FAILED_PRECONDITION = 9;
+  // Proxy bug.
+  RELAY_ERROR_CODE_INTERNAL = 13;
+  // The proxy is shutting down or the peer went away.
+  RELAY_ERROR_CODE_UNAVAILABLE = 14;
+  // Registration signature or key is invalid.
+  RELAY_ERROR_CODE_UNAUTHENTICATED = 16;
+}
+
+// Terminal relay failure (the WebSocket substitute for a gRPC status).
+message RelayError {
+  // Failure class.
+  RelayErrorCode code = 1;
+  // Human-readable detail; never contains payload bytes.
+  string message = 2;
+}

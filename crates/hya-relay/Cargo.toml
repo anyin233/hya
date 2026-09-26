@@ -1,0 +1,19 @@
+[package]
+name = "hya-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "hya secure relay: hya.relay.v1 rendezvous protocol, transport abstraction, and relay links (no hya runtime deps)"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures = { workspace = true }
+prost = { workspace = true }
+thiserror = { workspace = true }
+tonic = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
