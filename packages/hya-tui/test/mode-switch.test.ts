@@ -36,7 +36,7 @@ test("the client sends UpdateSession with permissionMode and lists the permissio
   const calls: Array<{ url: string; method: string; body: unknown }> = []
   const fetcher: FetchLike = async (input, init) => {
     calls.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
-    return Response.json(String(input).endsWith("/permission-modes")
+    return Response.json(String(input).includes("/permission-modes")
       ? { modes: [{ id: "manual", title: "Manual", description: "Ask", source: "builtin" }] }
       : { ...session, permissionMode: "yolo" })
   }
@@ -45,7 +45,8 @@ test("the client sends UpdateSession with permissionMode and lists the permissio
   expect(await client.listPermissionModes()).toEqual([{ id: "manual", title: "Manual", description: "Ask", source: "builtin" }])
   expect(calls).toEqual([
     { url: "http://127.0.0.1:8080/v1/sessions/hysec_1", method: "PATCH", body: { permissionMode: "yolo" } },
-    { url: "http://127.0.0.1:8080/v1/permission-modes", method: "GET", body: undefined },
+    // The catalog is scoped by the `directory` field (never a header).
+    { url: "http://127.0.0.1:8080/v1/permission-modes?directory=%2Fw", method: "GET", body: undefined },
   ])
 })
 

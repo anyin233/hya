@@ -51,7 +51,7 @@ async function statusBar(term: Tui): Promise<{ row: number; line: string }> {
 
 /** `permissionMode` of the backend's only top-level session. */
 async function backendMode(backend: Backend): Promise<string | undefined> {
-  const response = await fetch(`${backend.url}/v1/sessions`, { headers: { "x-hya-directory": backend.dir } })
+  const response = await fetch(`${backend.url}/v1/sessions`)
   const body = await response.json() as { sessions?: { parent?: string; permissionMode?: string }[] }
   return body.sessions?.find((session) => !session.parent)?.permissionMode
 }

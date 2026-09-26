@@ -21,10 +21,7 @@ type MessageInfo = { id: string; role: string; finish?: string; parts?: MessageP
 async function api<T>(backend: Backend, method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${backend.url}${path}`, {
     method,
-    headers: {
-      "x-hya-directory": backend.dir,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
+    headers: body === undefined ? {} : { "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const text = await response.text()

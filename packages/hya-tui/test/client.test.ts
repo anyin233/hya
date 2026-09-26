@@ -2,14 +2,14 @@ import { expect, test } from "bun:test"
 import { HyaClient, SseDecoder, bridgeTokenHeader, parseApiCommand, serverTokenEnv, type FetchLike } from "../src/client"
 
 test("creates a session and admits a prompt through scoped v1 requests", async () => {
-  const calls: Array<{ url: string; method: string; directory: string | null; body: unknown }> = []
+  const calls: Array<{ url: string; method: string; header: string | null; body: unknown }> = []
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
     const headers = new Headers(init?.headers)
     calls.push({
       url,
       method: init?.method ?? "GET",
-      directory: headers.get("x-hya-directory"),
+      header: headers.get("x-hya-directory"),
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     })
     return Response.json(url.endsWith("/turns")
@@ -27,14 +27,14 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
     {
       url: "http://127.0.0.1:8080/v1/sessions",
       method: "POST",
-      directory: "/work",
+      header: null,
       // A local start: the server reuses the Project containing the cwd or creates one (EnsureProjectForPath).
       body: { agent: "build", model: "offline/echo", workdir: "/work", kind: "SESSION_KIND_PROJECT" },
     },
     {
       url: "http://127.0.0.1:8080/v1/sessions/hysec_1/turns",
       method: "POST",
-      directory: "/work",
+      header: null,
       body: { prompt: { text: "hello" } },
     },
   ])
@@ -147,21 +147,21 @@ test("provider routes: upsert, refresh, key set/remove, model override set/remov
 test("reports empty HTTP errors", async () => {
   const failed = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
     new Response(null, { status: 503, statusText: "Service Unavailable" }))
-  await expect(failed.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 503 Service Unavailable")
+  await expect(failed.bootstrap()).rejects.toThrow("GET /v1/bootstrap?directory=%2Fwork: HTTP 503 Service Unavailable")
 
   const invalid = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
     new Response("gateway error", { status: 502, statusText: "Bad Gateway" }))
-  await expect(invalid.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 502 Bad Gateway")
+  await expect(invalid.bootstrap()).rejects.toThrow("GET /v1/bootstrap?directory=%2Fwork: HTTP 502 Bad Gateway")
 })
 
 test("admits a shell turn and finds files through scoped v1 requests", async () => {
-  const calls: Array<{ url: string; method: string; directory: string | null; body: unknown }> = []
+  const calls: Array<{ url: string; method: string; header: string | null; body: unknown }> = []
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
     calls.push({
       url,
       method: init?.method ?? "GET",
-      directory: new Headers(init?.headers).get("x-hya-directory"),
+      header: new Headers(init?.headers).get("x-hya-directory"),
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     })
     return Response.json(url.includes("/fs/find")
@@ -176,10 +176,10 @@ test("admits a shell turn and finds files through scoped v1 requests", async () 
     {
       url: "http://h/v1/sessions/hysec_1/turns",
       method: "POST",
-      directory: "/work",
+      header: null,
       body: { shell: { command: "echo hi", agent: "build", model: { providerId: "fake", modelId: "model" } } },
     },
-    { url: "http://h/v1/fs/find?pattern=**%2F*ma%20in*&limit=20", method: "GET", directory: "/work", body: undefined },
+    { url: "http://h/v1/fs/find?pattern=**%2F*ma%20in*&limit=20&directory=%2Fwork", method: "GET", header: null, body: undefined },
   ])
 })
 
@@ -240,11 +240,11 @@ test("revertSession and forkSession post RevertSession / ForkSession bodies", as
 })
 
 function recordingFetcher(reply: (url: string, method: string) => unknown) {
-  const calls: Array<{ url: string; method: string; directory: string | null; body: unknown }> = []
+  const calls: Array<{ url: string; method: string; header: string | null; body: unknown }> = []
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
     const method = init?.method ?? "GET"
-    calls.push({ url, method, directory: new Headers(init?.headers).get("x-hya-directory"), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    calls.push({ url, method, header: new Headers(init?.headers).get("x-hya-directory"), body: init?.body ? JSON.parse(String(init.body)) : undefined })
     return Response.json(reply(url, method) ?? {})
   }
   return { calls, fetcher }
@@ -265,14 +265,14 @@ test("createSession places a session in a Project, at a workdir, or as a tempora
   ])
 })
 
-test("setDirectory changes the x-hya-directory scope of later requests and streams", async () => {
+test("setDirectory changes the directory scope of later scoped requests", async () => {
   const { calls, fetcher } = recordingFetcher(() => ({ branch: "main" }))
   const client = new HyaClient("http://h", "/work", fetcher)
   expect(client.directory).toBe("/work")
   client.setDirectory("/docs")
   expect(client.directory).toBe("/docs")
   await client.getVcsStatus()
-  expect(calls).toEqual([{ url: "http://h/v1/vcs?directory=%2Fdocs", method: "GET", directory: "/docs", body: undefined }])
+  expect(calls).toEqual([{ url: "http://h/v1/vcs?directory=%2Fdocs", method: "GET", header: null, body: undefined }])
 })
 
 test("Project rpcs use the v1 routes and unwrap their responses", async () => {
@@ -315,11 +315,11 @@ test("listSessions filters by Project", async () => {
   ])
 })
 
-test("readFile sends its own scope and cap and decodes the size; an empty scope sends no x-hya-directory", async () => {
-  const calls: Array<{ url: string; directory: string | null }> = []
+test("readFile sends its own scope and cap and decodes the size; an empty scope sends no directory", async () => {
+  const calls: Array<{ url: string; header: string | null }> = []
   const fetcher: FetchLike = async (input, init) => {
     const url = String(input)
-    calls.push({ url, directory: new Headers(init?.headers).get("x-hya-directory") })
+    calls.push({ url, header: new Headers(init?.headers).get("x-hya-directory") })
     if (url.includes("/v1/fs/read")) return Response.json({ content: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png" })
     return Response.json({ paths: [] })
   }
@@ -328,8 +328,8 @@ test("readFile sends its own scope and cap and decodes the size; an empty scope 
   const read = await client.readFile("shots/a b.png", { directory: "/srv/app", maxBytes: 11 })
   expect(read).toEqual({ data: "AQID", size: 3, text: false, mime: "image/png" })
   expect(calls).toEqual([
-    { url: "http://127.0.0.1:8080/v1/fs/find?pattern=**%2F*a*&limit=5", directory: null },
-    { url: "http://127.0.0.1:8080/v1/fs/read?path=shots%2Fa%20b.png&maxBytes=11", directory: "/srv/app" },
+    { url: "http://127.0.0.1:8080/v1/fs/find?pattern=**%2F*a*&limit=5", header: null },
+    { url: "http://127.0.0.1:8080/v1/fs/read?path=shots%2Fa%20b.png&maxBytes=11&directory=%2Fsrv%2Fapp", header: null },
   ])
 })
 
@@ -372,5 +372,60 @@ test("a bridge token goes in x-hya-bridge-token on every request and stream; non
     ["2", token], ["2", token], ["2", token],
     ["3", "b".repeat(64)],
     ["4", null], ["4", null],
+  ])
+})
+
+test("every scoped call names the scope in its directory field and no request or stream sends x-hya-directory", async () => {
+  const { calls, fetcher } = recordingFetcher((url) => url.includes("/stream") ? undefined : {})
+  const streamed: Array<string | null> = []
+  const client = new HyaClient("http://h", "/work dir", async (input, init) => {
+    if (String(input).includes("/stream")) {
+      streamed.push(new Headers(init?.headers).get("x-hya-directory"))
+      return new Response("", { headers: { "content-type": "text/event-stream" } })
+    }
+    return fetcher(input, init)
+  })
+  await client.bootstrap()
+  await client.listAgents()
+  await client.listCommands()
+  await client.listWorkflows()
+  await client.listPermissionModes()
+  await client.findFiles("*", 1)
+  await client.readFile("a.txt")
+  await client.getVcsStatus()
+  await client.getVcsDiff()
+  await client.listAgentModels("hysec_1")
+  await client.setAgentModel("general", undefined)
+  await client.streamSession("hysec_1", "0", () => undefined, new AbortController().signal)
+  await client.streamGlobal(() => undefined, new AbortController().signal)
+  expect(calls.map((call) => [call.method, call.url.replace("http://h", ""), call.body])).toEqual([
+    ["GET", "/v1/bootstrap?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/agents?page.limit=500&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/commands?page.limit=500&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/workflows?page.limit=500&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/permission-modes?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/fs/find?pattern=*&limit=1&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/fs/read?path=a.txt&directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/vcs?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/vcs/diff?directory=%2Fwork%20dir", undefined],
+    ["GET", "/v1/agent-models?session=hysec_1&directory=%2Fwork%20dir", undefined],
+    ["PUT", "/v1/agent-models/general", { directory: "/work dir" }],
+  ])
+  expect(calls.every((call) => call.header === null)).toBe(true)
+  expect(streamed).toEqual([null, null])
+})
+
+test("an empty scope (remote start before a Project) names no directory", async () => {
+  const { calls, fetcher } = recordingFetcher(() => ({}))
+  const client = new HyaClient("http://h", "", fetcher)
+  await client.bootstrap()
+  await client.listAgents()
+  await client.getVcsStatus()
+  await client.setAgentModel("general", undefined)
+  expect(calls.map((call) => [call.url.replace("http://h", ""), call.body, call.header])).toEqual([
+    ["/v1/bootstrap", undefined, null],
+    ["/v1/agents?page.limit=500", undefined, null],
+    ["/v1/vcs", undefined, null],
+    ["/v1/agent-models/general", {}, null],
   ])
 })
