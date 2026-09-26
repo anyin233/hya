@@ -37,13 +37,13 @@ pub mod workflow;
 pub mod workspace;
 
 pub use event::{
-    ArchiveReason, CompactionStrategy, Envelope, Event, ReportOutcome, WorkflowRouteFailureClass,
-    WorkflowStageRouteOutcome,
+    ArchiveReason, CompactionStrategy, Envelope, Event, ReportOutcome, SessionKind,
+    WorkflowRouteFailureClass, WorkflowStageRouteOutcome,
 };
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
-    OperationId, OwnerRunId, PartId, PermissionRequestId, QuestionRequestId, SessionId, TeamRunId,
-    ToolCallId, WorkflowRunId,
+    OperationId, OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId,
+    TeamRunId, ToolCallId, WorkflowRunId,
 };
 pub use mail::{
     CHANNEL_RANDOM_LEN, ChannelKind, MailEndpoint, MailKind, is_minted_channel_id, mint_channel_id,

@@ -426,6 +426,11 @@ impl WorkflowRunId {
         ))
     }
 }
+uuid_id!(
+    ProjectId,
+    "prj",
+    "Project identity (`prj_` + UUIDv7): a named, ordered set of workspace roots (ADR-0024)."
+);
 uuid_id!(GoalId, "goal", "Goal-mode run id (`goal_` + UUIDv7).");
 uuid_id!(LoopRunId, "loop", "Loop-mode run id (`loop_` + UUIDv7).");
 uuid_id!(

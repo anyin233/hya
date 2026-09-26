@@ -83,6 +83,8 @@ async fn recovery_finds_running_workflow_among_idle_sessions() {
                         agent: "general".into(),
                         model: "fake".into(),
                         workdir: "/tmp".into(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
                     },
                 )
                 .await

@@ -11,8 +11,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OwnerRunId, PartId, SessionId,
-    ToolCallId, WorkflowRunId,
+    ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OwnerRunId, PartId, ProjectId,
+    SessionId, ToolCallId, WorkflowRunId,
 };
 use crate::mail::{ChannelKind, MailEndpoint, MailKind};
 use crate::message::{
@@ -25,6 +25,44 @@ use crate::workflow::{
     WorkflowIdentity, WorkflowMemberRole, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageStatus,
 };
 
+/// Kind of a session (ADR-0024): part of a Project, or a temporary session
+/// with its own scratch workdir that belongs to no Project.
+///
+/// Wire form is snake_case (`project` | `temporary`); absent decodes as
+/// [`SessionKind::Project`], the kind every pre-ADR-0024 session has.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    /// A session working inside a Project's roots (or a legacy session with
+    /// no Project recorded).
+    #[default]
+    Project,
+    /// A temporary session: no Project, workdir is a fresh scratch directory.
+    Temporary,
+}
+
+impl SessionKind {
+    /// Wire/storage label: `project` or `temporary`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Temporary => "temporary",
+        }
+    }
+
+    /// Parse a wire/storage label; `None` for anything but `project` or
+    /// `temporary`.
+    #[must_use]
+    pub fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "project" => Some(Self::Project),
+            "temporary" => Some(Self::Temporary),
+            _ => None,
+        }
+    }
+}
+
 /// Canonical runtime event stream: one tagged variant per discrete state change.
 ///
 /// Persist durable variants with a real `EventSeq`; high-frequency text may be
@@ -33,7 +71,7 @@ use crate::workflow::{
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     // -------- session lifecycle --------
-    /// Session is created; fold sets id/parent/agent/model/workdir.
+    /// Session is created; fold sets id/parent/agent/model/workdir/project/kind.
     SessionCreated {
         /// Session this event belongs to.
         session: SessionId,
@@ -45,6 +83,15 @@ pub enum Event {
         model: ModelRef,
         /// Absolute workdir for tools.
         workdir: String,
+        /// Project the session belongs to (ADR-0024). `None` for temporary
+        /// sessions and for logs written before Projects existed. Subagent
+        /// sessions carry their parent's Project.
+        #[serde(default)]
+        project: Option<ProjectId>,
+        /// Project or temporary session (ADR-0024). Logs written before the
+        /// field existed decode as [`SessionKind::Project`].
+        #[serde(default)]
+        kind: SessionKind,
     },
 
     /// Set or clear one temporary Agent model for the owning root Session tree.
@@ -1421,6 +1468,8 @@ mod tests {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("m"),
                 workdir: "/w".to_string(),
+                project: None,
+                kind: crate::SessionKind::Project,
             },
         }];
         let mut with_record = base.to_vec();
@@ -1528,6 +1577,8 @@ mod tests {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("m"),
                 workdir: "/w".to_string(),
+                project: None,
+                kind: crate::SessionKind::Project,
             },
         }];
         let mut with_record = base.to_vec();

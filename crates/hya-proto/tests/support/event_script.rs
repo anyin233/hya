@@ -3,7 +3,8 @@
 //! `script(seed, ...)` produces a plausible single-session event log mixing
 //! transcript streaming, usage records (per-round and legacy), message/part
 //! deletion (revert, compaction), file changes, transcript revert/unrevert/
-//! commit, archive/unarchive (including legacy zero stamps), compaction
+//! commit, archive/unarchive (including legacy zero stamps), Project and
+//! temporary session kinds (and legacy sessions with neither), compaction
 //! markers, todo lists, forks, Workflow runs
 //! (including a re-emitted `WorkflowRunStarted` for an already-seen run, which
 //! only replay-only reducer state can deduplicate), and team roster/mail
@@ -15,9 +16,9 @@
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FileChange, FileRestore, FileState, FinishReason,
     MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId,
-    Role, RosterStatus, SessionId, SubagentMode, TodoItem, TodoStatus, TokenUsage, ToolCallId,
-    UsagePurpose, WorkflowIdentity, WorkflowRevision, WorkflowRunId, WorkflowRunStatus,
-    WorkflowSourceId, WorkflowStagePlan,
+    ProjectId, Role, RosterStatus, SessionId, SessionKind, SubagentMode, TodoItem, TodoStatus,
+    TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision, WorkflowRunId,
+    WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
 };
 use uuid::Uuid;
 
@@ -545,12 +546,27 @@ pub fn script(seed: u64, session: SessionId, fork_of: Option<SessionId>, len: us
         handles: Vec::new(),
         members: Vec::new(),
     };
+    // Picked from the seed without consuming the RNG, so the rest of the
+    // script is unchanged: a Project session, a temporary session, or a
+    // legacy session that recorded neither.
+    let (project, kind) = match seed % 3 {
+        0 => (
+            Some(ProjectId::from_uuid(Uuid::from_u128(
+                u128::from(seed) + 0x5052_4a00,
+            ))),
+            SessionKind::Project,
+        ),
+        1 => (None, SessionKind::Temporary),
+        _ => (None, SessionKind::Project),
+    };
     let mut events = vec![Event::SessionCreated {
         session,
         parent: None,
         agent: "build".into(),
         model: "fake/a".into(),
         workdir: "/tmp/scripted".into(),
+        project,
+        kind,
     }];
     if let Some(source) = fork_of {
         events.push(Event::SessionForked {

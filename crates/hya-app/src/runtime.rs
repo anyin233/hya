@@ -4422,6 +4422,8 @@ You are the runtime-installed agent.
                         agent: agent.name.clone(),
                         model: agent.model.clone(),
                         workdir: agent.workdir.to_string_lossy().into_owned(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
                     },
                 )
                 .await
@@ -4435,6 +4437,8 @@ You are the runtime-installed agent.
                         agent: agent.name.clone(),
                         model: agent.model.clone(),
                         workdir: agent.workdir.to_string_lossy().into_owned(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
                     },
                 )
                 .await
@@ -4641,6 +4645,8 @@ You are the installed resident agent.
                     agent: base.name.clone(),
                     model: base.model.clone(),
                     workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 },
             )
             .await
@@ -4654,6 +4660,8 @@ You are the installed resident agent.
                     agent: AgentName::new(stable_id),
                     model: base.model.clone(),
                     workdir: workdir.to_string_lossy().into_owned(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 },
             )
             .await

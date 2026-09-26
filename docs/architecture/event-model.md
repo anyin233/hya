@@ -110,7 +110,7 @@ Reducer effects:
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String` | Fold: sets session id, parent, agent, model, workdir. `parent` is the link `session_lineage` walks toward the team root. |
+| `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String`, `project: Option<ProjectId>` (default `null`), `kind: SessionKind` (`project` \| `temporary`, default `project`) | Fold: sets session id, parent, agent, model, workdir, project, kind. `parent` is the link `session_lineage` walks toward the team root. `project` names the session's Project (ADR-0024; wire form is the UUID, `ProjectId` displays as `prj_<uuid-simple>`); `kind: temporary` sessions have no Project. A subagent session carries its parent's `project` and `kind`. Logs written before these fields decode as `project: null`, `kind: project`; the fold arrived in projection reducer version 8. The store mirrors both in `session.project_id` / `session.kind`. |
 | `session_agent_model_override_set` | `session`, `agent: AgentName`, `model: Option<ModelRef>` | Fold: insert or remove one Agent entry in `agent_model_overrides`. `None` clears that Agent; unrelated entries remain. |
 | `session_permission_mode_set` | `session`, `mode: String` | Fold: `permission_mode` (last write wins). Emitted only on the lineage root; subagent sessions inherit the root's mode. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`; see [Session permission modes](../configuration.md#session-permission-modes). Older binaries fold it as `unknown` (no-op). The v1 stream maps it to `sessionUpdated.permissionMode`. |
 | `session_moved` | `session`, `workdir: String` | Fold: workdir |
@@ -593,6 +593,8 @@ Projection {
 | Field | Source events |
 | --- | --- |
 | `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ switch/move) |
+| `project` | `session_created.project` (omitted when `None`) |
+| `kind` | `session_created.kind` (`project` for logs written before the field) |
 | `agent_model_overrides` | `session_agent_model_override_set` (`None` model removes that Agent) |
 | `permission_mode` | `session_permission_mode_set` on the root (omitted when `None`; `None` means the process default: `yolo` under `--yolo`/`model: danger`, else `manual`) |
 | `title` | `session_titled` |

@@ -96,6 +96,8 @@ async fn session_resumes_after_reconnect() {
                     agent: "build".into(),
                     model: "fake".into(),
                     workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 },
             )
             .await
@@ -207,6 +209,8 @@ async fn legacy_uuid_session_resumes_after_reconnect() {
                     agent: "build".into(),
                     model: "fake".into(),
                     workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 },
             )
             .await

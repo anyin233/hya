@@ -19,6 +19,8 @@ async fn create(store: &SessionStore, session: SessionId, parent: Option<Session
                 agent: AgentName::new(agent),
                 model: ModelRef::new("fake/model"),
                 workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         )
         .await
