@@ -129,9 +129,13 @@ relay doctor` command and expected recommendation, and the
 The **host connector** in `hya serve` puts a backend on the relay: it keeps
 a control stream to `hya proxy` open and registers the backend's **room**,
 and for every client stream it answers the Noise handshake and serves the
-ordinary `/v1` router over the decrypted bytes — REST, SSE, and the PTY
-WebSocket work unchanged. Nothing listens on a new port: the connection to
-the relay is outbound.
+same server as the TCP port over the decrypted bytes — REST, SSE, the PTY
+WebSocket, and gRPC (`content-type: application/grpc*`, HTTP/2) work
+unchanged. gRPC through the relay has the same restrictions as REST: every
+call carries the relay origin into its handler, so `RelayControl` and
+process stop/upgrade answer `PERMISSION_DENIED`, and calls with browser
+headers are refused. Nothing listens on a new port: the connection to the
+relay is outbound.
 
 ```sh
 # Foreground: join at start. stdout keeps the readiness line; the link goes
@@ -229,10 +233,14 @@ removes the record, so a later restart stays off the relay.
   authenticated, so stalled handshakes never crowd out working streams.
 - Relay streams are served with HTTP/1.1 (with upgrades, for the PTY
   WebSocket) or HTTP/2, whichever the client speaks.
-- At shutdown the live event streams of relay clients get the same last
-  `serverStopping {reason}` frame as local ones; after the drain the
-  connector closes its control stream (the proxy releases the room) and gives
-  the remaining relay streams 5 s before closing them.
+- Relay streams serve gRPC as well (`content-type: application/grpc*`, the
+  same services as the TCP port), with the relay origin carried into every
+  call.
+- At shutdown the live event streams of relay clients (SSE and gRPC) get the
+  same last `serverStopping {reason}` frame as local ones; after the drain
+  the connector stops accepting relay streams, gives the open ones 5 s to
+  finish, and then closes its control stream (the proxy releases the room,
+  which cuts the room's streams) and closes what is left.
 
 **Relay origin (ADR-0025 D5).** Requests that arrive through the relay carry
 the server-side request extension `hya_server::Origin::Relay`. They may use
@@ -255,7 +263,9 @@ the whole `/v1` API — holding the link means owner trust — except:
 (fail-closed: no TCP peer and no gRPC peer), and for browser requests (an
 `Origin` or `Sec-Fetch-Site` header), because the server's CORS policy
 mirrors any origin; the gRPC binding refuses non-loopback and unknown peers
-the same way.
+the same way. gRPC calls through the relay get every refusal of this section
+too (`PERMISSION_DENIED`): the relay origin, the peer, and browser headers
+go with each call into the router it dispatches through.
 
 **No browsers over the relay.** A relay-origin request that carries an
 `Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, or `Sec-Fetch-Dest` header is
@@ -1119,8 +1129,12 @@ unknown peer, or a browser. `RelayStatus` (protojson):
 In Rust, `hya_server::RelayHost` is the connector (`connect`,
 `disconnect`, `status`, `link`, `rotate`, `shutdown`, `set_service`,
 `set_settings_hook`), configured by `RelayHostConfig` and
-`hya_server::AppState::with_relay_host`; `hya_server::Origin` is the request
-extension.
+`hya_server::AppState::with_relay_host`; `set_service` takes the
+`hya_server::Server` from `hya_server::build` (HTTP and gRPC) or a bare
+router (HTTP only). `hya_server::Origin` is the request extension. At
+shutdown the connector stops accepting streams, lets the open ones finish
+(their `serverStopping` frame included), and only then releases the room,
+which cuts every stream of it at the proxy.
 
 ## Deployment recipes
 

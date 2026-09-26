@@ -14,6 +14,7 @@
 - `hya serve --relay <public-url>` joins a relay at start and prints the link once on stderr; `hya serve start --relay …` does the same for the database's daemon, and `restart` rejoins with the same link.
 - A running backend: `hya serve relay connect <url>`, `disconnect`, `status` (state, relay, room, binding, streams, last error), `link`, and `rotate`. These work from the backend's own machine only, never through the relay.
 - The backend's relay identity is kept in `<db>.relay-identity.json` (mode `0600`), so the link survives restarts; `--relay-ephemeral` uses a throwaway one. `--relay-transport` and `--relay-ca` choose the binding and trust a private CA. See [CLI](docs/cli.md).
+- `hya serve` answers gRPC on its HTTP port (HTTP/2 without TLS; requests with `content-type: application/grpc*`), from the same server state as HTTP, so a session or PTY made through one protocol is visible through the other at once, and shutdown sends `serverStopping` to SSE and gRPC streams alike. gRPC works through the relay too, with the same refusals as REST. `HYA_GRPC_BIND` is no longer needed; it still adds an extra listener serving the same state. See [Protocol guide](docs/protocol/README.md).
 
 ## Connecting to a remote backend
 

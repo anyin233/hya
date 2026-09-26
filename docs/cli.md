@@ -817,8 +817,8 @@ on stderr, once, as `hya relay link: <link>` plus a one-line secrecy note.
 
 ### Allowed Host names
 
-Every HTTP request (and every gRPC call on `HYA_GRPC_BIND`, by its
-`:authority`) must name an allowed host, or it gets `403
+Every HTTP request (and every gRPC call, by its `:authority`) must name an
+allowed host, or it gets `403
 {"error":{"code":"permission_denied","message":"request refused: Host \"…\" is
 not an allowed name for this server (allowed: …); …"}}` before any route runs.
 This stops **DNS rebinding**: a web page whose name resolves to 127.0.0.1
@@ -958,9 +958,13 @@ See [Diagnosing Slow Startup](troubleshooting.md#diagnosing-slow-startup).
 
 The server serves exactly one HTTP contract — `hya.v1` — under `/v1`
 (HTTP/JSON + SSE + WebSocket). The former native `/sessions/*` routes and the
-Compat-compatible legacy/v2 route groups are deleted. Setting
-`HYA_GRPC_BIND=<host:port>` additionally serves the same eighteen services over
-gRPC (reflection enabled). See [Protocol guide](protocol/README.md),
+Compat-compatible legacy/v2 route groups are deleted. The same port also
+serves the eighteen services over gRPC (HTTP/2 without TLS; requests with
+`content-type: application/grpc*`), from the same server state. Optional and
+legacy: `HYA_GRPC_BIND=<host:port>` adds an extra listener serving the same
+server (it prints `hya grpc listening on http://<addr>` after the readiness
+line; a bind failure is reported on stderr and the server starts without
+it). See [Protocol guide](protocol/README.md),
 [API reference](protocol/api-reference.md), and
 [Server and Client](architecture/server-client.md).
 

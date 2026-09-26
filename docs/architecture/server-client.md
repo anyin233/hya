@@ -13,7 +13,21 @@ serves exactly one contract — `hya.v1` — over two transports:
   bundle process's own status and body with no envelope, so the gRPC binding
   calls the shared `bundle_api::invoke` handler function directly and wraps
   the outcome in `BundleApiResponse` (same engine path, same error table).
-  Serve it with `HYA_GRPC_BIND=host:port`.
+  Each call's origin (relay or local), peer address, and admitted host go
+  with it into the in-process dispatch, so the router's relay and
+  loopback-only checks see a gRPC call exactly like an HTTP request.
+
+Both transports are served on **one port** from **one server state**:
+`hya_server::build(AppState)` returns a `Server` whose connections are
+served by hyper's auto builder (HTTP/1.1 with upgrades, or HTTP/2 / h2c); a
+request with `content-type: application/grpc*` goes to the tonic services
+(behind `GrpcHostLayer`, the Host guard on `:authority`), anything else to
+the axum router. Every router, `V1Grpc`, and `Server` made from one
+`AppState` (or its clones) shares one internal server state, so the
+background drivers (reclaim driver, Project busy watcher, session-list
+tracker, ephemeral reaper) start once and one `StreamShutdown` ends SSE and
+gRPC streams alike. The same `Server` serves the TCP listener, the optional
+extra `HYA_GRPC_BIND` listener, and every relay stream.
 
 Contract references:
 
@@ -115,8 +129,8 @@ methods `Any`.
   frontends (HTTP + SSE + `V1SessionMirror`).
 - [`../../crates/hya-client`](../../crates/hya-client) — lean typed
   `reqwest` client (tooling, e2e harness).
-- gRPC through `V1Grpc` — same contract over tonic when `HYA_GRPC_BIND` is
-  set.
+- gRPC through `V1Grpc` — same contract over tonic, on the server's HTTP
+  port (h2c); `HYA_GRPC_BIND` adds an optional extra listener.
 
 The legacy Compat-era SDK and in-process transport that served the old TUI were
 removed.
