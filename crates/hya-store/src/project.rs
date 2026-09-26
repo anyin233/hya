@@ -389,6 +389,96 @@ impl SessionStore {
         };
         self.get_project(parse_project_id(&raw_id)?).await
     }
+
+    /// `EnsureProjectForPath`: the non-archived Project whose root contains
+    /// `path` (longest root wins, ties by most recently updated —
+    /// [`SessionStore::resolve_project_by_path`]'s rule, evaluated inside this
+    /// call's transaction), else a newly created Project named after `path`'s
+    /// last path component (`path` itself when it has none, e.g. `/`) with
+    /// `path` as its only root. Returns the Project and whether it was
+    /// created.
+    ///
+    /// One `BEGIN IMMEDIATE` transaction: the lookup and the create-if-missing
+    /// insert are atomic, so concurrent callers for the same (or a containing)
+    /// path always converge on exactly one Project rather than racing to
+    /// create duplicates.
+    ///
+    /// # Errors
+    /// [`StoreError::ProjectRootNotAbsolute`] / [`StoreError::ProjectRootInvalid`]
+    /// for `path`, or SQLite failures.
+    pub async fn ensure_project_for_path(&self, path: &str) -> Result<(Project, bool), StoreError> {
+        let path = normalize_project_path(path.trim())?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(project) = resolve_project_by_path_in_tx(&mut tx, &path).await? {
+            tx.commit().await?;
+            return Ok((project, false));
+        }
+        let name = Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map_or_else(|| path.clone(), str::to_owned);
+        let id = ProjectId::new();
+        let now = now_millis();
+        sqlx::query(
+            "INSERT INTO project (id, name, created_at, updated_at, archived) \
+             VALUES (?, ?, ?, ?, 0)",
+        )
+        .bind(id.to_string())
+        .bind(&name)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        insert_roots(&mut tx, id, std::slice::from_ref(&path)).await?;
+        tx.commit().await?;
+        Ok((
+            Project {
+                id,
+                name,
+                roots: vec![path],
+                created_at_ms: now,
+                updated_at_ms: now,
+                archived: false,
+            },
+            true,
+        ))
+    }
+}
+
+/// [`SessionStore::resolve_project_by_path`], evaluated against an open
+/// transaction so [`SessionStore::ensure_project_for_path`] sees a consistent
+/// snapshot alongside its create-if-missing insert.
+async fn resolve_project_by_path_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    path: &str,
+) -> Result<Option<Project>, StoreError> {
+    let path = Path::new(path);
+    let rows = sqlx::query(
+        "SELECT r.project_id, r.path, p.updated_at FROM project_root r \
+         JOIN project p ON p.id = r.project_id WHERE p.archived = 0",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut best: Option<(usize, i64, String)> = None;
+    for row in rows {
+        let root: String = row.try_get("path")?;
+        let root = Path::new(&root);
+        if !path.starts_with(root) {
+            continue;
+        }
+        let candidate = (
+            root.components().count(),
+            row.try_get::<i64, _>("updated_at")?,
+            row.try_get::<String, _>("project_id")?,
+        );
+        if best.as_ref().is_none_or(|current| candidate > *current) {
+            best = Some(candidate);
+        }
+    }
+    let Some((_, _, raw_id)) = best else {
+        return Ok(None);
+    };
+    load_project(tx, parse_project_id(&raw_id)?).await
 }
 
 async fn insert_roots(

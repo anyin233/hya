@@ -568,3 +568,120 @@ async fn project_session_count_matches_the_listing() {
     let listed = store.list_projects().await.unwrap();
     assert_eq!(listed[0].session_count, 1);
 }
+
+#[tokio::test]
+async fn ensure_project_for_path_creates_once_and_names_by_last_component() {
+    let store = SessionStore::connect_memory().await.unwrap();
+
+    let (created, was_created) = store.ensure_project_for_path("/work/my-app").await.unwrap();
+    assert!(was_created);
+    assert_eq!(created.name, "my-app");
+    assert_eq!(created.roots, roots(&["/work/my-app"]));
+
+    let (reused, was_created) = store.ensure_project_for_path("/work/my-app").await.unwrap();
+    assert!(
+        !was_created,
+        "a second call for the same path must reuse it"
+    );
+    assert_eq!(reused.id, created.id);
+    assert_eq!(reused.updated_at_ms, created.updated_at_ms);
+}
+
+#[tokio::test]
+async fn ensure_project_for_path_names_the_root_path_slash() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let (project, was_created) = store.ensure_project_for_path("/").await.unwrap();
+    assert!(was_created);
+    assert_eq!(project.name, "/");
+    assert_eq!(project.roots, roots(&["/"]));
+}
+
+#[tokio::test]
+async fn ensure_project_for_path_reuses_a_containing_project_for_a_nested_path() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let outer = store
+        .create_project("outer", &roots(&["/work"]))
+        .await
+        .unwrap();
+
+    let (resolved, was_created) = store
+        .ensure_project_for_path("/work/nested/dir")
+        .await
+        .unwrap();
+    assert!(
+        !was_created,
+        "a path inside an existing root must reuse that Project"
+    );
+    assert_eq!(resolved.id, outer.id);
+    assert_eq!(resolved.roots, roots(&["/work"]), "roots are unchanged");
+
+    // Longest-root-wins still applies: a more specific existing Project beats
+    // the outer one.
+    tick().await;
+    let inner = store
+        .create_project("inner", &roots(&["/work/nested"]))
+        .await
+        .unwrap();
+    let (resolved, was_created) = store
+        .ensure_project_for_path("/work/nested/dir")
+        .await
+        .unwrap();
+    assert!(!was_created);
+    assert_eq!(resolved.id, inner.id);
+}
+
+#[tokio::test]
+async fn ensure_project_for_path_rejects_invalid_paths() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    assert!(matches!(
+        store.ensure_project_for_path("relative").await,
+        Err(StoreError::ProjectRootNotAbsolute { .. })
+    ));
+    assert!(matches!(
+        store.ensure_project_for_path("/a/../b").await,
+        Err(StoreError::ProjectRootInvalid { .. })
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ensure_project_for_path_concurrent_calls_produce_one_project() {
+    let db = temp_db();
+    let store = std::sync::Arc::new(SessionStore::connect(&db).await.unwrap());
+    let path = "/work/concurrent-app";
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let store = store.clone();
+        handles.push(tokio::spawn(async move {
+            store.ensure_project_for_path(path).await.unwrap()
+        }));
+    }
+
+    let mut ids = std::collections::HashSet::new();
+    let mut created_count = 0_u32;
+    for handle in handles {
+        let (project, was_created) = handle.await.unwrap();
+        ids.insert(project.id);
+        if was_created {
+            created_count += 1;
+        }
+    }
+    assert_eq!(
+        ids.len(),
+        1,
+        "every concurrent call must converge on one Project"
+    );
+    assert_eq!(created_count, 1, "exactly one call creates the Project");
+
+    let listed = store.list_projects().await.unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .filter(|s| s.project.roots == roots(&[path]))
+            .count(),
+        1,
+        "no duplicate Project was persisted"
+    );
+    drop(store);
+    remove_db(&db);
+}
