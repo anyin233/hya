@@ -48,11 +48,13 @@ database, and outlives all of them. Clients never stop it.
   and on quit stops only those. `hya --backend <url>` names a server instead
   (no discovery, no start; an unreachable URL is an error).
 - **Sessions follow the client, not the server.** A TUI started without
-  `--session`/`--continue` creates a session on connect. A session a client
+  `--session`/`--continue` creates a session on connect. ~~A session a client
   created and never used is deleted when that client leaves it (another
   session opened, or the client exits), after a server-side re-check that it
-  is still empty. This replaces the old lazy creation, which existed so a
-  quick look did not leave empty sessions behind.
+  is still empty.~~ Superseded by the amendment "The daemon drops unused
+  sessions" below: the daemon deletes it. This replaces the old lazy
+  creation, which existed so a quick look did not leave empty sessions
+  behind.
 
 ## Why
 
@@ -85,9 +87,10 @@ database, and outlives all of them. Clients never stop it.
 - Turns that run on a server when it stops end with it (closed as cancelled
   by its shutdown drain, or left for crash recovery after a SIGKILL); a
   client's queued prompts are dropped on reconnect.
-- The empty-session delete is a read then a delete, two requests: a prompt
+- ~~The empty-session delete is a read then a delete, two requests: a prompt
   another client sends into that empty session in between is lost with it.
-  Only the creating client deletes, only sessions it never used.
+  Only the creating client deletes, only sessions it never used.~~
+  Superseded by the amendment "The daemon drops unused sessions" below.
 - Headless commands on a daemon's database (`hya --db <db> exec`, `workflow
   use|run|state`) run through the daemon instead of opening the database a
   second time, so their sessions show up in every client. A command that holds
@@ -161,7 +164,9 @@ with do not pile up in the list and sessions left to work keep working.
 - **Switching is not an exit.** Opening another session leaves the previous
   one running.
 - **Empty stays deleted.** In every case an empty session the client created
-  and never used is deleted instead (the rule above).
+  and never used is deleted instead (the rule above; since the amendment
+  "The daemon drops unused sessions" the daemon deletes it, and it is never
+  archived).
 - **Resume unarchives.** `--resume [id]` (TUI and bare `hya`), `/resume
   [id]`, and opening an archived row of the `/sessions` picker (Ctrl+A shows
   them) unarchive the session and open it. `--continue` picks the newest
@@ -178,5 +183,66 @@ with do not pile up in the list and sessions left to work keep working.
 
 Consequences: an archived session is out of the sidebar and `--continue`
 until something resumes it or a prompt reaches it (a prompt unarchives on
-the backend). A TUI killed while its session is still empty leaves nothing
-behind only if its exit handler runs; a SIGKILL leaves the empty session.
+the backend). ~~A TUI killed while its session is still empty leaves nothing
+behind only if its exit handler runs; a SIGKILL leaves the empty session.~~
+Since the next amendment a killed TUI leaves nothing behind either.
+
+## Amendment (2026-09-26): the daemon drops unused sessions
+
+The client deleted its empty session itself on the way out: a re-read, a
+message listing, and a delete, raced against a 2 s exit budget. Under load
+the process exited first and killed the delete (about one exit in seven in
+the launch spec), a SIGKILLed TUI never ran it, and a client that had opened
+another client's empty session lost it when the creator left. Deciding
+"nobody needs this session any more" needs to know who else shows it, and
+only the daemon knows that.
+
+- **Ephemeral on create.** A client that opens a session before the user
+  asked for one (the TUI on connect, and `/new`) creates it with
+  `CreateSessionRequest.ephemeral`. The server records
+  `SessionEphemeralSet {ephemeral: true}`; the projection folds
+  `SessionProjection.ephemeral` (reducer version 8). The session's first
+  message (a prompt, command, or shell turn from any client), a title, an
+  archive, or a fork taken from it (`SessionEphemeralSet {ephemeral:
+  false}` on the source) clear the mark for good, so replay decides it and
+  logs from before the event are never ephemeral. `SessionInfo.ephemeral`
+  shows it.
+- **Watching is a session stream.** A client watches a session while it
+  has a `StreamSessionEvents` stream open on it (SSE or gRPC); the stream
+  layer counts them per session. The global stream does not count. A TUI
+  always streams its open session, so an open session is never dropped
+  under its viewer, whichever client created it.
+- **Drop after a grace.** 5 s after the last stream of an unused ephemeral
+  session closes, the daemon re-checks it and deletes it, then publishes the
+  live `sessionDeleted` frame. The grace lets a reconnecting client (a
+  server move, a stream retry) or a reopening one keep it. A session nobody
+  ever watched is checked 30 s after creation; at start the daemon sweeps
+  leftovers (a crash, a kill, a stop) with a check 30 s after it starts,
+  long enough for clients waiting on a `restart` to resubscribe.
+- **No lost prompt.** The re-check and the delete hold the session's
+  admission slot (the run registry every prompt, command, shell turn, and
+  Workflow run reserves), and the delete removes the log only if it did not
+  grow since the re-check. A prompt either lands first and keeps the
+  session, or is refused (`session_busy` during the delete,
+  `session_not_found` after it).
+- **Clients never delete.** The TUI no longer deletes on leave or exit; an
+  exit never waits for a delete. A graceful exit archives only a used
+  session: an unused one it created costs no request, and one another
+  client created is archived only when the server says it is not
+  ephemeral (archiving would keep it).
+
+A client-side delete with a longer exit budget was considered and rejected:
+it cannot see other viewers, cannot survive SIGKILL, and a longer budget
+only makes the race rarer. Keeping empty sessions and hiding them from lists
+was rejected too: they would still pile up in the database and in `--resume`.
+
+Consequences: an empty session disappears from other clients' lists about
+5 s after its last viewer leaves, not at once. A write that is not a turn
+(a rename, a model switch) keeps the session when it lands before the
+delete (the log grew) and fails with `session_not_found` when it arrives
+after; one whose existence check passed just before the delete and whose
+append lands just after can still leave a one-event log behind, the same
+window any `DeleteSession` has against a concurrent write. Old clients that never
+send the flag keep their own client-side delete; an old daemon ignores the
+flag, so a new TUI on it leaves its empty sessions behind until the daemon
+is upgraded (`hya serve restart`).

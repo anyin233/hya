@@ -158,14 +158,16 @@ Without `--continue`, `--session`, or `--resume`, the TUI creates a new session 
 it connects (with the default agent and model; without any model the first
 prompt creates it instead), so the header names it before you type.
 `/sessions` (or the sidebar) reaches the earlier ones. Empty sessions do not
-pile up: a session this TUI created and never used is deleted when the TUI
-leaves it — `/new`, `/open`, `/sessions`, a `/fork` switch, or the TUI
-exiting (a WebUI tab closing too; the delete waits at most 2 s). Right before
-the delete the TUI re-reads the session from the server and keeps it if it
-has any message, a running turn, a title (a `/rename`, or the automatic title
-after a first prompt), or a parent. Sessions other clients created are never
-deleted. The re-check and the delete are two requests, so a prompt another
-client sends into that empty session in between is lost with it.
+pile up: the TUI creates that session (and every `/new` one) *ephemeral*,
+and the backend daemon deletes it about 5 s after no TUI shows it any more
+while it is still unused — after `/new`, `/open`, `/sessions`, a `/fork`
+switch, `/exit`, a WebUI tab closing, or the TUI being killed. The first
+prompt or `!` shell command (from any client), a title (a `/rename`, or the
+automatic title after a first prompt), archiving, or a `/fork` from it keeps
+it for good. A session another TUI still shows is never deleted, whichever
+TUI created it, and quitting never waits for a delete (see
+[Ephemeral sessions](protocol/README.md#ephemeral-sessions) and ADR-0023).
+Other TUIs drop its row when the daemon deletes it.
 
 Two TUIs on the same database share one daemon, so they see the same
 sessions live; give one `--db` for a separate store. The backend's offline
@@ -201,9 +203,10 @@ cancels a running turn, which finishes on the daemon.
 | Closing a WebUI tab, SIGTERM/SIGHUP/SIGINT, a kill or crash | Left as is: it keeps running on the daemon, not archived. |
 | Switching sessions (`/new`, `/open`, `/sessions`, `/resume`, a `/fork` switch) | Not an exit: the previous session keeps running. |
 
-In every case an empty session this TUI created and never used is deleted
-instead (the rule above). The exit waits at most 2 s for the archive or the
-delete.
+In every case a session that is still unused (no prompt, title, archive,
+or fork yet) is never archived: the daemon deletes it once no TUI shows it
+(the rule above), so quitting sends nothing for it and does not wait. The
+graceful exit waits at most 2 s for the archive of a used session.
 
 In a WebUI tab (`--web-tab`) `/to-background` is not offered (it is left
 out of the command menu, completion, and `/help`); typing it, or Ctrl+D on
@@ -320,7 +323,7 @@ Changes apply to the running backend at once; no restart is needed.
 | Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
 | Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
-| `/exit`, `/quit` | Quit and archive the session (an empty one is deleted). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
+| `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of `--dir`'s sessions, archived ones included and tagged `[archived]`, newest first. |
 | `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |

@@ -3980,6 +3980,9 @@
           "archived_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "ephemeral": {
+            "type": "boolean"
           }
         }
       },
@@ -4038,6 +4041,9 @@
           },
           "title": {
             "type": "string"
+          },
+          "ephemeral": {
+            "type": "boolean"
           }
         }
       },

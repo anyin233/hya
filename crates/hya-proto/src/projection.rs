@@ -67,6 +67,13 @@ pub struct SessionProjection {
     /// archived; `None` when it is not (never archived, unarchived, or a
     /// legacy zero stamp). See [`SessionProjection::is_archived`].
     pub archived: Option<serde_json::Number>,
+    /// Created ephemeral (`SessionEphemeralSet { ephemeral: true }`) and
+    /// still unused: the server deletes such a session once no client
+    /// watches it. The session's first message (`MessageStarted`), a title,
+    /// an archive, or `SessionEphemeralSet { ephemeral: false }` clear it for
+    /// good. Omitted from serialized projections when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
     /// Share URL when shared; `None` after clear.
     pub share: Option<String>,
     /// Ordered transcript messages.
@@ -790,7 +797,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 7;
+pub const PROJECTION_REDUCER_VERSION: u32 = 8;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1021,6 +1028,7 @@ impl Projection {
             }
             Event::SessionTitled { title, .. } => {
                 self.session.title = Some(title.clone());
+                self.session.ephemeral = false;
             }
             Event::SessionMetadataSet { metadata, .. } => {
                 self.session.metadata = Some(metadata.clone());
@@ -1031,9 +1039,15 @@ impl Projection {
             Event::SessionArchived { archived, .. } => {
                 // A zero stamp is the legacy Compat "clear archive" write.
                 self.session.archived = (!is_zero_stamp(archived)).then(|| archived.clone());
+                if self.session.archived.is_some() {
+                    self.session.ephemeral = false;
+                }
             }
             Event::SessionUnarchived { .. } => {
                 self.session.archived = None;
+            }
+            Event::SessionEphemeralSet { ephemeral, .. } => {
+                self.session.ephemeral = *ephemeral;
             }
             Event::SessionShareSet { url, .. } => {
                 self.session.share = Some(url.clone());
@@ -1218,6 +1232,8 @@ impl Projection {
                 model,
                 ..
             } => {
+                // Any message makes the session used: never ephemeral again.
+                self.session.ephemeral = false;
                 if self.message_mut(*message).is_none() {
                     // A new message commits a pending revert: the hidden
                     // messages are gone for good and cannot be restored.

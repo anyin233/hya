@@ -39,6 +39,18 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
   ])
 })
 
+test("a session created on connect asks the daemon to drop it while unused (ephemeral)", async () => {
+  const bodies: unknown[] = []
+  const fetcher: FetchLike = async (_input, init) => {
+    bodies.push(init?.body ? JSON.parse(String(init.body)) : undefined)
+    return Response.json({ session: { id: "hysec_1", agent: "build", workdir: "/work", ephemeral: true } })
+  }
+  const client = new HyaClient("http://127.0.0.1:8080/", "/work", fetcher)
+  const session = await client.createSession("build", "offline/echo", "/work", { ephemeral: true })
+  expect(session.ephemeral).toBe(true)
+  expect(bodies).toEqual([{ agent: "build", model: "offline/echo", workdir: "/work", ephemeral: true }])
+})
+
 test("getVcsStatus scopes GetVcsStatus to the client's directory", async () => {
   const calls: string[] = []
   const fetcher: FetchLike = async (input) => {

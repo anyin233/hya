@@ -12494,6 +12494,11 @@ pub struct SessionInfo {
     /// When the session was archived; unset when it is not archived.
     #[prost(message, optional, tag = "18")]
     pub archived_at: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// Whether this root session was created `ephemeral` and is still unused
+    /// (no message, title, archive, or fork from it yet): the server deletes
+    /// it once no client has a `StreamSessionEvents` stream open on it.
+    #[prost(bool, tag = "19")]
+    pub ephemeral: bool,
 }
 /// Where a forked session came from.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -12545,6 +12550,13 @@ pub struct CreateSessionRequest {
     /// Initial title; empty lets the backend derive one.
     #[prost(string, tag = "6")]
     pub title: ::prost::alloc::string::String,
+    /// Create the session ephemeral: the server deletes it while it is still
+    /// unused (no message, title, archive, or fork from it) once no client has
+    /// a `StreamSessionEvents` stream open on it, after a short grace. For
+    /// sessions a client opens before the user asked for one (the TUI's
+    /// session on connect). Ignored with `parent` or `title` set.
+    #[prost(bool, tag = "7")]
+    pub ephemeral: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionResponse {

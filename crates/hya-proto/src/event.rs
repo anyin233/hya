@@ -116,6 +116,19 @@ pub enum Event {
         /// Session this event belongs to.
         session: SessionId,
     },
+    /// A root session was marked ephemeral (`true`: created for a client
+    /// before the user asked for one, e.g. the TUI's session on connect) or
+    /// kept (`false`: a fork was taken from it). The server deletes an
+    /// ephemeral session once it is still unused and no client watches it.
+    /// Folds `SessionProjection.ephemeral`; the session's first message, a
+    /// title, or an archive also clear it for good. An older binary folds it
+    /// as `Unknown` (the session is then simply kept).
+    SessionEphemeralSet {
+        /// Session this event belongs to.
+        session: SessionId,
+        /// Whether the session is (still) ephemeral.
+        ephemeral: bool,
+    },
     /// Share URL recorded for the session.
     SessionShareSet {
         /// Session this event belongs to.
@@ -1149,6 +1162,7 @@ impl Event {
             | Event::SessionPermissionSet { session, .. }
             | Event::SessionArchived { session, .. }
             | Event::SessionUnarchived { session, .. }
+            | Event::SessionEphemeralSet { session, .. }
             | Event::SessionShareSet { session, .. }
             | Event::SessionShareCleared { session, .. }
             | Event::AgentSwitched { session, .. }

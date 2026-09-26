@@ -58,14 +58,15 @@
  * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
  * Sessions (app/sessionKeeper.ts): without `--session`/`--continue`/
- * `--resume` a session is created on connect; a session this client created
- * and never used is deleted when the client leaves it (another session
- * opened, or `close()` on exit). `close("archive")` (a graceful exit:
- * `/exit`, Ctrl+C twice) archives the open session's root; `background`
- * (`/to-background`, Ctrl+D) and `signal` leave it running. `/resume` and
- * `--resume` unarchive and open one (app/resume.ts).
+ * `--resume` a session is created on connect, `ephemeral` (as is every `/new`
+ * one): the daemon deletes it while still unused once no client watches it
+ * (no session stream open on it), so leaving it (another session opened, any
+ * exit, a kill) needs no request. `close("archive")` (a graceful exit:
+ * `/exit`, Ctrl+C twice) archives the open session's root when it is used;
+ * `background` (`/to-background`, Ctrl+D) and `signal` leave it running.
+ * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
-import type { HyaClient, Interaction, MessageInfo, PromptAttachment, SessionInfo, StreamEvent, StreamFrame } from "../client"
+import { HttpError, type HyaClient, type Interaction, type MessageInfo, type PromptAttachment, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
@@ -120,8 +121,8 @@ export const childPollMs = 1500
 /** Global stream reconnect backoff: the session stream's 800 ms, doubling up to 15 s while it keeps failing (an older backend without the route). */
 const globalRetryMs = 800
 const globalRetryMaxMs = 15_000
-/** Longest wait on exit for deleting this client's empty session, or archiving the open one. */
-const dropOnExitMs = 2_000
+/** Longest wait on exit for archiving the open session (a graceful exit of a used session only). */
+const archiveOnExitMs = 2_000
 
 export interface ControllerOptions {
   client: HyaClient
@@ -224,18 +225,9 @@ export function createController({ client, store, directory, registry = createCo
   const keeper = createSessionKeeper({
     client: {
       getSession: (id) => client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
-      listMessages: (id) => client.listMessages(id),
-      deleteSession: (id) => client.deleteSession(id),
       archiveSession: async (id) => { await client.setArchived(id, true) },
     },
-    localBusy: (id) => (store.state.selected?.id === id && store.state.running) || store.state.queued.some((item) => item.session === id),
   })
-
-  /** Leaving `id`: drop it when this client created it and it is still empty (app/sessionKeeper.ts). */
-  async function dropIfEmpty(id: string): Promise<void> {
-    if ((await keeper.dropIfEmpty(id)) !== "deleted") return
-    store.setSessions(store.state.sessions.filter((row) => row.id !== id))
-  }
 
   async function refresh(): Promise<void> {
     const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes] = await Promise.all([
@@ -613,7 +605,6 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   async function openSession(sessionId: string): Promise<void> {
-    const previous = store.state.selected?.id
     const listed = store.state.sessions.find((row) => row.id === sessionId)
     // A fresh read gives the current `lastSeq`, so the stream gap-fill stays small.
     const session = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`)
@@ -631,8 +622,8 @@ export function createController({ client, store, directory, registry = createCo
     await refreshMessages()
     void refreshTodos()
     void refreshVcs()
+    // Leaving `previous` closes its session stream: an unused ephemeral one is the daemon's to drop.
     startStream(session.id)
-    if (previous && previous !== session.id) void dropIfEmpty(previous)
   }
 
   /** Leave a subagent's read-only view: open its parent session. */
@@ -650,7 +641,8 @@ export function createController({ client, store, directory, registry = createCo
     const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
     const model = modelArg ?? (defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined)
     if (!model) throw new Error("No model is available; configure a provider on the backend")
-    const session = await client.createSession(agent, model, directory)
+    // Ephemeral: dropped by the daemon while unused once nobody watches it (app/sessionKeeper.ts).
+    const session = await client.createSession(agent, model, directory, { ephemeral: true })
     keeper.created(session.id)
     store.setPendingAgent(undefined)
     store.setPendingModel(undefined)
@@ -987,7 +979,13 @@ export function createController({ client, store, directory, registry = createCo
     startGlobalStream()
     const selected = store.state.selected
     if (!selected) return
-    await openSession(selected.id).catch((error: unknown) => status(`Open failed: ${String(error)}`))
+    await openSession(selected.id).catch(async (error: unknown) => {
+      // Gone while no stream watched it (an unused ephemeral session the daemon dropped, or a
+      // delete another client made meanwhile): never stay on a session with no log behind it.
+      if (!(error instanceof HttpError && error.status === 404)) return status(`Open failed: ${String(error)}`)
+      store.dropSessionRow(selected.id)
+      await newSession().catch((failure: unknown) => status(`Session ${selected.id} is gone · new session failed: ${String(failure)}`))
+    })
     // A turn that ran on the old server died with it; the transcript above shows how far it got.
     if (store.state.running && !store.state.selected?.busy) store.endTurn()
   }
@@ -1010,14 +1008,17 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   /**
-   * Before exit (bounded wait): delete this client's session when it created
-   * it and never used it; else, on a graceful exit (`archive`), archive the
-   * open session's root. `background` and `signal` (the default: a WebUI tab
-   * closed, a kill) leave it running on the daemon.
+   * Before exit: on a graceful exit (`archive`) archive the open session's
+   * root when it is used (bounded wait). An unused session this client
+   * created costs no request and no wait: the daemon drops it once this
+   * client's stream is gone. `background` and `signal` (the default: a WebUI
+   * tab closed, a kill) leave it running on the daemon.
    */
   async function close(mode: ExitMode = "signal"): Promise<void> {
     const selected = store.state.selected?.id
-    if (selected) await Promise.race([keeper.leave(selected, mode).catch(() => undefined), Bun.sleep(dropOnExitMs)])
+    if (selected && mode === "archive" && !keeper.isFresh(selected)) {
+      await Promise.race([keeper.leave(selected, mode).catch(() => undefined), Bun.sleep(archiveOnExitMs)])
+    }
     dispose()
   }
 
