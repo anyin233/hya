@@ -216,7 +216,9 @@ where
     let mut request = tonic::Request::new(ReceiverStream::new(rx));
     request.extensions_mut().insert(CallAbort(abort.clone()));
     let guard = abort.clone().drop_guard();
-    let response = call(GeneratedClient::new(service), request)
+    let client =
+        GeneratedClient::new(service).max_decoding_message_size(super::MAX_CLIENT_MESSAGE_SIZE);
+    let response = call(client, request)
         .await
         .map_err(|status| status_to_transport(&status))?;
     // The call is up; from here the transport decides when to abort.

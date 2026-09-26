@@ -14,7 +14,7 @@
 //! identity that is never written anywhere.
 
 use std::io::Write as _;
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -156,28 +156,36 @@ impl RelayIdentity {
 
     /// Load the identity at `path`; `None` when there is no file.
     ///
+    /// The file is opened without following a final symbolic link
+    /// (`O_NOFOLLOW`), and the checks run on the opened descriptor (`fstat`),
+    /// so the file read is the file checked: it must be a regular file owned
+    /// by the effective user, with no group or other permission bits.
+    /// Extended ACLs (macOS `chmod +a`, POSIX ACLs) are not inspected; keep
+    /// the database directory private.
+    ///
     /// # Errors
     /// As [`RelayIdentity::load_or_create`].
     pub fn load(path: &Path) -> Result<Option<Self>, IdentityError> {
-        let metadata = match std::fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            // A FIFO must not block the open; it is refused below anyway.
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(path);
+        let mut file = match file {
+            Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+                return Err(IdentityError::Invalid(format!(
+                    "{} is a symbolic link; the relay identity must be a regular file",
+                    path.display()
+                )));
+            }
             Err(error) => return Err(io_error(path, &error)),
         };
-        if !metadata.is_file() {
-            return Err(IdentityError::Invalid(format!(
-                "{} is not a regular file",
-                path.display()
-            )));
-        }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(IdentityError::Invalid(format!(
-                "{} is readable by other users; it holds the relay link's secret keys (run `chmod 600 {}`)",
-                path.display(),
-                path.display()
-            )));
-        }
-        let text = Zeroizing::new(std::fs::read(path).map_err(|error| io_error(path, &error))?);
+        let metadata = file.metadata().map_err(|error| io_error(path, &error))?;
+        check_file(path, &FileFacts::of(&metadata), effective_uid())?;
+        let mut text = Zeroizing::new(Vec::new());
+        std::io::Read::read_to_end(&mut file, &mut text).map_err(|error| io_error(path, &error))?;
         let file: IdentityFile = serde_json::from_slice(&text).map_err(|_| {
             IdentityError::Invalid(format!("{} is not a relay identity file", path.display()))
         })?;
@@ -242,6 +250,56 @@ impl RelayIdentity {
     }
 }
 
+/// What [`RelayIdentity::load`] checks about the opened file.
+#[derive(Clone, Copy, Debug)]
+struct FileFacts {
+    regular: bool,
+    uid: u32,
+    mode: u32,
+}
+
+impl FileFacts {
+    fn of(metadata: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt as _;
+        Self {
+            regular: metadata.is_file(),
+            uid: metadata.uid(),
+            mode: metadata.mode(),
+        }
+    }
+}
+
+/// A regular file owned by `euid` with no group or other permission bits.
+fn check_file(path: &Path, facts: &FileFacts, euid: u32) -> Result<(), IdentityError> {
+    if !facts.regular {
+        return Err(IdentityError::Invalid(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+    if facts.uid != euid {
+        return Err(IdentityError::Invalid(format!(
+            "{} is owned by uid {}, not by this user (uid {euid}); it holds the relay link's secret keys",
+            path.display(),
+            facts.uid
+        )));
+    }
+    if facts.mode & 0o077 != 0 {
+        return Err(IdentityError::Invalid(format!(
+            "{} is accessible by other users; it holds the relay link's secret keys (run `chmod 600 {}`)",
+            path.display(),
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, cannot fail, and touches no
+    // memory owned by Rust.
+    unsafe { libc::geteuid() }
+}
+
 fn temp_path(path: &Path) -> PathBuf {
     let mut temp = path.as_os_str().to_owned();
     temp.push(format!(".{}.tmp", std::process::id()));
@@ -263,6 +321,8 @@ fn random32() -> Result<Zeroizing<[u8; 32]>, IdentityError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
@@ -305,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_readable_by_others_or_malformed_is_refused() {
+    fn a_file_accessible_by_others_or_malformed_is_refused() {
         let dir = scratch("refuse");
         let path = dir.join("id.json");
         RelayIdentity::generate().unwrap().save(&path).unwrap();
@@ -322,6 +382,53 @@ mod tests {
                 .is_none()
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_symlinked_identity_file_is_refused() {
+        let dir = scratch("symlink");
+        let real = dir.join("real.json");
+        RelayIdentity::generate().unwrap().save(&real).unwrap();
+        let link = dir.join("sessions.db.relay-identity.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let error = RelayIdentity::load(&link).unwrap_err().to_string();
+        assert!(error.contains("symbolic link"), "{error}");
+        // `load_or_create` must not replace it with a fresh identity either.
+        assert!(RelayIdentity::load_or_create(&link).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_non_regular_identity_path_is_refused() {
+        let dir = scratch("dir");
+        let error = RelayIdentity::load(&dir).unwrap_err().to_string();
+        assert!(error.contains("not a regular file"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_an_owner_only_file_of_this_user_is_accepted() {
+        let path = Path::new("/x/id.json");
+        let euid = 501;
+        let ok = FileFacts {
+            regular: true,
+            uid: euid,
+            mode: 0o100_600,
+        };
+        assert!(check_file(path, &ok, euid).is_ok());
+        let foreign = FileFacts { uid: 0, ..ok };
+        let error = check_file(path, &foreign, euid).unwrap_err().to_string();
+        assert!(error.contains("owned by uid 0"), "{error}");
+        for mode in [0o100_640, 0o100_604, 0o100_660, 0o100_700 | 0o010] {
+            let open = FileFacts { mode, ..ok };
+            let error = check_file(path, &open, euid).unwrap_err().to_string();
+            assert!(error.contains("chmod 600"), "{mode:o}: {error}");
+        }
+        let fifo = FileFacts {
+            regular: false,
+            ..ok
+        };
+        assert!(check_file(path, &fifo, euid).is_err());
     }
 
     #[test]

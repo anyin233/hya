@@ -1,5 +1,11 @@
-//! `hya relay doctor <proxy-url|link>`: probes a relay path end to end and
+//! `hya relay doctor <proxy-url|link|->`: probes a relay path end to end and
 //! recommends a `t=` value (docs/relay.md "Diagnostics", ADR-0025 D9).
+//!
+//! The probes only need the relay address, so a proxy URL or a redacted link
+//! (`hya://host/<room>`, no `#…`) is enough. A full link is accepted too — on
+//! stdin (`-`) quietly, as an argument with a warning, since arguments are
+//! visible in process listings; `--measure-idle` needs it (opening a stream
+//! to the room takes the link's open token).
 //!
 //! Dispatched before any runtime composition, like `hya proxy` and
 //! `hya update`: it only opens network connections, never a config, a
@@ -10,7 +16,8 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use hya_relay::client::{Binding, ClientConfig, ProbeFailure, ProbeFailureKind, RelayClient};
-use hya_relay::link::{RelayAddress, RelayLink, RoomId};
+use hya_relay::keys::OpenToken;
+use hya_relay::link::{RelayAddress, RelayLink, RoomId, redact_input};
 use hya_relay::proto::{Chunk, Heartbeat, chunk};
 use hya_relay::transport::TransportError;
 use serde::Serialize;
@@ -21,8 +28,10 @@ use tokio::time::timeout;
 pub(crate) enum RelayCommand {
     /// Probe a proxy URL or relay link and recommend a `t=` value.
     Doctor {
-        /// `https://…`/`http://…` proxy URL, or a `hya://`/`hya+insecure://`
-        /// link. The link's secret is never printed.
+        /// `https://…`/`http://…` proxy URL, a redacted
+        /// `hya://`/`hya+insecure://` link (no `#…`), a full link, or `-` to
+        /// read it from stdin. The link's secret is never printed; a full
+        /// link as an argument prints a process-listing warning.
         target: String,
         /// Extra trusted CA certificates (PEM), for a private CA.
         #[arg(long)]
@@ -57,6 +66,14 @@ pub(crate) async fn run(command: RelayCommand) -> anyhow::Result<i32> {
         measure_idle,
         idle_cap: MAX_IDLE_MEASUREMENT,
     };
+    let target = if target == "-" {
+        read_stdin_target()?
+    } else {
+        if carries_secret(&target) {
+            eprintln!("warning: {ARGV_WARNING}");
+        }
+        target
+    };
     let report = diagnose(&target, options).await?;
     if json {
         println!(
@@ -67,6 +84,27 @@ pub(crate) async fn run(command: RelayCommand) -> anyhow::Result<i32> {
         print_report(&report);
     }
     Ok(if report.reachable { 0 } else { 1 })
+}
+
+/// Printed when a full link (with its `#` secret) is a command-line argument.
+pub(crate) const ARGV_WARNING: &str = "the relay link was given as an argument, so its secret is visible in process listings; `hya relay doctor` only needs the redacted link (drop the `#…` part) or the proxy URL, or pass `-` and write the link to stdin";
+
+/// Whether `target` is a link carrying its secret fragment.
+fn carries_secret(target: &str) -> bool {
+    target.contains('#')
+}
+
+/// The first line of stdin, trimmed.
+fn read_stdin_target() -> anyhow::Result<String> {
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|error| anyhow::anyhow!("reading the target from stdin: {error}"))?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("no relay link or proxy URL on stdin");
+    }
+    Ok(trimmed.to_owned())
 }
 
 /// Upper bound of `--measure-idle` (ADR-0025 D9).
@@ -147,7 +185,12 @@ pub(crate) struct DoctorReport {
 
 /// Probe `target` (a proxy URL or a relay link) and build the report.
 pub(crate) async fn diagnose(target: &str, options: DoctorOptions) -> anyhow::Result<DoctorReport> {
-    let (address, room, redacted) = parse_target(target)?;
+    let Target {
+        address,
+        room,
+        token,
+        shown: redacted,
+    } = parse_target(target)?;
     let config = ClientConfig {
         extra_ca_pem: options.relay_ca.clone(),
         connect_timeout: options.timeout,
@@ -177,7 +220,7 @@ pub(crate) async fn diagnose(target: &str, options: DoctorOptions) -> anyhow::Re
         (false, false) => None,
     };
     let idle = if options.measure_idle {
-        Some(measure_idle(&client, room.as_ref(), options.idle_cap).await?)
+        Some(measure_idle(&client, room.as_ref(), token.as_ref(), options.idle_cap).await?)
     } else {
         None
     };
@@ -216,22 +259,57 @@ fn advice_for(kind: ProbeFailureKind) -> &'static str {
     }
 }
 
-/// Parse a proxy URL or a relay link. Returns the address, the room id (from
-/// a link, if any), and a string safe to print (a link's secret is never
-/// included).
-fn parse_target(target: &str) -> anyhow::Result<(RelayAddress, Option<RoomId>, String)> {
+/// A parsed doctor target.
+struct Target {
+    address: RelayAddress,
+    /// The room, from a (full or redacted) link.
+    room: Option<RoomId>,
+    /// The room's open token, from a full link.
+    token: Option<OpenToken>,
+    /// Safe to print: never a link's secret.
+    shown: String,
+}
+
+/// Parse a proxy URL, a redacted link, or a full link.
+fn parse_target(target: &str) -> anyhow::Result<Target> {
     if target.starts_with("hya://") || target.starts_with("hya+insecure://") {
-        let link = RelayLink::parse(target)
+        if carries_secret(target) {
+            let link = RelayLink::parse(target)
+                .map_err(|error| anyhow::anyhow!("invalid relay link: {error}"))?;
+            return Ok(Target {
+                address: link.address().clone(),
+                room: Some(link.room_id().clone()),
+                token: Some(link.open_token()),
+                shown: link.redacted(),
+            });
+        }
+        let (address, room, _) = RelayLink::parse_public(target)
             .map_err(|error| anyhow::anyhow!("invalid relay link: {error}"))?;
-        Ok((
-            link.address().clone(),
-            Some(link.room_id().clone()),
-            link.redacted(),
-        ))
+        let shown = format!(
+            "{}://{}{}/{room}",
+            if address.is_secure() {
+                "hya"
+            } else {
+                "hya+insecure"
+            },
+            address.authority(),
+            address.prefix()
+        );
+        Ok(Target {
+            address,
+            room: Some(room),
+            token: None,
+            shown,
+        })
     } else {
         let address = RelayAddress::parse_proxy_url(target)
             .map_err(|error| anyhow::anyhow!("invalid proxy url: {error}"))?;
-        Ok((address, None, target.to_owned()))
+        Ok(Target {
+            address,
+            room: None,
+            token: None,
+            shown: redact_input(target),
+        })
     }
 }
 
@@ -241,13 +319,16 @@ fn parse_target(target: &str) -> anyhow::Result<(RelayAddress, Option<RoomId>, S
 async fn measure_idle(
     client: &RelayClient,
     room: Option<&RoomId>,
+    token: Option<&OpenToken>,
     cap: Duration,
 ) -> anyhow::Result<IdleReport> {
-    let Some(room) = room else {
-        anyhow::bail!("--measure-idle needs a relay link (with a room), not a bare proxy URL");
+    let (Some(room), Some(token)) = (room, token) else {
+        anyhow::bail!(
+            "--measure-idle opens a stream to the room, which needs the full relay link (its open token); pass it on stdin with `-`"
+        );
     };
     let mut transport = client
-        .open(room)
+        .open_with_token(room, token)
         .await
         .map_err(|error| anyhow::anyhow!("cannot open a stream to measure idle time: {error}"))?;
     const STEP: Duration = Duration::from_secs(5);

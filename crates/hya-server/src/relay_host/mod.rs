@@ -141,6 +141,8 @@ impl RelaySettings {
 /// [`RelayHostError::InvalidArgument`].
 pub fn parse_proxy_url(url: &str) -> Result<RelayAddress, RelayHostError> {
     let url = url.trim();
+    // Never echo a pasted link's secret fragment.
+    let shown = hya_relay::link::redact_input(url);
     let normalized = if let Some(rest) = url.strip_prefix("hya+insecure://") {
         format!("http://{rest}")
     } else if let Some(rest) = url.strip_prefix("hya://") {
@@ -150,7 +152,7 @@ pub fn parse_proxy_url(url: &str) -> Result<RelayAddress, RelayHostError> {
     };
     RelayAddress::parse_proxy_url(&normalized).map_err(|error| {
         RelayHostError::InvalidArgument(format!(
-            "invalid relay URL `{url}` ({error}); expected https://host[:port][/prefix] or http://…"
+            "invalid relay URL `{shown}` ({error}); expected https://host[:port][/prefix] or http://…"
         ))
     })
 }
@@ -890,4 +892,25 @@ fn spawn_stream(inner: &Arc<Inner>, client: &RelayClient, room: &RoomId, stream_
         )
         .await;
     });
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bad_relay_url_error_never_echoes_a_pasted_link_secret() {
+        const SECRET: &str = "S3CR3TKEY.S3CR3TPSK";
+        for url in [
+            format!("hya://relay.example.com/olgw5bbcyqd7w3ijq2ipceylpx#{SECRET}"),
+            format!("https://relay.example.com#{SECRET}"),
+            format!("ftp://relay.example.com/x#{SECRET}"),
+            format!("https://bad host/#{SECRET}"),
+        ] {
+            let error = parse_proxy_url(&url).unwrap_err().to_string();
+            assert!(!error.contains("S3CR3T"), "{url} -> {error}");
+        }
+        assert!(parse_proxy_url("https://relay.example.com/hya").is_ok());
+    }
 }

@@ -95,3 +95,80 @@ async fn text_report_names_the_target_and_the_recommendation() -> TestResult {
     assert!(text.contains("recommended t=auto"), "{text}");
     Ok(())
 }
+
+const ROOM: &str = "eh7ddx5bksrgcytl7bkai36se4";
+const KEY_B64: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+const PSK_B64: &str = "S3CR3TS3CR3TS3CR3TS3CR3TS3CR3TS3CR3TS3CR3TA";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_redacted_link_is_enough_and_no_warning_is_printed() -> TestResult {
+    let (addr, relay) = start_relay().await;
+    let target = format!("hya+insecure://{addr}/{ROOM}");
+    let output = doctor(&target, &["--json"])?;
+    relay.abort();
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["target"], target.as_str(), "{report}");
+    assert_eq!(report["reachable"], true, "{report}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(!stderr.contains("process listings"), "{stderr}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_full_link_argument_warns_about_argv_and_never_prints_the_secret() -> TestResult {
+    let (addr, relay) = start_relay().await;
+    let target = format!("hya+insecure://{addr}/{ROOM}#{KEY_B64}.{PSK_B64}");
+    let output = doctor(&target, &[])?;
+    relay.abort();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("process listings"), "{stderr}");
+    for text in [&stdout, &stderr] {
+        assert!(!text.contains("S3CR3T"), "{text}");
+    }
+    assert!(
+        stdout.contains(&format!("hya+insecure://{addr}/{ROOM}")),
+        "{stdout}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_on_stdin_is_read_without_the_argv_warning() -> TestResult {
+    use std::io::Write as _;
+    let (addr, relay) = start_relay().await;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hya"))
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("NO_COLOR", "1")
+        .args(["relay", "doctor", "-", "--timeout", "3", "--json"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(format!("hya+insecure://{addr}/{ROOM}#{KEY_B64}.{PSK_B64}\n").as_bytes())?;
+    let output = child.wait_with_output()?;
+    relay.abort();
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["reachable"], true, "{report}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(!stderr.contains("process listings"), "{stderr}");
+    assert!(!stderr.contains("S3CR3T") && !report.to_string().contains("S3CR3T"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_malformed_target_error_never_echoes_its_fragment() -> TestResult {
+    let output = doctor("https://relay.example.com/x#S3CR3TKEY.S3CR3TPSK", &[])?;
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(!stderr.contains("S3CR3T"), "{stderr}");
+    Ok(())
+}

@@ -82,20 +82,26 @@ for complete configs in front of `hya proxy`.
 
 ```sh
 hya relay doctor https://relay.example.com/hya
-hya relay doctor 'hya://relay.example.com/hya/<room_id>#<key>.<psk>'
+hya relay doctor hya://relay.example.com/hya/<room_id>      # a redacted link
+hya serve relay link | hya relay doctor - --measure-idle     # a full link, on stdin
 ```
 
 Probes a relay path end to end and recommends a `t=` value (ADR-0025 D9).
-The target is either a proxy URL (`https://…`/`http://…`, the same origin
-you'd pass to `--relay`) or a full `hya://`/`hya+insecure://` link — **the
-link's secret is never printed**, only its redacted form
-(`hya[+insecure]://host[:port][/prefix]/<room_id>`).
+The probes only need the relay address, so the target is a proxy URL
+(`https://…`/`http://…`, the same origin you'd pass to `--relay`) or a
+**redacted** `hya://`/`hya+insecure://` link (no `#…`, as `hya serve relay
+status` prints it). A full link works too, but it is a credential: pass it
+as `-` and write it to stdin; given as an argument (visible in process
+listings) it is accepted with a warning on stderr. **The link's secret is
+never printed**, only its redacted form
+(`hya[+insecure]://host[:port][/prefix]/<room_id>`), and error messages cut
+any echoed input at `#`.
 
 | Flag | Meaning |
 | --- | --- |
 | `--relay-ca <PEM>` | Extra trusted CA certificates, for a private CA. |
 | `--timeout <SECS>` | Deadline for each probe (default 5s). |
-| `--measure-idle` | Also measure how long an idle stream survives on this path (bounded at 130s). Needs a link with a room that currently has a host registered — a bare proxy URL cannot be measured. |
+| `--measure-idle` | Also measure how long an idle stream survives on this path (bounded at 130s). It opens a stream to the room, so it needs the **full** link (its open token, see [Open tokens](#the-hyarelayv1-protocol)) of a room that currently has a host registered — a proxy URL or a redacted link cannot be measured. |
 | `--json` | Emit the report as JSON instead of text. |
 
 The report covers reachability/TLS, the gRPC probe result and reason, the
@@ -808,7 +814,14 @@ jitter (a delay is uniformly random in `[ceiling/2, ceiling]`);
 separate schedules. Call `connected()` once the room is registered;
 `reset()` starts over. `Backoff::with_seed` makes the jitter reproducible.
 
-`ClientError` variants: `RoomOffline` (`NOT_FOUND` on open), `Unavailable`
+**Message size.** The client accepts relay messages of at most
+`MAX_CLIENT_MESSAGE_SIZE` (one 65,535-byte Noise record plus 1 KiB of
+framing): the WebSocket binding's message and frame size and the gRPC
+binding's decode size are both bounded, so a hostile relay or peer cannot
+make a client buffer more. A larger message fails the stream.
+
+`ClientError` variants: `RoomOffline` (`NOT_FOUND` on open: offline, or the
+wrong open token), `Unavailable`
 (`UNAVAILABLE`), `Relay{code, message}` (any other proxy status),
 `Connect{binding, failure}` (a pinned or remembered binding cannot connect),
 `NoBinding{grpc, ws}`, `Transport`, `Timeout`, `Protocol`, `Config`;
