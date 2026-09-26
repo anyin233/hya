@@ -10,7 +10,7 @@
 - New v1 routes to manage providers without restarting the server:
   - `PUT /v1/providers/{providerId}` adds or updates a provider (`kind`, `baseUrl`, optional `apiKey`) and fetches its models.
   - `POST /v1/providers/{providerId}/refresh` re-fetches the provider's models from its remote.
-  - `PUT` / `DELETE /v1/providers/{providerId}/models` adds or edits a model entry in `config.yaml` (name, context and output limits, reasoning), or removes it.
+  - `PUT` / `DELETE /v1/providers/{providerId}/models` adds or edits a model entry in `config.yaml` (name, context and output limits, reasoning), or removes it. An edit changes only the fields it sends; an empty name or a `0` limit removes that field.
   - `POST /v1/providers/{providerId}/test` sends `hi` to one model with a 1-token output limit (16 for Responses-style providers, which reject anything smaller) and reports whether it answered.
   - gRPC has the same calls. See [Protocol guide](docs/protocol/README.md#providers-and-keys).
 - Saving or removing a key (`PUT` / `DELETE /v1/auth/{id}`) now takes effect immediately; a restart is no longer needed. Keys are written to `auth/<id>.yaml` with mode 0600. Provider rows now show `kind`, `baseUrl`, `keySource` (`saved`, `oauth`, `config`, or `none`; the key itself is never returned), and `modelCount`. Each model row now shows `source` (`remote`, `config`, `override`, or `offline`) and a display name.

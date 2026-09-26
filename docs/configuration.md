@@ -480,10 +480,12 @@ providers:
         reasoning: false
 ```
 
-The TUI Provider View (`/key`) writes these entries for you: adding a model or
+The [TUI Provider View](tui.md#provider-view) (`/key`) writes these entries for you: adding a model or
 editing a model's metadata calls `PUT /v1/providers/{id}/models`, which
-rewrites that entry in `config.yaml` (a string entry becomes a mapping when
-fields are added and turns back into a string when none remain); removing the
+patches that entry in `config.yaml`: fields the request omits keep their
+value, an empty name or a `0` limit removes it (a string entry becomes a
+mapping when fields are added and turns back into a string when none remain;
+`reasoning` can be set but only cleared by removing the entry). Removing the
 override calls `DELETE /v1/providers/{id}/models?modelId=…`. Adding a
 provider calls `PUT /v1/providers/{id}`, which writes `kind` and `base_url`
 (a new provider gets `models: []`) and saves the key to `auth/<id>.yaml`.

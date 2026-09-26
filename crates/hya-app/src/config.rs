@@ -621,11 +621,13 @@ pub enum ConfigEditError {
     Io(#[from] anyhow::Error),
 }
 
-/// Metadata written into one model's `models:` entry. Replace semantics for
-/// the fields this writer manages (`name`, `limit.context`, `limit.output`,
-/// and a boolean `reasoning`): `None` removes that field; other keys of the
-/// entry are preserved (a detailed `reasoning:` mapping is kept unless
-/// `reasoning` is `Some(false)`).
+/// Patch for one model's `models:` entry. Each field is optional: `None`
+/// keeps the entry's current value (or keeps it absent). An empty (after
+/// trimming) `display_name` removes `name`; a zero limit removes that
+/// `limit.*` key (and an empty `limit:` map). `reasoning: Some(_)` writes a
+/// boolean `reasoning` (`Some(true)` keeps a detailed `reasoning:` mapping);
+/// there is no clear for `reasoning` here: remove the whole entry instead.
+/// Keys this writer does not manage are always preserved.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModelEntryOverride {
     /// Entry `name` (display name).
@@ -795,14 +797,16 @@ fn provider_models<'a>(
     })
 }
 
-/// Write one model's entry into `providers.<provider_id>.models` (see
-/// [`ModelEntryOverride`] for the field semantics). A string entry becomes a
-/// mapping when fields are added; an entry left with only `id` is written
-/// back as a plain string.
+/// Patch one model's entry in `providers.<provider_id>.models` (see
+/// [`ModelEntryOverride`] for the field semantics), adding a bare `- <id>`
+/// entry when the model has none. A string entry becomes a mapping when a
+/// field is set; an entry left with only `id` is written back as a plain
+/// string.
 ///
 /// # Errors
 /// [`ConfigEditError::NotFound`] when the provider is not declared;
-/// [`ConfigEditError::Invalid`] when the result fails validation.
+/// [`ConfigEditError::Invalid`] when the patched file fails validation
+/// (e.g. the merged `limit.output` exceeds the merged `limit.context`).
 pub fn set_model_entry(
     config_path: &Path,
     provider_id: &str,
@@ -822,38 +826,37 @@ pub fn set_model_entry(
             map
         }
     };
-    match metadata
-        .display_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
+    match metadata.display_name.as_deref().map(str::trim) {
+        Some("") => {
+            entry.remove(key("name"));
+        }
         Some(name) => {
             entry.insert(key("name"), Value::String(name.to_string()));
         }
-        None => {
-            entry.remove(key("name"));
-        }
+        None => {}
     }
-    let mut limit = match entry.remove(key("limit")) {
-        Some(Value::Mapping(limit)) => limit,
-        _ => Mapping::new(),
-    };
-    for (field, value) in [
-        ("context", metadata.context_limit),
-        ("output", metadata.output_limit),
-    ] {
-        match value.filter(|tokens| *tokens > 0) {
-            Some(tokens) => {
-                limit.insert(key(field), Value::Number(u64::from(tokens).into()));
-            }
-            None => {
-                limit.remove(key(field));
+    if metadata.context_limit.is_some() || metadata.output_limit.is_some() {
+        let mut limit = match entry.remove(key("limit")) {
+            Some(Value::Mapping(limit)) => limit,
+            _ => Mapping::new(),
+        };
+        for (field, value) in [
+            ("context", metadata.context_limit),
+            ("output", metadata.output_limit),
+        ] {
+            match value {
+                Some(0) => {
+                    limit.remove(key(field));
+                }
+                Some(tokens) => {
+                    limit.insert(key(field), Value::Number(u64::from(tokens).into()));
+                }
+                None => {}
             }
         }
-    }
-    if !limit.is_empty() {
-        entry.insert(key("limit"), Value::Mapping(limit));
+        if !limit.is_empty() {
+            entry.insert(key("limit"), Value::Mapping(limit));
+        }
     }
     let detailed_reasoning = entry.get(key("reasoning")).is_some_and(Value::is_mapping);
     match metadata.reasoning {
@@ -863,11 +866,7 @@ pub fn set_model_entry(
         Some(true) if !detailed_reasoning => {
             entry.insert(key("reasoning"), Value::Bool(true));
         }
-        Some(true) => {}
-        None if detailed_reasoning => {}
-        None => {
-            entry.remove(key("reasoning"));
-        }
+        Some(true) | None => {}
     }
     let value = if entry.len() == 1 && entry.contains_key(key("id")) {
         Value::String(model_id.to_string())
@@ -4261,9 +4260,18 @@ providers:
         );
 
         // Clearing every managed field writes the entry back as a string.
-        set_model_entry(&path, "gw", "plain", &ModelEntryOverride::default()).unwrap();
+        set_model_entry(
+            &path,
+            "gw",
+            "vendor/new:free",
+            &ModelEntryOverride {
+                output_limit: Some(0),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("- plain\n"), "{raw}");
+        assert!(raw.contains("- vendor/new:free\n"), "{raw}");
 
         // Validation: an output above the context is rejected, file untouched.
         let before = std::fs::read_to_string(&path).unwrap();
@@ -4292,6 +4300,113 @@ providers:
             set_model_entry(&path, "missing", "m", &ModelEntryOverride::default()),
             Err(ConfigEditError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn set_model_entry_patches_only_the_fields_present() {
+        let path = temp_config(
+            "model-patch",
+            "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        name: Mine\n        limit:\n          context: 1000\n          output: 100\n        reasoning: true\n      - plain\n",
+        );
+        let entry = |id: &str| {
+            parse_providers(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .remove(0)
+                .models
+                .into_iter()
+                .find(|m| m.id == id)
+                .unwrap()
+        };
+
+        // Editing one field keeps the others.
+        set_model_entry(
+            &path,
+            "gw",
+            "m",
+            &ModelEntryOverride {
+                output_limit: Some(200),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        let m = entry("m");
+        assert_eq!(m.display_name.as_deref(), Some("Mine"));
+        assert_eq!(
+            m.limit.as_ref().map(|l| (l.context, l.output)),
+            Some((1000, 200))
+        );
+        assert!(!m.reasoning_variants.is_empty(), "reasoning kept");
+
+        // Validation uses the merged values: output above the kept context.
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(matches!(
+            set_model_entry(
+                &path,
+                "gw",
+                "m",
+                &ModelEntryOverride {
+                    output_limit: Some(2000),
+                    ..ModelEntryOverride::default()
+                },
+            ),
+            Err(ConfigEditError::Invalid(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        // An empty name clears `name`; limits stay.
+        set_model_entry(
+            &path,
+            "gw",
+            "m",
+            &ModelEntryOverride {
+                display_name: Some("  ".into()),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        let m = entry("m");
+        assert_eq!(m.display_name, None);
+        assert_eq!(
+            m.limit.as_ref().map(|l| (l.context, l.output)),
+            Some((1000, 200))
+        );
+
+        // Zero limits clear them and drop the empty `limit:` map.
+        set_model_entry(
+            &path,
+            "gw",
+            "m",
+            &ModelEntryOverride {
+                context_limit: Some(0),
+                output_limit: Some(0),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("limit"), "{raw}");
+        assert!(!entry("m").reasoning_variants.is_empty(), "reasoning kept");
+
+        // A request that sets nothing leaves a string entry alone and adds
+        // a missing model as a bare id.
+        set_model_entry(&path, "gw", "plain", &ModelEntryOverride::default()).unwrap();
+        set_model_entry(&path, "gw", "added", &ModelEntryOverride::default()).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("- plain\n"), "{raw}");
+        assert!(raw.contains("- added\n"), "{raw}");
+
+        // Setting a field on a string entry converts it to a mapping.
+        set_model_entry(
+            &path,
+            "gw",
+            "plain",
+            &ModelEntryOverride {
+                context_limit: Some(500),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(entry("plain").limit.as_ref().map(|l| l.context), Some(500));
     }
 
     #[test]

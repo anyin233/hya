@@ -522,10 +522,15 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
   fetches the model list into the model cache. `404 not_found` when the id
   is not in `config.yaml`. A 401/403 clears the cached rows; a transport or
   decode failure keeps them.
-- `SetProviderModel` writes one model entry into the provider's `models:`
-  (replace semantics for `name`, `limit.context`, `limit.output`, and a
-  boolean `reasoning`; an absent or `0` field is removed; other keys are
-  kept). `outputLimit` above `contextLimit` is `invalid_argument`.
+- `SetProviderModel` patches one model entry in the provider's `models:`
+  (adding a bare `- <modelId>` entry when there is none). An absent field
+  keeps the entry's current value; `displayName: ""` removes `name`;
+  `contextLimit: 0` / `outputLimit: 0` remove that `limit.*` key;
+  `reasoning` writes a boolean `reasoning` (`true` keeps a detailed
+  `reasoning:` mapping). `reasoning` cannot be cleared through this call:
+  delete the entry (`RemoveProviderModel`) or edit `config.yaml`. Other keys
+  are kept. An `outputLimit` above the entry's `contextLimit` after the
+  patch is `invalid_argument`.
   `RemoveProviderModel` deletes the entry (`404` when there is none); a
   remote model stays listed from the cache with `source: "remote"`.
 - `SetProviderAuth` writes the key atomically with mode `0600` as

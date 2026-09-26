@@ -380,6 +380,51 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
     assert!(config.contains("name: Alpha (mine)"), "{config}");
     assert!(config.contains("local/only"), "{config}");
 
+    // Editing one field patches the entry: the name and output limit stay.
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/gw/models",
+        json!({"modelId": "alpha", "contextLimit": 32000}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let alpha = model(&body["provider"], "alpha").unwrap();
+    assert_eq!(alpha["displayName"], "Alpha (mine)");
+    assert_eq!(alpha["contextLimit"], "32000");
+    assert_eq!(alpha["outputLimit"], "1024");
+    // An empty name clears the override back to the remote name; 0 clears
+    // a limit.
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/gw/models",
+        json!({"modelId": "alpha", "displayName": "", "outputLimit": 0}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let alpha = model(&body["provider"], "alpha").unwrap();
+    assert_eq!(alpha["displayName"], "Alpha");
+    assert_eq!(alpha["contextLimit"], "32000");
+    let config = std::fs::read_to_string(&env.config).unwrap();
+    assert!(!config.contains("Alpha (mine)"), "{config}");
+    assert!(!config.contains("output: 1024"), "{config}");
+    // A request that sets nothing adds the model as a bare entry.
+    let (status, body) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/gw/models",
+        json!({"modelId": "bare/m"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        model(&body["provider"], "bare/m").unwrap()["source"],
+        "config"
+    );
+    let config = std::fs::read_to_string(&env.config).unwrap();
+    assert!(config.contains("- bare/m\n"), "{config}");
+
     // Removing the override keeps the remote model (from the cache).
     let (status, body) = send(
         &app,
@@ -414,7 +459,7 @@ async fn upsert_fetches_models_saves_the_key_and_applies_live_then_keys_and_mode
         .find(|row| row["id"] == "gw")
         .unwrap();
     assert_eq!(row["baseUrl"], base_url.as_str());
-    assert_eq!(row["modelCount"], 3);
+    assert_eq!(row["modelCount"], 4);
     assert!(
         !list["providers"]
             .as_array()
