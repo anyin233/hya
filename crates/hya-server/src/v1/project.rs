@@ -97,27 +97,19 @@ async fn project_info(
 /// `EnsureProjectForPath`: the Project whose root contains `path` (longest
 /// root wins), else a new one named after `path`'s last component with
 /// `path` as its only root. Returns the Project and whether it was created.
-/// Serialized so concurrent callers for one directory share a Project.
+/// [`hya_store::SessionStore::ensure_project_for_path`] resolves and creates
+/// in one `BEGIN IMMEDIATE` transaction, so concurrent callers for one
+/// directory always converge on exactly one Project without a process-wide
+/// lock here.
 pub(crate) async fn ensure_project_for_path(
     st: &ServerState,
     path: &str,
 ) -> Result<(Project, bool), V1Error> {
-    let path = hya_store::normalize_project_path(path.trim())?;
-    let _guard = st.project_lock.lock().await;
-    if let Some(project) = st.engine.store().resolve_project_by_path(&path).await? {
-        return Ok((project, false));
+    let (project, created) = st.engine.store().ensure_project_for_path(path).await?;
+    if created {
+        st.notify_projects_updated();
     }
-    let name = std::path::Path::new(&path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map_or_else(|| path.clone(), str::to_owned);
-    let project = st
-        .engine
-        .store()
-        .create_project(&name, std::slice::from_ref(&path))
-        .await?;
-    st.notify_projects_updated();
-    Ok((project, true))
+    Ok((project, created))
 }
 
 async fn list_projects(

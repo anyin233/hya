@@ -218,7 +218,7 @@ loads:
 | Scope | Flag | Where | Precedence |
 | --- | --- | --- | --- |
 | User (default) | `--user` | The installed-bundle registry, `$XDG_DATA_HOME/hya/bundles/registry.sqlite3` (fallback `~/.local/share/hya/bundles/registry.sqlite3`). | Shadows first-party bundles with the same id or namespace. |
-| Project | `--project` | Bundle source directories under `./.hya/bundles/<dir>/` in the current directory (the directory `hya` is started from). | Highest: shadows user-installed and first-party bundles with the same id or namespace. |
+| Project | `--project` | Bundle source directories under `./.hya/bundles/<dir>/` in the current directory. The runtime loads them for sessions of the registered Project that has this directory as a root (not from the directory a server was started in). | Highest: shadows user-installed and first-party bundles with the same id or namespace. |
 
 `--user` and `--project` are mutually exclusive. The twelve bundles shipped with
 hya have scope `builtin`: they are listed but cannot be installed over as presets
@@ -674,7 +674,14 @@ hya exec --json "summarize this repo"
 
 Runs one headless turn and prints the rendered transcript. The session works
 in the current directory: its workdir is the caller's cwd as an absolute path.
-The command uses the global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
+When `exec` runs in process (not routed through a server that already holds
+`--db`), it ensures a Project for that cwd before binding the run's Agent
+catalog — the same find-or-create-in-one-transaction the server does for a
+routed session's workdir — so the directory's `.hya/bundles` project bundles,
+project plugins, and skills apply through the Project catalog scope, and the
+new session's `project` field names it. `hya run`, `-p` goal mode, `loop`, and
+a `workflow` command that creates a new Session all ensure a Project the same
+way. The command uses the global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
 store. With `--db`, the database stores the full canonical event log for replay,
 which can contain more sensitive data than the rendered transcript. `--json`
 prints the canonical event stream as JSONL. A file `--db` is locked for the

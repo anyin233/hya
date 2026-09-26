@@ -46,7 +46,7 @@ use hya_core::{
     CreateSession, GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator,
     RunOutcome, SafetyCaps, TurnBinding, run_goal,
 };
-use hya_proto::{FinishCause, ModelRef, SessionId};
+use hya_proto::{FinishCause, ModelRef, ProjectId, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
@@ -151,6 +151,24 @@ async fn exec_entry(
     }
 }
 
+/// Ensure a Project for `workdir` (F1 design Q3: the process-start-dir tier
+/// is gone; an in-process root session — `exec`/`run`/`-p` goal/`loop`/
+/// `workflow` — ensures a Project for its cwd instead). Callers must do this
+/// before binding runtime for that directory (agent/model resolution) and
+/// before creating the session, so the directory's `.hya/bundles` project
+/// bundles, project plugins, and skills apply through the Project catalog
+/// scope exactly like a routed (daemon) session's server-ensured Project.
+pub(crate) async fn ensure_project_for_workdir(
+    store: &SessionStore,
+    workdir: &std::path::Path,
+) -> anyhow::Result<ProjectId> {
+    let (project, _created) = store
+        .ensure_project_for_path(&workdir.to_string_lossy())
+        .await
+        .context("ensure project for the working directory")?;
+    Ok(project.id)
+}
+
 async fn cmd_exec(
     prompt: String,
     model_override: Option<String>,
@@ -193,6 +211,9 @@ async fn cmd_exec(
         .await?
     };
     let engine = built.engine();
+    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
+        .await
+        .context("ensure project for cwd")?;
     // Honor the configured `default_agent` for this headless root session,
     // same precedence and failure mode as `serve`'s root-session resolution:
     // config `default_agent`, then the built-in default; an unselectable id
@@ -226,7 +247,7 @@ async fn cmd_exec(
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
+            project: Some(project_id),
             kind: hya_proto::SessionKind::Project,
         })
         .await
@@ -424,6 +445,9 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
         .await?
     };
     let engine = built.engine();
+    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
+        .await
+        .context("ensure project for cwd")?;
     // Same `default_agent` precedence/failure mode as `serve` and `exec`.
     agent.name = resolve_headless_agent_name(
         &engine,
@@ -454,7 +478,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
+            project: Some(project_id),
             kind: hya_proto::SessionKind::Project,
         })
         .await
@@ -562,6 +586,9 @@ async fn cmd_goal(
         .await?
     };
     let engine = built.engine();
+    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
+        .await
+        .context("ensure project for cwd")?;
     // Same `default_agent` precedence/failure mode as `serve` and `exec`.
     agent.name = resolve_headless_agent_name(
         &engine,
@@ -596,7 +623,7 @@ async fn cmd_goal(
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
+            project: Some(project_id),
             kind: hya_proto::SessionKind::Project,
         })
         .await
@@ -719,6 +746,9 @@ async fn cmd_loop(
         .await?
     };
     let engine = built.engine();
+    let project_id = ensure_project_for_workdir(engine.store(), &agent.workdir)
+        .await
+        .context("ensure project for cwd")?;
     // Same `default_agent` precedence/failure mode as `serve` and `exec`.
     agent.name = resolve_headless_agent_name(
         &engine,
@@ -753,7 +783,7 @@ async fn cmd_loop(
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
-            project: None,
+            project: Some(project_id),
             kind: hya_proto::SessionKind::Project,
         })
         .await
