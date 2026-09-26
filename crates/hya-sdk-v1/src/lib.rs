@@ -198,7 +198,10 @@ impl V1Sdk {
         let admitted = self
             .create_turn(
                 session,
-                pb::create_turn_request::Kind::Prompt(pb::PromptTurn { text: text.into() }),
+                pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
+                    text: text.into(),
+                    ..Default::default()
+                }),
             )
             .await?;
         self.wait_turn(session, &admitted.id, Duration::from_secs(120))
@@ -498,6 +501,15 @@ impl V1SessionMirror {
                     text.clone_from(&replaced.text);
                 }
             }
+            Some(P::PartsAdded(added)) => {
+                if let Some(message) = self.messages.get_mut(&added.message) {
+                    for part in &added.parts {
+                        if !message.parts.iter().any(|known| known.id == part.id) {
+                            message.parts.push(part.clone());
+                        }
+                    }
+                }
+            }
             Some(P::ToolStateChanged(changed)) => {
                 if let Some(tool) = self.tool_part_mut(&changed.message, &changed.part) {
                     fold_tool_state(tool, changed);
@@ -685,6 +697,50 @@ mod tests {
         assert!(mirror.apply(&frame(5, reverted(true))));
         // Replayed durable frames stay no-ops.
         assert!(!mirror.apply(&frame(5, reverted(true))));
+    }
+
+    /// `partsAdded` appends a prompt's attachment parts once.
+    #[test]
+    fn parts_added_append_attachments_once() {
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&frame(
+            1,
+            P::MessageStarted(pb::MessageStarted {
+                message: "m".into(),
+                role: pb::Role::User as i32,
+                ..Default::default()
+            }),
+        ));
+        let added = || {
+            P::PartsAdded(pb::PartsAdded {
+                message: "m".into(),
+                parts: vec![pb::PartInfo {
+                    id: "a".into(),
+                    kind: Some(pb::part_info::Kind::Attachment(pb::AttachmentPart {
+                        name: "pixel.png".into(),
+                        mime: "image/png".into(),
+                        size: 4,
+                        ..Default::default()
+                    })),
+                }],
+            })
+        };
+        mirror.apply(&frame(2, added()));
+        let mut replay = V1SessionMirror::from_messages(
+            &mirror.messages()[0..1]
+                .iter()
+                .map(|m| (*m).clone())
+                .collect::<Vec<_>>(),
+        );
+        replay.apply(&frame(0, added()));
+        for mirror in [&mirror, &replay] {
+            let parts = &mirror.messages()[0].parts;
+            assert_eq!(parts.len(), 1);
+            assert!(matches!(
+                parts[0].kind.as_ref(),
+                Some(pb::part_info::Kind::Attachment(attachment)) if attachment.name == "pixel.png"
+            ));
+        }
     }
 
     /// Live deltas build the part; the durable start for the same id does

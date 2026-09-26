@@ -306,7 +306,12 @@ pub(crate) fn message(message: &MessageProjection) -> pb::MessageInfo {
             .map(ToString::to_string)
             .unwrap_or_default(),
         finish: message.finish.map(finish_reason).unwrap_or(0),
-        parts: message.parts.iter().filter_map(part).collect(),
+        parts: message
+            .parts
+            .iter()
+            .filter_map(part)
+            .chain(attachment_parts(&message.files))
+            .collect(),
         time_created: message.time_created.and_then(timestamp),
         time_updated: message.time_updated.and_then(timestamp),
         finish_cause: finish_cause(message.cause),
@@ -351,6 +356,27 @@ fn usage_totals(totals: &hya_proto::UsageTotals) -> pb::TokenUsage {
         cache_write: totals.cache_write,
         reasoning_unknown: totals.reasoning_unknown_output > 0,
     }
+}
+
+/// The prompt images recorded on a message as wire parts. Transcript reads
+/// never carry the bytes (`data` stays empty); they live in the session blob
+/// table and only go to the model.
+fn attachment_parts(files: &[serde_json::Value]) -> Vec<pb::PartInfo> {
+    hya_core::attachments::recorded_attachments(files)
+        .into_iter()
+        .map(|attachment| pb::PartInfo {
+            id: attachment.part,
+            kind: Some(hya_api::v1::part_info::Kind::Attachment(
+                pb::AttachmentPart {
+                    name: attachment.name,
+                    mime: attachment.mime,
+                    data: Vec::new(),
+                    path: attachment.path.unwrap_or_default(),
+                    size: attachment.size,
+                },
+            )),
+        })
+        .collect()
 }
 
 /// Map a projected part; media-free projections always map.
@@ -714,6 +740,16 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             undone: true,
             files: files.iter().map(reverted_file).collect(),
         }),
+        Event::UserPromptContextRecorded { message, files, .. } => {
+            let parts = attachment_parts(files);
+            if parts.is_empty() {
+                return None;
+            }
+            P::PartsAdded(pb::PartsAdded {
+                message: message.to_string(),
+                parts,
+            })
+        }
         Event::WorkflowSelected { .. }
         | Event::WorkflowRunStarted { .. }
         | Event::WorkflowStageStarted { .. }

@@ -577,15 +577,15 @@ impl SessionEngine {
             .await
     }
 
-    pub(crate) async fn admit_user_prompt_with_id_and_binding(
+    /// The user text after the `message.user.before` hooks (global, then
+    /// the agent's bundle hooks).
+    async fn user_text_after_hooks(
         &self,
-        session: SessionId,
-        message: MessageId,
-        text: String,
         binding: &TurnBinding,
         stable_id: &str,
-    ) -> Result<MessageId, CoreError> {
-        let channel_policy = crate::ChannelPolicy::from_binding(binding)?.snapshot_for(stable_id);
+        session: SessionId,
+        text: String,
+    ) -> String {
         let text = if let Some(hooks) = &self.hooks {
             match hooks
                 .message_user_before(MessageUserBeforeInput { session, text })
@@ -596,8 +596,113 @@ impl SessionEngine {
         } else {
             text
         };
+        self.apply_bundle_message_hook(binding, stable_id, session, text)
+            .await
+    }
+
+    /// Admit a user prompt with image attachments (see [`crate::attachments`]).
+    ///
+    /// The images are stored in the session's blob table and the user
+    /// message (`MessageStarted`, its text part, `UserPromptContextRecorded`
+    /// naming the blobs, `MessageFinished`) is appended in the same
+    /// transaction, so the prompt is never visible without its images and a
+    /// failure admits nothing. Without attachments this is
+    /// [`Self::admit_user_prompt`].
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] when the attachments fail
+    /// [`crate::attachments::validate_prompt_attachments`] (callers validate
+    /// first to map the error); store failures.
+    pub async fn admit_user_prompt_with_attachments(
+        &self,
+        session: SessionId,
+        text: String,
+        mut attachments: Vec<crate::attachments::PromptAttachment>,
+    ) -> Result<MessageId, CoreError> {
+        if attachments.is_empty() {
+            return self.admit_user_prompt(session, text).await;
+        }
+        crate::attachments::validate_prompt_attachments(&mut attachments)
+            .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let (binding, stable_id) = self.admission_binding(session).await?;
+        let channel_policy = crate::ChannelPolicy::from_binding(&binding)?.snapshot_for(&stable_id);
         let text = self
-            .apply_bundle_message_hook(binding, stable_id, session, text)
+            .user_text_after_hooks(&binding, &stable_id, session, text)
+            .await;
+        let message = MessageId::new();
+        let part = PartId::new();
+        let mut blobs = Vec::with_capacity(attachments.len());
+        let mut files = Vec::with_capacity(attachments.len());
+        for attachment in attachments {
+            let hash = crate::attachments::blob_hash(&attachment.data);
+            files.push(crate::attachments::file_entry(
+                PartId::new(),
+                &attachment,
+                &hash,
+            ));
+            blobs.push((hash, attachment.data));
+        }
+        let events = vec![
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::User,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: text,
+            },
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+            Event::UserPromptContextRecorded {
+                session,
+                message,
+                files,
+                agents: Vec::new(),
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::User,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ];
+        let envelopes = self
+            .store
+            .append_events_with_blobs(session, &blobs, &events)
+            .await?;
+        for envelope in envelopes {
+            self.publish_envelope(envelope);
+        }
+        self.update_session_channel_policy(session, channel_policy);
+        Ok(message)
+    }
+
+    pub(crate) async fn admit_user_prompt_with_id_and_binding(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        text: String,
+        binding: &TurnBinding,
+        stable_id: &str,
+    ) -> Result<MessageId, CoreError> {
+        let channel_policy = crate::ChannelPolicy::from_binding(binding)?.snapshot_for(stable_id);
+        let text = self
+            .user_text_after_hooks(binding, stable_id, session, text)
             .await;
         let part = PartId::new();
         self.emit(

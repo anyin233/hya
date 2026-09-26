@@ -175,6 +175,7 @@ pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
             context_limit: u64::from(row.capabilities.max_context),
             output_limit: u64::from(row.capabilities.max_output),
             source: row.source.as_str().to_owned(),
+            image_input: row.capabilities.image_input,
         })
         .collect()
 }

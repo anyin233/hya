@@ -1009,6 +1009,9 @@ impl serde::Serialize for AttachmentPart {
         if !self.path.is_empty() {
             len += 1;
         }
+        if self.size != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.AttachmentPart", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -1024,6 +1027,11 @@ impl serde::Serialize for AttachmentPart {
         if !self.path.is_empty() {
             struct_ser.serialize_field("path", &self.path)?;
         }
+        if self.size != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("size", ToString::to_string(&self.size).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1038,6 +1046,7 @@ impl<'de> serde::Deserialize<'de> for AttachmentPart {
             "mime",
             "data",
             "path",
+            "size",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1046,6 +1055,7 @@ impl<'de> serde::Deserialize<'de> for AttachmentPart {
             Mime,
             Data,
             Path,
+            Size,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1071,6 +1081,7 @@ impl<'de> serde::Deserialize<'de> for AttachmentPart {
                             "mime" => Ok(GeneratedField::Mime),
                             "data" => Ok(GeneratedField::Data),
                             "path" => Ok(GeneratedField::Path),
+                            "size" => Ok(GeneratedField::Size),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1094,6 +1105,7 @@ impl<'de> serde::Deserialize<'de> for AttachmentPart {
                 let mut mime__ = None;
                 let mut data__ = None;
                 let mut path__ = None;
+                let mut size__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -1122,6 +1134,14 @@ impl<'de> serde::Deserialize<'de> for AttachmentPart {
                             }
                             path__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Size => {
+                            if size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("size"));
+                            }
+                            size__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(AttachmentPart {
@@ -1129,6 +1149,7 @@ impl<'de> serde::Deserialize<'de> for AttachmentPart {
                     mime: mime__.unwrap_or_default(),
                     data: data__.unwrap_or_default(),
                     path: path__.unwrap_or_default(),
+                    size: size__.unwrap_or_default(),
                 })
             }
         }
@@ -15687,6 +15708,9 @@ impl serde::Serialize for ModelSummary {
         if !self.source.is_empty() {
             len += 1;
         }
+        if self.image_input.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ModelSummary", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -15721,6 +15745,9 @@ impl serde::Serialize for ModelSummary {
         if !self.source.is_empty() {
             struct_ser.serialize_field("source", &self.source)?;
         }
+        if let Some(v) = self.image_input.as_ref() {
+            struct_ser.serialize_field("imageInput", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -15745,6 +15772,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
             "output_limit",
             "outputLimit",
             "source",
+            "image_input",
+            "imageInput",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15758,6 +15787,7 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
             ContextLimit,
             OutputLimit,
             Source,
+            ImageInput,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15788,6 +15818,7 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             "contextLimit" | "context_limit" => Ok(GeneratedField::ContextLimit),
                             "outputLimit" | "output_limit" => Ok(GeneratedField::OutputLimit),
                             "source" => Ok(GeneratedField::Source),
+                            "imageInput" | "image_input" => Ok(GeneratedField::ImageInput),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15816,6 +15847,7 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                 let mut context_limit__ = None;
                 let mut output_limit__ = None;
                 let mut source__ = None;
+                let mut image_input__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -15876,6 +15908,12 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             }
                             source__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ImageInput => {
+                            if image_input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("imageInput"));
+                            }
+                            image_input__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ModelSummary {
@@ -15888,6 +15926,7 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                     context_limit: context_limit__.unwrap_or_default(),
                     output_limit: output_limit__.unwrap_or_default(),
                     source: source__.unwrap_or_default(),
+                    image_input: image_input__,
                 })
             }
         }
@@ -16932,6 +16971,114 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
         deserializer.deserialize_struct("hya.v1.PartStarted", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PartsAdded {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.message.is_empty() {
+            len += 1;
+        }
+        if !self.parts.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PartsAdded", len)?;
+        if !self.message.is_empty() {
+            struct_ser.serialize_field("message", &self.message)?;
+        }
+        if !self.parts.is_empty() {
+            struct_ser.serialize_field("parts", &self.parts)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PartsAdded {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "message",
+            "parts",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Message,
+            Parts,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "message" => Ok(GeneratedField::Message),
+                            "parts" => Ok(GeneratedField::Parts),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PartsAdded;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PartsAdded")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PartsAdded, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut message__ = None;
+                let mut parts__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Message => {
+                            if message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("message"));
+                            }
+                            message__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Parts => {
+                            if parts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("parts"));
+                            }
+                            parts__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PartsAdded {
+                    message: message__.unwrap_or_default(),
+                    parts: parts__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PartsAdded", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PermissionModeSummary {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -17415,6 +17562,152 @@ impl<'de> serde::Deserialize<'de> for ProjectInfo {
         deserializer.deserialize_struct("hya.v1.ProjectInfo", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PromptAttachment {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.mime.is_empty() {
+            len += 1;
+        }
+        if !self.data.is_empty() {
+            len += 1;
+        }
+        if !self.path.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PromptAttachment", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.mime.is_empty() {
+            struct_ser.serialize_field("mime", &self.mime)?;
+        }
+        if !self.data.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("data", pbjson::private::base64::encode(&self.data).as_str())?;
+        }
+        if !self.path.is_empty() {
+            struct_ser.serialize_field("path", &self.path)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PromptAttachment {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "mime",
+            "data",
+            "path",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Mime,
+            Data,
+            Path,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "mime" => Ok(GeneratedField::Mime),
+                            "data" => Ok(GeneratedField::Data),
+                            "path" => Ok(GeneratedField::Path),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PromptAttachment;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PromptAttachment")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PromptAttachment, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut mime__ = None;
+                let mut data__ = None;
+                let mut path__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Mime => {
+                            if mime__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mime"));
+                            }
+                            mime__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Data => {
+                            if data__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("data"));
+                            }
+                            data__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PromptAttachment {
+                    name: name__.unwrap_or_default(),
+                    mime: mime__.unwrap_or_default(),
+                    data: data__.unwrap_or_default(),
+                    path: path__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PromptAttachment", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PromptTurn {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -17426,9 +17719,15 @@ impl serde::Serialize for PromptTurn {
         if !self.text.is_empty() {
             len += 1;
         }
+        if !self.attachments.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.PromptTurn", len)?;
         if !self.text.is_empty() {
             struct_ser.serialize_field("text", &self.text)?;
+        }
+        if !self.attachments.is_empty() {
+            struct_ser.serialize_field("attachments", &self.attachments)?;
         }
         struct_ser.end()
     }
@@ -17441,11 +17740,13 @@ impl<'de> serde::Deserialize<'de> for PromptTurn {
     {
         const FIELDS: &[&str] = &[
             "text",
+            "attachments",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Text,
+            Attachments,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17468,6 +17769,7 @@ impl<'de> serde::Deserialize<'de> for PromptTurn {
                     {
                         match value {
                             "text" => Ok(GeneratedField::Text),
+                            "attachments" => Ok(GeneratedField::Attachments),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17488,6 +17790,7 @@ impl<'de> serde::Deserialize<'de> for PromptTurn {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut text__ = None;
+                let mut attachments__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Text => {
@@ -17496,10 +17799,17 @@ impl<'de> serde::Deserialize<'de> for PromptTurn {
                             }
                             text__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Attachments => {
+                            if attachments__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("attachments"));
+                            }
+                            attachments__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PromptTurn {
                     text: text__.unwrap_or_default(),
+                    attachments: attachments__.unwrap_or_default(),
                 })
             }
         }
@@ -23889,6 +24199,9 @@ impl serde::Serialize for StreamEvent {
                 stream_event::Payload::SessionReverted(v) => {
                     struct_ser.serialize_field("sessionReverted", v)?;
                 }
+                stream_event::Payload::PartsAdded(v) => {
+                    struct_ser.serialize_field("partsAdded", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -23945,6 +24258,8 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             "memberUpdated",
             "session_reverted",
             "sessionReverted",
+            "parts_added",
+            "partsAdded",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -23972,6 +24287,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             ErrorReported,
             MemberUpdated,
             SessionReverted,
+            PartsAdded,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24016,6 +24332,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             "errorReported" | "error_reported" => Ok(GeneratedField::ErrorReported),
                             "memberUpdated" | "member_updated" => Ok(GeneratedField::MemberUpdated),
                             "sessionReverted" | "session_reverted" => Ok(GeneratedField::SessionReverted),
+                            "partsAdded" | "parts_added" => Ok(GeneratedField::PartsAdded),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24199,6 +24516,13 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                                 return Err(serde::de::Error::duplicate_field("sessionReverted"));
                             }
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::SessionReverted)
+;
+                        }
+                        GeneratedField::PartsAdded => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partsAdded"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::PartsAdded)
 ;
                         }
                     }

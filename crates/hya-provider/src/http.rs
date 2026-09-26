@@ -210,6 +210,9 @@ pub struct HttpProvider {
     /// Optional per-model context/output limits (configured `limit` blocks or
     /// `models.yml.cache` rows).
     model_limits: BTreeMap<String, ModelLimitOverride>,
+    /// Per-model image-input support from config `modalities.input`;
+    /// absent models report unknown (`Capabilities::image_input = None`).
+    model_image_input: BTreeMap<String, bool>,
     /// Optional per-model display names published on catalog rows.
     model_display_names: BTreeMap<String, String>,
     /// Optional per-model catalog provenance overriding `catalog_source`.
@@ -323,6 +326,7 @@ impl HttpProvider {
             model_reasoning_variants: BTreeMap::new(),
             model_reasoning_defaults: BTreeMap::new(),
             model_limits: BTreeMap::new(),
+            model_image_input: BTreeMap::new(),
             model_display_names: BTreeMap::new(),
             model_sources: BTreeMap::new(),
             kind,
@@ -436,6 +440,17 @@ impl HttpProvider {
         limits: impl IntoIterator<Item = (String, ModelLimitOverride)>,
     ) -> Self {
         self.model_limits = limits.into_iter().collect();
+        self
+    }
+
+    /// Attach per-model image-input support (config `modalities.input`
+    /// contains `image`). Models without an entry report unknown.
+    #[must_use]
+    pub fn with_model_image_input(
+        mut self,
+        support: impl IntoIterator<Item = (String, bool)>,
+    ) -> Self {
+        self.model_image_input = support.into_iter().collect();
         self
     }
 
@@ -746,6 +761,9 @@ impl HttpProvider {
             }
             caps.max_output = limit.output;
         }
+        if let Some(image_input) = self.model_image_input.get(model_id) {
+            caps.image_input = Some(*image_input);
+        }
         if !self.model_reasoning_variants.is_empty()
             || self.model_reasoning_defaults.contains_key(model_id)
         {
@@ -849,6 +867,18 @@ impl HttpProvider {
             append_identity_bytes(&mut identity, model.as_bytes())?;
             identity.extend_from_slice(&limit.context.to_be_bytes());
             identity.extend_from_slice(&limit.output.to_be_bytes());
+        }
+
+        // Image-input support decides whether prompts may carry images; only
+        // routes that declare it extend the identity, so existing identities
+        // stay stable.
+        if !self.model_image_input.is_empty() {
+            append_identity_bytes(&mut identity, b"model-image-input")?;
+            append_identity_count(&mut identity, self.model_image_input.len())?;
+            for (model, image_input) in &self.model_image_input {
+                append_identity_bytes(&mut identity, model.as_bytes())?;
+                identity.push(u8::from(*image_input));
+            }
         }
 
         append_capabilities_identity(&mut identity, &self.caps)?;

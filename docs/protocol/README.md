@@ -211,6 +211,75 @@ in `ListEvents` too, so a transcript read can place the divider.
 { "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "LocalSummarizer", "message": "msg_...", "foldedCount": 12, "manual": true } } }
 ```
 
+## Prompt attachments (images)
+
+A prompt turn can carry images for the model: a screenshot, a diagram, a
+photo of a whiteboard. `PromptTurn.attachments` is a list of
+`PromptAttachment`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name` | string (required) | File name shown in the transcript and sent to the model. |
+| `mime` | string | `image/png`, `image/jpeg`, `image/gif`, or `image/webp`. Empty: detected from the bytes. When set it must match the bytes. |
+| `data` | bytes | The image. protojson: standard base64 (not a `data:` URL). |
+| `path` | string | Where the client read the file; recorded for display, never read by the server. |
+
+```sh
+curl -X POST localhost:3250/v1/sessions/hysec_.../turns -d '{
+  "prompt": {
+    "text": "What is wrong with this layout?",
+    "attachments": [
+      {"name": "screen.png", "mime": "image/png", "data": "iVBORw0KGgo...", "path": "/tmp/screen.png"}
+    ]
+  }
+}'
+```
+
+Limits and errors. Every failure below is `invalid_argument` (HTTP 400,
+gRPC `InvalidArgument`) and admits nothing: no user message, no model round.
+
+| Check | Limit |
+| --- | --- |
+| type | PNG, JPEG, GIF, WebP only, checked against the file signature; a declared type that differs from the bytes is refused |
+| one attachment | 10 MiB of image bytes (`MAX_ATTACHMENT_BYTES`), not empty, `name` not empty |
+| one turn | 20 MiB in total (`MAX_TURN_ATTACHMENT_BYTES`) |
+| model | the turn's model must not declare `image_input: false` (`ModelSummary.imageInput`, from the config `modalities.input` of the model entry — see [Configuration](../configuration.md)); unknown support is allowed |
+
+The `CreateTurn` JSON body may be up to 32 MiB over HTTP
+(`hya_server::MAX_TURN_REQUEST_BYTES`: the 20 MiB budget after base64 plus
+the rest of the request) and the gRPC message up to 24 MiB
+(`MAX_TURN_GRPC_MESSAGE_BYTES`, binary bytes); a larger request is refused
+by the transport before validation (HTTP 413, gRPC `OutOfRange`). Other
+routes keep the 2 MB default body limit.
+
+The user message and its images are recorded in one store transaction, so
+the prompt is never visible (to the model or a reader) without its images.
+Every later round and turn of the session sends the images again as part of
+the history, until a compaction folds that message away.
+
+**Transcript.** `ListMessages` / `GetMessage` list each image as a part after
+the prompt text:
+
+```json
+{ "id": "part_...", "attachment": { "name": "screen.png", "mime": "image/png", "path": "/tmp/screen.png", "size": "48213" } }
+```
+
+`AttachmentPart.data` is always empty in transcript reads and on the stream:
+the bytes are stored once, in the session's blob table, and only go to the
+model. A listing therefore stays small no matter how many images a session
+has; there is no route that returns the bytes. `size` is the byte count and
+`path` is what the client sent (omitted when empty).
+
+**Stream.** The durable `partsAdded { message, parts }` frame carries the
+same parts right after the user message's text part and before its
+`messageFinished`; append them to the message.
+
+```json
+{ "event": { "seq": "14", "session": "hysec_...", "partsAdded": { "message": "msg_...", "parts": [ { "id": "part_...", "attachment": { "name": "screen.png", "mime": "image/png", "size": "48213" } } ] } } }
+```
+
+A [fork](#fork) keeps the images of the copied messages.
+
 ## Revert and redo
 
 `POST /v1/sessions/{id}/revert` (`RevertSession`) is `/undo`: it hides a
@@ -277,7 +346,8 @@ The response is `{ session: SessionInfo, promptText }`; the new session's
 head or `untilSeq` fork). A `messageId` that is not a user message is
 `invalid_argument`; one not in the source is `not_found`. Copied messages get
 new ids; the source's file snapshots are not copied, so reverting a copied
-turn in the fork restores no files.
+turn in the fork restores no files. Prompt images of copied messages are
+copied with them (see [Prompt attachments](#prompt-attachments-images)).
 
 ## Live and durable frames
 
@@ -300,6 +370,8 @@ same part once, with the **same** message and part ids: `partStarted`,
 deltas and user-message text are durable `partStarted` / `partAppended` /
 `partCompleted` events; tool-call arguments are durable `partStarted` /
 `partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
+A prompt's image attachments arrive as one durable `partsAdded` (see
+[Prompt attachments](#prompt-attachments-images)).
 A `text_complete`
 plugin may rewrite a finished part: the rewrite arrives as a live
 `partReplaced` and is what the durable `partReplaced` records.
@@ -692,7 +764,7 @@ consolidation plan.
 2. GET  /v1/bootstrap                               → config + catalogs
 3. POST /v1/sessions        {agent, model, workdir} → {session: {id}}
 4. GET  /v1/sessions/{id}/events/stream             → SSE subscribe
-5. POST /v1/sessions/{id}/turns {prompt: {text}}    → {turn: {id, state}}
+5. POST /v1/sessions/{id}/turns {prompt: {text, attachments?}} → {turn: {id, state}}
 6. ... consume messageStarted / partStarted / partAppended / partReplaced / messageFinished ...
 7. POST /v1/interactions/{id}/respond               → when asked
 8. GET  /v1/sessions/{id}/messages                  → transcript reads

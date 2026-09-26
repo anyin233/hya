@@ -7,13 +7,14 @@
 
 use std::time::Duration;
 
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
 use crate::ServerState;
 use hya_api::v1 as pb;
 use hya_api::v1::create_turn_request::Kind;
+use hya_core::attachments::PromptAttachment;
 use hya_proto::SessionId;
 
 use super::V1Error;
@@ -21,7 +22,12 @@ use super::session::parse_session;
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
-        .route("/v1/sessions/:id/turns", post(create_turn))
+        // Prompt attachments ride in the body (base64 in JSON): lift the
+        // default 2 MB extractor limit for this route only.
+        .route(
+            "/v1/sessions/:id/turns",
+            post(create_turn).layer(DefaultBodyLimit::max(crate::MAX_TURN_REQUEST_BYTES)),
+        )
         .route("/v1/sessions/:id/turns/:turn", get(get_turn))
         .route("/v1/sessions/:id/turns/:turn/wait", post(wait_turn))
         .route("/v1/sessions/:id/turns/:turn/cancel", post(cancel_turn))
@@ -135,10 +141,17 @@ async fn create_turn(
 
     match request.kind {
         Some(Kind::Prompt(prompt)) => {
-            let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
-            let message = st.engine.admit_user_prompt(session, prompt.text).await?;
-            let engine = st.engine.clone();
+            let attachments = prompt_attachments(prompt.attachments)?;
             let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            if !attachments.is_empty() {
+                ensure_image_input(&st, session, &turn.agent).await?;
+            }
+            let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+            let message = st
+                .engine
+                .admit_user_prompt_with_attachments(session, prompt.text, attachments)
+                .await?;
+            let engine = st.engine.clone();
             spawn_auto_title(&st, session, &turn.agent.model);
             let external_dirs =
                 crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
@@ -293,6 +306,46 @@ async fn create_turn(
         }
         None => Err(V1Error::invalid_argument("missing turn kind")),
     }
+}
+
+/// Validate a prompt's attachments ([`hya_core::attachments`]): image types
+/// only, 10 MiB each, 20 MiB per turn. Any failure is `invalid_argument`.
+fn prompt_attachments(
+    attachments: Vec<pb::PromptAttachment>,
+) -> Result<Vec<PromptAttachment>, V1Error> {
+    let mut attachments = attachments
+        .into_iter()
+        .map(|attachment| PromptAttachment {
+            name: attachment.name,
+            mime: attachment.mime,
+            data: attachment.data,
+            path: Some(attachment.path),
+        })
+        .collect::<Vec<_>>();
+    hya_core::attachments::validate_prompt_attachments(&mut attachments)
+        .map_err(|error| V1Error::invalid_argument(error.to_string()))?;
+    Ok(attachments)
+}
+
+/// Refuse images for a model whose route declares no image input
+/// (`Capabilities::image_input == Some(false)`); unknown support is allowed.
+async fn ensure_image_input(
+    st: &ServerState,
+    session: SessionId,
+    agent: &hya_core::AgentSpec,
+) -> Result<(), V1Error> {
+    let model = st.engine.root_turn_model(session, agent).await?;
+    let image_input = st
+        .engine
+        .provider_router()
+        .capabilities(&model)
+        .and_then(|capabilities| capabilities.image_input);
+    if image_input == Some(false) {
+        return Err(V1Error::invalid_argument(format!(
+            "model `{model}` does not accept image input; switch to a model that does or send the prompt without attachments"
+        )));
+    }
+    Ok(())
 }
 
 fn running_turn(session: SessionId, message: &str) -> pb::CreateTurnResponse {

@@ -39,7 +39,7 @@ use super::spill::ArtifactEvictionSink;
 use super::stream_round::RoundAttribution;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
-use messages::{projection_to_messages, request_from_messages};
+use messages::{AttachmentData, attachment_blobs, projection_to_messages, request_from_messages};
 
 /// Range endpoints for a compaction that folded the entire input window.
 ///
@@ -1021,9 +1021,54 @@ impl SessionEngine {
         model: &ModelRef,
     ) -> Result<(hya_proto::Projection, Vec<Message>, usize), CoreError> {
         let projection = self.store.read_projection(session).await?;
-        let messages = projection_to_messages(agent, &projection, model);
+        let attachments = self.attachment_data(session, &projection).await?;
+        let messages = projection_to_messages(agent, &projection, model, &attachments);
         let tokens = self.token_accounting.estimate(&messages);
         Ok((projection, messages, tokens))
+    }
+
+    /// Load the prompt images the next request sends (see
+    /// [`crate::attachments`]) from the session blob table as `data:` URLs.
+    async fn attachment_data(
+        &self,
+        session: SessionId,
+        projection: &hya_proto::Projection,
+    ) -> Result<AttachmentData, CoreError> {
+        let mut data = AttachmentData::new();
+        for (blob, mime) in attachment_blobs(projection) {
+            if data.contains_key(&blob) {
+                continue;
+            }
+            if let Some(bytes) = self.store.file_blob(session, &blob).await? {
+                data.insert(blob, crate::attachments::data_url(&mime, &bytes));
+            }
+        }
+        Ok(data)
+    }
+
+    /// Model a Root turn of `session` would request first, before
+    /// `chat.params`, fallback, or routing (the same resolution the turn
+    /// uses: session and configured agent model preferences, the agent's
+    /// authored model, then the session binding).
+    ///
+    /// # Errors
+    /// Projection read or runtime binding failures.
+    pub async fn root_turn_model(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+    ) -> Result<ModelRef, CoreError> {
+        let projection = self.store.read_projection(session).await?;
+        let workdir = session_workdir(agent, &projection);
+        let binding = self.bind_session_runtime(session, &workdir).await?;
+        let stable_id = projection
+            .session
+            .agent
+            .as_ref()
+            .unwrap_or(&agent.name)
+            .as_str()
+            .to_string();
+        Ok(self.requested_turn_model(&binding, &stable_id, true, None, &projection, agent))
     }
 
     /// Model a turn round requests before `chat.params`, fallback, or routing.
@@ -1275,7 +1320,9 @@ impl SessionEngine {
                 &projection,
                 agent,
             );
-            let mut messages = projection_to_messages(&live_agent, &projection, &model);
+            let attachments = self.attachment_data(session, &projection).await?;
+            let mut messages =
+                projection_to_messages(&live_agent, &projection, &model, &attachments);
             // Active route for this turn. Its advertised context window scales
             // the compaction threshold, so resolve it before deciding.
             let capabilities = self.provider_router().capabilities(&model);

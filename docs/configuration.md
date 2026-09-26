@@ -465,6 +465,7 @@ the v1 `ModelSummary.source` field (`remote`, `config`, `override`, or
 | `limit.context` | positive `u32` | Context window (see [Model limits](#model-limits)). |
 | `limit.output` | positive `u32` | Max output tokens (see [Model limits](#model-limits)). |
 | `reasoning` | `true`, `false`, or `{default?, variants?}` | `false` advertises no effort menu (same as `variants: []`); `true` keeps the remote or provider-kind menu; the mapping is described in [Reasoning metadata](#reasoning-metadata). |
+| `modalities.input` | list of names (`text`, `image`, ...) | Whether the model accepts images: with `image` in the list, prompt image attachments are sent; without it, a prompt turn with attachments is refused with `invalid_argument` before anything runs. Unset means unknown, and attachments are allowed. Shown as v1 `ModelSummary.imageInput`. `modalities.output` is accepted and ignored. See [Prompt attachments](protocol/README.md#prompt-attachments-images). |
 
 ```yaml
 providers:
@@ -478,6 +479,8 @@ providers:
           output: 8192               # context still comes from the remote list
       - id: my-finetune              # config-only row
         reasoning: false
+        modalities:
+          input: [text]              # no images: attachments are refused
 ```
 
 The [TUI Provider View](tui.md#provider-view) (`/key`) writes these entries for you: adding a model or

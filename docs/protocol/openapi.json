@@ -1489,6 +1489,9 @@
           },
           "source": {
             "type": "string"
+          },
+          "image_input": {
+            "type": "boolean"
           }
         }
       },
@@ -2142,6 +2145,24 @@
           },
           "session_reverted": {
             "$ref": "#/components/schemas/SessionReverted"
+          },
+          "parts_added": {
+            "$ref": "#/components/schemas/PartsAdded"
+          }
+        }
+      },
+      "PartsAdded": {
+        "type": "object",
+        "description": "Complete parts added to a message in one step.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartInfo"
+            }
           }
         }
       },
@@ -3103,7 +3124,7 @@
       },
       "AttachmentPart": {
         "type": "object",
-        "description": "A binary or file attachment on a message.",
+        "description": "A binary or file attachment on a message (for example an image attached to a prompt turn).",
         "properties": {
           "name": {
             "type": "string"
@@ -3117,6 +3138,10 @@
           },
           "path": {
             "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4177,6 +4202,31 @@
         "description": "A plain user prompt turn.",
         "properties": {
           "text": {
+            "type": "string"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptAttachment"
+            }
+          }
+        }
+      },
+      "PromptAttachment": {
+        "type": "object",
+        "description": "One image attached to a prompt turn.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "path": {
             "type": "string"
           }
         }

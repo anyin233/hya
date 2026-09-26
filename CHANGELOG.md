@@ -1,5 +1,15 @@
 # 0.41.0
 
+## Image attachments on prompts
+
+- A v1 prompt turn can carry images: `PromptTurn.attachments` is a list of `{name, mime, data (base64), path}` entries.
+  - Accepted types are PNG, JPEG, GIF, and WebP, detected from the file bytes; a declared `mime` must match them.
+  - Limits are 10 MiB per image and 20 MiB per turn. A bad attachment returns `invalid_argument` and no turn starts.
+  - The turns route accepts request bodies up to 32 MiB over HTTP and 24 MiB over gRPC.
+- A model declared in config with `modalities: {input: [text]}` refuses image prompts with a clear error. When support is unknown, the prompt is sent. `ModelSummary.imageInput` reports the model's support.
+- Messages list images as `attachment` parts with name, type, and size, but without the bytes. The stream sends `partsAdded` when a prompt's images are added.
+- Image bytes are stored per session next to the file snapshots. They are not stored in the event log, they count toward the 256 MiB per-session limit, and a fork copies them. See [Protocol guide](docs/protocol/README.md).
+
 ## TUI views: `/diff`, `/mcp`, `/rules`, `/agent-models`
 
 - `/diff` shows the working tree's changes (`git diff HEAD` plus untracked files) full screen. The file list shows `+N -M` counts and the diff lines are colored. `n`/`p` or `]`/`[` switch files, `r` reloads, and the usual keys and the mouse wheel scroll.

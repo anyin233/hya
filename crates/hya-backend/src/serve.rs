@@ -168,7 +168,10 @@ pub(crate) async fn prepare_server(
                     ))
                     .add_service(pbv1::auth_server::AuthServer::new(grpc.clone()))
                     .add_service(pbv1::session_server::SessionServer::new(grpc.clone()))
-                    .add_service(pbv1::turn_server::TurnServer::new(grpc.clone()))
+                    .add_service(
+                        pbv1::turn_server::TurnServer::new(grpc.clone())
+                            .max_decoding_message_size(hya_server::MAX_TURN_GRPC_MESSAGE_BYTES),
+                    )
                     .add_service(pbv1::messages_server::MessagesServer::new(grpc.clone()))
                     .add_service(pbv1::events_server::EventsServer::new(grpc.clone()))
                     .add_service(pbv1::interactions_server::InteractionsServer::new(

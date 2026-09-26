@@ -111,6 +111,7 @@ impl Client {
             session: session.to_string(),
             kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
                 text: text.into(),
+                ..Default::default()
             })),
         };
         self.call(

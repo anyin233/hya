@@ -168,6 +168,10 @@ pub struct Capabilities {
     pub max_context: u32,
     /// Advertised max output tokens (`0` means unspecified / unknown).
     pub max_output: u32,
+    /// Whether the model accepts image input: `Some(true)` / `Some(false)`
+    /// when known (config `modalities.input`), `None` when unknown. Prompt
+    /// admission rejects image attachments only on `Some(false)`.
+    pub image_input: Option<bool>,
 }
 
 pub(crate) fn append_identity_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {

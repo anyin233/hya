@@ -183,7 +183,19 @@ message StreamEvent {
     // messages: a revert hides `messageId` and every later message; an undo
     // brings them back. A later `messageStarted` commits a pending revert.
     SessionReverted session_reverted = 23;
+    // Complete parts were added to a message in one step (durable): the
+    // images attached to a prompt turn, as `AttachmentPart`s without their
+    // bytes. Append them to the message after its text.
+    PartsAdded parts_added = 24;
   }
+}
+
+// Complete parts added to a message in one step.
+message PartsAdded {
+  // Owning message identifier.
+  string message = 1;
+  // The added parts, in message order.
+  repeated PartInfo parts = 2;
 }
 
 // A session revert or its undo.

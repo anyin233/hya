@@ -263,6 +263,7 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
             session: session_id.clone(),
             kind: Some(pb::create_turn_request::Kind::Prompt(pb::PromptTurn {
                 text: "say hello".into(),
+                ..Default::default()
             })),
         }))
         .await

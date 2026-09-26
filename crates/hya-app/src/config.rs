@@ -291,7 +291,7 @@ fn resolve_provider_retry(
 #[serde(untagged)]
 enum ModelConfig {
     Id(String),
-    Detailed(DetailedModelConfig),
+    Detailed(Box<DetailedModelConfig>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,6 +309,11 @@ struct DetailedModelConfig {
     /// instead of failing the untagged `ModelConfig` match.
     #[serde(default)]
     limit: Option<Value>,
+    /// `{ input: [text, image, ...] }`: declares whether the model accepts
+    /// image input (prompt attachments). Raw for the same error reporting
+    /// as `limit`.
+    #[serde(default)]
+    modalities: Option<Value>,
 }
 
 /// A model entry's `reasoning:` value.
@@ -380,6 +385,46 @@ struct ParsedModel {
     explicit_default: Option<ReasoningEffort>,
     /// Configured token limits (`0` in a field means unspecified).
     limit: Option<hya_provider::ModelLimitOverride>,
+    /// Image input from `modalities.input`; `None` when not declared.
+    image_input: Option<bool>,
+}
+
+/// Validate one model `modalities` block: a mapping whose optional `input`
+/// (and `output`) is a list of modality names. Returns whether `input`
+/// contains `image`, or `None` when `input` is absent.
+fn resolve_model_modalities(
+    provider_id: &str,
+    model_id: &str,
+    modalities: &Value,
+) -> anyhow::Result<Option<bool>> {
+    let Value::Mapping(fields) = modalities else {
+        anyhow::bail!("provider {provider_id} model {model_id} modalities must be a mapping");
+    };
+    let mut image_input = None;
+    for (key, value) in fields {
+        let key = key.as_str().unwrap_or_default();
+        if !matches!(key, "input" | "output") {
+            anyhow::bail!(
+                "provider {provider_id} model {model_id} has unknown modalities key {key} (expected input or output)"
+            );
+        }
+        let names = value
+            .as_sequence()
+            .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+            .with_context(|| {
+                format!(
+                    "provider {provider_id} model {model_id} modalities.{key} must be a list of names (for example [text, image])"
+                )
+            })?;
+        if key == "input" {
+            image_input = Some(
+                names
+                    .iter()
+                    .any(|name| name.trim().eq_ignore_ascii_case("image")),
+            );
+        }
+    }
+    Ok(image_input)
 }
 
 /// Validate one object-form model `limit` block.
@@ -1608,13 +1653,14 @@ fn resolve_providers_filtered(
         let mut seen = BTreeSet::new();
         let mut models = Vec::new();
         for model in &provider.models {
-            let (raw_id, name, reasoning_field, limit) = match model {
-                ModelConfig::Id(id) => (id.as_str(), None, None, None),
+            let (raw_id, name, reasoning_field, limit, modalities) = match model {
+                ModelConfig::Id(id) => (id.as_str(), None, None, None, None),
                 ModelConfig::Detailed(model) => (
                     model.id.as_str(),
                     model.name.as_deref(),
                     model.reasoning.as_ref(),
                     model.limit.as_ref(),
+                    model.modalities.as_ref(),
                 ),
             };
             let reasoning_off = matches!(reasoning_field, Some(ReasoningField::Flag(false)));
@@ -1678,6 +1724,10 @@ fn resolve_providers_filtered(
             let limit = limit
                 .map(|limit| resolve_model_limit(id, model_id, limit))
                 .transpose()?;
+            let image_input = modalities
+                .map(|modalities| resolve_model_modalities(id, model_id, modalities))
+                .transpose()?
+                .flatten();
             let display_name = name
                 .map(str::trim)
                 .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
@@ -1690,6 +1740,7 @@ fn resolve_providers_filtered(
                 variants_configured,
                 explicit_default,
                 limit,
+                image_input,
             });
         }
         let api_key = if resolve_secrets {
@@ -2114,6 +2165,8 @@ struct EffectiveModel {
     reasoning_variants: Vec<String>,
     reasoning_default: Option<ReasoningEffort>,
     limit: hya_provider::ModelLimitOverride,
+    /// Declared image input (config `modalities.input`); `None` unknown.
+    image_input: Option<bool>,
     source: ModelCatalogSource,
 }
 
@@ -2153,6 +2206,7 @@ fn merge_provider_models(
                 reasoning_variants: model.reasoning_variants.clone(),
                 reasoning_default: model.reasoning_default,
                 limit: model.limit.clone().unwrap_or_default(),
+                image_input: model.image_input,
                 source: ModelCatalogSource::Configured,
             });
         }
@@ -2187,6 +2241,7 @@ fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> Ef
             context: row.context_limit,
             output: row.output_limit,
         },
+        image_input: None,
         source: ModelCatalogSource::Discovered,
     }
 }
@@ -2242,6 +2297,7 @@ fn override_model(
         reasoning_variants,
         reasoning_default,
         limit,
+        image_input: config.image_input,
         source: ModelCatalogSource::Overridden,
     }
 }
@@ -2283,7 +2339,12 @@ fn route_for_models(
             .display_name
             .clone()
             .map(|name| (model.id.clone(), name))
-    }));
+    }))
+    .with_model_image_input(
+        models
+            .iter()
+            .filter_map(|model| model.image_input.map(|image| (model.id.clone(), image))),
+    );
     if credential.use_codex_session {
         route = route.with_codex_session_auth(credential.account_id.clone());
     }
@@ -4011,6 +4072,38 @@ plugins:
                 "{limit}: got {message}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn configured_model_modalities_reach_route_image_input() {
+        let yaml = "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: vision\n        modalities:\n          input: [text, image]\n      - id: text-only\n        modalities:\n          input: [text]\n      - plain\n";
+        let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
+        let credential = ProviderCredential {
+            token: Some("test".to_string()),
+            use_grok_session: false,
+            use_codex_session: false,
+            account_id: None,
+            use_oauth_refresh: false,
+        };
+        let plan = plan_for_provider(&provider, &credential, &[], None).unwrap();
+        let image_input = |model: &str| {
+            plan.models
+                .iter()
+                .find(|row| row.model_id == model)
+                .map(|row| row.capabilities.image_input)
+                .unwrap()
+        };
+        assert_eq!(image_input("vision"), Some(true));
+        assert_eq!(image_input("text-only"), Some(false));
+        assert_eq!(
+            image_input("plain"),
+            None,
+            "undeclared support stays unknown"
+        );
+
+        let bad = "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        modalities:\n          input: image\n";
+        let error = parse_providers(bad).unwrap_err().to_string();
+        assert!(error.contains("modalities"), "{error}");
     }
 
     #[tokio::test]

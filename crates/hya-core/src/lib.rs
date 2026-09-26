@@ -21,6 +21,8 @@ pub const MAX_SUBAGENT_DEPTH: u32 = 2;
 
 /// Built-ins plus installed bundles resolved as one agent namespace.
 pub mod agent_catalog;
+/// Prompt image attachments: limits, validation, and blob-backed storage.
+pub mod attachments;
 /// Compiled-in agent definitions (not AgentBundles).
 pub mod builtin_agents;
 /// Bundle-registered HTTP endpoints and the host reads behind their capability.
