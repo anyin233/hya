@@ -8,8 +8,9 @@
 //! replacing it on the same stream after a PSK rotation), and for every
 //! `incoming` stream it accepts the stream, answers the Noise `NKpsk0`
 //! handshake as the responder (bounded by a short timeout), and serves the
-//! same `/v1` router as the TCP listener over the decrypted bytes, with the
-//! [`crate::Origin::Relay`] extension on each request. Handshake failures are
+//! same [`crate::Server`] as the TCP listener (the `/v1` router and the gRPC
+//! services) over the decrypted bytes, with the [`crate::Origin::Relay`]
+//! extension on each request. Handshake failures are
 //! logged without key material. Streams still handshaking and streams being
 //! served have separate caps, so stalled handshakes never take a serving
 //! slot.
@@ -25,7 +26,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use axum::Router;
 use futures::{SinkExt as _, StreamExt as _};
 use hya_relay::client::{
     Backoff, BindingChoice, ClientConfig, ClientError, HeartbeatConfig, ReconnectPolicy,
@@ -264,8 +264,9 @@ impl Default for RelayHost {
 
 struct Inner {
     config: RelayHostConfig,
-    /// The `/v1` router relay streams are served with.
-    service: Mutex<Option<Router>>,
+    /// The server (HTTP router and gRPC services) relay streams are
+    /// served with.
+    service: Mutex<Option<crate::Server>>,
     /// Serializes connect / disconnect / rotate / shutdown.
     control: tokio::sync::Mutex<Option<Session>>,
     shared: Mutex<Shared>,
@@ -352,11 +353,13 @@ impl RelayHost {
         *lock(&self.inner.hook) = Some(hook);
     }
 
-    /// Serve relay streams with `router` (the same `/v1` router as the TCP
-    /// listener). Until this is called incoming streams are not accepted.
-    /// [`RelayHost::shutdown`] releases it.
-    pub fn set_service(&self, router: Router) {
-        *lock(&self.inner.service) = Some(router);
+    /// Serve relay streams with `server` (the same [`crate::Server`] as
+    /// the TCP listener, so REST, SSE, WebSocket, and gRPC all work over
+    /// the relay; a bare router serves HTTP only). Until this is called
+    /// incoming streams are not accepted. [`RelayHost::shutdown`] releases
+    /// it.
+    pub fn set_service(&self, server: impl Into<crate::Server>) {
+        *lock(&self.inner.service) = Some(server.into());
     }
 
     /// The current settings, while connected (or reconnecting).
@@ -634,7 +637,7 @@ impl RelayHost {
         };
         streams.cancel();
         let _ = tokio::time::timeout(Duration::from_secs(1), inner.tasks.wait()).await;
-        // Break the router <-> state reference cycle.
+        // Break the server <-> state reference cycle.
         *lock(&inner.service) = None;
     }
 
@@ -847,8 +850,8 @@ fn spawn_stream(inner: &Arc<Inner>, client: &RelayClient, room: &RoomId, stream_
         );
         return;
     };
-    let Some(router) = lock(&inner.service).clone() else {
-        tracing::warn!("relay host: no router to serve relay streams with");
+    let Some(server) = lock(&inner.service).clone() else {
+        tracing::warn!("relay host: no server to serve relay streams with");
         return;
     };
     let inner = inner.clone();
@@ -905,7 +908,7 @@ fn spawn_stream(inner: &Arc<Inner>, client: &RelayClient, room: &RoomId, stream_
         );
         conn::serve(
             io,
-            router,
+            server,
             inner.graceful.clone(),
             streams,
             inner.config.shutdown_grace,

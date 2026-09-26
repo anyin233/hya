@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use hya_server::{AppState, router as server_router};
+use hya_server::AppState;
 
 use crate::cli_args::RelayFlags;
 use crate::{db_lock, serve_relay};
@@ -54,6 +54,9 @@ pub(crate) async fn cmd_serve(
     // measured: SIGTERM 7ms after the listen line died by signal, 500ms after it exited 0.
     let terminate = install_termination_signals().context("install termination handlers")?;
     println!("hya server listening on {}", prepared.url);
+    if let Some(url) = &prepared.extra_url {
+        println!("hya grpc listening on {url}");
+    }
     emit_startup_mark("backend_listen", Some(&prepared.url));
     if let Some(link) = link
         && !relay.relay_quiet_link
@@ -277,15 +280,22 @@ pub(crate) fn restart_allow_hosts(
 
 /// A composed `hya serve` whose listener is bound but not yet serving.
 pub(crate) struct PreparedServer {
-    /// `http://<addr>` of the bound listener.
+    /// `http://<addr>` of the bound listener (HTTP and gRPC).
     pub(crate) url: String,
     listener: tokio::net::TcpListener,
-    router: axum::Router,
+    /// `HYA_GRPC_BIND`: an optional extra listener serving the same server
+    /// (and so the same state) as `listener`.
+    extra: Option<tokio::net::TcpListener>,
+    /// `http://<addr>` of `extra`.
+    pub(crate) extra_url: Option<String>,
+    /// The HTTP router and the gRPC services over one server state.
+    server: hya_server::Server,
     built: hya_app::BuiltSessionEngine,
     /// The database lock; released (and the discovery file removed) only
     /// after the server has drained and shut down.
     lock: Option<db_lock::DbLock>,
-    /// Ends every live event stream when the shutdown begins.
+    /// Ends every live event stream (SSE and gRPC) when the shutdown
+    /// begins.
     streams: hya_server::StreamShutdown,
     /// The relay host connector (joined by `--relay` or `hya serve relay
     /// connect`); left after the drain.
@@ -297,7 +307,7 @@ pub(crate) struct PreparedServer {
 /// On `stop`, drain first: every in-flight turn in every session (roots and
 /// members) is cancelled with cause `shutdown` and closes its messages within
 /// the drain deadline, members go terminal, and new turns are refused — so
-/// open turn requests finish and the HTTP server can complete its graceful
+/// open turn requests finish and the server can complete its graceful
 /// shutdown. The spawn supervisor is shut down afterwards.
 pub(crate) async fn serve_until(
     prepared: PreparedServer,
@@ -305,7 +315,8 @@ pub(crate) async fn serve_until(
 ) -> anyhow::Result<()> {
     let PreparedServer {
         listener,
-        router,
+        extra,
+        server,
         mut built,
         lock,
         streams,
@@ -314,30 +325,43 @@ pub(crate) async fn serve_until(
     } = prepared;
     let supervisor = built.resident_supervisor();
     let stop_request = lock.as_ref().map(db_lock::DbLock::stop_request_path);
-    // Peer addresses let the loopback-only rpcs (`RelayControl`) refuse
-    // non-loopback clients.
-    let serve_result = axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(async move {
-        stop.await;
-        // Why: `hya serve stop|restart` leave a request addressed to this
-        // pid before their SIGTERM; anything else is a plain signal.
-        let reason = stop_request
-            .and_then(|path| db_lock::take_stop_request(&path, std::process::id()))
-            .unwrap_or(hya_server::ShutdownReason::Signal);
-        // End every client's live event stream first, with that reason as
-        // the last frame: they never finish on their own, and connected
-        // clients (the daemon outlives them, ADR-0023) must not hold the
-        // shutdown open. Health answers `unavailable` from here on.
-        streams.close(reason);
-        supervisor
-            .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
-            .await;
-    })
-    .await
-    .context("serve http");
+    // The extra listener stops accepting when the shutdown begins, like the
+    // main one.
+    let stopping = tokio_util::sync::CancellationToken::new();
+    let extra_served = extra.map(|listener| {
+        let server = server.clone();
+        let stopping = stopping.clone();
+        tokio::spawn(async move {
+            server
+                .serve(listener, async move { stopping.cancelled().await })
+                .await;
+        })
+    });
+    // HTTP and gRPC on one listener; peer addresses let the loopback-only
+    // rpcs (`RelayControl`) refuse non-loopback clients.
+    server
+        .serve(listener, async move {
+            stop.await;
+            stopping.cancel();
+            // Why: `hya serve stop|restart` leave a request addressed to this
+            // pid before their SIGTERM; anything else is a plain signal.
+            let reason = stop_request
+                .and_then(|path| db_lock::take_stop_request(&path, std::process::id()))
+                .unwrap_or(hya_server::ShutdownReason::Signal);
+            // End every client's live event stream (SSE and gRPC) first,
+            // with that reason as the last frame: they never finish on their
+            // own, and connected clients (the daemon outlives them,
+            // ADR-0023) must not hold the shutdown open. Health answers
+            // `unavailable` from here on.
+            streams.close(reason);
+            supervisor
+                .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+                .await;
+        })
+        .await;
+    if let Some(extra) = extra_served {
+        let _ = extra.await;
+    }
     // Relay streams already got their `serverStopping` frame and the drain
     // closed their turns: leave the relay (the room is released) and close
     // what is left of them.
@@ -345,7 +369,7 @@ pub(crate) async fn serve_until(
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     // Last: remove the discovery file and release the lock.
     drop(lock);
-    serve_result.and(shutdown_result)
+    shutdown_result
 }
 
 /// Compose the runtime and bind `bind` (shared by `hya serve` and bare `hya`).
@@ -450,73 +474,44 @@ pub(crate) async fn prepare_server(
         state.catalog_updates_sender(),
         pending_discovery,
     );
-    // Optional gRPC listener: HYA_GRPC_BIND=host:port serves the same
-    // hya.v1 contract over tonic next to the HTTP surface.
-    if let Some(grpc_bind) = std::env::var("HYA_GRPC_BIND")
-        .ok()
-        .filter(|value| !value.is_empty())
-    {
-        let grpc_state = state.clone();
-        let grpc_hosts = hosts.clone();
-        tokio::spawn(async move {
-            if let Ok(listener) = tokio::net::TcpListener::bind(&grpc_bind).await {
-                let addr = listener
-                    .local_addr()
-                    .map_or_else(|_| grpc_bind.clone(), |addr| addr.to_string());
-                println!("hya grpc listening on http://{addr}");
-                let grpc = hya_server::V1Grpc::new(grpc_state);
-                use hya_api::v1 as pbv1;
-                // The same Host allowlist on `:authority`; unknown peers
-                // are refused by the loopback-only rpcs themselves.
-                let server = tonic::transport::Server::builder()
-                    .layer(hya_server::GrpcHostLayer::new(grpc_hosts))
-                    .add_service(pbv1::process_server::ProcessServer::new(grpc.clone()))
-                    .add_service(pbv1::catalog_server::CatalogServer::new(grpc.clone()))
-                    .add_service(pbv1::agent_models_server::AgentModelsServer::new(
-                        grpc.clone(),
-                    ))
-                    .add_service(pbv1::auth_server::AuthServer::new(grpc.clone()))
-                    .add_service(pbv1::session_server::SessionServer::new(grpc.clone()))
-                    .add_service(
-                        pbv1::turn_server::TurnServer::new(grpc.clone())
-                            .max_decoding_message_size(hya_server::MAX_TURN_GRPC_MESSAGE_BYTES),
-                    )
-                    .add_service(pbv1::messages_server::MessagesServer::new(grpc.clone()))
-                    .add_service(pbv1::events_server::EventsServer::new(grpc.clone()))
-                    .add_service(pbv1::interactions_server::InteractionsServer::new(
-                        grpc.clone(),
-                    ))
-                    .add_service(pbv1::workflow_server::WorkflowServer::new(grpc.clone()))
-                    .add_service(pbv1::files_server::FilesServer::new(grpc.clone()))
-                    .add_service(pbv1::project_server::ProjectServer::new(grpc.clone()))
-                    .add_service(pbv1::worktrees_server::WorktreesServer::new(grpc.clone()))
-                    .add_service(pbv1::mcp_server::McpServer::new(grpc.clone()))
-                    .add_service(pbv1::pty_server::PtyServer::new(grpc.clone()))
-                    .add_service(pbv1::logs_server::LogsServer::new(grpc.clone()))
-                    .add_service(pbv1::bundle_api_server::BundleApiServer::new(grpc.clone()))
-                    .add_service(pbv1::relay_control_server::RelayControlServer::new(
-                        grpc.clone(),
-                    ))
-                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
-                let _ = server.await;
-            }
-        });
-    }
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
+    // Optional, legacy: HYA_GRPC_BIND=host:port serves the same server (HTTP
+    // and gRPC, the same state) on an extra listener; the main listener
+    // already answers gRPC.
+    let extra = match std::env::var("HYA_GRPC_BIND")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        Some(extra_bind) => match tokio::net::TcpListener::bind(&extra_bind).await {
+            Ok(extra) => Some(extra),
+            Err(error) => {
+                eprintln!("hya: HYA_GRPC_BIND={extra_bind}: could not listen ({error})");
+                None
+            }
+        },
+        None => None,
+    };
+    let extra_url = extra
+        .as_ref()
+        .and_then(|extra| extra.local_addr().ok())
+        .map(|addr| format!("http://{addr}"));
     if let Some(lock) = lock.as_mut() {
         lock.publish_with(&db_lock::connect_url(addr), &hosts.extra_hosts())
             .context("publish the server discovery file")?;
     }
-    let router = server_router(state.clone());
-    relay.set_service(router.clone());
+    // One server state for HTTP, gRPC, the extra listener, and the relay.
+    let server = hya_server::build(state.clone());
+    relay.set_service(server.clone());
     Ok(PreparedServer {
         url: format!("http://{addr}"),
         listener,
+        extra,
+        extra_url,
         streams: state.streams(),
-        router,
+        server,
         built,
         lock,
         relay,

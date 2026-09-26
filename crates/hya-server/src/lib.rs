@@ -5,6 +5,9 @@
 //! - **HTTP/JSON + SSE + WebSocket** — the `/v1` routes generated from the
 //!   `hya.v1` IDL (`crates/hya-api`), plus the gRPC binding (`V1Grpc`)
 //!   dispatching through the same router.
+//! - **One listener** — [`build`] makes a [`Server`] that serves both on
+//!   one port (`content-type: application/grpc*` goes to gRPC, everything
+//!   else to the HTTP router) from one shared server state.
 //!
 //! CORS mirrors the request origin and headers and allows any method, behind
 //! a guard that accepts only allowed Host names and refuses browser requests
@@ -27,6 +30,7 @@ mod provider_control;
 pub mod relay_host;
 mod runs;
 mod sanitize;
+mod server;
 mod session_list;
 mod state;
 mod streams;
@@ -55,6 +59,7 @@ pub use provider_control::{
 };
 pub use relay_host::{RelayHost, RelayHostConfig, RelaySettings};
 pub use sanitize::display_text;
+pub use server::{Server, build};
 pub use state::AppState;
 pub(crate) use state::ServerState;
 pub use streams::{ShutdownReason, StreamShutdown};
@@ -78,21 +83,30 @@ pub use workflow_control::{
 /// request admission guard (Host allowlist, no browsers over the relay;
 /// `host.rs`), which runs first — also for CORS preflights.
 ///
-/// The gRPC binding (`V1Grpc`) dispatches through this same router, so the
-/// two transports share one handler set.
+/// Every router, gRPC binding ([`V1Grpc::new`]), and combined [`Server`]
+/// ([`build`]) made from one `AppState` (or its clones) shares one server
+/// state, whose background drivers start once. To serve HTTP and gRPC on
+/// one listener use [`build`].
 pub fn router(state: AppState) -> Router {
     let hosts = std::sync::Arc::new(state.allowed_hosts());
-    let state = ServerState::new(state);
-    spawn_background_reclaim_driver(state.clone());
-    spawn_project_busy_watcher(state.clone());
-    session_list::spawn_busy_tracker(state.clone());
-    ephemeral::spawn_reaper(state.clone());
+    let state = state.server_state();
     v1::router()
         .with_state(state)
         .layer(cors())
         .layer(axum::middleware::from_fn(move |request, next| {
             host::guard(hosts.clone(), request, next)
         }))
+}
+
+/// Start the process-wide background drivers of a server state: the
+/// backgrounded-MCP reclaim driver, the Project busy watcher, the
+/// session-list busy tracker, and the ephemeral-session reaper. Called
+/// exactly once per server state ([`AppState::server_state`]).
+pub(crate) fn spawn_background_drivers(state: &ServerState) {
+    spawn_background_reclaim_driver(state.clone());
+    spawn_project_busy_watcher(state.clone());
+    session_list::spawn_busy_tracker(state.clone());
+    ephemeral::spawn_reaper(state.clone());
 }
 
 /// Drive the reclaim turn for backgrounded MCP calls.
