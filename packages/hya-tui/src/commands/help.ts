@@ -10,12 +10,16 @@
  */
 import type { TextareaAction } from "@opentui/core"
 import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyAction } from "../keys/bindings"
+import { agentModelsKeyRows } from "../state/agentModels"
+import { diffKeyRows } from "../state/diff"
+import { mcpKeyRows } from "../state/mcp"
 import type { PickerRow } from "../state/picker"
 import { providerKeyRows } from "../state/providers"
+import { rulesKeyRows } from "../state/rules"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Rules", "AgentModels", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -161,7 +165,15 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   }))
   // The Provider View's keys (`/key`; state/providers.ts `providerKeyRows`, also its footer line).
   const providerRows: HelpRow[] = providerKeyRows.map((row) => ({ group: "Providers", keys: row.keys, description: row.description }))
-  const rows = [...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(), ...providerRows, ...commandRows]
+  // The Diff / MCP / Saved Rules / Agent Models views' keys (also each view's footer line).
+  const diffRows: HelpRow[] = diffKeyRows.map((row) => ({ group: "Diff", keys: row.keys, description: row.description }))
+  const mcpRows: HelpRow[] = mcpKeyRows.map((row) => ({ group: "Mcp", keys: row.keys, description: row.description }))
+  const savedRuleRows: HelpRow[] = rulesKeyRows.map((row) => ({ group: "Rules", keys: row.keys, description: row.description }))
+  const agentModelRows: HelpRow[] = agentModelsKeyRows.map((row) => ({ group: "AgentModels", keys: row.keys, description: row.description }))
+  const rows = [
+    ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
+    ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentModelRows, ...commandRows,
+  ]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))
     .sort((a, b) => helpGroups.indexOf(a.row.group) - helpGroups.indexOf(b.row.group) || a.index - b.index)

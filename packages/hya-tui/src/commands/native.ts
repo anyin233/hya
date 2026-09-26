@@ -332,6 +332,26 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ actions }) => { actions.openProviders() },
   },
   {
+    name: "/diff",
+    description: "Open the Diff view: the working tree diff, split per file",
+    run: ({ actions }) => { actions.openDiff() },
+  },
+  {
+    name: "/mcp",
+    description: "Open the MCP view: server status, tools, connect/disconnect, login",
+    run: ({ actions }) => { actions.openMcp() },
+  },
+  {
+    name: "/rules",
+    description: "Open the Saved Rules view: saved permission decisions, delete",
+    run: ({ actions }) => { actions.openRules() },
+  },
+  {
+    name: "/agent-models",
+    description: "Open the Agent Models view: per-agent default model, pick or clear",
+    run: ({ actions }) => { actions.openAgentModels() },
+  },
+  {
     name: "/workflows",
     description: "List workflows",
     run: async ({ store, client, actions }) => {

@@ -212,6 +212,57 @@ export interface ProviderTestResponse {
   latencyMs?: number | string
 }
 
+/** `SavedRule` (`GET /v1/permissions/rules`): a persisted allow/deny/ask decision. */
+export interface SavedRule {
+  id: string
+  /** `RULE_PERMISSION_ALLOW`, `_ASK`, `_DENY`. */
+  permission: string
+  /** Empty matches every tool. */
+  tool?: string
+  pattern?: string
+  timeCreated?: string
+}
+
+/** `McpServerStatus` (`GET /v1/mcp`): one configured MCP server. */
+export interface McpServerStatus {
+  name: string
+  /** `MCP_SERVER_STATE_DESIRED`, `_CONNECTED`, `_DISCONNECTED`, `_FAILED`. */
+  state?: string
+  /** Namespaced tools (`mcp__server__tool`) when connected. */
+  tools?: string[]
+  /** Set when `state` is `_FAILED`. */
+  error?: string
+  authRequired?: boolean
+}
+
+/** `AgentModelSelection`: a concrete provider/model pick. */
+export interface AgentModelSelection {
+  providerId?: string
+  modelId?: string
+}
+
+/** `AgentModelState` (`GET /v1/agent-models`): one agent's effective base model. */
+export interface AgentModelState {
+  agentId: string
+  description?: string
+  /** `primary` or `subagent`. */
+  mode?: string
+  hidden?: boolean
+  /** Direct model/category configuration is present; such agents cannot take a remembered preference. */
+  configured?: boolean
+  /** Whether an automatic remembered preference can be set. */
+  settable?: boolean
+  /** Retained preference, including stale or configured rows. */
+  preference?: AgentModelSelection
+  /** Whether the retained preference exactly matches the current catalog. */
+  preferenceAvailable?: boolean
+  effective?: AgentModelSelection
+  /** `AGENT_MODEL_SOURCE_SESSION`, `_CONFIGURED`, `_REMEMBERED`, `_DEFAULT`. */
+  source?: string
+  configuration?: AgentModelSelection
+  sessionOverride?: AgentModelSelection
+}
+
 export interface CommandSummary {
   name: string
   description?: string
@@ -457,11 +508,11 @@ export class HyaClient {
     return this.request("GET", "/v1/bootstrap")
   }
 
-  private async listAll<T>(path: string, field: string): Promise<T[]> {
+  private async listAll<T>(path: string, field: string, extraQuery = ""): Promise<T[]> {
     const rows: T[] = []
     let cursor = ""
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
-      const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}`
+      const query = `page.limit=500${cursor ? `&page.cursor=${encodeURIComponent(cursor)}` : ""}${extraQuery}`
       const result = await this.request<Record<string, unknown> & { page?: PageInfo }>("GET", `${path}?${query}`)
       const pageRows = result[field]
       if (Array.isArray(pageRows)) rows.push(...pageRows as T[])
@@ -534,6 +585,69 @@ export class HyaClient {
   /** `TestProviderModel` (`POST /v1/providers/{id}/test`): one `hi` with 1 output token (16 on Responses routes), up to 60 s. */
   async testProviderModel(provider: string, modelId: string, signal?: AbortSignal): Promise<ProviderTestResponse> {
     return this.request("POST", `/v1/providers/${encodeURIComponent(provider)}/test`, { modelId }, signal)
+  }
+
+  /** `GetVcsDiff` (`GET /v1/vcs/diff`): `git diff HEAD` plus untracked files, as one unified-diff text; `""` outside a git repo. */
+  async getVcsDiff(): Promise<string> {
+    const result = await this.request<{ diff?: string }>("GET", `/v1/vcs/diff?directory=${encodeURIComponent(this.directory)}`)
+    return result.diff ?? ""
+  }
+
+  /** `GetMcpStatus` (`GET /v1/mcp`): every configured MCP server's status. */
+  async getMcpStatus(): Promise<McpServerStatus[]> {
+    const result = await this.request<{ servers?: McpServerStatus[] }>("GET", `/v1/mcp?directory=${encodeURIComponent(this.directory)}`)
+    return result.servers ?? []
+  }
+
+  /** `ConnectMcp` (`POST /v1/mcp/{name}/connect`). */
+  async connectMcp(name: string, signal?: AbortSignal): Promise<McpServerStatus> {
+    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/connect`, { directory: this.directory, name }, signal)
+  }
+
+  /** `DisconnectMcp` (`POST /v1/mcp/{name}/disconnect`). */
+  async disconnectMcp(name: string, signal?: AbortSignal): Promise<McpServerStatus> {
+    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/disconnect`, { directory: this.directory, name }, signal)
+  }
+
+  /** `StartMcpAuth` (`POST /v1/mcp/{name}/auth`): the URL to open in a browser. */
+  async startMcpAuth(name: string, signal?: AbortSignal): Promise<{ authorizationUrl?: string }> {
+    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/auth`, { directory: this.directory, name }, signal)
+  }
+
+  /** `CompleteMcpAuth` (`POST /v1/mcp/{name}/auth/complete`) with the callback code. */
+  async completeMcpAuth(name: string, code: string, signal?: AbortSignal): Promise<McpServerStatus> {
+    return this.request("POST", `/v1/mcp/${encodeURIComponent(name)}/auth/complete`, { directory: this.directory, name, code }, signal)
+  }
+
+  /** `RemoveMcpAuth` (`DELETE /v1/mcp/{name}/auth`): delete stored credentials. */
+  async removeMcpAuth(name: string, signal?: AbortSignal): Promise<void> {
+    await this.request("DELETE", `/v1/mcp/${encodeURIComponent(name)}/auth?directory=${encodeURIComponent(this.directory)}`, undefined, signal)
+  }
+
+  /** `ListSavedRules` (`GET /v1/permissions/rules`): saved permission decisions, stable id order. */
+  async listSavedRules(): Promise<SavedRule[]> {
+    return this.listAll("/v1/permissions/rules", "rules", `&directory=${encodeURIComponent(this.directory)}`)
+  }
+
+  /** `DeleteSavedRule` (`DELETE /v1/permissions/rules/{rule}`). */
+  async deleteSavedRule(id: string, signal?: AbortSignal): Promise<void> {
+    await this.request("DELETE", `/v1/permissions/rules/${encodeURIComponent(id)}?directory=${encodeURIComponent(this.directory)}`, undefined, signal)
+  }
+
+  /** `ListAgentModels` (`GET /v1/agent-models`): effective base model of every catalog agent. */
+  async listAgentModels(session?: string): Promise<AgentModelState[]> {
+    const query = session ? `&session=${encodeURIComponent(session)}` : ""
+    const result = await this.request<{ agents?: AgentModelState[] }>("GET", `/v1/agent-models?directory=${encodeURIComponent(this.directory)}${query}`)
+    return result.agents ?? []
+  }
+
+  /** `SetAgentModel` (`PUT /v1/agent-models/{agentId}`); an absent `preference` clears it. */
+  async setAgentModel(agentId: string, preference: AgentModelSelection | undefined, session?: string, signal?: AbortSignal): Promise<AgentModelState> {
+    return this.request("PUT", `/v1/agent-models/${encodeURIComponent(agentId)}`, {
+      directory: this.directory,
+      ...(session ? { session } : {}),
+      ...(preference ? { preference } : {}),
+    }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

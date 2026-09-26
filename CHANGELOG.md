@@ -1,5 +1,12 @@
 # 0.41.0
 
+## TUI views: `/diff`, `/mcp`, `/rules`, `/agent-models`
+
+- `/diff` shows the working tree's changes (`git diff HEAD` plus untracked files) full screen. The file list shows `+N -M` counts and the diff lines are colored. `n`/`p` or `]`/`[` switch files, `r` reloads, and the usual keys and the mouse wheel scroll.
+- `/mcp` lists MCP servers with their state, tool count, and error. Enter shows a server's tools; `c` connects and `x` disconnects. `a` starts auth: it copies the authorization URL and asks for the code.
+- `/rules` lists saved permission rules; `d` deletes one after you confirm.
+- `/agent-models` lists each agent's effective model and where it comes from (session, configured, remembered, or default). Enter sets an agent's default model from the model picker, and `c` clears it. Agents whose model is fixed in config show why they can't be changed. See [TUI](docs/tui.md).
+
 ## Revert and redo sessions with file restore; fork at a message
 
 - `POST /v1/sessions/{session}/revert` now works:

@@ -119,7 +119,7 @@ export async function run(options: Options): Promise<void> {
   renderer.once("destroy", () => void shutdown(0))
   const active = controller
   await render(() => (
-    <AppContext.Provider value={{ store, controller: active, server, ui: {} }}>
+    <AppContext.Provider value={{ store, controller: active, server, ui: active.ui }}>
       <App />
     </AppContext.Provider>
   ), renderer)

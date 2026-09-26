@@ -16,6 +16,10 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openSession: async (id) => { calls.push(`open ${id}`) },
     newSession: async (agent, model) => { calls.push(`new ${agent ?? ""} ${model ?? ""}`.trim()) },
     openProviders: () => { calls.push("providers") },
+    openDiff: () => { calls.push("diff") },
+    openMcp: () => { calls.push("mcp") },
+    openRules: () => { calls.push("rules") },
+    openAgentModels: () => { calls.push("agentModels") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
     quit: () => { calls.push("quit") },
@@ -66,6 +70,15 @@ test("/open resolves list numbers and /key opens the Provider View", async () =>
   await run("/open hysec_x")
   await run("/key")
   expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
+})
+
+test("/diff, /mcp, /rules, /agent-models open their full-screen views", async () => {
+  const { calls, run } = harness()
+  await run("/diff")
+  await run("/mcp")
+  await run("/rules")
+  await run("/agent-models")
+  expect(calls).toEqual(["diff", "mcp", "rules", "agentModels"])
 })
 
 test("usage errors are thrown for incomplete commands", async () => {

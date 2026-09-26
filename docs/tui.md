@@ -172,6 +172,10 @@ Changes apply to the running backend at once; no restart is needed.
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
 | Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In an open list (the command menu, the file list, a picker) it moves the highlight up instead. |
 | `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
+| `/diff` | Open the full-screen [Diff view](#diff-view): the working tree diff, split per file. |
+| `/mcp` | Open the full-screen [MCP servers](#mcp-servers) view: server status, tools, connect/disconnect, login. |
+| `/rules` | Open the full-screen [Saved Rules](#saved-rules) view: saved permission decisions, delete. |
+| `/agent-models` | Open the full-screen [Agent Models](#agent-models) view: per-agent default model, pick or clear. |
 | `/workflows`, `/workflow select <name>`, `/workflow run [name]` | View sources and selected state; select or start a Workflow in the selected session. |
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
@@ -1716,6 +1720,109 @@ the TUI does not wait for it.
 
 A failed call shows the server's `code: message` (for example
 `invalid_argument: …` or `not_found: …`) without the method and path.
+
+## Diff view
+
+`/diff` opens a full-screen view of the working tree diff: `git diff HEAD`
+plus every untracked file, split back into one entry per file. The file list
+sits on the left (path and `+N -M`), the highlighted file's colored diff on
+the right — same line colors as a tool card's diff (add/remove/hunk).
+
+### Keys
+
+Up/Down, PgUp/PgDn, Home/End, and the mouse wheel scroll the open file's
+body. `n` / `p` (or `]` / `[`) move to the next / previous file. `r` reloads
+the diff (after editing files outside the TUI, for example). Esc closes the
+view; Ctrl+C closes it too and keeps its quit meaning. The help overlay
+(`?`, group `diff`) lists the same keys.
+
+With no changes the body says `No changes`; outside a git repository (or
+when the backend directory is not one) it says `Not a git repository` — the
+same signal the status bar's git branch uses (`GetVcsStatus`), since the
+diff route itself does not distinguish the two.
+
+### Diff view interfaces
+
+| Action | Call | Reads |
+| --- | --- | --- |
+| Open, `r` reload | `GET /v1/vcs/diff?directory=<dir>` | `GetVcsDiffResponse.diff`: one unified-diff text, split client-side on `diff --git` headers into per-file rows (`raw`/`paths` are not sent; the backend does not yet honor them, so the whole tree's diff is always read) |
+
+## MCP servers
+
+`/mcp` opens a full-screen view of every configured MCP server: its
+connection state, tool count, and (when failed) its error.
+
+### Keys
+
+Up/Down move the highlight; Enter opens the highlighted server's tool list
+(`MCP › <name>`); `c` connects it now, `x` disconnects it; `r` refreshes;
+`/` filters by name or state. `a` starts a login for a server that needs one
+(`authRequired`): the authorization URL is copied to the clipboard (OSC 52,
+the same action `/copy` uses) and shown, then a one-line pop-up takes the
+callback code — Enter completes the login, Esc cancels the pop-up only (the
+server keeps needing a login). Esc on the list closes the view; Ctrl+C
+closes it too and keeps its quit meaning. The help overlay (`?`, group
+`mcp`) lists the same keys.
+
+### MCP view interfaces
+
+| Action | Call | Reads |
+| --- | --- | --- |
+| Open, `r` refresh | `GET /v1/mcp?directory=<dir>` | `McpServerStatus[]` (`name`, `state`, `tools`, `error`, `authRequired`) |
+| `c` connect | `POST /v1/mcp/{name}/connect` | `McpServerStatus` |
+| `x` disconnect | `POST /v1/mcp/{name}/disconnect` | `McpServerStatus` |
+| `a` start login | `POST /v1/mcp/{name}/auth` | `{authorizationUrl}` |
+| Code pop-up Enter | `POST /v1/mcp/{name}/auth/complete` | `{code}` → `McpServerStatus` |
+
+## Saved Rules
+
+`/rules` opens a full-screen list of saved permission decisions (the rules a
+persisted "always allow" / "always deny" answer writes). Each row shows the
+effect, the tool it matches (`*` for every tool), the pattern, and when it
+was saved.
+
+### Keys
+
+Up/Down move the highlight; `d` asks to confirm, Enter on the confirm line
+deletes the rule (`DELETE /v1/permissions/rules/{id}`); `r` refreshes; `/`
+filters. Esc cancels a running call, then the pending delete, then the
+filter, then closes the view; Ctrl+C closes it too and keeps its quit
+meaning. The help overlay (`?`, group `rules`) lists the same keys.
+
+The backend currently reports every saved rule as `ask` with no saved time
+(a known gap tracked for a later backend step); the view renders whatever
+the server returns and shows the time once the backend fills it in.
+
+### Saved Rules interfaces
+
+| Action | Call | Reads |
+| --- | --- | --- |
+| Open, `r` refresh | `GET /v1/permissions/rules?directory=<dir>` (paginated) | `SavedRule[]` (`id`, `permission`, `tool`, `pattern`, `timeCreated`) |
+| `d` then Enter | `DELETE /v1/permissions/rules/{id}?directory=<dir>` | — |
+
+## Agent Models
+
+`/agent-models` opens a full-screen list of every catalog agent's base
+model: its mode (`primary`/`subagent`), the effective `provider/model`, and
+which tier resolved it (`session`, `configured`, `remembered`, `default`).
+
+### Keys
+
+Up/Down move the highlight. Enter on a `settable` agent opens the shared
+model picker (the same one `/model` uses) to choose its remembered default;
+`c` clears a set preference. An agent with direct model or category
+configuration cannot take a remembered preference — Enter and `c` on it (or
+`c` with no preference set) show why instead of acting. `r` refreshes, `/`
+filters. Esc closes the view; Ctrl+C closes it too and keeps its quit
+meaning. The help overlay (`?`, group `agentmodels`) lists the same keys.
+
+### Agent Models interfaces
+
+| Action | Call | Body | Reads |
+| --- | --- | --- | --- |
+| Open, `r` refresh | `GET /v1/agent-models?directory=<dir>` | — | `AgentModelState[]` (`agentId`, `mode`, `hidden`, `configured`, `settable`, `preference`, `preferenceAvailable`, `effective`, `source`) |
+| Enter → picker Enter | `PUT /v1/agent-models/{agentId}` | `{directory, preference: {providerId, modelId}}` | `AgentModelState` |
+| `c` clear | `PUT /v1/agent-models/{agentId}` | `{directory}` (no `preference`) | `AgentModelState` |
 
 ## Interface definitions
 

@@ -1,14 +1,18 @@
 import type { MouseEvent, Selection } from "@opentui/core"
 import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, Show } from "solid-js"
+import { AgentModelsView } from "../components/AgentModelsView"
 import { Composer } from "../components/Composer"
+import { DiffView } from "../components/DiffView"
 import { Footer } from "../components/Footer"
 import { Header } from "../components/Header"
 import { MainPanel } from "../components/MainPanel"
+import { McpView } from "../components/McpView"
 import { ModeConfirm } from "../components/ModeConfirm"
 import { PendingBlock } from "../components/PendingBlock"
 import { Picker } from "../components/Picker"
 import { ProviderView } from "../components/ProviderView"
+import { RulesView } from "../components/RulesView"
 import { paintSelection } from "../components/selection"
 import { copyNotice } from "../composer/clipboard"
 import { PromptDock } from "../components/PromptDock"
@@ -28,8 +32,10 @@ export { layoutBreakpoints } from "../state/layout"
  * sessions' asks, the permission/question prompt, the one-line yolo
  * confirmation, status line, bordered composer, footer instruction) and,
  * when shown, the sidebar on the right (state/layout.ts). The full-screen
- * Provider View (`/key`, components/ProviderView.tsx) is drawn over both
- * when open, and the modal picker (components/Picker.tsx) over everything.
+ * Provider (`/key`), Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`),
+ * and Agent Models (`/agent-models`) views are drawn over both when one of
+ * them is open (at most one at a time), and the modal picker
+ * (components/Picker.tsx) over everything.
  *
  * Mouse selection: a left press paints the theme's selection color on the
  * text renderables (components/selection.ts); releasing a drag copies the
@@ -69,6 +75,10 @@ export function App() {
         <Sidebar width={side()} />
       </Show>
       <ProviderView />
+      <DiffView />
+      <McpView />
+      <RulesView />
+      <AgentModelsView />
       <Picker />
     </box>
   )
