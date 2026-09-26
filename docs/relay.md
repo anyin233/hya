@@ -15,12 +15,60 @@ implemented yet.
 
 ## Usage
 
-The proxy server library (`hya_relay::server`, see [Bindings](#bindings))
-and the client library (`hya_relay::client`, see
-[Client transport](#client-transport)) exist. *Coming in later steps:* `hya proxy`, `hya serve --relay`, `hya serve relay
-…`, `hya bridge`, `hya --connect <link>`, `/connect-remote`, `hya relay
-doctor`, and deployment recipes (Cloudflare Tunnel, nginx, Caddy, Tailscale,
-direct TLS).
+The proxy server library (`hya_relay::server`, see [Bindings](#bindings)),
+the client library (`hya_relay::client`, see
+[Client transport](#client-transport)), and the `hya proxy` command exist.
+*Coming in later steps:* `hya relay doctor`, `hya serve --relay`, `hya serve
+relay …`, `hya bridge`, `hya --connect <link>`, and `/connect-remote`.
+
+### `hya proxy`
+
+```sh
+hya proxy --port 8766
+```
+
+Runs the relay proxy standalone: a blind Noise rendezvous a backend and a
+client reach each other through (see [Proxy behavior](#proxy-behavior)). It
+is dispatched before any runtime composition — no config, providers,
+plugins, MCP, or session store — so it starts as fast as `hya update`.
+Readiness line on stdout, exactly:
+
+```text
+hya proxy listening on <scheme>://<addr><prefix>
+```
+
+`<scheme>` is `https` when `--tls-cert`/`--tls-key` are given, else `http`;
+`<addr>` is the bound socket address (so `--port 0` picks a free port and
+still prints it); `<prefix>` is the normalized `--path-prefix`, or empty.
+Operational notices go to stderr. `hya proxy` stops on SIGINT or SIGTERM: it
+stops accepting, drains every stream (`RelayServer`'s graceful shutdown, see
+[Bindings](#bindings)), and exits 0.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--host <HOST>` | `0.0.0.0` | Bind host. The proxy has no local trust boundary (Noise encrypts the payload end to end), so the default is every interface. |
+| `--port <PORT>` | `8766` | Bind port. `0` picks a free port. |
+| `--tls-cert <PEM>` | none | Certificate chain; requires `--tls-key`. |
+| `--tls-key <PEM>` | none | Private key; requires `--tls-cert`. |
+| `--path-prefix <PREFIX>` | none | Serve both bindings under a path prefix. |
+| `--trust-forwarded` | off | Identify clients by `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` instead of the socket address. Only safe behind a hop that overwrites these headers. |
+| `--max-rooms <N>` | `1024` | [`ProxyLimits::max_rooms`](#proxy-behavior). |
+| `--max-streams-per-room <N>` | `64` | `ProxyLimits::max_streams_per_room`. |
+| `--max-streams-per-peer <N>` | `256` | `ProxyLimits::max_streams_per_peer`. |
+| `--max-rooms-per-peer <N>` | `16` | `ProxyLimits::max_rooms_per_peer`. |
+| `--max-pending-registrations-per-peer <N>` | `8` | `ProxyLimits::max_pending_registrations_per_peer`. |
+| `--idle-timeout-secs <N>` | `120` | `ProxyLimits::idle_timeout`. |
+| `--stream-rate-bytes-per-sec <N>` | `8388608` | `ProxyLimits::stream_rate_bytes_per_sec` (`0` = unlimited). |
+| `--stream-rate-burst-bytes <N>` | `1048576` | `ProxyLimits::stream_rate_burst_bytes`. |
+| `--max-chunk-data <N>` | `262144` | `ProxyLimits::max_chunk_data`. |
+| `--early-data-limit <N>` | `65536` | `ProxyLimits::early_data_limit`. |
+| `--accept-timeout-secs <N>` | `10` | `ProxyLimits::accept_timeout`. |
+| `--handshake-timeout-secs <N>` | `10` | `ProxyLimits::handshake_timeout`. |
+| `--drain-timeout-secs <N>` | `10` | `RelayServerConfig::drain_timeout`. |
+
+Every limit flag mirrors a [`ProxyLimits`](#proxy-behavior) field one for
+one; durations are given in whole seconds (nothing else in `hya` parses
+`10s`-style durations yet).
 
 ## Interfaces
 

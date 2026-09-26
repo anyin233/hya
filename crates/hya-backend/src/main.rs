@@ -20,6 +20,7 @@ mod db_lock;
 mod exec_stream;
 mod frontend;
 mod models_cmd;
+mod proxy_cmd;
 mod rpc;
 mod serve;
 mod sessions_cmd;
@@ -1011,6 +1012,9 @@ async fn main() -> anyhow::Result<()> {
             hya_updater::cli::run(command, &mut stdout)
                 .map_err(|error| anyhow::anyhow!("hya update: {error}"))
         }
+        // The proxy composes no runtime either: no config, providers, MCP,
+        // or session store — it only opens network connections.
+        Some(Command::Proxy { args }) => proxy_cmd::cmd_proxy(args).await,
         Some(Command::Loop {
             target,
             budget,
