@@ -607,3 +607,57 @@ async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
     }
     relay.stop().await;
 }
+
+#[tokio::test]
+async fn the_client_refuses_oversized_relay_messages_on_both_bindings() {
+    use hya_relay::client::{MAX_CLIENT_MESSAGE_SIZE, register_host};
+    use hya_relay::proto::proxy_to_host;
+    // A relay that forwards chunks far larger than a Noise record.
+    let relay = Relay::start(
+        support::relay_config().limits(hya_relay::proxy::ProxyLimits {
+            max_chunk_data: 4 * MAX_CLIENT_MESSAGE_SIZE,
+            stream_rate_bytes_per_sec: 0,
+            ..hya_relay::proxy::ProxyLimits::default()
+        }),
+    )
+    .await;
+    for transport in [Transport::Grpc, Transport::Ws] {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let (hash, token) = token_of(&key);
+        let host = RelayClient::new(relay.address(), config(transport)).unwrap();
+        let mut control = host.host().await.unwrap();
+        let room = register_host(&mut control, &key, &hash, 5 * SECOND)
+            .await
+            .unwrap()
+            .room()
+            .clone();
+        let opener = RelayClient::new(relay.address(), config(transport)).unwrap();
+        let opening = tokio::spawn(async move { opener.open_with_token(&room, &token).await });
+        let stream_id = loop {
+            let frame = timeout(5 * SECOND, control.next()).await.unwrap();
+            if let Some(Ok(hya_relay::proto::ProxyToHost {
+                frame: Some(proxy_to_host::Frame::Incoming(incoming)),
+            })) = frame
+            {
+                break incoming.stream_id;
+            }
+        };
+        let mut leg = host.accept(&stream_id).await.unwrap();
+        let mut open = opening.await.unwrap().unwrap();
+        // A full Noise record fits.
+        let record = vec![1u8; hya_relay::tunnel::MAX_NOISE_MESSAGE];
+        leg.send(data(&record)).await.unwrap();
+        assert_eq!(
+            next(&mut open).await.unwrap().unwrap(),
+            data(&record),
+            "{transport}"
+        );
+        // Twice the bound does not: the stream fails instead of buffering it.
+        leg.send(data(&vec![2u8; 2 * MAX_CLIENT_MESSAGE_SIZE]))
+            .await
+            .unwrap();
+        let item = next(&mut open).await;
+        assert!(matches!(item, Some(Err(_)) | None), "{transport}: {item:?}");
+    }
+    relay.stop().await;
+}

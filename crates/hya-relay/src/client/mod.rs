@@ -27,6 +27,11 @@
 //! **TLS.** rustls with the operating-system roots, the webpki roots, and an
 //! optional extra CA file; the server name is the address host.
 //! `hya+insecure://` addresses are plaintext.
+//!
+//! **Message size.** Every frame the client accepts is bounded by
+//! [`MAX_CLIENT_MESSAGE_SIZE`] (one Noise record plus framing), on the
+//! WebSocket (message and frame size) and gRPC (decode size) bindings alike,
+//! so a hostile relay or peer cannot make the client buffer more.
 
 mod backoff;
 mod connect;
@@ -66,6 +71,11 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default [`ClientConfig::open_timeout`].
 pub const DEFAULT_OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Largest relay message (WebSocket message or frame, gRPC message) the
+/// client accepts: one maximal Noise record
+/// ([`MAX_NOISE_MESSAGE`](crate::tunnel::MAX_NOISE_MESSAGE)) plus 1 KiB of
+/// protobuf and binding framing.
+pub const MAX_CLIENT_MESSAGE_SIZE: usize = crate::tunnel::MAX_NOISE_MESSAGE + 1024;
 /// HTTP/2 keepalive ack timeout when dead-peer detection is off.
 const H2_KEEPALIVE_ACK_TIMEOUT: Duration = Duration::from_secs(20);
 

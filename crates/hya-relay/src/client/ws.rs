@@ -7,8 +7,8 @@ use std::task::{Context, Poll};
 use futures::{Sink, Stream};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use super::connect::{ALPN_HTTP1, Io, Tls, connect};
@@ -35,7 +35,12 @@ pub(crate) async fn connect_route(
             kind: ProbeFailureKind::Connect,
             detail: format!("invalid WebSocket URL {url}: {error}"),
         })?;
-    let handshake = tokio_tungstenite::client_async(request, io);
+    let limits = WebSocketConfig {
+        max_message_size: Some(super::MAX_CLIENT_MESSAGE_SIZE),
+        max_frame_size: Some(super::MAX_CLIENT_MESSAGE_SIZE),
+        ..WebSocketConfig::default()
+    };
+    let handshake = tokio_tungstenite::client_async_with_config(request, io, Some(limits));
     match tokio::time::timeout(config.connect_timeout, handshake).await {
         Err(_) => Err(ProbeFailure {
             kind: ProbeFailureKind::Timeout,
