@@ -28,7 +28,8 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
       url: "http://127.0.0.1:8080/v1/sessions",
       method: "POST",
       directory: "/work",
-      body: { agent: "build", model: "offline/echo", workdir: "/work" },
+      // A local start: the server reuses the Project containing the cwd or creates one (EnsureProjectForPath).
+      body: { agent: "build", model: "offline/echo", workdir: "/work", kind: "SESSION_KIND_PROJECT" },
     },
     {
       url: "http://127.0.0.1:8080/v1/sessions/hysec_1/turns",

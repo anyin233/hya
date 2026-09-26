@@ -258,9 +258,39 @@
     "streaming": false
   },
   {
+    "method": "POST",
+    "path": "/v1/projects",
+    "operationId": "Project.CreateProject",
+    "streaming": false
+  },
+  {
     "method": "GET",
     "path": "/v1/projects/current",
     "operationId": "Project.GetCurrentProject",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/projects/ensure",
+    "operationId": "Project.EnsureProjectForPath",
+    "streaming": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/projects/resolve",
+    "operationId": "Project.ResolveProject",
+    "streaming": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/projects/{project}",
+    "operationId": "Project.DeleteProject",
+    "streaming": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/projects/{project}",
+    "operationId": "Project.GetProject",
     "streaming": false
   },
   {

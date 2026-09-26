@@ -3,31 +3,79 @@ syntax = "proto3";
 
 package hya.v1;
 
+import "google/protobuf/timestamp.proto";
 import "hya/v1/common.proto";
 
-// Project and VCS surface for directory-aware frontends.
+// Project and VCS surface. A Project (ADR-0024) is a named, ordered,
+// non-empty list of absolute root directories on the backend machine; the
+// first root is the primary root. Sessions belong to at most one Project.
 service Project {
-  // List known projects.
+  // List the Projects (archived ones are left out), most recently updated
+  // first.
   //
   // hya.http: GET /v1/projects
   rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
 
-  // The project served by this backend process.
+  // The Project whose root contains the request's directory scope (the
+  // `x-hya-directory` header, else `directory`), matched like
+  // `ResolveProject`. `invalid_argument` without a scope or for a relative
+  // scope; `not_found` when no Project contains it.
   //
   // hya.http: GET /v1/projects/current
   rpc GetCurrentProject(GetCurrentProjectRequest) returns (ProjectInfo);
 
-  // Update project metadata (display name).
+  // The Project that contains `path`, without creating one: `project` is
+  // unset when none does. A path inside several roots matches the longest
+  // root. `invalid_argument` for a relative path or one with a `..`
+  // component.
+  //
+  // hya.http: GET /v1/projects/resolve
+  rpc ResolveProject(ResolveProjectRequest) returns (ResolveProjectResponse);
+
+  // The Project for a local working directory: the Project that contains
+  // `path` (as `ResolveProject`), else a new Project named after the last
+  // component of `path` whose only root is `path`. `created` tells which.
+  // `invalid_argument` as for `ResolveProject`.
+  //
+  // hya.http: POST /v1/projects/ensure
+  rpc EnsureProjectForPath(EnsureProjectForPathRequest) returns (EnsureProjectForPathResponse);
+
+  // Create a Project. `invalid_argument` for an empty name, no roots, or a
+  // relative root or one with a `..` component. Roots are normalized (`.`
+  // components and trailing separators dropped) and de-duplicated; they need
+  // not exist.
+  //
+  // hya.http: POST /v1/projects
+  rpc CreateProject(CreateProjectRequest) returns (ProjectInfo);
+
+  // Read one Project. `not_found` when it does not exist.
+  //
+  // hya.http: GET /v1/projects/{project}
+  rpc GetProject(GetProjectRequest) returns (ProjectInfo);
+
+  // Rename a Project and/or replace its roots, in one step. Running
+  // sessions of the Project see new roots from their next turn.
+  // `not_found` when it does not exist; `invalid_argument` as for
+  // `CreateProject`.
   //
   // hya.http: PATCH /v1/projects/{project}
   rpc UpdateProject(UpdateProjectRequest) returns (ProjectInfo);
 
-  // List the work directories registered under a project.
+  // Delete a Project. `failed_precondition` while a non-archived root
+  // session belongs to it; `not_found` when it does not exist. Archived and
+  // deleted sessions keep the id, which then names no Project.
+  //
+  // hya.http: DELETE /v1/projects/{project}
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse);
+
+  // The roots of a Project, primary root first. `not_found` when it does
+  // not exist.
   //
   // hya.http: GET /v1/projects/{project}/directories
   rpc ListProjectDirectories(ListProjectDirectoriesRequest) returns (ListProjectDirectoriesResponse);
 
-  // Initialize git in a project that has no repository yet.
+  // Initialize git in the primary root of a Project that has no repository
+  // yet. `not_found` when the Project does not exist.
   //
   // hya.http: POST /v1/projects/{project}/init-git
   rpc InitProjectGit(InitProjectGitRequest) returns (InitProjectGitResponse);
@@ -48,14 +96,28 @@ service Project {
   rpc ApplyPatch(ApplyPatchRequest) returns (ApplyPatchResponse);
 }
 
-// One registered project.
+// One Project.
 message ProjectInfo {
-  // Project identifier.
+  reserved 2;
+  reserved "directory";
+  // Project identifier (`prj_...`).
   string id = 1;
-  // Absolute directory of the project.
-  string directory = 2;
-  // Display name; defaults to the directory basename.
+  // Display name.
   string name = 3;
+  // Absolute root directories on the backend machine, primary root first.
+  // Never empty.
+  repeated string roots = 4;
+  // When the Project was created.
+  google.protobuf.Timestamp created_at = 5;
+  // When the Project was last renamed or its roots replaced.
+  google.protobuf.Timestamp updated_at = 6;
+  // Root sessions (not subagent sessions) of the Project that still exist,
+  // archived ones included.
+  uint32 session_count = 7;
+  // Whether a non-archived session of the Project is running a turn now
+  // (the same run state as `SessionInfo.busy`). Live changes arrive as
+  // `projectsUpdated` frames on the global event stream.
+  bool busy = 8;
 }
 
 message ListProjectsRequest {
@@ -64,20 +126,67 @@ message ListProjectsRequest {
 }
 
 message ListProjectsResponse {
-  // Known projects.
+  // Projects, most recently updated first.
   repeated ProjectInfo projects = 1;
   // Pagination outcome.
   PageInfo page = 2;
 }
 
-message GetCurrentProjectRequest {}
+message GetCurrentProjectRequest {
+  // Directory scope; the `x-hya-directory` header overrides it.
+  string directory = 1;
+}
+
+message ResolveProjectRequest {
+  // Absolute path to match against every Project's roots.
+  string path = 1;
+}
+
+message ResolveProjectResponse {
+  // The Project whose root contains `path`; unset when none does.
+  ProjectInfo project = 1;
+}
+
+message EnsureProjectForPathRequest {
+  // Absolute working directory.
+  string path = 1;
+}
+
+message EnsureProjectForPathResponse {
+  // The matching or newly created Project.
+  ProjectInfo project = 1;
+  // Whether this call created the Project.
+  bool created = 2;
+}
+
+message CreateProjectRequest {
+  // Display name (non-empty after trimming).
+  string name = 1;
+  // Absolute root directories, primary root first (at least one).
+  repeated string roots = 2;
+}
+
+message GetProjectRequest {
+  // Project identifier.
+  string project = 1;
+}
 
 message UpdateProjectRequest {
   // Project identifier.
   string project = 1;
   // New display name when set.
   optional string name = 2;
+  // New root list, primary root first, replacing the whole list; empty
+  // keeps the current roots.
+  repeated string roots = 3;
 }
+
+message DeleteProjectRequest {
+  // Project identifier.
+  string project = 1;
+}
+
+message DeleteProjectResponse {}
 
 message ListProjectDirectoriesRequest {
   // Project identifier.
@@ -85,7 +194,7 @@ message ListProjectDirectoriesRequest {
 }
 
 message ListProjectDirectoriesResponse {
-  // Absolute directory paths registered under the project.
+  // The Project's roots, primary root first.
   repeated string directories = 1;
 }
 

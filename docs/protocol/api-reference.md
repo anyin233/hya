@@ -495,13 +495,20 @@ at launch instead of fanning out over every list rpc.
 
 ## Service `Project`
 
-Project and VCS surface for directory-aware frontends.
+Project and VCS surface. A Project (ADR-0024) is a named, ordered,
+non-empty list of absolute root directories on the backend machine; the
+first root is the primary root. Sessions belong to at most one Project.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
 | `ListProjects` | `GET /v1/projects` | `hya.v1.Project.ListProjects` | `ListProjectsRequest` | `ListProjectsResponse` |
 | `GetCurrentProject` | `GET /v1/projects/current` | `hya.v1.Project.GetCurrentProject` | `GetCurrentProjectRequest` | `ProjectInfo` |
+| `ResolveProject` | `GET /v1/projects/resolve` | `hya.v1.Project.ResolveProject` | `ResolveProjectRequest` | `ResolveProjectResponse` |
+| `EnsureProjectForPath` | `POST /v1/projects/ensure` | `hya.v1.Project.EnsureProjectForPath` | `EnsureProjectForPathRequest` | `EnsureProjectForPathResponse` |
+| `CreateProject` | `POST /v1/projects` | `hya.v1.Project.CreateProject` | `CreateProjectRequest` | `ProjectInfo` |
+| `GetProject` | `GET /v1/projects/{project}` | `hya.v1.Project.GetProject` | `GetProjectRequest` | `ProjectInfo` |
 | `UpdateProject` | `PATCH /v1/projects/{project}` | `hya.v1.Project.UpdateProject` | `UpdateProjectRequest` | `ProjectInfo` |
+| `DeleteProject` | `DELETE /v1/projects/{project}` | `hya.v1.Project.DeleteProject` | `DeleteProjectRequest` | `DeleteProjectResponse` |
 | `ListProjectDirectories` | `GET /v1/projects/{project}/directories` | `hya.v1.Project.ListProjectDirectories` | `ListProjectDirectoriesRequest` | `ListProjectDirectoriesResponse` |
 | `InitProjectGit` | `POST /v1/projects/{project}/init-git` | `hya.v1.Project.InitProjectGit` | `InitProjectGitRequest` | `InitProjectGitResponse` |
 | `GetVcsStatus` | `GET /v1/vcs` | `hya.v1.Project.GetVcsStatus` | `GetVcsStatusRequest` | `VcsStatus` |
@@ -510,27 +517,72 @@ Project and VCS surface for directory-aware frontends.
 
 ### `Project.ListProjects`
 
-List known projects.
+List the Projects (archived ones are left out), most recently updated
+first.
 
 
 ### `Project.GetCurrentProject`
 
-The project served by this backend process.
+The Project whose root contains the request's directory scope (the
+`x-hya-directory` header, else `directory`), matched like
+`ResolveProject`. `invalid_argument` without a scope or for a relative
+scope; `not_found` when no Project contains it.
+
+
+### `Project.ResolveProject`
+
+The Project that contains `path`, without creating one: `project` is
+unset when none does. A path inside several roots matches the longest
+root. `invalid_argument` for a relative path or one with a `..`
+component.
+
+
+### `Project.EnsureProjectForPath`
+
+The Project for a local working directory: the Project that contains
+`path` (as `ResolveProject`), else a new Project named after the last
+component of `path` whose only root is `path`. `created` tells which.
+`invalid_argument` as for `ResolveProject`.
+
+
+### `Project.CreateProject`
+
+Create a Project. `invalid_argument` for an empty name, no roots, or a
+relative root or one with a `..` component. Roots are normalized (`.`
+components and trailing separators dropped) and de-duplicated; they need
+not exist.
+
+
+### `Project.GetProject`
+
+Read one Project. `not_found` when it does not exist.
 
 
 ### `Project.UpdateProject`
 
-Update project metadata (display name).
+Rename a Project and/or replace its roots, in one step. Running
+sessions of the Project see new roots from their next turn.
+`not_found` when it does not exist; `invalid_argument` as for
+`CreateProject`.
+
+
+### `Project.DeleteProject`
+
+Delete a Project. `failed_precondition` while a non-archived root
+session belongs to it; `not_found` when it does not exist. Archived and
+deleted sessions keep the id, which then names no Project.
 
 
 ### `Project.ListProjectDirectories`
 
-List the work directories registered under a project.
+The roots of a Project, primary root first. `not_found` when it does
+not exist.
 
 
 ### `Project.InitProjectGit`
 
-Initialize git in a project that has no repository yet.
+Initialize git in the primary root of a Project that has no repository
+yet. `not_found` when the Project does not exist.
 
 
 ### `Project.GetVcsStatus`
@@ -1338,7 +1390,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `directory` (1) | `string` | Directory scope; empty means the process default directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
-| `interactions_only` (3) | `bool` | Deliver only the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session plus the process-wide `catalogUpdated` notice; skip every session's engine events and their `resync` frames. For a client that follows one session on its session stream and needs only the asks of the others. |
+| `interactions_only` (3) | `bool` | Deliver only the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session plus the process-wide `catalogUpdated` and `projectsUpdated` notices; skip every session's engine events and their `resync` frames. For a client that follows one session on its session stream and needs only the asks of the others. |
 
 ### `StreamFrame`
 
@@ -1388,10 +1440,12 @@ One curated projected event from the event log.
 | `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
 | `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
 | `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | The provider/model catalog changed (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`. |
+| `projects_updated` (26) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
 
 ### `PartsAdded`
 
 The provider/model catalog changed; carries no fields.
+The Project list changed; carries no fields.
 Complete parts added to a message in one step.
 
 | Field | Type | Description |
@@ -2197,13 +2251,17 @@ One-round-trip startup snapshot for frontends.
 
 ### `ProjectInfo`
 
-One registered project.
+One Project.
 
 | Field | Type | Description |
 |---|---|---|
-| `id` (1) | `string` | Project identifier. |
-| `directory` (2) | `string` | Absolute directory of the project. |
-| `name` (3) | `string` | Display name; defaults to the directory basename. |
+| `id` (1) | `string` | Project identifier (`prj_...`). |
+| `name` (3) | `string` | Display name. |
+| `roots` (4) | `repeated string` | Absolute root directories on the backend machine, primary root first. Never empty. |
+| `created_at` (5) | `google.protobuf.Timestamp` | When the Project was created. |
+| `updated_at` (6) | `google.protobuf.Timestamp` | When the Project was last renamed or its roots replaced. |
+| `session_count` (7) | `uint32` | Root sessions (not subagent sessions) of the Project that still exist, archived ones included. |
+| `busy` (8) | `bool` | Whether a non-archived session of the Project is running a turn now (the same run state as `SessionInfo.busy`). Live changes arrive as `projectsUpdated` frames on the global event stream. |
 
 ### `ListProjectsRequest`
 
@@ -2217,8 +2275,59 @@ One registered project.
 
 | Field | Type | Description |
 |---|---|---|
-| `projects` (1) | `repeated ProjectInfo` | Known projects. |
+| `projects` (1) | `repeated ProjectInfo` | Projects, most recently updated first. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
+
+### `GetCurrentProjectRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope; the `x-hya-directory` header overrides it. |
+
+### `ResolveProjectRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | Absolute path to match against every Project's roots. |
+
+### `ResolveProjectResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `project` (1) | `ProjectInfo` | The Project whose root contains `path`; unset when none does. |
+
+### `EnsureProjectForPathRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | Absolute working directory. |
+
+### `EnsureProjectForPathResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `project` (1) | `ProjectInfo` | The matching or newly created Project. |
+| `created` (2) | `bool` | Whether this call created the Project. |
+
+### `CreateProjectRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `name` (1) | `string` | Display name (non-empty after trimming). |
+| `roots` (2) | `repeated string` | Absolute root directories, primary root first (at least one). |
+
+### `GetProjectRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `project` (1) | `string` | Project identifier. |
 
 ### `UpdateProjectRequest`
 
@@ -2227,6 +2336,14 @@ One registered project.
 |---|---|---|
 | `project` (1) | `string` | Project identifier. |
 | `name` (2) | `optional string` | New display name when set. |
+| `roots` (3) | `repeated string` | New root list, primary root first, replacing the whole list; empty keeps the current roots. |
+
+### `DeleteProjectRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `project` (1) | `string` | Project identifier. |
 
 ### `ListProjectDirectoriesRequest`
 
@@ -2240,7 +2357,7 @@ One registered project.
 
 | Field | Type | Description |
 |---|---|---|
-| `directories` (1) | `repeated string` | Absolute directory paths registered under the project. |
+| `directories` (1) | `repeated string` | The Project's roots, primary root first. |
 
 ### `InitProjectGitRequest`
 
@@ -2458,6 +2575,8 @@ Projection summary of one session.
 | `revert` (16) | `SessionRevert` | Pending revert (`RevertSession`): its messages are hidden from `ListMessages` until an undo restores them or the next prompt or shell turn commits the revert. Unset when nothing is pending. |
 | `archived` (17) | `bool` | Whether this root session is archived: hidden from `ListSessions` unless requested. Subagent child sessions are never archived; they follow their root. Archiving does not cancel a running turn. |
 | `archived_at` (18) | `google.protobuf.Timestamp` | When the session was archived; unset when it is not archived. |
+| `project_id` (19) | `string` | Project the session belongs to (a subagent session carries its root's); empty for a temporary session or one created before Projects existed. The id may name a Project that was deleted since. |
+| `kind` (20) | `SessionKind` | Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`. |
 
 ### `ForkSource`
 
@@ -2481,15 +2600,34 @@ A pending revert of a session.
 
 ### `CreateSessionRequest`
 
+Where a new root session works is chosen by the client (ADR-0024):
+
+- `kind = SESSION_KIND_TEMPORARY`: no Project; the server creates the
+session's scratch directory and uses it as the workdir. `project_id` and
+`workdir` must be unset (`invalid_argument`).
+- `project_id` set (kind `SESSION_KIND_PROJECT` or unset): the Project must
+exist (`not_found`). `workdir`, when set, must lie inside one of its roots
+(`invalid_argument` otherwise); unset means the primary root.
+- no `project_id`, `workdir` set (kind `SESSION_KIND_PROJECT` or unset): the
+Project is found or created as by `EnsureProjectForPath(workdir)` and the
+session works in `workdir` (a local client passes its cwd).
+- neither: `invalid_argument`.
+
+A child session (`parent` set) always joins its parent's Project and kind:
+`project_id` and `kind` must be unset (`invalid_argument`); `workdir`
+defaults to the parent's. `workdir` must be absolute without `..`
+components.
 
 | Field | Type | Description |
 |---|---|---|
 | `agent` (1) | `string` | Agent name or catalog id to bind as the session's default agent. |
 | `model` (2) | `string` | Model reference the session starts on (`provider/model[#variant]`). |
-| `workdir` (3) | `string` | Absolute workdir for tools and relative paths in this session. |
+| `workdir` (3) | `optional string` | Absolute workdir for tools and relative paths in this session; see the rules above. |
 | `parent` (4) | `string` | When set, marks the new session as a child of this parent id. |
 | `initialize` (5) | `bool` | When true, run the directory initialization turn after creation. |
 | `title` (6) | `string` | Initial title; empty lets the backend derive one. |
+| `project_id` (7) | `string` | Project of the new root session. |
+| `kind` (8) | `SessionKind` | Kind of the new root session; unset means `SESSION_KIND_PROJECT`. |
 
 ### `CreateSessionResponse`
 
@@ -2510,11 +2648,11 @@ A pending revert of a session.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory whose sessions should be listed. |
 | `parent` (2) | `string` | Restrict to direct children of this session id when non-empty. |
 | `page` (3) | `PageRequest` | Standard pagination controls. |
 | `include_archived` (4) | `bool` | Also list archived root sessions (default: they are left out). |
 | `archived_only` (5) | `bool` | List only archived root sessions (implies `include_archived`). |
+| `project_id` (6) | `string` | Restrict to the sessions (root and subagent) of this Project when non-empty; an id that names no Project lists nothing. |
 
 ### `ListSessionsResponse`
 
@@ -3098,6 +3236,16 @@ Change status of one file.
 | `VCS_FILE_STATUS_DELETED` | 3 | Deletion. |
 | `VCS_FILE_STATUS_RENAMED` | 4 | Rename. |
 | `VCS_FILE_STATUS_UNTRACKED` | 5 | Not tracked by VCS. |
+
+### `SessionKind`
+
+Kind of a session (ADR-0024).
+
+| Value | Number | Description |
+|---|---|---|
+| `SESSION_KIND_UNSPECIFIED` | 0 | Unset. On `CreateSessionRequest` it means `SESSION_KIND_PROJECT`; the server never reports it. |
+| `SESSION_KIND_PROJECT` | 1 | A session of a Project: its workdir lies inside the Project's roots (sessions created before Projects existed have no Project). |
+| `SESSION_KIND_TEMPORARY` | 2 | A session of no Project, working in its own fresh scratch directory `$XDG_CACHE_HOME/hya/scratch/<session id>` (fallback `$HOME/.cache/hya/scratch/<session id>`), which hya never deletes. |
 
 ### `TurnState`
 

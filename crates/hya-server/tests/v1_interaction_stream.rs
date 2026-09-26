@@ -738,7 +738,13 @@ async fn global_stream_interactions_only_skips_session_events() {
         .iter()
         .filter_map(|frame| frame["event"].as_object())
         .flat_map(|event| event.keys().cloned().collect::<Vec<_>>())
-        .filter(|key| !matches!(key.as_str(), "seq" | "session" | "timeRecorded"))
+        // Creating the session also changed the Project list.
+        .filter(|key| {
+            !matches!(
+                key.as_str(),
+                "seq" | "session" | "timeRecorded" | "projectsUpdated"
+            )
+        })
         .collect();
     assert_eq!(
         kinds,
@@ -760,6 +766,7 @@ async fn global_stream_interactions_only_skips_session_events() {
                 Some(pb::stream_event::Payload::CatalogUpdated(_)) => {
                     grpc_kinds.push("catalogUpdated");
                 }
+                Some(pb::stream_event::Payload::ProjectsUpdated(_)) => {}
                 Some(pb::stream_event::Payload::PermissionRequested(_)) => {
                     grpc_kinds.push("permissionRequested");
                     break;

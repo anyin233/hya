@@ -6446,9 +6446,10 @@ pub struct StreamGlobalEventsRequest {
     pub since_seq: u64,
     /// Deliver only the live interaction frames (`permissionRequested`,
     /// `questionRequested`, `interactionResolved`) of every session plus the
-    /// process-wide `catalogUpdated` notice; skip every session's engine
-    /// events and their `resync` frames. For a client that follows one session
-    /// on its session stream and needs only the asks of the others.
+    /// process-wide `catalogUpdated` and `projectsUpdated` notices; skip every
+    /// session's engine events and their `resync` frames. For a client that
+    /// follows one session on its session stream and needs only the asks of
+    /// the others.
     #[prost(bool, tag = "3")]
     pub interactions_only: bool,
 }
@@ -6496,7 +6497,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -6586,11 +6587,21 @@ pub mod stream_event {
         /// `ListProviders`.
         #[prost(message, tag = "25")]
         CatalogUpdated(super::CatalogUpdated),
+        /// The Project list changed: a Project was created, updated, or
+        /// deleted, a Project gained or lost a session, or a Project's `busy`
+        /// flag changed. Live-only and process-wide, delivered on the global
+        /// stream only (also with `interactions_only`): `seq` is 0 and `session`
+        /// is empty. Re-read `ListProjects`.
+        #[prost(message, tag = "26")]
+        ProjectsUpdated(super::ProjectsUpdated),
     }
 }
 /// The provider/model catalog changed; carries no fields.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CatalogUpdated {}
+/// The Project list changed; carries no fields.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ProjectsUpdated {}
 /// Complete parts added to a message in one step.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartsAdded {
@@ -10416,18 +10427,34 @@ pub mod process_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
-/// One registered project.
+/// One Project.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectInfo {
-    /// Project identifier.
+    /// Project identifier (`prj_...`).
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
-    /// Absolute directory of the project.
-    #[prost(string, tag = "2")]
-    pub directory: ::prost::alloc::string::String,
-    /// Display name; defaults to the directory basename.
+    /// Display name.
     #[prost(string, tag = "3")]
     pub name: ::prost::alloc::string::String,
+    /// Absolute root directories on the backend machine, primary root first.
+    /// Never empty.
+    #[prost(string, repeated, tag = "4")]
+    pub roots: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// When the Project was created.
+    #[prost(message, optional, tag = "5")]
+    pub created_at: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// When the Project was last renamed or its roots replaced.
+    #[prost(message, optional, tag = "6")]
+    pub updated_at: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// Root sessions (not subagent sessions) of the Project that still exist,
+    /// archived ones included.
+    #[prost(uint32, tag = "7")]
+    pub session_count: u32,
+    /// Whether a non-archived session of the Project is running a turn now
+    /// (the same run state as `SessionInfo.busy`). Live changes arrive as
+    /// `projectsUpdated` frames on the global event stream.
+    #[prost(bool, tag = "8")]
+    pub busy: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProjectsRequest {
@@ -10437,15 +10464,61 @@ pub struct ListProjectsRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProjectsResponse {
-    /// Known projects.
+    /// Projects, most recently updated first.
     #[prost(message, repeated, tag = "1")]
     pub projects: ::prost::alloc::vec::Vec<ProjectInfo>,
     /// Pagination outcome.
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct GetCurrentProjectRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetCurrentProjectRequest {
+    /// Directory scope; the `x-hya-directory` header overrides it.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveProjectRequest {
+    /// Absolute path to match against every Project's roots.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveProjectResponse {
+    /// The Project whose root contains `path`; unset when none does.
+    #[prost(message, optional, tag = "1")]
+    pub project: ::core::option::Option<ProjectInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EnsureProjectForPathRequest {
+    /// Absolute working directory.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EnsureProjectForPathResponse {
+    /// The matching or newly created Project.
+    #[prost(message, optional, tag = "1")]
+    pub project: ::core::option::Option<ProjectInfo>,
+    /// Whether this call created the Project.
+    #[prost(bool, tag = "2")]
+    pub created: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateProjectRequest {
+    /// Display name (non-empty after trimming).
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Absolute root directories, primary root first (at least one).
+    #[prost(string, repeated, tag = "2")]
+    pub roots: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetProjectRequest {
+    /// Project identifier.
+    #[prost(string, tag = "1")]
+    pub project: ::prost::alloc::string::String,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateProjectRequest {
     /// Project identifier.
@@ -10454,7 +10527,19 @@ pub struct UpdateProjectRequest {
     /// New display name when set.
     #[prost(string, optional, tag = "2")]
     pub name: ::core::option::Option<::prost::alloc::string::String>,
+    /// New root list, primary root first, replacing the whole list; empty
+    /// keeps the current roots.
+    #[prost(string, repeated, tag = "3")]
+    pub roots: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteProjectRequest {
+    /// Project identifier.
+    #[prost(string, tag = "1")]
+    pub project: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DeleteProjectResponse {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProjectDirectoriesRequest {
     /// Project identifier.
@@ -10463,7 +10548,7 @@ pub struct ListProjectDirectoriesRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProjectDirectoriesResponse {
-    /// Absolute directory paths registered under the project.
+    /// The Project's roots, primary root first.
     #[prost(string, repeated, tag = "1")]
     pub directories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
@@ -10613,7 +10698,9 @@ pub mod project_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-    /// Project and VCS surface for directory-aware frontends.
+    /// Project and VCS surface. A Project (ADR-0024) is a named, ordered,
+    /// non-empty list of absolute root directories on the backend machine; the
+    /// first root is the primary root. Sessions belong to at most one Project.
     #[derive(Debug, Clone)]
     pub struct ProjectClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -10694,7 +10781,8 @@ pub mod project_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
-        /// List known projects.
+        /// List the Projects (archived ones are left out), most recently updated
+        /// first.
         ///
         /// hya.http: GET /v1/projects
         pub async fn list_projects(
@@ -10721,7 +10809,10 @@ pub mod project_client {
                 .insert(GrpcMethod::new("hya.v1.Project", "ListProjects"));
             self.inner.unary(req, path, codec).await
         }
-        /// The project served by this backend process.
+        /// The Project whose root contains the request's directory scope (the
+        /// `x-hya-directory` header, else `directory`), matched like
+        /// `ResolveProject`. `invalid_argument` without a scope or for a relative
+        /// scope; `not_found` when no Project contains it.
         ///
         /// hya.http: GET /v1/projects/current
         pub async fn get_current_project(
@@ -10745,7 +10836,120 @@ pub mod project_client {
                 .insert(GrpcMethod::new("hya.v1.Project", "GetCurrentProject"));
             self.inner.unary(req, path, codec).await
         }
-        /// Update project metadata (display name).
+        /// The Project that contains `path`, without creating one: `project` is
+        /// unset when none does. A path inside several roots matches the longest
+        /// root. `invalid_argument` for a relative path or one with a `..`
+        /// component.
+        ///
+        /// hya.http: GET /v1/projects/resolve
+        pub async fn resolve_project(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ResolveProjectRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ResolveProjectResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Project/ResolveProject",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Project", "ResolveProject"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// The Project for a local working directory: the Project that contains
+        /// `path` (as `ResolveProject`), else a new Project named after the last
+        /// component of `path` whose only root is `path`. `created` tells which.
+        /// `invalid_argument` as for `ResolveProject`.
+        ///
+        /// hya.http: POST /v1/projects/ensure
+        pub async fn ensure_project_for_path(
+            &mut self,
+            request: impl tonic::IntoRequest<super::EnsureProjectForPathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::EnsureProjectForPathResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Project/EnsureProjectForPath",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Project", "EnsureProjectForPath"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Create a Project. `invalid_argument` for an empty name, no roots, or a
+        /// relative root or one with a `..` component. Roots are normalized (`.`
+        /// components and trailing separators dropped) and de-duplicated; they need
+        /// not exist.
+        ///
+        /// hya.http: POST /v1/projects
+        pub async fn create_project(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateProjectRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProjectInfo>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Project/CreateProject",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Project", "CreateProject"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Read one Project. `not_found` when it does not exist.
+        ///
+        /// hya.http: GET /v1/projects/{project}
+        pub async fn get_project(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetProjectRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProjectInfo>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Project/GetProject",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut().insert(GrpcMethod::new("hya.v1.Project", "GetProject"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Rename a Project and/or replace its roots, in one step. Running
+        /// sessions of the Project see new roots from their next turn.
+        /// `not_found` when it does not exist; `invalid_argument` as for
+        /// `CreateProject`.
         ///
         /// hya.http: PATCH /v1/projects/{project}
         pub async fn update_project(
@@ -10769,7 +10973,37 @@ pub mod project_client {
                 .insert(GrpcMethod::new("hya.v1.Project", "UpdateProject"));
             self.inner.unary(req, path, codec).await
         }
-        /// List the work directories registered under a project.
+        /// Delete a Project. `failed_precondition` while a non-archived root
+        /// session belongs to it; `not_found` when it does not exist. Archived and
+        /// deleted sessions keep the id, which then names no Project.
+        ///
+        /// hya.http: DELETE /v1/projects/{project}
+        pub async fn delete_project(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteProjectRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteProjectResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Project/DeleteProject",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Project", "DeleteProject"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// The roots of a Project, primary root first. `not_found` when it does
+        /// not exist.
         ///
         /// hya.http: GET /v1/projects/{project}/directories
         pub async fn list_project_directories(
@@ -10796,7 +11030,8 @@ pub mod project_client {
                 .insert(GrpcMethod::new("hya.v1.Project", "ListProjectDirectories"));
             self.inner.unary(req, path, codec).await
         }
-        /// Initialize git in a project that has no repository yet.
+        /// Initialize git in the primary root of a Project that has no repository
+        /// yet. `not_found` when the Project does not exist.
         ///
         /// hya.http: POST /v1/projects/{project}/init-git
         pub async fn init_project_git(
@@ -10914,7 +11149,8 @@ pub mod project_server {
     /// Generated trait containing gRPC methods that should be implemented for use with ProjectServer.
     #[async_trait]
     pub trait Project: std::marker::Send + std::marker::Sync + 'static {
-        /// List known projects.
+        /// List the Projects (archived ones are left out), most recently updated
+        /// first.
         ///
         /// hya.http: GET /v1/projects
         async fn list_projects(
@@ -10924,21 +11160,83 @@ pub mod project_server {
             tonic::Response<super::ListProjectsResponse>,
             tonic::Status,
         >;
-        /// The project served by this backend process.
+        /// The Project whose root contains the request's directory scope (the
+        /// `x-hya-directory` header, else `directory`), matched like
+        /// `ResolveProject`. `invalid_argument` without a scope or for a relative
+        /// scope; `not_found` when no Project contains it.
         ///
         /// hya.http: GET /v1/projects/current
         async fn get_current_project(
             &self,
             request: tonic::Request<super::GetCurrentProjectRequest>,
         ) -> std::result::Result<tonic::Response<super::ProjectInfo>, tonic::Status>;
-        /// Update project metadata (display name).
+        /// The Project that contains `path`, without creating one: `project` is
+        /// unset when none does. A path inside several roots matches the longest
+        /// root. `invalid_argument` for a relative path or one with a `..`
+        /// component.
+        ///
+        /// hya.http: GET /v1/projects/resolve
+        async fn resolve_project(
+            &self,
+            request: tonic::Request<super::ResolveProjectRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ResolveProjectResponse>,
+            tonic::Status,
+        >;
+        /// The Project for a local working directory: the Project that contains
+        /// `path` (as `ResolveProject`), else a new Project named after the last
+        /// component of `path` whose only root is `path`. `created` tells which.
+        /// `invalid_argument` as for `ResolveProject`.
+        ///
+        /// hya.http: POST /v1/projects/ensure
+        async fn ensure_project_for_path(
+            &self,
+            request: tonic::Request<super::EnsureProjectForPathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::EnsureProjectForPathResponse>,
+            tonic::Status,
+        >;
+        /// Create a Project. `invalid_argument` for an empty name, no roots, or a
+        /// relative root or one with a `..` component. Roots are normalized (`.`
+        /// components and trailing separators dropped) and de-duplicated; they need
+        /// not exist.
+        ///
+        /// hya.http: POST /v1/projects
+        async fn create_project(
+            &self,
+            request: tonic::Request<super::CreateProjectRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProjectInfo>, tonic::Status>;
+        /// Read one Project. `not_found` when it does not exist.
+        ///
+        /// hya.http: GET /v1/projects/{project}
+        async fn get_project(
+            &self,
+            request: tonic::Request<super::GetProjectRequest>,
+        ) -> std::result::Result<tonic::Response<super::ProjectInfo>, tonic::Status>;
+        /// Rename a Project and/or replace its roots, in one step. Running
+        /// sessions of the Project see new roots from their next turn.
+        /// `not_found` when it does not exist; `invalid_argument` as for
+        /// `CreateProject`.
         ///
         /// hya.http: PATCH /v1/projects/{project}
         async fn update_project(
             &self,
             request: tonic::Request<super::UpdateProjectRequest>,
         ) -> std::result::Result<tonic::Response<super::ProjectInfo>, tonic::Status>;
-        /// List the work directories registered under a project.
+        /// Delete a Project. `failed_precondition` while a non-archived root
+        /// session belongs to it; `not_found` when it does not exist. Archived and
+        /// deleted sessions keep the id, which then names no Project.
+        ///
+        /// hya.http: DELETE /v1/projects/{project}
+        async fn delete_project(
+            &self,
+            request: tonic::Request<super::DeleteProjectRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteProjectResponse>,
+            tonic::Status,
+        >;
+        /// The roots of a Project, primary root first. `not_found` when it does
+        /// not exist.
         ///
         /// hya.http: GET /v1/projects/{project}/directories
         async fn list_project_directories(
@@ -10948,7 +11246,8 @@ pub mod project_server {
             tonic::Response<super::ListProjectDirectoriesResponse>,
             tonic::Status,
         >;
-        /// Initialize git in a project that has no repository yet.
+        /// Initialize git in the primary root of a Project that has no repository
+        /// yet. `not_found` when the Project does not exist.
         ///
         /// hya.http: POST /v1/projects/{project}/init-git
         async fn init_project_git(
@@ -10986,7 +11285,9 @@ pub mod project_server {
             tonic::Status,
         >;
     }
-    /// Project and VCS surface for directory-aware frontends.
+    /// Project and VCS surface. A Project (ADR-0024) is a named, ordered,
+    /// non-empty list of absolute root directories on the backend machine; the
+    /// first root is the primary root. Sessions belong to at most one Project.
     #[derive(Debug)]
     pub struct ProjectServer<T> {
         inner: Arc<T>,
@@ -11153,6 +11454,187 @@ pub mod project_server {
                     };
                     Box::pin(fut)
                 }
+                "/hya.v1.Project/ResolveProject" => {
+                    #[allow(non_camel_case_types)]
+                    struct ResolveProjectSvc<T: Project>(pub Arc<T>);
+                    impl<
+                        T: Project,
+                    > tonic::server::UnaryService<super::ResolveProjectRequest>
+                    for ResolveProjectSvc<T> {
+                        type Response = super::ResolveProjectResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ResolveProjectRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Project>::resolve_project(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ResolveProjectSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Project/EnsureProjectForPath" => {
+                    #[allow(non_camel_case_types)]
+                    struct EnsureProjectForPathSvc<T: Project>(pub Arc<T>);
+                    impl<
+                        T: Project,
+                    > tonic::server::UnaryService<super::EnsureProjectForPathRequest>
+                    for EnsureProjectForPathSvc<T> {
+                        type Response = super::EnsureProjectForPathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::EnsureProjectForPathRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Project>::ensure_project_for_path(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = EnsureProjectForPathSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Project/CreateProject" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateProjectSvc<T: Project>(pub Arc<T>);
+                    impl<
+                        T: Project,
+                    > tonic::server::UnaryService<super::CreateProjectRequest>
+                    for CreateProjectSvc<T> {
+                        type Response = super::ProjectInfo;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateProjectRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Project>::create_project(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateProjectSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Project/GetProject" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetProjectSvc<T: Project>(pub Arc<T>);
+                    impl<
+                        T: Project,
+                    > tonic::server::UnaryService<super::GetProjectRequest>
+                    for GetProjectSvc<T> {
+                        type Response = super::ProjectInfo;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetProjectRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Project>::get_project(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetProjectSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/hya.v1.Project/UpdateProject" => {
                     #[allow(non_camel_case_types)]
                     struct UpdateProjectSvc<T: Project>(pub Arc<T>);
@@ -11183,6 +11665,51 @@ pub mod project_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = UpdateProjectSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Project/DeleteProject" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteProjectSvc<T: Project>(pub Arc<T>);
+                    impl<
+                        T: Project,
+                    > tonic::server::UnaryService<super::DeleteProjectRequest>
+                    for DeleteProjectSvc<T> {
+                        type Response = super::DeleteProjectResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteProjectRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Project>::delete_project(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteProjectSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -12461,6 +12988,14 @@ pub struct SessionInfo {
     /// When the session was archived; unset when it is not archived.
     #[prost(message, optional, tag = "18")]
     pub archived_at: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// Project the session belongs to (a subagent session carries its root's);
+    /// empty for a temporary session or one created before Projects existed.
+    /// The id may name a Project that was deleted since.
+    #[prost(string, tag = "19")]
+    pub project_id: ::prost::alloc::string::String,
+    /// Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
+    #[prost(enumeration = "SessionKind", tag = "20")]
+    pub kind: i32,
 }
 /// Where a forked session came from.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -12489,6 +13024,23 @@ pub struct SessionRevert {
     #[prost(message, repeated, tag = "4")]
     pub files: ::prost::alloc::vec::Vec<RevertedFile>,
 }
+/// Where a new root session works is chosen by the client (ADR-0024):
+///
+/// - `kind = SESSION_KIND_TEMPORARY`: no Project; the server creates the
+///    session's scratch directory and uses it as the workdir. `project_id` and
+///    `workdir` must be unset (`invalid_argument`).
+/// - `project_id` set (kind `SESSION_KIND_PROJECT` or unset): the Project must
+///    exist (`not_found`). `workdir`, when set, must lie inside one of its roots
+///    (`invalid_argument` otherwise); unset means the primary root.
+/// - no `project_id`, `workdir` set (kind `SESSION_KIND_PROJECT` or unset): the
+///    Project is found or created as by `EnsureProjectForPath(workdir)` and the
+///    session works in `workdir` (a local client passes its cwd).
+/// - neither: `invalid_argument`.
+///
+/// A child session (`parent` set) always joins its parent's Project and kind:
+/// `project_id` and `kind` must be unset (`invalid_argument`); `workdir`
+/// defaults to the parent's. `workdir` must be absolute without `..`
+/// components.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {
     /// Agent name or catalog id to bind as the session's default agent.
@@ -12497,9 +13049,10 @@ pub struct CreateSessionRequest {
     /// Model reference the session starts on (`provider/model\[#variant\]`).
     #[prost(string, tag = "2")]
     pub model: ::prost::alloc::string::String,
-    /// Absolute workdir for tools and relative paths in this session.
-    #[prost(string, tag = "3")]
-    pub workdir: ::prost::alloc::string::String,
+    /// Absolute workdir for tools and relative paths in this session; see the
+    /// rules above.
+    #[prost(string, optional, tag = "3")]
+    pub workdir: ::core::option::Option<::prost::alloc::string::String>,
     /// When set, marks the new session as a child of this parent id.
     #[prost(string, tag = "4")]
     pub parent: ::prost::alloc::string::String,
@@ -12509,6 +13062,12 @@ pub struct CreateSessionRequest {
     /// Initial title; empty lets the backend derive one.
     #[prost(string, tag = "6")]
     pub title: ::prost::alloc::string::String,
+    /// Project of the new root session.
+    #[prost(string, tag = "7")]
+    pub project_id: ::prost::alloc::string::String,
+    /// Kind of the new root session; unset means `SESSION_KIND_PROJECT`.
+    #[prost(enumeration = "SessionKind", tag = "8")]
+    pub kind: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionResponse {
@@ -12524,9 +13083,6 @@ pub struct GetSessionRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSessionsRequest {
-    /// Directory whose sessions should be listed.
-    #[prost(string, tag = "1")]
-    pub directory: ::prost::alloc::string::String,
     /// Restrict to direct children of this session id when non-empty.
     #[prost(string, tag = "2")]
     pub parent: ::prost::alloc::string::String,
@@ -12539,6 +13095,10 @@ pub struct ListSessionsRequest {
     /// List only archived root sessions (implies `include_archived`).
     #[prost(bool, tag = "5")]
     pub archived_only: bool,
+    /// Restrict to the sessions (root and subagent) of this Project when
+    /// non-empty; an id that names no Project lists nothing.
+    #[prost(string, tag = "6")]
+    pub project_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSessionsResponse {
@@ -12681,6 +13241,43 @@ pub struct RevertSessionResponse {
     /// Files this call wrote (or could not restore).
     #[prost(message, repeated, tag = "2")]
     pub files: ::prost::alloc::vec::Vec<RevertedFile>,
+}
+/// Kind of a session (ADR-0024).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SessionKind {
+    /// Unset. On `CreateSessionRequest` it means `SESSION_KIND_PROJECT`; the
+    /// server never reports it.
+    Unspecified = 0,
+    /// A session of a Project: its workdir lies inside the Project's roots
+    /// (sessions created before Projects existed have no Project).
+    Project = 1,
+    /// A session of no Project, working in its own fresh scratch directory
+    /// `$XDG_CACHE_HOME/hya/scratch/<session id>` (fallback
+    /// `$HOME/.cache/hya/scratch/<session id>`), which hya never deletes.
+    Temporary = 2,
+}
+impl SessionKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SESSION_KIND_UNSPECIFIED",
+            Self::Project => "SESSION_KIND_PROJECT",
+            Self::Temporary => "SESSION_KIND_TEMPORARY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SESSION_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "SESSION_KIND_PROJECT" => Some(Self::Project),
+            "SESSION_KIND_TEMPORARY" => Some(Self::Temporary),
+            _ => None,
+        }
+    }
 }
 /// Generated client implementations.
 pub mod session_client {

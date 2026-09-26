@@ -198,6 +198,20 @@ pub(crate) fn session_info(
         }),
         archived: session.is_archived(),
         archived_at: session.archived_at_millis().and_then(timestamp),
+        project_id: session
+            .project
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        kind: session_kind(session.kind) as i32,
+    }
+}
+
+/// The wire form of a session kind.
+pub(crate) fn session_kind(kind: hya_proto::SessionKind) -> pb::SessionKind {
+    match kind {
+        hya_proto::SessionKind::Project => pb::SessionKind::Project,
+        hya_proto::SessionKind::Temporary => pb::SessionKind::Temporary,
     }
 }
 

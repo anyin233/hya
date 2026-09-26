@@ -23,7 +23,14 @@ export interface SessionInfo {
   forkedFrom?: ForkSource
   /** A pending revert (`RevertSession`, `/undo`): set until `/redo` undoes it or the next prompt or shell turn commits it. */
   revert?: SessionRevert
+  /** The session's Project (ADR-0024); unset for a temporary session or one created before Projects existed. */
+  projectId?: string
+  /** `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`. */
+  kind?: SessionKind
 }
+
+/** `hya.v1.SessionKind`. */
+export type SessionKind = "SESSION_KIND_PROJECT" | "SESSION_KIND_TEMPORARY"
 
 /** `ForkSource`: the source session and the user message the fork was cut before (empty for a head fork). */
 export interface ForkSource {
@@ -401,6 +408,12 @@ export interface StreamEvent {
    * "Live and durable frames").
    */
   catalogUpdated?: Record<string, never>
+  /**
+   * Live-only, empty `session`, global stream only: the Project list changed
+   * (a Project created/updated/deleted, a session added or removed, or a
+   * Project's `busy` flag flipped). Re-read `GET /v1/projects`.
+   */
+  projectsUpdated?: Record<string, never>
 }
 
 export interface StreamFrame {
@@ -516,11 +529,17 @@ export class HyaClient {
     return payload as T
   }
 
+  /**
+   * `CreateSession` for a local start: a Project session working in `workdir`
+   * (the cwd). The server reuses the Project whose root contains it, or
+   * creates one rooted at it (`EnsureProjectForPath`).
+   */
   async createSession(agent: string, model: string, workdir: string): Promise<SessionInfo> {
     const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", {
       agent,
       model,
       workdir,
+      kind: "SESSION_KIND_PROJECT",
     })
     return result.session
   }

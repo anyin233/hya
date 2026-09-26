@@ -23,6 +23,9 @@ pub enum Code {
     PermissionDenied,
     /// Another run already owns the session's single admission slot.
     SessionBusy,
+    /// The operation is refused in the resource's current state (for
+    /// example deleting a Project that still has live sessions).
+    FailedPrecondition,
     /// The operation conflicts with the current state (stale revisions,
     /// idempotency replays, terminal rewrites).
     Conflict,
@@ -56,6 +59,7 @@ impl Code {
             Self::SessionNotFound => "session_not_found",
             Self::PermissionDenied => "permission_denied",
             Self::SessionBusy => "session_busy",
+            Self::FailedPrecondition => "failed_precondition",
             Self::Conflict => "conflict",
             Self::Unavailable => "unavailable",
             Self::Internal => "internal",
@@ -74,7 +78,7 @@ impl Code {
             Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => 404,
             Self::BundleApiMethodNotAllowed => 405,
             Self::PermissionDenied => 403,
-            Self::SessionBusy | Self::Conflict => 409,
+            Self::SessionBusy | Self::Conflict | Self::FailedPrecondition => 409,
             Self::Unavailable => 503,
             Self::Internal => 500,
             Self::BundleApiFailed => 502,
@@ -91,7 +95,9 @@ impl Code {
             }
             Self::BundleApiMethodNotAllowed => tonic::Code::Unimplemented,
             Self::PermissionDenied => tonic::Code::PermissionDenied,
-            Self::SessionBusy | Self::Conflict => tonic::Code::FailedPrecondition,
+            Self::SessionBusy | Self::Conflict | Self::FailedPrecondition => {
+                tonic::Code::FailedPrecondition
+            }
             Self::Unavailable | Self::BundleApiFailed => tonic::Code::Unavailable,
             Self::Internal => tonic::Code::Internal,
         }
@@ -157,6 +163,12 @@ mod tests {
         assert_eq!(Code::SessionBusy.http_status(), 409);
         assert_eq!(
             Code::SessionBusy.grpc_code(),
+            tonic::Code::FailedPrecondition
+        );
+        assert_eq!(Code::FailedPrecondition.as_str(), "failed_precondition");
+        assert_eq!(Code::FailedPrecondition.http_status(), 409);
+        assert_eq!(
+            Code::FailedPrecondition.grpc_code(),
             tonic::Code::FailedPrecondition
         );
         assert_eq!(Code::SessionNotFound.http_status(), 404);

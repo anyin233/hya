@@ -59,7 +59,7 @@ async fn create_session_with_model(env: &E2eEnv, model: &str) -> SessionId {
         .create_session(&pb::CreateSessionRequest {
             agent: env.agent.clone(),
             model: model.to_string(),
-            workdir: env.backend.workdir_str(),
+            workdir: Some(env.backend.workdir_str()),
             ..Default::default()
         })
         .await

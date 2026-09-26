@@ -105,9 +105,10 @@ message StreamGlobalEventsRequest {
   uint64 since_seq = 2;
   // Deliver only the live interaction frames (`permissionRequested`,
   // `questionRequested`, `interactionResolved`) of every session plus the
-  // process-wide `catalogUpdated` notice; skip every session's engine
-  // events and their `resync` frames. For a client that follows one session
-  // on its session stream and needs only the asks of the others.
+  // process-wide `catalogUpdated` and `projectsUpdated` notices; skip every
+  // session's engine events and their `resync` frames. For a client that
+  // follows one session on its session stream and needs only the asks of
+  // the others.
   bool interactions_only = 3;
 }
 
@@ -199,11 +200,20 @@ message StreamEvent {
     // stream it reaches (global and session). Re-read `ListModels` /
     // `ListProviders`.
     CatalogUpdated catalog_updated = 25;
+    // The Project list changed: a Project was created, updated, or
+    // deleted, a Project gained or lost a session, or a Project's `busy`
+    // flag changed. Live-only and process-wide, delivered on the global
+    // stream only (also with `interactions_only`): `seq` is 0 and `session`
+    // is empty. Re-read `ListProjects`.
+    ProjectsUpdated projects_updated = 26;
   }
 }
 
 // The provider/model catalog changed; carries no fields.
 message CatalogUpdated {}
+
+// The Project list changed; carries no fields.
+message ProjectsUpdated {}
 
 // Complete parts added to a message in one step.
 message PartsAdded {

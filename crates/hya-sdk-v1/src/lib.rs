@@ -44,6 +44,19 @@ pub enum SdkError {
     Stream(String),
 }
 
+/// Percent-encode one path segment or query value (RFC 3986 unreserved
+/// characters pass through).
+fn encode_component(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 /// Typed client over one hya backend's `/v1` surface.
 pub struct V1Sdk {
     base: String,
@@ -160,6 +173,148 @@ impl V1Sdk {
             page.map(|page| format!("page.cursor={}&page.limit={}", page.cursor, page.limit));
         self.call(reqwest::Method::GET, "/v1/sessions", query, None::<&Value>)
             .await
+    }
+
+    /// `GET /v1/sessions?projectId=…` — list the sessions (root and
+    /// subagent) of one Project.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn list_project_sessions(
+        &self,
+        project: &str,
+        page: Option<pb::PageRequest>,
+    ) -> Result<pb::ListSessionsResponse, SdkError> {
+        let mut query = format!("projectId={}", encode_component(project));
+        if let Some(page) = page {
+            query.push_str(&format!(
+                "&page.cursor={}&page.limit={}",
+                encode_component(&page.cursor),
+                page.limit
+            ));
+        }
+        self.call(
+            reqwest::Method::GET,
+            "/v1/sessions",
+            Some(query),
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `GET /v1/projects` — the Projects, most recently updated first.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn list_projects(&self) -> Result<Vec<pb::ProjectInfo>, SdkError> {
+        let response: pb::ListProjectsResponse = self
+            .call(reqwest::Method::GET, "/v1/projects", None, None::<&Value>)
+            .await?;
+        Ok(response.projects)
+    }
+
+    /// `GET /v1/projects/{id}` — read one Project.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure (`not_found`).
+    pub async fn get_project(&self, project: &str) -> Result<pb::ProjectInfo, SdkError> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("/v1/projects/{}", encode_component(project)),
+            None,
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `POST /v1/projects` — create a Project with a name and roots.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure (`invalid_argument`).
+    pub async fn create_project(
+        &self,
+        name: &str,
+        roots: Vec<String>,
+    ) -> Result<pb::ProjectInfo, SdkError> {
+        let request = pb::CreateProjectRequest {
+            name: name.to_owned(),
+            roots,
+        };
+        self.call(reqwest::Method::POST, "/v1/projects", None, Some(&request))
+            .await
+    }
+
+    /// `PATCH /v1/projects/{id}` — rename and/or replace the roots (empty
+    /// `roots` keeps them) in one step.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn update_project(
+        &self,
+        request: pb::UpdateProjectRequest,
+    ) -> Result<pb::ProjectInfo, SdkError> {
+        self.call(
+            reqwest::Method::PATCH,
+            &format!("/v1/projects/{}", encode_component(&request.project)),
+            None,
+            Some(&request),
+        )
+        .await
+    }
+
+    /// `DELETE /v1/projects/{id}` — delete a Project (`failed_precondition`
+    /// while a non-archived root session uses it).
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn delete_project(&self, project: &str) -> Result<(), SdkError> {
+        let _: pb::DeleteProjectResponse = self
+            .call(
+                reqwest::Method::DELETE,
+                &format!("/v1/projects/{}", encode_component(project)),
+                None,
+                None::<&Value>,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// `GET /v1/projects/resolve?path=…` — the Project containing `path`, if
+    /// any (never creates one).
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn resolve_project(&self, path: &str) -> Result<Option<pb::ProjectInfo>, SdkError> {
+        let response: pb::ResolveProjectResponse = self
+            .call(
+                reqwest::Method::GET,
+                "/v1/projects/resolve",
+                Some(format!("path={}", encode_component(path))),
+                None::<&Value>,
+            )
+            .await?;
+        Ok(response.project)
+    }
+
+    /// `POST /v1/projects/ensure` — the Project containing `path`, or a new
+    /// one rooted at it.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn ensure_project_for_path(
+        &self,
+        path: &str,
+    ) -> Result<pb::EnsureProjectForPathResponse, SdkError> {
+        let request = pb::EnsureProjectForPathRequest {
+            path: path.to_owned(),
+        };
+        self.call(
+            reqwest::Method::POST,
+            "/v1/projects/ensure",
+            None,
+            Some(&request),
+        )
+        .await
     }
 
     /// `POST /v1/sessions/{id}/turns` — admit a prompt turn.
