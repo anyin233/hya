@@ -30,6 +30,8 @@ pub mod bundle_apis;
 mod bundle_hooks;
 /// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
+/// Catalog scopes (Global / Directory / Project) and their registry overlays.
+pub mod catalog_scope;
 /// Model category resolution and member-agent construction.
 pub mod category;
 /// Trusted defaults and restrictive bundle policy for runtime channels.
@@ -95,6 +97,7 @@ pub use bundle_apis::{
     StoreSessionReads, UsageScope,
 };
 pub use bus::EventBus;
+pub use catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};
 pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, apply_agent_model_preference,
     apply_spawn_model_policy, build_member_agent, eligible_agent_model_preference, inject_skills,
