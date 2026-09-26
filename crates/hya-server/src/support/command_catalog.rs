@@ -88,8 +88,10 @@ pub(crate) struct CommandInfo {
     pub(crate) subtask: Option<bool>,
 }
 
-pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
-    let workdir = workdir.to_string_lossy();
+/// Commands visible in `workdir`. With no workdir (a listing that names no
+/// directory), only global commands: builtins and user skills, with
+/// `${path}` left unexpanded since there is no directory to name.
+pub(crate) fn list(workdir: Option<&Path>) -> Vec<CommandInfo> {
     let mut commands = core_commands()
         .iter()
         .map(|(command, template)| CommandInfo {
@@ -97,7 +99,10 @@ pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
             ..command_info(
                 command.name.clone(),
                 command.description.clone(),
-                template.replace("${path}", workdir.as_ref()),
+                match workdir {
+                    Some(workdir) => template.replace("${path}", &workdir.to_string_lossy()),
+                    None => template.clone(),
+                },
                 Vec::new(),
                 command.subtask,
             )
@@ -147,16 +152,19 @@ pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
             None,
         ),
     ]);
-    upsert_commands(
-        &mut commands,
-        crate::support::command_sources::disk_commands(Path::new(workdir.as_ref())),
-    );
-    add_skill_commands(&mut commands, Path::new(workdir.as_ref()));
+    if let Some(workdir) = workdir {
+        upsert_commands(
+            &mut commands,
+            crate::support::command_sources::disk_commands(workdir),
+        );
+    }
+    add_skill_commands(&mut commands, workdir);
     commands
 }
 
+/// Expand `command` against the catalog of a session's `workdir`.
 pub(crate) fn expand_prompt(workdir: &Path, command: &str, arguments: &str) -> Option<String> {
-    list(workdir)
+    list(Some(workdir))
         .into_iter()
         .find(|item| item.name == command && item.expandable)
         .map(|item| expand_template(&item.template, arguments))
@@ -331,7 +339,7 @@ fn command_hints(template: &str) -> Vec<String> {
     numbered
 }
 
-fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: &Path) {
+fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: Option<&Path>) {
     for skill in crate::support::skill_catalog::list(workdir) {
         if commands.iter().any(|command| command.name == skill.name) {
             continue;
@@ -360,7 +368,7 @@ mod tests {
                 .map(|asset| asset.content.replace("${path}", "/work"))
                 .unwrap_or_else(|| panic!("missing {id} asset"))
         };
-        let commands = super::list(std::path::Path::new("/work"));
+        let commands = super::list(Some(std::path::Path::new("/work")));
         for (name, id, subtask) in [("init", "init", None), ("review", "review", Some(true))] {
             let command = commands
                 .iter()

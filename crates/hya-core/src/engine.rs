@@ -984,6 +984,18 @@ impl SessionEngine {
         Ok(self.runtime.bind_turn(workdir)?)
     }
 
+    /// Optionally refresh external catalogs, then bind a project-less view
+    /// (user skills and builtins) for listings that name no directory.
+    ///
+    /// # Errors
+    /// Propagates catalog refresh or bind failures.
+    pub async fn bind_global_runtime(&self) -> Result<TurnBinding, CoreError> {
+        if let Some(refresh) = &self.catalog_refresh {
+            let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
+        }
+        Ok(self.runtime.bind_global()?)
+    }
+
     /// Bind a fresh runtime for a Session and apply its root-tree model
     /// overrides. Catalog refresh and skill discovery happen exactly as for a
     /// root bind; temporary models are filtered against currently available
@@ -2054,6 +2066,12 @@ fn agent_def(agent: &AgentDefinition<'_>) -> AgentDef {
     }
 }
 
+/// The session's recorded workdir.
+///
+/// Every `SessionCreated` carries a workdir, so a projection of an existing
+/// session always has one. `agent.workdir` is reached only for a projection
+/// with no session at all (callers reject those first); it is the turn's
+/// AgentSpec, never a process working directory (ADR-0024).
 pub(crate) fn session_workdir(agent: &AgentSpec, projection: &Projection) -> PathBuf {
     projection
         .session

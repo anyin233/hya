@@ -530,8 +530,9 @@ hya exec "summarize this repo"
 hya exec --json "summarize this repo"
 ```
 
-Runs one headless turn and prints the rendered transcript. The command uses the
-global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
+Runs one headless turn and prints the rendered transcript. The session works
+in the current directory: its workdir is the caller's cwd as an absolute path.
+The command uses the global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
 store. With `--db`, the database stores the full canonical event log for replay,
 which can contain more sensitive data than the rendered transcript. `--json`
 prints the canonical event stream as JSONL.
@@ -625,6 +626,19 @@ hya serve --bind 127.0.0.1:8080 --db hya.db
 ```
 
 Starts the HTTP/SSE API from [`../crates/hya-server`](../crates/hya-server).
+
+**No working directory.** `hya serve` never resolves a request against the
+directory it was started in ([ADR-0024](adr/0024-project-model-and-client-chosen-workspace.md)).
+Clients say where to work: a session's workdir comes from `CreateSession`
+(a `workdir`, a Project, or a temporary scratch directory), and rpcs that work
+on a directory (files, VCS, worktrees, PTY) need an absolute
+`x-hya-directory` header or `directory` field, else they fail with
+`invalid_argument`. Catalog listings without one show the global view (see
+[the protocol guide](protocol/README.md#base-url-and-scoping)). The only
+startup-directory reads left are project bundles and plugins under
+`./.hya/` (see [Bundle Commands](#bundle-commands)). Bare `hya` passes its
+cwd to the TUI as `--dir`, and `hya exec`/`run`/`-p`/`loop` record the
+caller's cwd as their session's workdir.
 
 | Flag | Meaning |
 | --- | --- |

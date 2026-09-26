@@ -852,7 +852,11 @@ impl WorkflowControl {
         let context = WorkflowRunContext {
             binding,
             caller: caller_name.to_string(),
-            base_agent: self.base_agent.clone(),
+            // Members work in the lead session's workdir (ADR-0024).
+            base_agent: AgentSpec {
+                workdir: workdir.clone(),
+                ..self.base_agent.clone()
+            },
             inputs,
             resident_supervisor: Some(self.resident_supervisor.clone()),
             routing: Some(self.routing.clone()),

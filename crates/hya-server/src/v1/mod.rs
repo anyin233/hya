@@ -208,25 +208,49 @@ impl IntoResponse for V1Error {
     }
 }
 
-/// Resolve the directory scope for a request.
+/// The directory scope a request names, if any.
 ///
-/// Precedence: the `x-hya-directory` header, then the request's
-/// `directory` field, then the process workdir.
+/// Precedence: the `x-hya-directory` header, then the request's `directory`
+/// field. `hya serve` has no working directory of its own (ADR-0024), so
+/// there is no fallback: `Ok(None)` means the request named no scope. A
+/// relative scope would resolve against the server process's cwd, so it is
+/// `invalid_argument`.
+pub(crate) fn request_scope(
+    headers: &axum::http::HeaderMap,
+    requested: &str,
+) -> Result<Option<std::path::PathBuf>, V1Error> {
+    let named = headers
+        .get(DIRECTORY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|header| !header.is_empty())
+        .or_else(|| Some(requested.trim()).filter(|field| !field.is_empty()));
+    let Some(named) = named else {
+        return Ok(None);
+    };
+    let path = std::path::PathBuf::from(named);
+    if !path.is_absolute() {
+        return Err(V1Error::invalid_argument(format!(
+            "the directory scope must be an absolute path, got `{named}`"
+        )));
+    }
+    Ok(Some(path))
+}
+
+/// The directory scope of an rpc that cannot work without one.
+///
+/// Fails with `invalid_argument` when the request names none; the server
+/// never substitutes its own working directory.
 pub(crate) fn scope_directory(
     headers: &axum::http::HeaderMap,
     requested: &str,
-) -> std::path::PathBuf {
-    if let Some(header) = headers
-        .get(DIRECTORY_HEADER)
-        .and_then(|value| value.to_str().ok())
-        && !header.trim().is_empty()
-    {
-        return std::path::PathBuf::from(header.trim());
-    }
-    if !requested.trim().is_empty() {
-        return std::path::PathBuf::from(requested.trim());
-    }
-    std::path::PathBuf::from(".")
+) -> Result<std::path::PathBuf, V1Error> {
+    request_scope(headers, requested)?.ok_or_else(|| {
+        V1Error::invalid_argument(format!(
+            "this rpc needs a directory scope: send the `{DIRECTORY_HEADER}` header or \
+             the request's `directory` field (hya serve has no working directory)"
+        ))
+    })
 }
 
 /// Build a generated request message from path variables and query

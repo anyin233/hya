@@ -81,7 +81,7 @@ message McpServerStatus {
 }
 
 message GetMcpStatusRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
 }
 
@@ -107,7 +107,7 @@ message UrlTransport {
 }
 
 message AddMcpServerRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Server name used in tool namespaces.
   string name = 2;
@@ -123,21 +123,21 @@ message AddMcpServerRequest {
 }
 
 message ConnectMcpRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Server name to connect.
   string name = 2;
 }
 
 message DisconnectMcpRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Server name to disconnect.
   string name = 2;
 }
 
 message StartMcpAuthRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Server name to authenticate.
   string name = 2;
@@ -149,7 +149,7 @@ message StartMcpAuthResponse {
 }
 
 message CompleteMcpAuthRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Server name completing the flow.
   string name = 2;
@@ -158,7 +158,7 @@ message CompleteMcpAuthRequest {
 }
 
 message RemoveMcpAuthRequest {
-  // Directory scope; empty means the process default directory.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Server name whose credentials should be removed.
   string name = 2;

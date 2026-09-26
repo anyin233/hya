@@ -41,11 +41,14 @@ impl SessionEngine {
             .as_ref()
             .map_or("build", hya_proto::AgentName::as_str)
             .to_string();
+        // Every session records its workdir at creation; there is no
+        // process-level fallback (ADR-0024).
         let workdir = projection
             .session
             .workdir
             .as_deref()
-            .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| CoreError::Invalid(format!("session not found: {session}")))?;
         Ok((
             self.bind_session_runtime(session, &workdir).await?,
             stable_id,

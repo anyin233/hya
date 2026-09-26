@@ -3365,8 +3365,8 @@ impl ResidentSupervisor {
             .session
             .workdir
             .clone()
-            .unwrap_or_else(|| ".".to_string());
-        let workdir = std::path::PathBuf::from(workdir);
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| CoreError::Invalid(format!("session not found: {child}")))?;
         let binding = self.engine.bind_session_runtime(child, &workdir).await?;
         let agents = self
             .engine

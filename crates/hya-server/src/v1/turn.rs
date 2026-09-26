@@ -144,7 +144,7 @@ async fn create_turn(
     match request.kind {
         Some(Kind::Prompt(prompt)) => {
             let attachments = prompt_attachments(prompt.attachments)?;
-            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await?;
             if !attachments.is_empty() {
                 ensure_image_input(&st, session, &turn.agent).await?;
             }
@@ -222,13 +222,7 @@ async fn create_turn(
             let text = match native_request.text.clone() {
                 Some(text) => text,
                 None => {
-                    let workdir = st
-                        .engine
-                        .read_projection(session)
-                        .await
-                        .ok()
-                        .and_then(|projection| projection.session.workdir.clone())
-                        .map_or_else(|| st.agent.workdir.clone(), std::path::PathBuf::from);
+                    let workdir = crate::support::reference::session_workdir(&st, session).await?;
                     crate::support::command_catalog::expand_prompt(
                         &workdir,
                         &command.command,
@@ -253,7 +247,7 @@ async fn create_turn(
                 )
                 .await?;
             let engine = st.engine.clone();
-            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await?;
             spawn_auto_title(&st, session, &turn.agent.model);
             let external_dirs =
                 crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;

@@ -36,7 +36,7 @@ async fn list_worktrees(
     headers: HeaderMap,
 ) -> Result<Json<pb::ListWorktreesResponse>, V1Error> {
     let request: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &request.directory);
+    let source = scope_directory(&headers, &request.directory)?;
     let infos = crate::support::worktree_git::infos(&source)
         .await
         .map_err(V1Error::internal)?;
@@ -55,7 +55,7 @@ async fn create_worktree(
     Json(request): Json<pb::CreateWorktreeRequest>,
 ) -> Result<Json<pb::Worktree>, V1Error> {
     let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &scope.directory);
+    let source = scope_directory(&headers, &scope.directory)?;
     let requested = if request.name.is_empty() {
         None
     } else {
@@ -76,7 +76,7 @@ async fn delete_worktree(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::DeleteWorktreeResponse>, V1Error> {
     let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &scope.directory);
+    let source = scope_directory(&headers, &scope.directory)?;
     let removed = crate::support::worktree_git::remove(&source, &id)
         .await
         .map_err(V1Error::internal)?;
@@ -96,7 +96,7 @@ async fn reset_worktree(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::Worktree>, V1Error> {
     let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let source = scope_directory(&headers, &scope.directory);
+    let source = scope_directory(&headers, &scope.directory)?;
     let reset = crate::support::worktree_git::reset(&source, &id)
         .await
         .map_err(V1Error::internal)?;

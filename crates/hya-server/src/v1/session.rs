@@ -486,11 +486,12 @@ async fn fork_session(
                 .model
                 .clone()
                 .unwrap_or_else(|| st.agent.model.clone()),
+            // Every session records its workdir; the fork works there too.
             workdir: projection
                 .session
                 .workdir
                 .clone()
-                .unwrap_or_else(|| st.agent.workdir.to_string_lossy().into_owned()),
+                .ok_or_else(|| V1Error::session_not_found(&source.to_string()))?,
             // A fork stays in its source's Project and keeps its kind.
             project: projection.session.project,
             kind: projection.session.kind,

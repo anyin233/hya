@@ -12,8 +12,6 @@ pub(crate) mod command_sources;
 #[allow(dead_code)]
 pub(crate) mod git;
 #[allow(dead_code)]
-pub(crate) mod location;
-#[allow(dead_code)]
 pub(crate) mod model_ref;
 #[allow(dead_code)]
 pub(crate) mod pty_runtime;
@@ -37,7 +35,5 @@ pub(crate) mod workspace_id;
 pub(crate) mod worktree_git;
 #[allow(dead_code)]
 pub(crate) mod worktree_git_info;
-#[allow(dead_code)]
-pub(crate) mod worktree_git_lookup;
 
 pub(crate) mod global_state;

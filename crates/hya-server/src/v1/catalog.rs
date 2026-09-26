@@ -15,7 +15,7 @@ use crate::ServerState;
 use hya_api::v1 as pb;
 use serde_json::{Value, json};
 
-use super::{V1Error, scope_directory};
+use super::{V1Error, request_scope};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -54,15 +54,16 @@ async fn list_agents(
     headers: HeaderMap,
 ) -> Result<Json<pb::ListAgentsResponse>, V1Error> {
     let request: pb::ListAgentsRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &request.directory);
-    let agents = agent_rows(&st, &workdir).await?;
+    let workdir = request_scope(&headers, &request.directory)?;
+    let agents = agent_rows(&st, workdir.as_deref()).await?;
     Ok(Json(paginated_agents(agents, &request.page)))
 }
 
-/// Agent rows shared with the bootstrap snapshot.
+/// Agent rows shared with the bootstrap snapshot; `None` lists the global
+/// (project-less) view.
 pub(crate) async fn agent_rows(
     st: &ServerState,
-    workdir: &Path,
+    workdir: Option<&Path>,
 ) -> Result<Vec<pb::AgentSummary>, V1Error> {
     let rows = crate::support::bound_agent_metadata::list(st, workdir)
         .await
@@ -139,10 +140,8 @@ pub(crate) fn paginate<T>(rows: Vec<T>, page: &Option<pb::PageRequest>) -> (Vec<
 async fn list_models(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListModelsResponse>, V1Error> {
     let request: pb::ListModelsRequest = super::query_request(&[], &query)?;
-    let _scope = scope_directory(&headers, &request.directory);
     let mut models = model_rows(&st);
     if !request.provider_id.is_empty() {
         models.retain(|model| model.provider_id == request.provider_id);
@@ -225,10 +224,8 @@ fn kind_label(kind: hya_provider::ProviderKind) -> &'static str {
 async fn list_providers(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListProvidersResponse>, V1Error> {
     let request: pb::ListProvidersRequest = super::query_request(&[], &query)?;
-    let _scope = scope_directory(&headers, &request.directory);
     let providers = provider_rows(&st, &model_rows(&st)).await;
     let (providers, page) = paginate(providers, &request.page);
     Ok(Json(pb::ListProvidersResponse {
@@ -351,11 +348,9 @@ async fn get_provider(
     State(st): State<ServerState>,
     AxumPath(provider_id): AxumPath<String>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ProviderInfo>, V1Error> {
     let request: pb::GetProviderRequest =
         super::query_request(&[("provider_id", provider_id.as_str())], &query)?;
-    let _scope = scope_directory(&headers, &request.directory);
     provider_info(&st, &request.provider_id)
         .await
         .map(Json)
@@ -373,8 +368,8 @@ async fn list_commands(
     headers: HeaderMap,
 ) -> Result<Json<pb::ListCommandsResponse>, V1Error> {
     let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &request.directory);
-    let commands = command_rows(&workdir);
+    let workdir = request_scope(&headers, &request.directory)?;
+    let commands = command_rows(workdir.as_deref());
     let (commands, page) = paginate(commands, &request.page);
     Ok(Json(pb::ListCommandsResponse {
         commands,
@@ -382,8 +377,9 @@ async fn list_commands(
     }))
 }
 
-/// Command rows shared with the bootstrap snapshot.
-pub(crate) fn command_rows(workdir: &Path) -> Vec<pb::CommandSummary> {
+/// Command rows shared with the bootstrap snapshot; `None` lists global
+/// commands only.
+pub(crate) fn command_rows(workdir: Option<&Path>) -> Vec<pb::CommandSummary> {
     crate::support::command_catalog::list(workdir)
         .into_iter()
         .map(|row| pb::CommandSummary {
@@ -406,8 +402,8 @@ async fn list_skills(
     headers: HeaderMap,
 ) -> Result<Json<pb::ListSkillsResponse>, V1Error> {
     let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &request.directory);
-    let skills = skill_rows(&workdir);
+    let workdir = request_scope(&headers, &request.directory)?;
+    let skills = skill_rows(workdir.as_deref());
     let (skills, page) = paginate(skills, &request.page);
     Ok(Json(pb::ListSkillsResponse {
         skills,
@@ -415,8 +411,9 @@ async fn list_skills(
     }))
 }
 
-/// Skill rows shared with the bootstrap snapshot.
-pub(crate) fn skill_rows(workdir: &Path) -> Vec<pb::SkillSummary> {
+/// Skill rows shared with the bootstrap snapshot; `None` lists user skills
+/// and builtins only.
+pub(crate) fn skill_rows(workdir: Option<&Path>) -> Vec<pb::SkillSummary> {
     crate::support::skill_catalog::list(workdir)
         .into_iter()
         .map(|row| pb::SkillSummary {
@@ -432,10 +429,8 @@ pub(crate) fn skill_rows(workdir: &Path) -> Vec<pb::SkillSummary> {
 async fn list_tools(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListToolsResponse>, V1Error> {
     let request: pb::ListToolsRequest = super::query_request(&[], &query)?;
-    let _scope = scope_directory(&headers, &request.directory);
     let tools = tool_rows(&st);
     let (tools, page) = paginate(tools, &request.page);
     Ok(Json(pb::ListToolsResponse {
@@ -514,10 +509,8 @@ async fn list_runtime_schemas(State(st): State<ServerState>) -> Json<Value> {
 async fn list_saved_rules(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
-    headers: HeaderMap,
 ) -> Result<Json<pb::ListSavedRulesResponse>, V1Error> {
     let request: pb::ListSavedRulesRequest = super::query_request(&[], &query)?;
-    let _scope = scope_directory(&headers, &request.directory);
     let rules = saved_rule_rows(&st).await;
     let (rules, page) = paginate(rules, &request.page);
     Ok(Json(pb::ListSavedRulesResponse {
@@ -531,7 +524,10 @@ async fn list_saved_rules(
 /// Every row is an "allow always" grant, so the effect is always
 /// `RULE_PERMISSION_ALLOW`. Exact tool/MCP grants report the granted tool as
 /// `tool` with an empty `pattern`; exact command grants report `bash` plus the
-/// command; action-wide grants report the action name plus `*`.
+/// command; action-wide grants report the action name plus `*`. `project_id`
+/// is the store row's own scope: `"global"` for every rule except an
+/// `ExternalDirectory` grant (ADR-0026), which carries the Project it is
+/// scoped to.
 pub(crate) async fn saved_rule_rows(st: &ServerState) -> Vec<pb::SavedRule> {
     let Ok(rows) = st.permission_requests.list_saved(None).await else {
         return Vec::new();
@@ -541,6 +537,7 @@ pub(crate) async fn saved_rule_rows(st: &ServerState) -> Vec<pb::SavedRule> {
 
 fn saved_rule(row: hya_store::SavedPermission) -> pb::SavedRule {
     let exact = row.resource != "*";
+    let project_id = row.project_id;
     let (tool, pattern) = match row.action.as_str() {
         "tool" | "mcp" if exact => (row.resource, String::new()),
         _ => (row.action, row.resource),
@@ -551,6 +548,7 @@ fn saved_rule(row: hya_store::SavedPermission) -> pb::SavedRule {
         tool,
         pattern,
         time_created: row.time_created_ms.and_then(super::convert::timestamp),
+        project_id,
     }
 }
 

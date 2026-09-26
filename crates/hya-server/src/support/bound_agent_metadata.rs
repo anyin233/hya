@@ -127,12 +127,19 @@ async fn resolve_session_model(
     Ok(explicit)
 }
 
-/// Bind once for `workdir` and list catalog agents from that TurnBinding.
+/// Bind once for `workdir` (or, with none, the project-less global view) and
+/// list catalog agents from that TurnBinding.
 ///
 /// Bind failures surface as typed `ApiError` (via `CoreError`) rather than an
 /// empty list fallback — there is no second authority when binding fails.
-pub(crate) async fn list(st: &ServerState, workdir: &Path) -> Result<Vec<BoundAgentRow>, ApiError> {
-    let binding = st.engine.bind_root_runtime(workdir).await?;
+pub(crate) async fn list(
+    st: &ServerState,
+    workdir: Option<&Path>,
+) -> Result<Vec<BoundAgentRow>, ApiError> {
+    let binding = match workdir {
+        Some(workdir) => st.engine.bind_root_runtime(workdir).await?,
+        None => st.engine.bind_global_runtime().await?,
+    };
     let catalog = binding.agent_catalog();
 
     // Ordinary reachability: every non-reserved agent is reachable, because

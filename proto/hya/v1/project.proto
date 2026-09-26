@@ -209,7 +209,9 @@ message InitProjectGitResponse {
 }
 
 message GetVcsStatusRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
 }
 
@@ -254,7 +256,9 @@ message VcsFileChange {
 }
 
 message GetVcsDiffRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Accepted and ignored: the diff is always git's unified patch
   // (`git diff HEAD` plus untracked files).
@@ -272,7 +276,9 @@ message GetVcsDiffResponse {
 }
 
 message ApplyPatchRequest {
-  // Directory scope; empty means the process default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Unified diff patch to apply.
   string patch = 2;

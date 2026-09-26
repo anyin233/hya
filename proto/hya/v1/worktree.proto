@@ -42,8 +42,9 @@ message Worktree {
 }
 
 message ListWorktreesRequest {
-  // Directory scope of the owning repository; empty means the process
-  // default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
 }
 
@@ -53,8 +54,9 @@ message ListWorktreesResponse {
 }
 
 message CreateWorktreeRequest {
-  // Directory scope of the owning repository; empty means the process
-  // default directory.
+  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // without one the rpc fails with invalid_argument (the backend has no
+  // working directory of its own).
   string directory = 1;
   // Worktree name; derived from the branch when empty.
   string name = 2;

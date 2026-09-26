@@ -116,7 +116,8 @@ enum AuthStatus {
 }
 
 message ListAgentsRequest {
-  // Directory whose bound agent catalog should be listed.
+  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // empty lists the global view (no project sources).
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
@@ -142,7 +143,7 @@ message ListAgentsResponse {
 }
 
 message ListModelsRequest {
-  // Directory whose model catalog should be listed.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Restrict to one provider when non-empty.
   string provider_id = 2;
@@ -194,7 +195,7 @@ message ListModelsResponse {
 }
 
 message ListProvidersRequest {
-  // Directory whose provider catalog should be listed.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
@@ -233,7 +234,7 @@ message ListProvidersResponse {
 }
 
 message GetProviderRequest {
-  // Directory context for the provider lookup.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Provider identifier.
   string provider_id = 2;
@@ -364,7 +365,8 @@ message TestProviderModelResponse {
 }
 
 message ListCommandsRequest {
-  // Directory whose command catalog should be listed.
+  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // empty lists the global view (no project sources).
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
@@ -400,7 +402,8 @@ message ListCommandsResponse {
 }
 
 message ListSkillsRequest {
-  // Directory whose skill catalog should be listed.
+  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // empty lists the global view (no project sources).
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;
@@ -428,7 +431,7 @@ message ListSkillsResponse {
 }
 
 message ListToolsRequest {
-  // Directory whose tool catalog should be listed.
+  // Ignored: this rpc does not depend on a directory.
   string directory = 1;
   // Standard pagination controls.
   PageRequest page = 2;

@@ -16,7 +16,7 @@ use hya_api::v1 as pb;
 use hya_proto::ProjectId;
 use hya_store::Project;
 
-use super::{DIRECTORY_HEADER, V1Error, scope_directory};
+use super::{V1Error, scope_directory};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -143,21 +143,12 @@ async fn current_project(
     headers: HeaderMap,
 ) -> Result<Json<pb::ProjectInfo>, V1Error> {
     let request: pb::GetCurrentProjectRequest = super::query_request(&[], &query)?;
-    let scope = headers
-        .get(DIRECTORY_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|scope| !scope.is_empty())
-        .unwrap_or_else(|| request.directory.trim());
-    if scope.is_empty() {
-        return Err(V1Error::invalid_argument(
-            "a directory scope (x-hya-directory or directory) is required",
-        ));
-    }
+    let scope = scope_directory(&headers, &request.directory)?;
+    let scope = scope.to_string_lossy();
     let project = st
         .engine
         .store()
-        .resolve_project_by_path(scope)
+        .resolve_project_by_path(&scope)
         .await?
         .ok_or_else(|| V1Error::not_found(format!("no project contains {scope}")))?;
     Ok(Json(project_info(&st, &project, None).await?))
@@ -284,7 +275,7 @@ async fn get_vcs_status(
     headers: HeaderMap,
 ) -> Result<Json<pb::VcsStatus>, V1Error> {
     let request: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &request.directory);
+    let workdir = scope_directory(&headers, &request.directory)?;
     let branch = crate::support::git::branch(&workdir);
     let head = tokio::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -349,7 +340,7 @@ async fn get_vcs_diff(
 ) -> Result<Json<pb::GetVcsDiffResponse>, V1Error> {
     let request: pb::GetVcsDiffRequest =
         super::query_request_pairs(&[], query.iter().map(|(k, v)| (k, v)), &["paths"])?;
-    let workdir = scope_directory(&headers, &request.directory);
+    let workdir = scope_directory(&headers, &request.directory)?;
     let paths = diff_paths(&request.paths)?;
     // `raw` is accepted and ignored: the diff is always git's unified patch.
     let diff = if crate::support::git::is_repo(&workdir) {
@@ -394,7 +385,7 @@ async fn apply_patch(
     Json(request): Json<pb::ApplyPatchRequest>,
 ) -> Result<Json<pb::ApplyPatchResponse>, V1Error> {
     let scope: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
-    let workdir = scope_directory(&headers, &scope.directory);
+    let workdir = scope_directory(&headers, &scope.directory)?;
     let _ = &request.directory;
     if !crate::support::git::is_repo(&workdir) {
         return Err(V1Error::invalid_argument(

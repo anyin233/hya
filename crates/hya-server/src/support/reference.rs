@@ -4,7 +4,7 @@ use hya_proto::AgentName;
 use std::sync::Arc;
 
 use hya_core::{
-    AgentSpec, PromptEnv, discover_context_files, render_environment_and_context, today,
+    AgentSpec, CoreError, PromptEnv, discover_context_files, render_environment_and_context, today,
 };
 use hya_proto::SessionId;
 use serde_json::Value;
@@ -21,28 +21,20 @@ pub(crate) struct SessionTurnAgent {
     pub guidance: Option<Arc<str>>,
 }
 
-pub(crate) async fn agent_with_guidance(st: &ServerState) -> SessionTurnAgent {
-    let workdir = crate::support::location::workdir(st);
-    agent_with_guidance_at(st, &workdir).await
-}
-
-pub(crate) async fn agent_with_guidance_at(st: &ServerState, workdir: &Path) -> SessionTurnAgent {
-    let mut agent = (*st.agent).clone();
-    agent.workdir = workdir.to_path_buf();
-    // Bundle is the sole agent definition authority for prompt/reasoning.
-    // Do not overlay legacy disk agent file prompt/reasoning here.
-    let guidance = guidance_at(st, workdir).await;
-    SessionTurnAgent { agent, guidance }
-}
-
-pub(crate) async fn session_workdir(st: &ServerState, session: SessionId) -> PathBuf {
+/// A session's recorded workdir. Every session has one; the server has no
+/// working directory to fall back on (ADR-0024).
+pub(crate) async fn session_workdir(
+    st: &ServerState,
+    session: SessionId,
+) -> Result<PathBuf, CoreError> {
     st.engine
         .store()
         .read_projection(session)
-        .await
-        .ok()
-        .and_then(|projection| projection.session.workdir.map(PathBuf::from))
-        .unwrap_or_else(|| crate::support::location::workdir(st))
+        .await?
+        .session
+        .workdir
+        .map(PathBuf::from)
+        .ok_or_else(|| CoreError::Invalid(format!("session not found: {session}")))
 }
 
 // Run a turn under the session's switched agent, not the server default (the
@@ -52,16 +44,14 @@ pub(crate) async fn session_workdir(st: &ServerState, session: SessionId) -> Pat
 pub(crate) async fn session_agent_with_guidance(
     st: &ServerState,
     session: SessionId,
-) -> SessionTurnAgent {
-    let Ok(projection) = st.engine.store().read_projection(session).await else {
-        return agent_with_guidance(st).await;
-    };
+) -> Result<SessionTurnAgent, CoreError> {
+    let projection = st.engine.store().read_projection(session).await?;
     let workdir = projection
         .session
         .workdir
         .as_deref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::support::location::workdir(st));
+        .ok_or_else(|| CoreError::Invalid(format!("session not found: {session}")))?;
     let mut agent = (*st.agent).clone();
     agent.workdir = workdir.clone();
     let active_name = projection
@@ -79,12 +69,7 @@ pub(crate) async fn session_agent_with_guidance(
         .unwrap_or_else(|| agent.model.clone());
     agent.model = active_model;
     let guidance = guidance_at(st, &workdir).await;
-    SessionTurnAgent { agent, guidance }
-}
-
-pub(crate) async fn list(st: &ServerState) -> Vec<Value> {
-    let workdir = crate::support::location::workdir(st);
-    list_at(st, &workdir).await
+    Ok(SessionTurnAgent { agent, guidance })
 }
 
 pub(crate) async fn list_at(st: &ServerState, workdir: &Path) -> Vec<Value> {
@@ -212,7 +197,7 @@ pub(crate) async fn shell_agent(
     if let Some(model) = req.model_ref() {
         st.engine.switch_model(session, model).await?;
     }
-    let mut turn = session_agent_with_guidance(st, session).await;
+    let mut turn = session_agent_with_guidance(st, session).await?;
     if let Some(agent) = req
         .agent
         .as_deref()

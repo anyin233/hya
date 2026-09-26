@@ -69,12 +69,19 @@ async fn create_pty(
     Json(request): Json<pb::CreatePtyRequest>,
 ) -> Result<Json<pb::PtySession>, V1Error> {
     let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
-    let cwd = if request.cwd.is_empty() {
-        scope_directory(&headers, &scope.directory)
+    // The shell starts in the request's `cwd`, else the directory scope;
+    // never in the server's own working directory (ADR-0024).
+    let cwd = if request.cwd.trim().is_empty() {
+        scope_directory(&headers, &scope.directory)?
             .to_string_lossy()
             .into_owned()
+    } else if std::path::Path::new(request.cwd.trim()).is_absolute() {
+        request.cwd.trim().to_owned()
     } else {
-        request.cwd.clone()
+        return Err(V1Error::invalid_argument(format!(
+            "the pty cwd must be an absolute path, got `{}`",
+            request.cwd
+        )));
     };
     let payload = crate::support::pty_state::CreatePayload {
         command: if request.shell.is_empty() {

@@ -54,7 +54,7 @@ async fn read_file(
     headers: HeaderMap,
 ) -> Result<Json<pb::ReadFileResponse>, V1Error> {
     let request: pb::ReadFileRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory);
+    let root = scope_directory(&headers, &request.directory)?;
     let path = resolve_under(&root, &request.path)?;
     let bytes = tokio::fs::read(&path)
         .await
@@ -75,7 +75,7 @@ async fn list_directory(
     headers: HeaderMap,
 ) -> Result<Json<pb::ListDirectoryResponse>, V1Error> {
     let request: pb::ListDirectoryRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory);
+    let root = scope_directory(&headers, &request.directory)?;
     let dir = resolve_under(&root, &request.path)?;
     let mut entries = Vec::new();
     let mut read_dir = tokio::fs::read_dir(&dir)
@@ -120,7 +120,7 @@ async fn find_files(
     headers: HeaderMap,
 ) -> Result<Json<pb::FindFilesResponse>, V1Error> {
     let request: pb::FindFilesRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory);
+    let root = scope_directory(&headers, &request.directory)?;
     let limit = if request.limit == 0 {
         500
     } else {
@@ -148,7 +148,7 @@ async fn search_text(
     headers: HeaderMap,
 ) -> Result<Json<pb::SearchTextResponse>, V1Error> {
     let request: pb::SearchTextRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory);
+    let root = scope_directory(&headers, &request.directory)?;
     let limit = if request.limit == 0 {
         200
     } else {
@@ -197,7 +197,7 @@ async fn search_symbols(
     headers: HeaderMap,
 ) -> Result<Json<pb::SearchSymbolsResponse>, V1Error> {
     let request: pb::SearchSymbolsRequest = super::query_request(&[], &query)?;
-    let root = scope_directory(&headers, &request.directory);
+    let root = scope_directory(&headers, &request.directory)?;
     let symbols = st
         .engine
         .lsp()
