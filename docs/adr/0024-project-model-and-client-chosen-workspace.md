@@ -64,10 +64,14 @@ The client chooses where a session works. The unit it chooses is a
   spawned with `current_dir = $HOME` only so that it does not pin a random
   directory. The only readers left are project-tier plugin and bundle
   discovery (`./.hya/plugins`, `./.hya/bundles`), which therefore resolve to
-  `~/.hya/` for a daemon.
+  `~/.hya/` for a daemon. **Amended by ADR-0027**: these two tiers are no
+  longer process-wide reads of a start directory; they are scoped catalog
+  overlays resolved per registered Project, from every one of its roots.
 - **Per-root context.** Bundles, skills, and `AGENTS.md` context under `.hya`
   are loaded from the session's workdir as before. Other roots contribute no
-  context yet (follow-up).
+  context yet (follow-up). **Amended by ADR-0027**: bundles, plugins,
+  commands, and skills are now discovered from every root of the session's
+  Project (workdir first, then each root, first wins), not the workdir alone.
 
 ## Why
 
