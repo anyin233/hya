@@ -2,13 +2,18 @@
 import { resolve } from "node:path"
 
 export interface Options {
-  /** Base URL of a running `hya serve`; unset = the TUI starts its own backend (src/launch.ts). */
+  /** Base URL of a running `hya serve`; unset = the TUI finds or starts its database's daemon (src/launch.ts). */
   server?: string
   /** Workspace directory: `x-hya-directory` of every request, and the started backend's working directory. */
   directory: string
-  /** `hya` binary for the started backend (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
+  /** `hya` binary that starts the daemon (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
   hya?: string
-  /** SQLite database of the started backend (`--db`); default `$XDG_STATE_HOME/hya/sessions.db`. */
+  /**
+   * The database whose daemon the TUI uses (`--db`); default
+   * `$XDG_STATE_HOME/hya/sessions.db` without `--server`. With `--server` it
+   * names the database behind that URL, so the TUI can find or restart its
+   * daemon when the server goes away; without it, `--server` is fixed.
+   */
   db?: string
   /** Open the most recent top-level session of `directory` (`--continue`). */
   continue: boolean
@@ -16,8 +21,6 @@ export interface Options {
   session?: string
   /** The WebUI bare `hya` serves next to this TUI (`--web-url`), or why it could not (`--web-error`). */
   web?: WebInfo
-  /** `--attached-pid`: bare `hya` attached to this running server instead of starting one (shown in `/status`). */
-  attachedPid?: number
 }
 
 /** The WebUI state bare `hya` passes to its terminal TUI: exactly one of the two is set. */
@@ -30,26 +33,28 @@ export interface WebInfo {
 
 export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
 
-Without --server the TUI attaches to the server already running on --db
-(its <db>.server.json answers), else starts its own backend (hya serve on a
-free local port, working directory --dir) and stops it when the TUI exits.
+Without --server the TUI uses the backend daemon of --db: the server already
+running on it (its <db>.server.json answers), else a new one it starts with
+\`hya serve start\` (detached, working directory --dir). The daemon keeps
+running after the TUI exits; \`hya serve stop\` stops it. When the server goes
+away, the TUI finds or starts the next one and reconnects.
 
 Options:
-  --server URL      Connect to a running hya serve instead of starting one
+  --server URL      Connect to this hya server instead of the database's
+                    daemon; with --db, a lost server is replaced by the
+                    database's daemon
   --dir PATH        Workspace directory (default: the current directory)
-  --hya PATH        hya binary to start; lookup order: --hya, then HYA_BIN,
-                    then hya on PATH
-  --db PATH         SQLite database of the started backend
-                    (default: $XDG_STATE_HOME/hya/sessions.db, else
-                    ~/.local/state/hya/sessions.db)
+  --hya PATH        hya binary that starts the daemon; lookup order: --hya,
+                    then HYA_BIN, then hya on PATH
+  --db PATH         SQLite database whose daemon to use
+                    (default without --server: $XDG_STATE_HOME/hya/sessions.db,
+                    else ~/.local/state/hya/sessions.db)
   -c, --continue    Open the most recent top-level session in --dir
   -s, --session ID  Open the session with this id
   --web-url URL     Show this WebUI address (set by bare hya, which serves
                     the WebUI next to this TUI)
   --web-error TEXT  Show "WebUI unavailable: TEXT" (set by bare hya when the
                     WebUI could not start)
-  --attached-pid N  With --server: the server is another process's (pid N)
-                    that bare hya attached to; shown in /status
   -h, --help        Show this help
 
 Environment:
@@ -66,7 +71,6 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let session: string | undefined
   let webUrl: string | undefined
   let webError: string | undefined
-  let attachedPid: string | undefined
   let resume = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
@@ -81,11 +85,9 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     else if (arg === "--session" || arg === "-s") session = argv[++index]!
     else if (arg === "--web-url") webUrl = argv[++index]!
     else if (arg === "--web-error") webError = argv[++index]!
-    else if (arg === "--attached-pid") attachedPid = argv[++index]!
     else throw new Error(`Unknown or incomplete option: ${arg}`)
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
-  if (server !== undefined && (hya !== undefined || db !== undefined)) throw new Error("--hya and --db only apply without --server")
   const options: Options = { directory: resolve(directory), continue: resume }
   if (server !== undefined) {
     const url = new URL(server)
@@ -102,11 +104,5 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     options.web = { url: url.toString() }
   }
   if (webError !== undefined) options.web = { error: webError }
-  if (attachedPid !== undefined) {
-    if (server === undefined) throw new Error("--attached-pid only applies with --server")
-    const pid = Number(attachedPid)
-    if (!Number.isInteger(pid) || pid <= 0) throw new Error("--attached-pid needs a process id")
-    options.attachedPid = pid
-  }
   return options
 }

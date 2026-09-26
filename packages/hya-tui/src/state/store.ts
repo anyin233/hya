@@ -155,6 +155,10 @@ export interface AppState {
   readonly commandDisplay: ReadonlyMap<string, string>
   /** Backend version from bootstrap (`/status`). */
   readonly serverVersion: string
+  /** Backend pid from bootstrap (`/status`, when nothing else names it). */
+  readonly serverPid: number | undefined
+  /** The server's base URL (header, sidebar); switches when the TUI moves to another server (app/reconnect.ts). */
+  readonly serverUrl: string
   /** The open session's todo list (`/todos`, `GetSessionTodo`). */
   readonly todos: TodoItem[]
   /** Text of the `/status` view. */
@@ -183,7 +187,7 @@ export interface AppState {
   readonly picker: ActivePicker | undefined
   /** The open session's newest billed round with a message (`tokensRecorded`), for live context occupancy (E22). */
   readonly liveRound: LiveRound | undefined
-  /** The backend this TUI started (one-command launch), for `/status`; `undefined` with `--server`. */
+  /** The backend daemon this TUI uses, for `/status`; `undefined` until known. */
   readonly backend: BackendInfo | undefined
   /** The WebUI bare `hya` serves next to this TUI (`--web-url` / `--web-error`); `undefined` otherwise. */
   readonly web: WebInfo | undefined
@@ -197,15 +201,15 @@ export interface LiveRound {
   usage: TokenUsage
 }
 
-/** A backend started by this TUI (src/launch.ts). */
+/** The backend daemon the TUI uses (src/launch.ts, app/reconnect.ts; `/status`). */
 export interface BackendInfo {
-  pid: number
-  /** The `hya` binary this TUI started (absent when attached). */
-  bin?: string
-  /** The database (absent when bare `hya` attached and did not say). */
+  pid?: number
+  /** The database it serves (the TUI's `--db`, or the default). */
   db?: string
-  /** The server is another process's that this TUI (or bare `hya`) attached to; quitting does not stop it. */
-  attached?: boolean
+  /** Unix ms when it started listening (its discovery file). */
+  startedAt?: number
+  /** The URL came from `--server` (bare `hya --backend`), not from the database's discovery file. */
+  explicit?: boolean
 }
 
 /**
@@ -287,6 +291,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     pendingShell: undefined,
     commandDisplay: new Map(),
     serverVersion: "",
+    serverPid: undefined,
+    serverUrl: "",
     todos: [],
     statusText: "",
     promptSelection: undefined,
@@ -398,6 +404,7 @@ export function createAppStore() {
         set("models", bootstrap.models ?? [])
         set("interactions", mergeInteractions(bootstrap.interactions ?? [], liveAsks, answered))
         set("serverVersion", bootstrap.location?.version ?? "")
+        set("serverPid", bootstrap.location?.pid || undefined)
       })
     },
 
@@ -575,6 +582,7 @@ export function createAppStore() {
     applyAsk,
     /** The backend this TUI started (`/status`). */
     setBackend(info: BackendInfo | undefined): void { set("backend", info) },
+    setServerUrl(url: string): void { set("serverUrl", url) },
     /** The WebUI state from bare `hya` (status bar, sidebar, `/status`). */
     setWeb(info: WebInfo | undefined): void { set("web", info) },
 

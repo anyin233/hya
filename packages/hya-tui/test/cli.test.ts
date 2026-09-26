@@ -27,9 +27,11 @@ test("--continue and --session choose the session to open", () => {
   expect(() => parseArguments(["--continue", "--session", "x"], "/cwd")).toThrow("--continue and --session cannot be combined")
 })
 
-test("--hya and --db only apply to a backend the TUI starts itself", () => {
-  expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--hya", "/x"], "/cwd")).toThrow("--hya and --db only apply without --server")
-  expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--db", "/x"], "/cwd")).toThrow("--hya and --db only apply without --server")
+test("with --server, --db and --hya let the TUI find or restart the database's daemon when that server goes away", () => {
+  expect(parseArguments(["--server", "http://127.0.0.1:1", "--db", "/s.db", "--hya", "/bin/hya"], "/cwd")).toEqual({
+    server: "http://127.0.0.1:1/", directory: "/cwd", continue: false, db: "/s.db", hya: "/bin/hya",
+  })
+  expect(usage).toMatch(/--db PATH[\s\S]*--server/)
 })
 
 test("usage documents every flag and the binary lookup order", () => {
@@ -55,9 +57,7 @@ test("usage names the preferences file and its HYA_TUI_CONFIG override", () => {
   expect(usage).toContain("hya/tui.json")
 })
 
-test("--attached-pid names the running server bare hya attached to", () => {
-  expect(parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "4242"], "/cwd")).toMatchObject({ attachedPid: 4242 })
-  expect(() => parseArguments(["--attached-pid", "4242"], "/cwd")).toThrow("--attached-pid only applies with --server")
-  expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "x"], "/cwd")).toThrow("--attached-pid needs a process id")
-  expect(usage).toContain("--attached-pid")
+test("--attached-pid is gone: the backend is a daemon nobody owns", () => {
+  expect(() => parseArguments(["--server", "http://127.0.0.1:1", "--attached-pid", "4242"], "/cwd")).toThrow("Unknown or incomplete option: --attached-pid")
+  expect(usage).not.toContain("--attached-pid")
 })

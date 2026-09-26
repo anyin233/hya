@@ -82,25 +82,62 @@ bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080
 
 ## TUI Cannot Start Its Backend
 
-Without `--server` the TUI starts `hya serve` itself. If that fails it
-prints the reason and the last lines of the server's output, then exits
-with status 1:
+Without `--server` the TUI uses the database's backend daemon and starts it
+with `hya serve start --json` when none runs. If that fails it prints the
+reason and the last lines of the output, then exits with status 1:
 
 - `hya binary not found: …` — no `--hya`, no `HYA_BIN`, and no `hya` on
   `PATH`, or the path given does not exist. Build one
   (`cargo build -p hya-backend --bin hya`) and pass
   `--hya target/debug/hya`, or connect to a running server with `--server`.
-- `hya serve exited with code N before it was ready` — the server failed
-  at startup; the output lines below it say why (a config error, an
-  unusable `--db` path, …). Run `hya serve --bind 127.0.0.1:0` in the same
-  directory to see the full output.
-- `hya serve did not print its readiness line within 60 s` — the server
-  hung during startup; see [Diagnosing Slow Startup](#diagnosing-slow-startup).
-- `database <db> is in use by another hya process that serves no reachable
-  server` — see [Database Is Already in Use](#database-is-already-in-use).
+- `hya serve start exited with code 1` followed by `hya serve (daemon)
+  exited with … before it was ready; see <db>.server.log` — the daemon
+  failed at startup; the log lines below it say why (a config error, an
+  unusable `--db` path, …). The whole log is `<db>.server.log` next to the
+  database (`~/.local/state/hya/sessions.db.server.log` by default).
+- `the hya server daemon did not answer within 60 s` — the daemon hung
+  during startup; see [Diagnosing Slow Startup](#diagnosing-slow-startup).
+- `database <db> is held by pid <pid>, which serves no reachable server` —
+  see [Database Is Already in Use](#database-is-already-in-use).
+- `hya serve start printed unexpected output (is --hya an older hya?)` — the
+  binary predates `hya serve start`; point `--hya`/`HYA_BIN` at a current one.
 
-`/status` in the TUI shows the backend it started (pid, binary, database),
-or the running server it attached to.
+`/status` in the TUI shows the daemon (`daemon · pid <pid> · db <db> ·
+started <N>m ago`); `hya serve status` shows the same from a shell.
+
+## The Backend Daemon
+
+Bare `hya` and the TUI leave the backend daemon running when they quit
+([ADR-0023](adr/0023-persistent-backend-daemon.md)); that is expected. To see,
+stop, or replace it:
+
+```sh
+hya serve status            # url, pid, version, db, uptime (exit 1: none runs)
+hya serve stop              # graceful; --force kills after --timeout (30 s)
+hya serve restart           # after an upgrade, or to change --model/--yolo
+tail -f ~/.local/state/hya/sessions.db.server.log
+```
+
+- **`backend 0.x ≠ tui 0.y · hya serve restart`** in the TUI, or `note: the
+  running server is hya X, this is hya Y` from `hya serve` — a daemon of an
+  older (or newer) hya is still running after an upgrade. Run
+  `hya serve restart`; open TUIs reconnect by themselves.
+- **`Server stopped · reconnecting…`**, then **`Started a new server · pid N`**
+  or **`Server moved · now pid N`** — the daemon stopped (`hya serve stop` or
+  `restart`, a crash) and the TUI found or started the next one; the open
+  session was reloaded. A turn that was running ended with the old server.
+- **`hya serve stop` does not stop it for good** — open TUIs that know the
+  database start a new daemon when theirs goes away. Quit them first.
+- **`Server lost: <reason> · retrying`** — no daemon could be found or
+  started; the TUI tries again on the next stream retry. Check
+  `hya serve status` and the daemon log.
+- **`--model`/`--yolo`/`--pure` of `hya` seem ignored** — they shape only a
+  daemon that launch starts; a running daemon keeps its own. `hya serve
+  restart --model …` (or `stop`, then start `hya` with the flags) applies
+  them.
+- **A TUI with `--server <url>` does not reconnect** — without `--db` the URL
+  is fixed; add `--db <database>` to let it fall back to that database's
+  daemon.
 
 See the [TUI guide](tui.md), [CLI Reference](cli.md), and
 [Protocol guide](protocol/README.md).
@@ -252,7 +289,9 @@ then resume reading the stream.
 
 One database has one server ([ADR-0022](adr/0022-one-writer-per-database.md)):
 the server holds `<db>.lock` and publishes `<db>.server.json` next to the
-database. TUIs and bare `hya` attach to it, but a second server is refused:
+database. TUIs and bare `hya` use it (it is normally the backend daemon,
+[ADR-0023](adr/0023-persistent-backend-daemon.md)), but a second server is
+refused:
 
 - `hya serve: database <db> is already in use by hya server pid <pid> at <url>`
   (exit status 75): connect to that server
@@ -261,11 +300,10 @@ database. TUIs and bare `hya` attach to it, but a second server is refused:
 - `… is already in use by pid <pid> (lock <db>.lock); it is still starting or
   does not serve HTTP` (exit status 75): the holder has not published a URL.
   Wait for it to start, or find it with `ps -p <pid>`.
-- Bare `hya`: `database <db> is in use by pid <pid>, which has published no
-  server` / `… published <url> but it does not answer (waited 20 s)`: the
-  holder is hung or is not a server. Stop that process.
-- TUI: `database <db> is in use by another hya process that serves no
-  reachable server`: same cause.
+- Bare `hya`, the TUI, or `hya serve start`: `database <db> is held by pid
+  <pid>, which serves no reachable server (waited 60 s)`: the holder is hung
+  or is not a server. Stop it (`hya serve stop --force --db <db>`, or kill
+  that pid).
 
 `<db>.lock` is released by the OS when its process exits, even on a crash or
 SIGKILL. Do not delete it. A `<db>.server.json` left by a crash is ignored

@@ -1,9 +1,8 @@
-// One writer per database (ADR-0022; docs/tui.md "Start it", docs/cli.md
-// "Bare `hya`"): a second TUI on the same database attaches to the first
-// one's `hya serve` (found through `<db>.server.json`) instead of starting a
-// second writer, so both see the same sessions and each other's live events.
-// Bare `hya` attaches the same way, and quitting an attached frontend never
-// stops the other process's server.
+// One writer per database (ADR-0022, ADR-0023; docs/tui.md "Start it",
+// docs/cli.md "Bare `hya`"): every TUI on a database uses its one backend
+// daemon (found through `<db>.server.json`), so all see the same sessions
+// and each other's live events. Bare `hya` uses the same daemon, and quitting
+// any frontend leaves the daemon running.
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { dirname, join } from "node:path"
@@ -32,13 +31,13 @@ const alive = (pid: number): boolean => {
 /** `/status`'s Server URL and the whole screen (the Backend row is matched by the caller). */
 async function status(term: Tui): Promise<{ server: string; text: string }> {
   await prompt(term, "/status")
-  await term.waitForText(/Backend\s+(started|attached)/)
+  await term.waitForText(/Backend\s+daemon · pid \d+/)
   const text = await term.text()
   return { server: /Server\s+(http:\/\/127\.0\.0\.1:\d+)/.exec(text)![1]!, text }
 }
 
-/** The pid of the server this TUI started, from `/status`. */
-const startedPid = (text: string): number => Number(/Backend\s+started by this TUI · pid (\d+)/.exec(text)![1])
+/** The daemon's pid, from `/status`. */
+const startedPid = (text: string): number => Number(/Backend\s+daemon · pid (\d+)/.exec(text)![1])
 
 /**
  * A second web host in a second tab, so two TUIs run at once (the `tui`
@@ -78,7 +77,7 @@ function bareHyaEnv(workspace: Workspace): Record<string, string> {
 test.describe("two frontends, one database", () => {
   test.use({ model: { steps: [textStep("Reply seen by both TUIs."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("a second TUI attaches to the first one's server; both follow the same session live", async ({ tui, workspace, page }, testInfo) => {
+  test("a second TUI uses the first one's daemon; both follow the same session live", async ({ tui, workspace, page }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
     const one = await status(first)
@@ -91,12 +90,11 @@ test.describe("two frontends, one database", () => {
       const two = await status(second)
       // Same server, not a second writer.
       expect(two.server).toBe(one.server)
-      expect(two.text).toMatch(new RegExp(`Backend\\s+attached to a running server · pid ${pid} · db /`))
+      expect(two.text).toMatch(new RegExp(`Backend\\s+daemon · pid ${pid} · db /`))
       await second.attach(testInfo, "second-status")
 
-      // The first TUI creates a session; the second opens it by id.
-      await prompt(first, "/new")
-      await expect.poll(async () => /hya · (hysec_\w+)/.exec(await first.text())?.[1], { timeout: 20_000 }).toBeDefined()
+      // The first TUI's session (created on connect); the second opens it by id.
+      await first.waitForText(/hya · hysec_\w+/)
       const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
       await prompt(second, `/open ${session}`)
       await second.waitForText(new RegExp(`hya · ${session}`))
@@ -109,22 +107,19 @@ test.describe("two frontends, one database", () => {
       await second.waitForText("Reply seen by both TUIs.", 20_000)
       await second.attach(testInfo, "second-live")
 
-      // Quitting the attached TUI leaves the first one's server running.
+      // Quitting either TUI leaves the daemon running.
       await prompt(second, "/exit")
       await expect.poll(() => second.page.evaluate(() => window.hyaTerm.exitCode), { timeout: 15_000 }).toBe(0)
       expect(alive(pid)).toBe(true)
-      await prompt(first, "/status")
-      await first.waitForText(/Backend\s+started by this TUI/)
     } finally {
       await stopHost(host)
     }
-    // The owner still stops its own server.
     await prompt(first, "/exit")
     expect(await first.waitForExit()).toBe(0)
-    await expect.poll(() => alive(pid), { timeout: 15_000 }).toBe(false)
+    expect(alive(pid)).toBe(true)
   })
 
-  test("bare hya attaches to a running server on its database and leaves it running on quit", async ({ tui, workspace, page }, testInfo) => {
+  test("bare hya uses the running daemon of its database and leaves it running on quit", async ({ tui, workspace, page }, testInfo) => {
     const owner = await tui(...selfLaunch(workspace))
     await owner.waitForText("Connected to hya", 30_000)
     const one = await status(owner)
@@ -135,7 +130,7 @@ test.describe("two frontends, one database", () => {
       await bare.waitForText("Connected to hya", 60_000)
       const two = await status(bare)
       expect(two.server).toBe(one.server)
-      expect(two.text).toMatch(new RegExp(`Backend\\s+attached to a running server · pid ${pid}(?!\\d)(?! · db)`))
+      expect(two.text).toMatch(new RegExp(`Backend\\s+daemon · pid ${pid} · db /`))
       // Bare hya still serves its WebUI next to the attached TUI.
       await bare.waitForText(/WebUI\s+http:\/\/127\.0\.0\.1:\d+/)
       await bare.attach(testInfo, "bare-attached-status")
@@ -144,12 +139,12 @@ test.describe("two frontends, one database", () => {
     } finally {
       await stopHost(host)
     }
-    // Only what bare hya started stopped: the owner's server still answers.
+    // Only bare hya's frontends stopped: the daemon still answers.
     expect(alive(pid)).toBe(true)
     const health = await fetch(`${one.server}/v1/health`).then((response) => response.json() as Promise<{ ok: boolean }>)
     expect(health.ok).toBe(true)
     await prompt(owner, "/exit")
     expect(await owner.waitForExit()).toBe(0)
-    await expect.poll(() => alive(pid), { timeout: 15_000 }).toBe(false)
+    expect(alive(pid)).toBe(true)
   })
 })

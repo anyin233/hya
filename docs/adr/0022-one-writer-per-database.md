@@ -64,7 +64,9 @@ database ties discovery to the store rather than to a per-user registry:
 - An attached frontend depends on the owner. When the owner exits (for
   example the first TUI quits and stops the `hya serve` it started),
   attached TUIs lose their server and say so. They do not take over. Restart
-  them to start a new owner.
+  them to start a new owner. *Superseded by
+  [ADR-0023](0023-persistent-backend-daemon.md):* the server is a daemon no
+  client owns or stops, and a TUI that loses it finds or starts the next one.
 - Flags that shape the server (`--model`, `--yolo`, `--pure`, config and
   environment) come from the owner. Bare `hya` notes in its log that its own
   flags do not apply when it attaches.

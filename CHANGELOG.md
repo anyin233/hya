@@ -1,5 +1,16 @@
 # 0.41.0
 
+## The backend runs as a daemon that outlives its clients
+
+- Quitting the TUI or the WebUI no longer stops the backend. On start, a client looks for the backend of its database. If none runs, it starts `hya serve` as a detached daemon (its own session, output in `<db>.server.log`), and every later client attaches to it. Bare `hya` no longer runs a server inside its own process.
+- `hya serve start|status|stop|restart` (with `--db`) control the daemon; plain `hya serve` still runs in the foreground. `stop` ends open event streams and waits until the database is released; add `--force` to kill it after `--timeout`.
+- `hya --backend <url>` connects bare `hya` to a given backend, with no discovery and no auto-start.
+- The terminal TUI and every WebUI tab use the same daemon, database, and directory, so each sees and opens the sessions the other started.
+- When the backend goes away, a TUI finds or starts one again, then reconnects and reloads the open session. The status line shows `Server stopped · reconnecting…`, then `Started a new server` or `Server moved`. A turn that was running on the old backend is lost.
+- A TUI started without `--session` or `--continue` creates a session as soon as it connects. A session it created and never used is deleted when you leave it or quit.
+- A client that finds a daemon of another hya version suggests `hya serve restart`.
+- `/status` shows `daemon · pid N · db D · started …`. The TUI flag `--attached-pid` is removed. While shutting down, `/v1/health` answers 503. See [CLI](docs/cli.md#backend-daemon) and [ADR-0023](docs/adr/0023-persistent-backend-daemon.md).
+
 ## Archived sessions
 
 - Root sessions can be archived and unarchived with `PATCH /v1/sessions/{id} {"archived": true|false}`. Archiving never cancels a running turn. A new prompt, command, or shell turn unarchives the session.

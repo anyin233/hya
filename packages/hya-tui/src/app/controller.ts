@@ -47,6 +47,17 @@
  * Usage and todos: `tokensRecorded`, `todoUpdated`, and `compactionApplied`
  * fold in the store; a `tokensRecorded` also re-reads the open session
  * (debounced) for its authoritative `SessionInfo.usage` total.
+ *
+ * Losing the server (app/reconnect.ts): when either stream fails or ends
+ * and the server fails its health probes, a TUI that knows its database
+ * (`reconnect` set) finds or starts the next server, switches the client's
+ * base URL, resubscribes both streams, and reloads the catalogs and the open
+ * session. A turn that ran on the old server died with it.
+ *
+ * Sessions (app/sessionKeeper.ts): without `--session`/`--continue` a
+ * session is created on connect; a session this client created and never
+ * used is deleted when the client leaves it (another session opened, or
+ * `close()` on exit).
  */
 import type { HyaClient, Interaction, MessageInfo, PromptAttachment, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand } from "../completion"
@@ -85,6 +96,9 @@ import { createRevertController } from "./revert"
 import { createRulesController } from "./rules"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
+import { createReconnector, type ServerSwitch } from "./reconnect"
+import { createSessionKeeper } from "./sessionKeeper"
+import { probeHealth } from "../launch"
 import { tuiVersion } from "../version"
 
 /** Overlay flush interval: coalesces stream deltas into one render per display frame. */
@@ -99,6 +113,8 @@ export const childPollMs = 1500
 /** Global stream reconnect backoff: the session stream's 800 ms, doubling up to 15 s while it keeps failing (an older backend without the route). */
 const globalRetryMs = 800
 const globalRetryMaxMs = 15_000
+/** Longest wait on exit for deleting this client's empty session. */
+const dropOnExitMs = 2_000
 
 export interface ControllerOptions {
   client: HyaClient
@@ -118,6 +134,14 @@ export interface ControllerOptions {
   terminal?: TerminalAccess
   /** Environment for `$VISUAL` / `$EDITOR` (default `process.env`). */
   env?: Record<string, string | undefined>
+  /**
+   * Find or start the database's server after this one went away
+   * (app/reconnect.ts; src/launch.ts `connectOrStart`). Unset for a fixed
+   * `--server` without `--db`: the streams just keep retrying it.
+   */
+  reconnect?: () => Promise<ServerSwitch>
+  /** Health probe of a server URL (default src/launch.ts `probeHealth`). */
+  probe?: (url: string) => Promise<boolean>
 }
 
 /** What the controller needs from the renderer (CliRenderer in app/run.tsx; a fake in tests). */
@@ -148,7 +172,7 @@ const helpMaxRows = 40
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env }: ControllerOptions) {
+export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, probe = (url) => probeHealth(url) }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let globalAbort: AbortController | undefined
   /** Asks a desktop notification was considered for: the open tree's asks arrive on both streams. */
@@ -188,6 +212,20 @@ export function createController({ client, store, directory, registry = createCo
     onEnd: (outcome) => sendNotification(outcome.ok ? "turnFinished" : "turnFailed", outcome.ok ? (store.state.selected?.title ?? "") : outcome.detail),
   })
   const modes = createModeSwitcher({ store, client })
+  const keeper = createSessionKeeper({
+    client: {
+      getSession: (id) => client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
+      listMessages: (id) => client.listMessages(id),
+      deleteSession: (id) => client.deleteSession(id),
+    },
+    localBusy: (id) => (store.state.selected?.id === id && store.state.running) || store.state.queued.some((item) => item.session === id),
+  })
+
+  /** Leaving `id`: drop it when this client created it and it is still empty (app/sessionKeeper.ts). */
+  async function dropIfEmpty(id: string): Promise<void> {
+    if ((await keeper.dropIfEmpty(id)) !== "deleted") return
+    store.setSessions(store.state.sessions.filter((row) => row.id !== id))
+  }
 
   async function refresh(): Promise<void> {
     const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes] = await Promise.all([
@@ -418,12 +456,14 @@ export function createController({ client, store, directory, registry = createCo
             ready()
           }, true)
         } catch (error) {
-          if (!controller.signal.aborted) {
+          if (!controller.signal.aborted && !reconnector?.busy()) {
             store.setConnected(false)
             status(`Stream reconnecting: ${String(error)}`)
           }
         }
         ready()
+        // Ended or failed: the server may be gone (stopped, restarted, crashed).
+        if (!controller.signal.aborted && !closing) void reconnector?.lost()
         if (!controller.signal.aborted) await Bun.sleep(800)
       }
     })()
@@ -484,6 +524,8 @@ export function createController({ client, store, directory, registry = createCo
           // Silent: the session stream owns the connection state; this one only adds other sessions' asks.
         }
         if (controller.signal.aborted) break
+        // With no session open this is the only stream: it notices a lost server too.
+        if (!closing) void reconnector?.lost()
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, delay)
           controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve() }, { once: true })
@@ -494,6 +536,7 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   async function openSession(sessionId: string): Promise<void> {
+    const previous = store.state.selected?.id
     const listed = store.state.sessions.find((row) => row.id === sessionId)
     // A fresh read gives the current `lastSeq`, so the stream gap-fill stays small.
     const session = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`)
@@ -512,6 +555,7 @@ export function createController({ client, store, directory, registry = createCo
     void refreshTodos()
     void refreshVcs()
     startStream(session.id)
+    if (previous && previous !== session.id) void dropIfEmpty(previous)
   }
 
   /** Leave a subagent's read-only view: open its parent session. */
@@ -530,6 +574,7 @@ export function createController({ client, store, directory, registry = createCo
     const model = modelArg ?? (defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined)
     if (!model) throw new Error("No model is available; configure a provider on the backend")
     const session = await client.createSession(agent, model, directory)
+    keeper.created(session.id)
     store.setPendingAgent(undefined)
     store.setPendingModel(undefined)
     await refresh()
@@ -731,6 +776,7 @@ export function createController({ client, store, directory, registry = createCo
       const command = shellCommand(text)
       if (command === "") throw new Error("Usage: !<shell command>")
       if (!store.state.selected) await newSession()
+      keeper.used(store.state.selected!.id)
       if (command !== undefined) {
         store.followTranscript()
         await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
@@ -807,8 +853,11 @@ export function createController({ client, store, directory, registry = createCo
       let missing = ""
       if (target) await openSession(target).catch(() => { missing = ` · session ${target} not found` })
       else if (startup.continue) missing = " · no earlier session in this directory"
+      // A plain start opens a new session right away (deleted again if it stays empty).
+      // Without a model it is created by the first prompt instead.
+      else await newSession().catch(() => undefined)
       const version = bootstrap.location?.version ?? ""
-      const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
+      const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion} · hya serve restart` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
       status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
@@ -816,6 +865,35 @@ export function createController({ client, store, directory, registry = createCo
       store.setView("help")
       store.markReady()
     }
+  }
+
+  /** Move to another server (app/reconnect.ts): new base URL, both streams resubscribed, catalogs and the open session reloaded. */
+  async function switchServer(next: ServerSwitch): Promise<void> {
+    client.setBaseUrl(next.url)
+    store.setServerUrl(next.url)
+    try {
+      store.applyBootstrap(await client.bootstrap())
+    } catch {
+      // The catalog refresh below reports a server that does not answer.
+    }
+    await refresh().catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
+    startGlobalStream()
+    const selected = store.state.selected
+    if (!selected) return
+    await openSession(selected.id).catch((error: unknown) => status(`Open failed: ${String(error)}`))
+    // A turn that ran on the old server died with it; the transcript above shows how far it got.
+    if (store.state.running && !store.state.selected?.busy) store.endTurn()
+  }
+
+  const reconnector = reconnect
+    ? createReconnector({ url: () => client.baseUrl, probe, reconnect, switchTo: switchServer, status })
+    : undefined
+
+  /** Before exit: delete this client's session when it created it and never used it (bounded wait). */
+  async function close(): Promise<void> {
+    const selected = store.state.selected?.id
+    if (selected) await Promise.race([dropIfEmpty(selected).catch(() => undefined), Bun.sleep(dropOnExitMs)])
+    dispose()
   }
 
   function dispose(): void {
@@ -877,6 +955,7 @@ export function createController({ client, store, directory, registry = createCo
     ui,
     refreshAll,
     start,
+    close,
     dispose,
   }
 }
