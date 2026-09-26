@@ -14,6 +14,18 @@ fn repository_root() -> PathBuf {
         .unwrap_or_else(|| panic!("hya-bundle must live under <repository>/crates"))
 }
 
+/// Committed Workflow docs, plus the generated architecture wiki page when this
+/// checkout has one. The wiki lives in the git-ignored `.autors/`, so a clean
+/// clone (CI) checks the committed docs only.
+fn workflow_doc_paths() -> Vec<PathBuf> {
+    let root = repository_root();
+    let mut paths = vec![root.join("docs/workflows.md")];
+    if root.join(".autors/hya/wiki").is_dir() {
+        paths.push(root.join(".autors/hya/wiki/pages/architecture/workflow-composition.md"));
+    }
+    paths
+}
+
 fn docs_example_path() -> PathBuf {
     repository_root().join("docs/examples/bundle.hya.md")
 }
@@ -273,10 +285,7 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
 /// Workflow product surface instead of only the compiler internals.
 #[test]
 fn workflow_docs_cover_control_replay_and_client_state() {
-    let paths = [
-        repository_root().join("docs/workflows.md"),
-        repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
-    ];
+    let paths = workflow_doc_paths();
     let required_markers = [
         "WorkflowBundle",
         "session.updated",
@@ -322,10 +331,7 @@ fn workflow_docs_cover_control_replay_and_client_state() {
 /// Ensure Workflow and provider docs describe the suffix-free model-routing contract.
 #[test]
 fn workflow_docs_cover_stage_model_routing_and_route_outcomes() {
-    for path in [
-        repository_root().join("docs/workflows.md"),
-        repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
-    ] {
+    for path in workflow_doc_paths() {
         let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!(
                 "Workflow routing documentation must exist at {}: {error}",
