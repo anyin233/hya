@@ -464,6 +464,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: async ({ actions }) => { await actions.refresh(); await actions.refreshMessages() },
   },
   {
+    name: "/reconnect",
+    description: "Find or start the backend now (after hya serve stop)",
+    run: ({ actions }) => actions.reconnect(),
+  },
+  {
     name: "/sidebar",
     description: "Show or hide the sidebar (Ctrl+B)",
     argumentHint: "[on|off]",

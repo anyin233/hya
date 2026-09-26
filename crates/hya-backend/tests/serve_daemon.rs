@@ -102,6 +102,27 @@ fn http_get(url: &str, path: &str) -> Result<String, Box<dyn std::error::Error>>
     Ok(text)
 }
 
+/// Open `GET /v1/events/stream` (SSE) and wait for its response head.
+fn open_events(url: &str) -> Result<TcpStream, Box<dyn std::error::Error>> {
+    let mut stream = TcpStream::connect(authority(url)?)?;
+    stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    write!(
+        stream,
+        "GET /v1/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
+    )?;
+    let mut head = [0u8; 64];
+    let read = stream.read(&mut head)?;
+    assert!(String::from_utf8_lossy(&head[..read]).starts_with("HTTP/1.1 200"));
+    Ok(stream)
+}
+
+/// Everything the server still sends on `stream` until it closes it.
+fn rest_of(mut stream: TcpStream) -> String {
+    let mut bytes = Vec::new();
+    let _ = stream.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 fn wait_until(what: &str, timeout: Duration, mut check: impl FnMut() -> bool) -> TestResult {
     let deadline = Instant::now() + timeout;
     while !check() {
@@ -174,14 +195,7 @@ fn start_runs_a_detached_daemon_that_status_reports_and_stop_ends() -> TestResul
     assert!(status["uptimeMs"].as_u64().is_some(), "{status}");
 
     // Stop: graceful, even while a client holds an event stream open.
-    let mut stream = TcpStream::connect(authority(&url)?)?;
-    write!(
-        stream,
-        "GET /v1/events/stream HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
-    )?;
-    let mut head = [0u8; 64];
-    let read = stream.read(&mut head)?;
-    assert!(String::from_utf8_lossy(&head[..read]).starts_with("HTTP/1.1 200"));
+    let stream = open_events(&url)?;
     let begun = Instant::now();
     let stopped = run(&root, &db, &["stop"])?;
     assert!(
@@ -195,6 +209,22 @@ fn start_runs_a_detached_daemon_that_status_reports_and_stop_ends() -> TestResul
         begun.elapsed()
     );
     assert!(String::from_utf8_lossy(&stopped.stdout).contains(&format!("pid {pid}")));
+    // The client was told it was a manual stop (so it does not start the
+    // next daemon), and the output says so.
+    let told = rest_of(stream);
+    assert!(
+        told.contains(r#""serverStopping":{"reason":"stop"}"#),
+        "the stream's last frame names the stop: {told}"
+    );
+    assert!(
+        String::from_utf8_lossy(&stopped.stdout).contains("stay disconnected until /reconnect"),
+        "{}",
+        String::from_utf8_lossy(&stopped.stdout)
+    );
+    assert!(
+        !PathBuf::from(format!("{}.server.stop", db.display())).exists(),
+        "the daemon consumed the stop request"
+    );
     wait_until("the daemon exited", Duration::from_secs(5), || !alive(pid))?;
     assert!(!PathBuf::from(format!("{}.server.json", db.display())).exists());
 
@@ -217,6 +247,7 @@ fn restart_replaces_the_daemon() -> TestResult {
     let first = json(&run(&root, &db, &["start", "--json"])?)?;
     let first_pid = pid_of(&first)?;
     daemons.0.push(first_pid);
+    let stream = open_events(first["url"].as_str().ok_or("no url")?)?;
     let restarted = run(&root, &db, &["restart", "--json"])?;
     assert!(
         restarted.status.success(),
@@ -229,6 +260,11 @@ fn restart_replaces_the_daemon() -> TestResult {
     assert_ne!(first_pid, second_pid);
     assert_eq!(second["started"], serde_json::json!(true));
     assert!(!alive(first_pid));
+    let told = rest_of(stream);
+    assert!(
+        told.contains(r#""serverStopping":{"reason":"restart"}"#),
+        "clients of a restarted daemon wait for the next one: {told}"
+    );
     assert!(
         http_get(second["url"].as_str().ok_or("no url")?, "/v1/health")?.contains("\"ok\":true")
     );
@@ -294,10 +330,17 @@ fn start_waits_out_a_server_that_is_shutting_down() -> TestResult {
     let first = json(&run(&root, &db, &["start", "--json"])?)?;
     let first_pid = pid_of(&first)?;
     daemons.0.push(first_pid);
+    let stream = open_events(first["url"].as_str().ok_or("no url")?)?;
     // SAFETY: `kill` has no memory-safety preconditions.
     unsafe {
         libc::kill(first_pid, libc::SIGTERM);
     }
+    // A plain signal (no `hya serve stop` request) is reported as such.
+    let told = rest_of(stream);
+    assert!(
+        told.contains(r#""serverStopping":{"reason":"signal"}"#),
+        "{told}"
+    );
     let next = run(&root, &db, &["start", "--json"])?;
     assert!(
         next.status.success(),

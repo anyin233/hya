@@ -79,17 +79,65 @@ database, and outlives all of them. Clients never stop it.
   database; start it deliberately.
 - A daemon of an older hya keeps serving after an upgrade. Clients show a
   version mismatch notice with `hya serve restart`.
-- `hya serve stop` with TUIs open is effectively a restart: they start the
-  next daemon. Quit the TUIs first to stop for good.
+- ~~`hya serve stop` with TUIs open is effectively a restart: they start the
+  next daemon.~~ Superseded by the amendment below: a stopped daemon stays
+  stopped.
 - Turns that run on a server when it stops end with it (closed as cancelled
   by its shutdown drain, or left for crash recovery after a SIGKILL); a
   client's queued prompts are dropped on reconnect.
 - The empty-session delete is a read then a delete, two requests: a prompt
   another client sends into that empty session in between is lost with it.
   Only the creating client deletes, only sessions it never used.
+- Headless commands on a daemon's database (`hya --db <db> exec`, `workflow
+  use|run|state`) run through the daemon instead of opening the database a
+  second time, so their sessions show up in every client. A command that holds
+  the lock itself (no daemon running) makes a daemon started meanwhile wait
+  (ADR-0022, docs/cli.md "Database lock and the backend daemon").
 - The daemon's working directory is the starter's. Requests carry their own
   directory (`x-hya-directory`), so this only matters for requests without
   one.
 - Supersedes ADR-0020's in-process server and ADR-0022's "an attached
   frontend depends on the owner" consequence; the lock and the discovery
   file of ADR-0022 are unchanged.
+
+## Amendment (2026-09-26): a manual stop stays stopped
+
+With the reconnect rule above, `hya serve stop` under open TUIs only
+restarted the daemon: the TUIs saw their server go and started the next one.
+The backend must be stoppable by hand, so the server now says why it goes
+away, and clients start a server by themselves only after an unexpected loss.
+
+- **Reason frame.** When a server shuts down, the last frame of every live
+  stream (SSE and gRPC, global and session, and the only frame of a stream
+  opened while it shuts down) is the live-only `serverStopping {reason}`
+  (`StreamEvent` payload 26), sent before the stream ends. `reason` is
+  `stop`, `restart`, or `signal`.
+- **How the daemon learns the reason.** `hya serve stop` and `restart` write
+  `<db>.server.stop` (`{"pid": <holder>, "reason": "stop"|"restart"}`,
+  atomically) before they send SIGTERM. On its termination signal the server
+  reads the file, uses it only when `pid` is its own, and deletes it; without
+  one the reason is `signal`. Whoever takes the database lock deletes a stale
+  file. A v1 admin route (`POST /v1/shutdown`) was considered and rejected:
+  it would add a remotely reachable way to stop the server (any local
+  process, any web page that can reach loopback), change the contract every
+  frontend and the gRPC surface implement, and still need the pid-directed
+  signal path for older daemons. The file sits next to the lock (same
+  owner, mode, and trust as the lock and discovery files), costs nothing when
+  unused, and degrades to `signal` (treated like `stop`) if it cannot be
+  written or an old daemon ignores it.
+- **Client rules.** `stop`, `signal`, or an unknown reason: start nothing.
+  The TUI shows `Backend stopped (hya serve stop) · /reconnect starts it
+  again`, refuses prompts, and only *looks* for a server (the discovery file
+  plus health, never a start); when another client starts one, it attaches.
+  `restart`: wait up to 60 s for the next daemon of the database and attach
+  (`Server moved · now pid N`); never start one; after 60 s behave as after
+  `stop`. No reason (the stream ended without the frame: crash, `kill -9`,
+  lost network): find or start, as before. `/reconnect` finds or starts the
+  daemon at once from any state.
+
+Consequences: `hya serve stop` stops for good until a user acts
+(`/reconnect`, or a new `hya`/TUI). A client that misses the frame (its
+stream was down, backing off, at that moment) treats the stop as a crash and
+starts the next daemon; clients older than this amendment ignore the frame
+and do the same. A SIGKILL (`stop --force` after the timeout) comes after the
+SIGTERM, so the frame was already sent.

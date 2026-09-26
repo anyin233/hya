@@ -2154,12 +2154,24 @@
           },
           "catalog_updated": {
             "$ref": "#/components/schemas/CatalogUpdated"
+          },
+          "server_stopping": {
+            "$ref": "#/components/schemas/ServerStopping"
+          }
+        }
+      },
+      "ServerStopping": {
+        "type": "object",
+        "description": "The provider/model catalog changed; carries no fields. Why the server is going away.",
+        "properties": {
+          "reason": {
+            "type": "string"
           }
         }
       },
       "PartsAdded": {
         "type": "object",
-        "description": "The provider/model catalog changed; carries no fields. Complete parts added to a message in one step.",
+        "description": "Complete parts added to a message in one step.",
         "properties": {
           "message": {
             "type": "string"

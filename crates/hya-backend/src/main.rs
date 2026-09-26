@@ -18,9 +18,11 @@ mod bundle_cmd;
 mod cli_args;
 mod daemon;
 mod db_lock;
+mod db_writer;
 mod exec_stream;
 mod frontend;
 mod models_cmd;
+mod routed;
 mod rpc;
 mod serve;
 mod sessions_cmd;
@@ -100,6 +102,49 @@ fn state_dir() -> std::path::PathBuf {
         .join("hya");
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// `hya exec`/`run` on `db`, respecting the database lock
+/// ([`db_writer`]): through the server that owns a file database, else
+/// in process while holding its lock (in-memory stores are not locked).
+async fn exec_entry(
+    command: &str,
+    prompt: String,
+    model_override: Option<String>,
+    db: &str,
+    yolo: bool,
+    json: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    match db_writer::claim(db, command)? {
+        db_writer::Writer::Server(server) => {
+            if pure {
+                db_writer::exit_unroutable(
+                    command,
+                    db,
+                    &server,
+                    "--pure cannot apply to a running server (it loaded its own context)",
+                );
+            }
+            routed::exec(
+                &server.url,
+                routed::ExecRequest {
+                    prompt,
+                    model: model_override,
+                    yolo,
+                    json,
+                },
+            )
+            .await
+        }
+        // The lock (if any) is held until the run returns; an early exit
+        // (a stop signal) releases it with the process.
+        db_writer::Writer::Direct(lock) => {
+            let result = cmd_exec(prompt, model_override, db, yolo, json, pure).await;
+            drop(lock);
+            result
+        }
+    }
 }
 
 async fn cmd_exec(
@@ -907,7 +952,8 @@ async fn main() -> anyhow::Result<()> {
             format,
             json,
         }) => {
-            cmd_exec(
+            exec_entry(
+                "run",
                 message.join(" "),
                 model,
                 &db,
@@ -918,7 +964,7 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Some(Command::Exec { prompt, json }) => {
-            cmd_exec(prompt, model, &db, yolo, json, pure).await
+            exec_entry("exec", prompt, model, &db, yolo, json, pure).await
         }
         Some(Command::Serve {
             action: Some(action),

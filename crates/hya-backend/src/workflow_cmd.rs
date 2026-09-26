@@ -17,6 +17,9 @@ use hya_proto::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::db_writer::Writer;
+use crate::routed::WorkflowRoute;
+
 /// CLI commands backed by the app-owned Workflow control seam.
 #[derive(Subcommand)]
 pub(crate) enum WorkflowCliCommand {
@@ -260,6 +263,52 @@ pub(crate) async fn run(
     let session = session
         .map(|value| value.parse().context("parse workflow Session id"))
         .transpose()?;
+    // `list`/`info` never open the database. Every other command writes it
+    // (a Session, a selection, a run, crash recovery on open), so it holds
+    // the database lock, or goes through the server that owns the database.
+    let lock = if read_only {
+        None
+    } else {
+        match crate::db_writer::claim(db, "workflow")? {
+            Writer::Direct(lock) => lock,
+            Writer::Server(server) => {
+                let route = match command {
+                    ControlCommand::Select {
+                        name,
+                        expected_revision,
+                    } => WorkflowRoute::Select {
+                        name,
+                        expected_revision: expected_revision.map(|revision| revision.to_string()),
+                    },
+                    ControlCommand::Run {
+                        name,
+                        expected_revision,
+                        inputs,
+                        ..
+                    } => {
+                        let reason = if expected_revision.is_some() {
+                            Some("`workflow run --revision` cannot be sent to it")
+                        } else if pure {
+                            Some("--pure cannot apply to it (it loaded its own context)")
+                        } else if yolo {
+                            Some("--yolo cannot apply to its Workflow runs")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = reason {
+                            crate::db_writer::exit_unroutable("workflow", db, &server, reason);
+                        }
+                        WorkflowRoute::Run { name, inputs }
+                    }
+                    ControlCommand::State => WorkflowRoute::State,
+                    other => anyhow::bail!("unexpected Workflow command {other:?}"),
+                };
+                let result =
+                    crate::routed::workflow(&server.url, session, model_override, route).await?;
+                return finish(&result, json_output, is_run);
+            }
+        }
+    };
     let runtime = WorkflowRuntime::start(
         model_override,
         if read_only { "" } else { db },
@@ -270,16 +319,22 @@ pub(crate) async fn run(
     .await?;
     let result = runtime.execute(command).await;
     let shutdown = runtime.shutdown().await;
+    drop(lock);
     let result = result.map_err(control_error)?;
     shutdown?;
+    finish(&result, json_output, is_run)
+}
+
+/// Print a Workflow command result; a run that did not complete is an error.
+fn finish(result: &WorkflowCommandResult, json_output: bool, is_run: bool) -> anyhow::Result<()> {
     if json_output {
         let mut out = std::io::stdout().lock();
-        writeln!(out, "{}", serde_json::to_string_pretty(&result)?)
+        writeln!(out, "{}", serde_json::to_string_pretty(result)?)
             .context("write Workflow result")?;
     } else {
-        print_text_result(&result);
+        print_text_result(result);
     }
-    if is_run && !run_succeeded(&result) {
+    if is_run && !run_succeeded(result) {
         if let WorkflowCommandResult::Run { result } = result {
             anyhow::bail!(
                 "workflow `{}` ended {}",

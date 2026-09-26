@@ -25,6 +25,7 @@ use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use hya_server::ShutdownReason;
 use serde::{Deserialize, Serialize};
 
 /// `hya serve`'s exit status when another process holds the database
@@ -45,8 +46,8 @@ pub(crate) struct Discovery {
     pub(crate) started_at: u64,
 }
 
-/// `<db>.lock`, `<db>.server.json`, and the daemon log `<db>.server.log` of
-/// one database.
+/// `<db>.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, and
+/// the stop request `<db>.server.stop` of one database.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DbPaths {
     pub(crate) lock: PathBuf,
@@ -54,6 +55,9 @@ pub(crate) struct DbPaths {
     /// Where a detached `hya serve` daemon of this database writes its
     /// output (ADR-0023).
     pub(crate) log: PathBuf,
+    /// Why `hya serve stop|restart` asked the holder to stop
+    /// ([`request_stop`]); read by the server when its SIGTERM arrives.
+    pub(crate) stop: PathBuf,
 }
 
 /// The lock and discovery paths of `db`, or `None` for stores that are not
@@ -78,6 +82,7 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
         lock: with(".lock"),
         discovery: with(".server.json"),
         log: with(".server.log"),
+        stop: with(".server.stop"),
     })
 }
 
@@ -167,11 +172,14 @@ pub(crate) fn try_claim(db: &str) -> std::io::Result<Claim> {
         }
         Err(std::fs::TryLockError::Error(error)) => return Err(with_path(error, &paths.lock)),
     }
-    // We hold the lock: any discovery file is a crashed owner's.
-    match std::fs::remove_file(&paths.discovery) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(with_path(error, &paths.discovery)),
+    // We hold the lock: any discovery file is a crashed owner's, and any
+    // stop request was addressed to an earlier owner.
+    for stale in [&paths.discovery, &paths.stop] {
+        match std::fs::remove_file(stale) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(with_path(error, stale)),
+        }
     }
     file.set_len(0)?;
     file.rewind()?;
@@ -229,6 +237,41 @@ fn with_path(error: std::io::Error, path: &Path) -> std::io::Error {
     std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }
 
+/// `<db>.server.stop`: why `hya serve stop|restart` stopped the holder.
+#[derive(Debug, Serialize, Deserialize)]
+struct StopRequest {
+    /// The lock holder it is addressed to.
+    pid: u32,
+    /// `stop` or `restart` (`ServerStopping.reason`).
+    reason: String,
+}
+
+/// Tell the holder `pid` of `paths` why it is about to get SIGTERM (ADR-0023:
+/// clients of a stopped server stay disconnected, clients of a restarted
+/// one wait for the next). Written atomically before the signal; the server
+/// reads it when the signal arrives ([`DbLock::take_stop_request`]). Without
+/// it (or when it names another pid) the server reports a plain `signal`.
+pub(crate) fn request_stop(
+    paths: &DbPaths,
+    pid: u32,
+    reason: ShutdownReason,
+) -> std::io::Result<()> {
+    let body = serde_json::to_vec(&StopRequest {
+        pid,
+        reason: reason.as_str().to_owned(),
+    })
+    .map_err(std::io::Error::other)?;
+    let mut temp = paths.stop.clone().into_os_string();
+    temp.push(format!(".{}.tmp", std::process::id()));
+    let temp = PathBuf::from(temp);
+    std::fs::write(&temp, body).map_err(|error| with_path(error, &temp))?;
+    if let Err(error) = std::fs::rename(&temp, &paths.stop) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(with_path(error, &paths.stop));
+    }
+    Ok(())
+}
+
 /// Parse a discovery file; `None` when missing or malformed.
 pub(crate) fn read_discovery(path: &Path) -> Option<Discovery> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -256,6 +299,19 @@ impl DbLock {
         &self.paths
     }
 
+    /// The stop request addressed to this process, removed once read;
+    /// `None` when there is none (a plain signal) or it names another pid.
+    #[cfg(test)]
+    pub(crate) fn take_stop_request(&self) -> Option<ShutdownReason> {
+        take_stop_request(&self.paths.stop, std::process::id())
+    }
+
+    /// Where [`request_stop`] writes (for a shutdown future that cannot
+    /// borrow the lock).
+    pub(crate) fn stop_request_path(&self) -> PathBuf {
+        self.paths.stop.clone()
+    }
+
     /// Atomically write the discovery file for a server listening on `url`.
     pub(crate) fn publish(&mut self, url: &str) -> std::io::Result<Discovery> {
         let discovery = Discovery {
@@ -280,6 +336,19 @@ impl DbLock {
         self.published = true;
         Ok(discovery)
     }
+}
+
+/// [`DbLock::take_stop_request`] for a process `pid` holding the lock whose
+/// stop request file is `path`.
+pub(crate) fn take_stop_request(path: &Path, pid: u32) -> Option<ShutdownReason> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let request: StopRequest = serde_json::from_str(&text).ok()?;
+    if request.pid != pid {
+        return None;
+    }
+    // Still under the lock: nobody else takes it.
+    let _ = std::fs::remove_file(path);
+    ShutdownReason::parse(&request.reason)
 }
 
 impl Drop for DbLock {
@@ -393,6 +462,7 @@ mod tests {
         assert_eq!(found.lock, scratch.0.join("sessions.db.lock"));
         assert_eq!(found.discovery, scratch.0.join("sessions.db.server.json"));
         assert_eq!(found.log, scratch.0.join("sessions.db.server.log"));
+        assert_eq!(found.stop, scratch.0.join("sessions.db.server.stop"));
     }
 
     #[test]
@@ -479,6 +549,39 @@ mod tests {
         .unwrap();
         let _lock = owned(try_claim(&db).unwrap());
         assert!(!stale.exists());
+    }
+
+    #[test]
+    fn claiming_removes_a_stale_stop_request() {
+        let scratch = Scratch::new("stale-stop");
+        let db = scratch.db();
+        let paths = paths(&db).unwrap();
+        request_stop(&paths, std::process::id(), ShutdownReason::Stop).unwrap();
+        let lock = owned(try_claim(&db).unwrap());
+        assert!(!paths.stop.exists());
+        assert_eq!(lock.take_stop_request(), None);
+    }
+
+    #[test]
+    fn a_stop_request_names_its_pid_and_is_taken_once() {
+        let scratch = Scratch::new("stop-request");
+        let db = scratch.db();
+        let lock = owned(try_claim(&db).unwrap());
+        let paths = lock.paths().clone();
+        // Addressed to another process (a stale file, pid reuse): ignored.
+        request_stop(&paths, std::process::id() + 1, ShutdownReason::Stop).unwrap();
+        assert_eq!(lock.take_stop_request(), None);
+        request_stop(&paths, std::process::id(), ShutdownReason::Restart).unwrap();
+        let text = std::fs::read_to_string(&paths.stop).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["reason"], serde_json::json!("restart"));
+        assert_eq!(value["pid"], serde_json::json!(std::process::id()));
+        assert_eq!(lock.take_stop_request(), Some(ShutdownReason::Restart));
+        assert!(!paths.stop.exists(), "taken requests are removed");
+        assert_eq!(lock.take_stop_request(), None);
+        // Garbage is ignored.
+        std::fs::write(&paths.stop, "not json").unwrap();
+        assert_eq!(lock.take_stop_request(), None);
     }
 
     #[test]

@@ -1388,10 +1388,19 @@ One curated projected event from the event log.
 | `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
 | `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
 | `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | The provider/model catalog changed (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`. |
+| `server_stopping` (26) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
+
+### `ServerStopping`
+
+The provider/model catalog changed; carries no fields.
+Why the server is going away.
+
+| Field | Type | Description |
+|---|---|---|
+| `reason` (1) | `string` | `stop`: stopped on purpose (`hya serve stop`); do not start another. `restart`: `hya serve restart`; a new server of the same database follows, attach to it. `signal`: SIGTERM/SIGINT/SIGHUP from anything else (a foreground `hya serve` interrupted, a supervisor); treat like `stop`. A stream that ends without this frame lost its server unexpectedly (crash, kill, network). |
 
 ### `PartsAdded`
 
-The provider/model catalog changed; carries no fields.
 Complete parts added to a message in one step.
 
 | Field | Type | Description |

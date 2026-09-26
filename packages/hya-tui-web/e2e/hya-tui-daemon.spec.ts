@@ -1,16 +1,17 @@
 // The backend daemon (ADR-0023; docs/tui.md "When the server goes away"):
 // the server outlives its TUIs, and `hya serve stop` / `restart` control it.
-// A TUI that knows its database reconnects when its server goes away: it
-// finds the next server through the discovery file or starts one, switches
-// to it, and reloads the open session. With two TUIs, the database lock makes
-// exactly one of them start the new daemon; the other attaches to it.
+// The server says why it goes away (`serverStopping {reason}`): after `stop`
+// a TUI starts nothing and waits for `/reconnect`; after `restart` it waits
+// for the next daemon and attaches. Only an unexpected loss (a crash, kill
+// -9) makes it find or start the next server by itself; with two TUIs, the
+// database lock makes exactly one of them start it, the other attaches.
 
 import type { Page } from "@playwright/test"
-import { spawn, type ChildProcess } from "node:child_process"
+import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, textStep, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, textStep, workspaceDb, type Workspace } from "./hya"
 
 const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
@@ -48,6 +49,17 @@ async function secondTab(page: Page, workspace: Workspace): Promise<{ term: Tui;
   return { term: new Tui(tab, url), host }
 }
 
+/** Pids of every `hya serve` process of the workspace database. */
+function servePids(workspace: Workspace): number[] {
+  let out = ""
+  try {
+    out = execFileSync("pgrep", ["-f", `serve --bind 127.0.0.1:0 --db ${workspaceDb(workspace)}`]).toString()
+  } catch {
+    // pgrep exits 1 when nothing matches.
+  }
+  return out.split("\n").filter(Boolean).map(Number)
+}
+
 async function stopHost(host: ChildProcess): Promise<void> {
   if (host.exitCode !== null || host.signalCode !== null) return
   const exited = new Promise((resolve) => host.once("exit", resolve))
@@ -58,7 +70,7 @@ async function stopHost(host: ChildProcess): Promise<void> {
 test.describe("backend daemon", () => {
   test.use({ model: { steps: [textStep("Before the stop."), textStep("After the new server."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("`hya serve stop` under a TUI: it starts a new daemon, reloads the session, and keeps working", async ({ tui, workspace }, testInfo) => {
+  test("`hya serve stop` under a TUI: nothing starts a new daemon until /reconnect, which then works", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
     await prompt(term, "first prompt")
@@ -70,32 +82,73 @@ test.describe("backend daemon", () => {
     const stopped = await daemon(workspace, ["stop"])
     expect(stopped.code).toBe(0)
     expect(stopped.stdout).toContain(`stopped hya server pid ${before}`)
+    expect(stopped.stdout).toContain("connected TUIs stay disconnected until /reconnect")
 
-    // The TUI noticed, started the next daemon, and says so.
+    // The TUI was told it was a manual stop: it says so and starts nothing.
+    await term.waitForText("Backend stopped (hya serve stop) · /reconnect starts it again", 20_000)
+    await term.waitForText("backend stopped")
+    await term.attach(testInfo, "stopped")
+    // Prompts are refused while stopped (and the stream keeps retrying meanwhile).
+    await prompt(term, "lost prompt")
+    await term.waitForText("Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again")
+    expect(await daemonStatus(workspace)).toBeUndefined()
+    expect(servePids(workspace)).toEqual([])
+
+    // /reconnect starts the next daemon, reloads the session, and it works.
+    await prompt(term, "/reconnect")
     await term.waitForText(/Started a new server · pid \d+/, 30_000)
     const after = Number(/Started a new server · pid (\d+)/.exec(await term.text())![1])
     expect(after).not.toBe(before)
     expect((await daemonStatus(workspace))?.pid).toBe(after)
-    // Same session, transcript reloaded from the database.
     await term.waitForText(new RegExp(`hya · ${session}`))
     await term.waitForText("Before the stop.")
-    await term.attach(testInfo, "after-restart")
-
-    // It keeps working on the new server, and /status names it.
     await prompt(term, "second prompt")
     await term.waitForText("After the new server.", 20_000)
     await term.waitForText(/^Ready/m)
     expect(await statusPid(term)).toBe(after)
-
-    // About 80 columns: the notice still reads.
-    await term.resize(690, 640)
-    const restarted = await daemon(workspace, ["restart"])
-    expect(restarted.code).toBe(0)
-    await term.waitForText(/Server moved · now pid \d+/, 30_000)
-    await term.attach(testInfo, "narrow-moved")
+    expect(await term.text()).not.toContain("backend stopped")
   })
 
-  test("two TUIs lose the daemon: exactly one starts the next, the other attaches to it", async ({ tui, workspace, page }, testInfo) => {
+  test("`hya serve restart` under a TUI: it waits for the new daemon and attaches; still exactly one daemon", async ({ tui, workspace }, testInfo) => {
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Connected to hya", 30_000)
+    await prompt(term, "first prompt")
+    await term.waitForText("Before the stop.", 20_000)
+    await term.waitForText(/^Ready/m)
+    const before = await statusPid(term)
+    // About 80 columns: the notice still reads.
+    await term.resize(690, 640)
+
+    const restarted = await daemon(workspace, ["restart", "--json"])
+    expect(restarted.code).toBe(0)
+    const next = JSON.parse(restarted.stdout.trim()) as { pid: number; started: boolean }
+    expect(next.started).toBe(true)
+    await term.waitForText(`Server moved · now pid ${next.pid}`, 30_000)
+    await term.attach(testInfo, "narrow-moved")
+    expect(await term.text()).not.toContain("Started a new server")
+    expect(next.pid).not.toBe(before)
+    expect(servePids(workspace)).toEqual([next.pid])
+    await prompt(term, "after the restart")
+    await term.waitForText("After the new server.", 20_000)
+    await term.waitForText(/^Ready/m)
+    expect(servePids(workspace)).toEqual([next.pid])
+  })
+
+  test("a daemon killed with SIGKILL (no reason sent): the TUI starts the next one by itself", async ({ tui, workspace }, testInfo) => {
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Connected to hya", 30_000)
+    const before = await statusPid(term)
+    process.kill(before, "SIGKILL")
+    await term.waitForText(/Started a new server · pid \d+/, 30_000)
+    const after = Number(/Started a new server · pid (\d+)/.exec(await term.text())![1])
+    expect(after).not.toBe(before)
+    expect((await daemonStatus(workspace))?.pid).toBe(after)
+    await term.attach(testInfo, "after-kill")
+    await prompt(term, "after the crash")
+    await term.waitForText("Before the stop.", 20_000)
+  })
+
+  test("two TUIs lose the daemon to a crash: exactly one starts the next, the other attaches to it", async ({ tui, workspace, page }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
     const { term: second, host } = await secondTab(page, workspace)
@@ -104,7 +157,7 @@ test.describe("backend daemon", () => {
       const before = await statusPid(first)
       expect(await statusPid(second)).toBe(before)
 
-      expect((await daemon(workspace, ["stop"])).code).toBe(0)
+      process.kill(before, "SIGKILL")
       const notice = /Started a new server · pid \d+|Server moved · now pid \d+/
       await first.waitForText(notice, 30_000)
       await second.waitForText(notice, 30_000)

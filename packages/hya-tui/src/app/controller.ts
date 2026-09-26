@@ -52,7 +52,10 @@
  * and the server fails its health probes, a TUI that knows its database
  * (`reconnect` set) finds or starts the next server, switches the client's
  * base URL, resubscribes both streams, and reloads the catalogs and the open
- * session. A turn that ran on the old server died with it.
+ * session. A turn that ran on the old server died with it. A server that
+ * says why it stops (`serverStopping`, the last frame of each stream)
+ * changes that: after `stop` nothing is started and prompts are refused
+ * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
  * Sessions (app/sessionKeeper.ts): without `--session`/`--continue` a
  * session is created on connect; a session this client created and never
@@ -140,6 +143,8 @@ export interface ControllerOptions {
    * `--server` without `--db`: the streams just keep retrying it.
    */
   reconnect?: () => Promise<ServerSwitch>
+  /** Find the database's running server without starting one (src/launch.ts `findRunningServer`): how a stopped TUI notices a server another client started, and how it follows `hya serve restart`. */
+  find?: () => Promise<ServerSwitch | undefined>
   /** Health probe of a server URL (default src/launch.ts `probeHealth`). */
   probe?: (url: string) => Promise<boolean>
 }
@@ -172,7 +177,7 @@ const helpMaxRows = 40
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, probe = (url) => probeHealth(url) }: ControllerOptions) {
+export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url) }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let globalAbort: AbortController | undefined
   /** Asks a desktop notification was considered for: the open tree's asks arrive on both streams. */
@@ -418,7 +423,15 @@ export function createController({ client, store, directory, registry = createCo
     store.setMessages(sessionId, store.state.messages)
   }
 
+  /** `serverStopping` (live, empty `session`): the last frame before the server ends this stream. */
+  function onStopping(event: StreamEvent | undefined): boolean {
+    if (!event?.serverStopping) return false
+    reconnector?.stopping(client.baseUrl, event.serverStopping.reason ?? "")
+    return true
+  }
+
   async function onFrame(frame: StreamFrame, sessionId: string): Promise<void> {
+    if (onStopping(frame.event)) return
     if (store.state.selected?.id !== sessionId) return
     if (frame.resync) {
       store.markLiveLost()
@@ -456,10 +469,9 @@ export function createController({ client, store, directory, registry = createCo
             ready()
           }, true)
         } catch (error) {
-          if (!controller.signal.aborted && !reconnector?.busy()) {
-            store.setConnected(false)
-            status(`Stream reconnecting: ${String(error)}`)
-          }
+          if (!controller.signal.aborted && !reconnector?.busy()) store.setConnected(false)
+          // A stopped TUI keeps its `Backend stopped` notice while the stream retries.
+          if (!controller.signal.aborted && !reconnector?.busy() && !reconnector?.stopped()) status(`Stream reconnecting: ${String(error)}`)
         }
         ready()
         // Ended or failed: the server may be gone (stopped, restarted, crashed).
@@ -476,6 +488,7 @@ export function createController({ client, store, directory, registry = createCo
    * announced on the status line, and notified while unfocused.
    */
   async function onGlobalFrame(frame: StreamFrame): Promise<void> {
+    if (onStopping(frame.event)) return
     if (frame.resync) {
       // Ask frames in the gap are lost: list the pending asks again.
       await refreshInteractions().catch(() => undefined)
@@ -709,6 +722,7 @@ export function createController({ client, store, directory, registry = createCo
     undo: () => revert.undo(),
     redo: () => revert.redo(),
     fork: () => revert.fork(),
+    reconnect: () => reconnectNow(),
     cancelTurn: () => turns.cancel(),
     quit,
     openPicker,
@@ -771,6 +785,10 @@ export function createController({ client, store, directory, registry = createCo
       }
       if (store.state.selected?.parent) {
         status(readOnlyStatus)
+        return
+      }
+      if (reconnector?.stopped()) {
+        status(stoppedPromptStatus)
         return
       }
       const command = shellCommand(text)
@@ -886,8 +904,21 @@ export function createController({ client, store, directory, registry = createCo
   }
 
   const reconnector = reconnect
-    ? createReconnector({ url: () => client.baseUrl, probe, reconnect, switchTo: switchServer, status })
+    ? createReconnector({
+      url: () => client.baseUrl, probe, reconnect, switchTo: switchServer, status,
+      ...(find ? { find } : {}),
+      onStopped: (stopped) => { store.setBackendStopped(stopped); if (stopped) store.setConnected(false) },
+    })
     : undefined
+
+  /** `/reconnect`: find or start the database's server now; a fixed `--server` only resubscribes. */
+  async function reconnectNow(): Promise<void> {
+    if (reconnector) return reconnector.reconnectNow()
+    status(`Reconnecting to ${client.baseUrl} (--server without --db: no backend to find or start)`)
+    startGlobalStream()
+    const selected = store.state.selected
+    if (selected) startStream(selected.id)
+  }
 
   /** Before exit: delete this client's session when it created it and never used it (bounded wait). */
   async function close(): Promise<void> {
@@ -961,6 +992,9 @@ export function createController({ client, store, directory, registry = createCo
 }
 
 export type Controller = ReturnType<typeof createController>
+
+/** Status shown when a prompt or shell command is submitted while the backend is stopped on purpose. */
+export const stoppedPromptStatus = "Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again"
 
 /** Status shown when a prompt is submitted in a subagent's read-only view. */
 export const readOnlyStatus = "Read-only: this is a subagent's session · Esc returns to the parent"

@@ -174,7 +174,7 @@ fn session_stream(
 ///
 /// Every stream ends when the server starts shutting down
 /// (`StreamShutdown::close`), so connected clients never hold the graceful
-/// shutdown open.
+/// shutdown open; its last frame is a live `serverStopping {reason}`.
 pub(crate) fn frame_stream(
     st: ServerState,
     scope: StreamScope,
@@ -254,7 +254,48 @@ pub(crate) fn frame_stream(
     if !interactions_only {
         feeds.push(engine);
     }
-    futures::stream::select_all(feeds).take_until(closed)
+    // The last frame says why the server goes away (only when it does: the
+    // feeds never end on their own while the state lives).
+    let shutdown = st.streams.clone();
+    // Never an error; the Result matches the merged item type (as above).
+    #[allow(clippy::result_large_err)]
+    let stopping = futures::stream::once(async move {
+        shutdown
+            .reason()
+            .map(|reason| Ok(server_stopping_frame(reason)))
+    })
+    .filter_map(futures::future::ready);
+    futures::stream::select_all(feeds)
+        .take_until(closed)
+        .chain(stopping)
+}
+
+/// Milliseconds since the Unix epoch, as the frames' `timeRecorded`.
+fn now_timestamp() -> Option<pbjson_types::Timestamp> {
+    super::convert::timestamp(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+            .unwrap_or_default(),
+    )
+}
+
+/// The live-only, process-wide `serverStopping` frame: the last frame of
+/// every stream when the server shuts down.
+fn server_stopping_frame(reason: crate::streams::ShutdownReason) -> pb::StreamFrame {
+    pb::StreamFrame {
+        frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+            seq: 0,
+            session: String::new(),
+            time_recorded: now_timestamp(),
+            payload: Some(pb::stream_event::Payload::ServerStopping(
+                pb::ServerStopping {
+                    reason: reason.as_str().to_owned(),
+                },
+            )),
+        })),
+    }
 }
 
 /// The live-only, process-wide `catalogUpdated` frame.
@@ -263,13 +304,7 @@ fn catalog_updated_frame() -> pb::StreamFrame {
         frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
             seq: 0,
             session: String::new(),
-            time_recorded: super::convert::timestamp(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
-                    .unwrap_or_default(),
-            ),
+            time_recorded: now_timestamp(),
             payload: Some(pb::stream_event::Payload::CatalogUpdated(
                 pb::CatalogUpdated {},
             )),

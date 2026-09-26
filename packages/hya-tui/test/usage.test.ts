@@ -142,3 +142,10 @@ test("the status bar shows the WebUI address, or a warning when it is unavailabl
   const failed = statusBarSegments({ ...base, web: { error: "port 3250 is in use" } }, 80)
   expect(failed.at(-1)).toEqual({ text: "WebUI unavailable", tone: "warning" })
 })
+
+test("a backend stopped on purpose shows `backend stopped` (error) instead of `reconnecting`", () => {
+  const base = { mode: "manual", directory: "/w", branch: "", connected: false }
+  expect(statusBarText(base, 80)).toBe("mode manual · /w · reconnecting")
+  expect(statusBarText({ ...base, stopped: true }, 80)).toBe("mode manual · /w · backend stopped")
+  expect(statusBarSegments({ ...base, stopped: true }, 80).at(-1)?.tone).toBe("error")
+})

@@ -114,6 +114,13 @@ export async function run(options: Options): Promise<void> {
             store.setBackend(daemonInfo(connection))
             return { url: connection.url, pid: connection.pid, started: connection.started, version: connection.version, startedAt: connection.startedAt }
           },
+          // Never starts one: after `hya serve stop` / `restart` (app/reconnect.ts).
+          find: async () => {
+            const found = await findRunningServer(db, options.directory)
+            if (!found) return undefined
+            store.setBackend({ pid: found.pid, db, startedAt: found.startedAt })
+            return { url: found.url, pid: found.pid, started: false, version: found.version, startedAt: found.startedAt }
+          },
         }
       : {}),
     preferencesPath: prefsPath,

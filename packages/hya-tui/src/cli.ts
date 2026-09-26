@@ -36,8 +36,9 @@ export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
 Without --server the TUI uses the backend daemon of --db: the server already
 running on it (its <db>.server.json answers), else a new one it starts with
 \`hya serve start\` (detached, working directory --dir). The daemon keeps
-running after the TUI exits; \`hya serve stop\` stops it. When the server goes
-away, the TUI finds or starts the next one and reconnects.
+running after the TUI exits; \`hya serve stop\` stops it, and the TUI then
+starts nothing until /reconnect. After \`hya serve restart\` it attaches to
+the new daemon; after a crash it finds or starts the next one.
 
 Options:
   --server URL      Connect to this hya server instead of the database's

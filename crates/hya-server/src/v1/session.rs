@@ -48,28 +48,38 @@ async fn create_session(
     State(st): State<ServerState>,
     Json(request): Json<pb::CreateSessionRequest>,
 ) -> Result<Json<pb::CreateSessionResponse>, V1Error> {
-    if request.agent.trim().is_empty() {
-        return Err(V1Error::invalid_argument("agent is required"));
-    }
-    if request.model.trim().is_empty() {
-        return Err(V1Error::invalid_argument("model is required"));
-    }
     if request.workdir.trim().is_empty() {
         return Err(V1Error::invalid_argument("workdir is required"));
     }
-    let agent = crate::support::bound_agent_metadata::resolve_session_agent(
-        &st,
-        std::path::Path::new(&request.workdir),
-        Some(request.agent.as_str()),
-    )
-    .await
-    .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
+    let workdir = std::path::Path::new(&request.workdir);
+    let (agent, model) = if request.agent.trim().is_empty() || request.model.trim().is_empty() {
+        // An empty agent or model takes the server's default, resolved as
+        // for a headless root session (`hya exec`): config `default_agent`,
+        // else the built-in agent, on that agent's effective model.
+        let requested = Some(request.agent.trim()).filter(|agent| !agent.is_empty());
+        let explicit = Some(request.model.trim())
+            .filter(|model| !model.is_empty())
+            .map(hya_proto::ModelRef::new);
+        crate::support::bound_agent_metadata::resolve_new_session_agent_model(
+            &st, workdir, requested, explicit,
+        )
+        .await?
+    } else {
+        let agent = crate::support::bound_agent_metadata::resolve_session_agent(
+            &st,
+            workdir,
+            Some(request.agent.as_str()),
+        )
+        .await
+        .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
+        (agent, hya_proto::ModelRef::new(request.model.clone()))
+    };
     let session = st
         .engine
         .create(CreateSession {
             parent: request.parent.parse().ok(),
             agent,
-            model: hya_proto::ModelRef::new(request.model.clone()),
+            model,
             workdir: request.workdir.clone(),
         })
         .await?;

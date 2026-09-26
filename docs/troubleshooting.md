@@ -122,12 +122,23 @@ tail -f ~/.local/state/hya/sessions.db.server.log
   running server is hya X, this is hya Y` from `hya serve` — a daemon of an
   older (or newer) hya is still running after an upgrade. Run
   `hya serve restart`; open TUIs reconnect by themselves.
+- **`Backend stopped (hya serve stop) · /reconnect starts it again`** (and
+  `backend stopped` in the status bar) — someone ran `hya serve stop`. Open
+  TUIs start nothing and refuse prompts (`Not sent · the backend is stopped
+  …`); type `/reconnect` to start the daemon again, or start `hya` / a TUI
+  anywhere: stopped TUIs attach to that daemon by themselves. `Backend
+  stopped (signal)` means the server got SIGTERM/SIGINT/SIGHUP from something
+  else (a foreground `hya serve` interrupted, a supervisor); same handling.
+- **`Backend restarting (hya serve restart) · waiting for the new one…`**,
+  then **`Server moved · now pid N`** — `hya serve restart` ran; the TUI
+  attached to the new daemon. If none answers within 60 s:
+  `Backend did not come back after hya serve restart · /reconnect starts it
+  again` (see `hya serve status` and the daemon log).
 - **`Server stopped · reconnecting…`**, then **`Started a new server · pid N`**
-  or **`Server moved · now pid N`** — the daemon stopped (`hya serve stop` or
-  `restart`, a crash) and the TUI found or started the next one; the open
-  session was reloaded. A turn that was running ended with the old server.
-- **`hya serve stop` does not stop it for good** — open TUIs that know the
-  database start a new daemon when theirs goes away. Quit them first.
+  or **`Server moved · now pid N`** — the daemon went away without saying why
+  (a crash, `kill -9`, a machine sleep) and the TUI found or started the next
+  one; the open session was reloaded. A turn that was running ended with the
+  old server.
 - **`Server lost: <reason> · retrying`** — no daemon could be found or
   started; the TUI tries again on the next stream retry. Check
   `hya serve status` and the daemon log.
@@ -302,8 +313,19 @@ refused:
   Wait for it to start, or find it with `ps -p <pid>`.
 - Bare `hya`, the TUI, or `hya serve start`: `database <db> is held by pid
   <pid>, which serves no reachable server (waited 60 s)`: the holder is hung
-  or is not a server. Stop it (`hya serve stop --force --db <db>`, or kill
-  that pid).
+  or is not a server. A headless `hya --db <db> exec` or `workflow run` holds
+  the lock for its whole run; wait for it to finish. Otherwise stop it (`hya
+  serve stop --force --db <db>`, or kill that pid).
+- `hya exec: database <db> is in use by pid <pid> and it does not serve HTTP
+  yet; try again or stop it` (also `hya run`, `hya workflow`, `hya sessions`;
+  exit status 75): a daemon is still starting, or another headless command
+  holds the database. Try again in a moment, or pass another `--db`.
+- `hya exec: database <db> is in use by hya server pid <pid> at <url>, and
+  <reason>; stop it (…) or pass another --db` (exit status 75): the command
+  would normally go through that server, but this invocation cannot (for
+  example `--pure`, or `workflow run --revision`). Drop that flag, stop the
+  server (`hya serve stop --db <db>`), or use another `--db`. See
+  [CLI: Database lock and the backend daemon](cli.md#database-lock-and-the-backend-daemon).
 
 `<db>.lock` is released by the OS when its process exits, even on a crash or
 SIGKILL. Do not delete it. A `<db>.server.json` left by a crash is ignored
@@ -316,8 +338,9 @@ continue:
 
 - make sure another process is not holding a long write transaction
 - use a separate database path for separate local experiments
-- `hya exec --db` and `hya workflow` do not take the server lock: on a database
-  a server is using, they are a second writer
+- `hya exec --db` and `hya workflow` respect the server lock (they go through
+  the server that holds the database), so a `database is locked` error points
+  at a process outside hya, or an older hya, writing the file
 - use an empty `--db ""` for in-memory one-off runs
 
 ## The Server Binds an Unexpected Port

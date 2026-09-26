@@ -309,6 +309,8 @@ export interface StatusBarFields {
   /** Compact todo count (`Todos n/m`) shown only while the sidebar is hidden. */
   todos?: string
   connected: boolean
+  /** The backend was stopped on purpose (`hya serve stop`; app/reconnect.ts): `backend stopped` in the error color instead of `reconnecting`. */
+  stopped?: boolean
   /** The WebUI bare `hya` serves (`WebUI <url>`), or `WebUI unavailable` in the warning color. */
   web?: WebInfo
   /** Vim mode is on: the composer's mode and a half-typed command (`2d`), shown first. */
@@ -330,7 +332,7 @@ export const contextAlarmPercent = 95
  * The status bar's segments in order: with vim mode on `-- INSERT --` /
  * `-- NORMAL --` (plus a pending command, `-- NORMAL -- 2d`), `mode <mode>`, `ctx N%`, `<n> tok`,
  * the directory, `⎇ <branch>`, `WebUI <url>` (or `WebUI unavailable`),
- * `Todos n/m`, `reconnecting`. Segments with no
+ * `Todos n/m`, `reconnecting` (or `backend stopped`). Segments with no
  * data are omitted; the least essential (from the end) drop first so the
  * line fits `width`.
  */
@@ -346,7 +348,7 @@ export function statusBarSegments(fields: StatusBarFields, width: number): Statu
     fields.branch ? { text: `⎇ ${fields.branch}`, tone: "muted" } : undefined,
     fields.web ? { text: webLabel(fields.web)!, tone: fields.web.url ? "muted" : "warning" } : undefined,
     fields.todos ? { text: fields.todos, tone: "muted" } : undefined,
-    fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
+    fields.stopped ? { text: "backend stopped", tone: "error" } : fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
   ]
   const shown = segments.filter((segment): segment is StatusSegment => Boolean(segment))
   const keep = vim ? 2 : 1

@@ -424,8 +424,9 @@ Stream events come in two kinds:
   They are never persisted and `ListEvents` never returns them: the
   assistant text of an in-flight provider round, the pending
   interaction frames (`permissionRequested`, `questionRequested`,
-  `interactionResolved`; `GET /v1/interactions` is their listing), and the
-  process-wide `catalogUpdated` notice.
+  `interactionResolved`; `GET /v1/interactions` is their listing), the
+  process-wide `catalogUpdated` notice, and `serverStopping` (see
+  [Server shutdown](#server-shutdown)).
 
 **`catalogUpdated`.** When the provider/model catalog changes — a provider
 is added, edited, or refreshed, a key is set or removed, or startup model
@@ -911,11 +912,35 @@ ends) and gRPC (the stream completes) — and from then on answers
 {"error": {"code": "unavailable", "message": "the server is shutting down"}}
 ```
 
-Streams never end on their own otherwise, so a stream that ends while the
-client did not cancel it means the server is going away (or the connection
-dropped). Probe `GET /v1/health`: `{"ok": true}` means reconnect to the same
-server; `unavailable` or no answer means find its successor. Local clients of
-a database do that through `<db>.server.json`
+**`serverStopping`.** The last frame of every stream (global — also with
+`interactionsOnly` — and session, SSE and gRPC) is one live-only
+`serverStopping` event (`StreamEvent.server_stopping`, payload 26) with an
+empty `session` and no `seq`; a stream opened while the server shuts down
+gets only this frame and ends. `reason` (a string) says what the client
+should do next:
+
+| `reason` | Cause | Client should |
+| --- | --- | --- |
+| `stop` | `hya serve stop` | Not start another server. Stay disconnected until the user asks (the TUI's `/reconnect`), or attach when another client starts one. |
+| `restart` | `hya serve restart` | Wait (the TUI: up to 60 s) for the next server of the same database and attach to it; not start one. |
+| `signal` | Any other SIGTERM/SIGINT/SIGHUP (Ctrl+C on a foreground `hya serve`, a supervisor, `kill`) | As `stop`. |
+
+Clients treat an unknown `reason` like `stop`. The first reason wins; a
+second signal during the drain does not change it. `hya serve stop|restart`
+pass the reason through `<db>.server.stop`
+([cli.md](../cli.md#hya-serve)); a server on an in-memory store (no lock)
+always reports `signal`.
+
+```json
+{ "event": { "timeRecorded": "2026-09-26T10:00:00Z", "serverStopping": { "reason": "stop" } } }
+```
+
+Streams never end on their own otherwise, so a stream that ends **without**
+`serverStopping` while the client did not cancel it means the server went
+away unexpectedly (a crash, `kill -9`) or the connection dropped. Probe
+`GET /v1/health`: `{"ok": true}` means reconnect to the same server;
+`unavailable` or no answer means find its successor (or start one). Local
+clients of a database do that through `<db>.server.json`
 ([ADR-0022](../adr/0022-one-writer-per-database.md),
 [ADR-0023](../adr/0023-persistent-backend-daemon.md)); the TUI's rules are in
 [tui.md](../tui.md#when-the-server-goes-away). Durable events are never lost:

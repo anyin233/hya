@@ -78,6 +78,66 @@ in-memory store is intentionally non-durable.
 
 When `--prompt` is present, it takes precedence over subcommand dispatch.
 
+### Database lock and the backend daemon
+
+A database file has one writer at a time
+([ADR-0022](adr/0022-one-writer-per-database.md)): the process holding
+`<db>.lock` (see [`hya serve`](#hya-serve)). Usually that is the backend
+daemon ([ADR-0023](adr/0023-persistent-backend-daemon.md)). Every command that
+writes a file database checks the lock first:
+
+- **A server holds it** (it published `<db>.server.json`): the command goes
+  through that server over `/v1`, so the session is the server's and every
+  TUI or WebUI tab on it sees the session live. If the command cannot be
+  expressed there, it exits **75** before it writes anything.
+- **Nobody holds it:** the command takes the lock and holds it until it exits
+  (the OS releases it on a crash). A `hya serve --db` or daemon started
+  meanwhile exits 75, and bare `hya`/a TUI waits for the lock (up to 60 s)
+  before it starts one. `hya serve stop` sends the holder SIGTERM, which stops
+  the command as a signal would (exit 143).
+- **A process holds it but has not published a server** (a daemon still
+  starting, or another command below): exit **75** with
+  `hya <command>: database <db> is in use by pid <pid> and it does not serve HTTP yet; try again or stop it`.
+
+In-memory stores (`--db ""`, the default of `exec`/`run`/`serve`) and SQLite
+URIs are never locked.
+
+| Command | Store | Server holds the file `--db` | Nobody holds it |
+| --- | --- | --- | --- |
+| `exec`, `run` | `--db`, else in-memory | Through the server: a new root session in the current directory, one prompt turn, the same stdout. `--model` sets the session's model, `--yolo` its permission mode. `--pure` exits 75. | Lock held for the run |
+| `workflow use`, `workflow state` | `--db`, else in-memory | Through the server (`/v1/sessions/{id}/workflow`) | Lock held for the command |
+| `workflow run` | `--db`, else in-memory | Through the server; a run without `--session` creates the session there. `--revision`, `--pure`, and `--yolo` exit 75 (no `/v1` field for them). | Lock held for the run |
+| `workflow list`, `workflow info` | In-memory always | Not affected | Not affected |
+| `sessions archive`/`unarchive` | Durable default or `--db` | Through the server (`PATCH /v1/sessions/{id}`) | Lock held for the write |
+| `sessions` (list), `tail-session` | Durable default or `--db` | Read directly, never write, no lock | Read directly, no lock |
+| `-p` goal mode, `loop`, `rpc` | A private temporary database per run | Not affected (`--db` is ignored) | Not affected |
+| `serve` | `--db`, else in-memory | Exits 75 | Takes the lock (it is the server) |
+| `agent`, `bundle`, `models`, `auth`, `update` | No session store | Not affected | Not affected |
+
+The 75 line for a command the server cannot run names the server and the way
+out:
+
+```text
+hya exec: database /home/me/work.db is in use by hya server pid 4242 at http://127.0.0.1:53211, and --pure cannot apply to a running server (it loaded its own context); stop it (`hya serve stop --db /home/me/work.db`) or pass another --db
+```
+
+**What differs when a command goes through the server.** The server's
+configuration, providers, plugins, and context apply, not the command's own.
+The command has no `--pure` or `--yolo` runtime of its own. It rejects the
+permission asks and questions of its session tree, as it would in process.
+
+- `exec`/`run`: the command returns when the lead's turn ends. Team members,
+  subagents, or a synthesis turn still running on the server keep running and
+  are not drained. `--json` output is polled every 250 ms and ends with the
+  same final flush from the durable log, in ascending `seq` order. SIGINT or
+  SIGTERM cancels the turn on the server (`cause: user_cancel`) and exits 130
+  or 143. A second SIGINT exits at once. A turn that another client cancels
+  exits 1.
+- `workflow run`: the server returns once the run is admitted, and the
+  command polls the session's workflow state until the run ends. Stopping the
+  command (Ctrl-C) does not stop the run on the server. Errors read `<code>:
+  <message>` from the `/v1` error model.
+
 ## Backend Command Catalog
 
 The backend serves a built-in command catalog from
@@ -131,6 +191,10 @@ hya --db sessions.db workflow state --session hysec_...
 first-party Workflow catalog. `use` persists an exact source/revision identity
 in an existing Session and therefore requires `--session`. `state` also requires
 `--session` and replays that Session from the selected database.
+
+`use`, `run`, and `state` on a file `--db` hold its lock, or go through the
+server that owns it (see
+[Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
 
 `run [NAME]` executes the explicit name, or the Session selection when `NAME`
 is omitted with `--session`. A run without `--session` creates a new Session and
@@ -428,13 +492,17 @@ one (`hya serve start`) or drop --backend`. The TUIs then get only
 `--server <URL>` (no `--db`), so they never replace that server, and
 `/status` shows `Backend     daemon · pid <pid> · via --backend/--server`.
 
-**When the daemon goes away.** `hya serve stop`/`restart` or a crash ends the
-server under running frontends. Every TUI bare `hya` started (the terminal
-one and every WebUI tab) knows the database (`--db`), so it finds the next
-server or starts one, switches to it, and reloads the open session
-([tui.md](tui.md#when-the-server-goes-away)). Turns that were running on the
-old server end with it. A new WebUI tab tries the URL in its command first
-and falls back to the database's daemon when it does not answer.
+**When the daemon goes away.** Every TUI bare `hya` started (the terminal
+one and every WebUI tab) knows the database (`--db`), and the server says
+why it stops ([tui.md](tui.md#when-the-server-goes-away)). After `hya serve
+stop` they stay disconnected (`Backend stopped (hya serve stop) · /reconnect
+starts it again`) until `/reconnect` in one of them, or a new client, starts
+the daemon again; the others attach to it. After `hya serve restart` they
+attach to the new daemon. After a crash they find the next server or start
+one. Either way they switch to it and reload the open session. Turns that
+were running on the old server end with it. A new WebUI tab tries the URL in
+its command first and falls back to the database's daemon (found or started)
+when it does not answer.
 
 **Requirements.** Bare `hya` starts the frontends only when both stdin and
 stdout are terminals. It needs [Bun](https://bun.sh) (`$BUN`, else `bun` on
@@ -531,7 +599,7 @@ so Ctrl+C in the terminal reaches only the TUI and `hya`.
 | TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`) and exactly one of `--web-url <url>` / `--web-error <reason>` ([tui.md](tui.md#start-it)). The WebUI tabs' TUI command is the same without the web flag. |
 | Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
 | Log files | `<state dir>/hya/hya.log` (bare `hya`) and `<db>.server.log` (the daemon), append-only; each rotated once to `.1` above 4 MiB. |
-| Daemon | Found: `<db>.server.json` whose pid is alive and whose `/v1/health` answers. Else started like `hya serve start` (60 s wait). Never stopped by bare `hya`. |
+| Daemon | Found: `<db>.server.json` whose pid is alive and whose `/v1/health` answers. Else started like `hya serve start` (60 s wait). Never stopped by bare `hya`; after `hya serve stop` its TUIs start it again only on `/reconnect`. |
 | Exit status | The TUI's status; `128 + signal` for a signal to `hya` or a TUI killed by one; **1** for an error before start. |
 
 To run the frontends by hand instead (development, a remote server), see
@@ -558,7 +626,10 @@ Runs one headless turn and prints the rendered transcript. The command uses the
 global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
 store. With `--db`, the database stores the full canonical event log for replay,
 which can contain more sensitive data than the rendered transcript. `--json`
-prints the canonical event stream as JSONL.
+prints the canonical event stream as JSONL. A file `--db` is locked for the
+run; when a server (the backend daemon) already holds it, `exec` runs the turn
+through that server instead (see
+[Database lock and the backend daemon](#database-lock-and-the-backend-daemon)).
 
 `--json` streams live: envelopes print as the engine broadcasts them (the
 database is written per-event regardless), with an initial catch-up pass for
@@ -678,6 +749,7 @@ same file a second time ([ADR-0022](adr/0022-one-writer-per-database.md)).
 | File | Contract |
 | --- | --- |
 | `<db>.lock` | Exclusive advisory lock (`flock`), taken without waiting before the store opens and held until the process exits; the OS releases it on a crash or SIGKILL. Contents: the owner's pid. Never deleted. |
+| `<db>.server.stop` | Written atomically by `hya serve stop` / `restart` just before their SIGTERM: `{"pid": <lock holder>, "reason": "stop" \| "restart"}`. The server reads it when a termination signal arrives, uses it only when `pid` is its own, and deletes it; the reason becomes the last frame of every client stream (`serverStopping`, see below). Deleted by whoever takes the lock. |
 | `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
 
 `<db>` is the `--db` path with its directory resolved (symlinks and `..`), so
@@ -698,7 +770,11 @@ that attach check the discovery file with `GET <url>/v1/health`
 While a server shuts down, `GET /v1/health` answers **503** `unavailable`
 and every open event stream (`StreamSessionEvents`, `StreamGlobalEvents`,
 over SSE and gRPC) ends at once, so connected clients never hold the shutdown
-open and notice the loss right away.
+open and notice the loss right away. The last frame of each stream is
+`serverStopping {reason}`: `stop` (`hya serve stop`), `restart` (`hya serve
+restart`), or `signal` (any other SIGTERM/SIGINT/SIGHUP, for example Ctrl+C
+on a foreground `hya serve`); see
+[Server shutdown](protocol/README.md#server-shutdown).
 
 ### Backend daemon
 
@@ -725,13 +801,17 @@ after the action. The path is made absolute.
 | --- | --- | --- | --- |
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`) **detached**: its own session (`setsid`), working directory the current one, stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
 | `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log"}`. | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
-| `stop [--force] [--timeout <s>]` | SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)`, `killed …` with `--force`, or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
-| `restart [--json] [--force] [--timeout <s>]` | `stop`, then `start`. | As `start`; the stop line goes to stderr with `--json`. | As `stop`, then `start` |
+| `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
+| `restart [--json] [--force] [--timeout <s>]` | `stop` with reason `restart`, then `start`. | As `start`; the stop line goes to stderr with `--json`. | As `stop`, then `start` |
 
-Clients of a stopped daemon that know the database (every TUI bare `hya`
-starts, and TUIs started without `--server`) start the next one themselves
-([tui.md](tui.md#when-the-server-goes-away)), so `hya serve stop` with TUIs
-open is effectively a restart. Stop the TUIs first to stop for good.
+A stop is a stop: connected TUIs start nothing after `hya serve stop` (or a
+plain signal). They show `Backend stopped (hya serve stop) · /reconnect
+starts it again` and stay disconnected until `/reconnect` in one of them, or
+a new client (`hya`, a TUI, `hya serve start`) starts the daemon, which they
+then attach to. After `restart` they wait up to 60 s for the new daemon and
+attach to it. Only a daemon that goes away without saying why (a crash,
+`kill -9`) makes them find or start the next one by themselves
+([tui.md](tui.md#when-the-server-goes-away)).
 
 **Signal handling.** SIGTERM, SIGINT, and SIGHUP handlers are installed
 **before** the listen line is printed (an e2e-harness ordering requirement: a

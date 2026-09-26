@@ -183,29 +183,47 @@ HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --continu
 ### When the server goes away
 
 The daemon can stop under a running TUI: `hya serve stop` or `restart`, a
-crash, or a machine sleep that killed it. A stopping server ends every event
-stream and answers `GET /v1/health` with `503 unavailable`. When a stream
-ends or fails, the TUI probes the server twice, 500 ms apart; a server that
-still answers was a blip, and the stream just reconnects (with the usual
-backoff). A TUI that knows its database (started without `--server`, or with
-`--db`) then runs the same find-or-start as at launch, and:
+signal, a crash, or a machine sleep that killed it. A stopping server ends
+every event stream and answers `GET /v1/health` with `503 unavailable`; the
+last frame of each stream says why (`serverStopping {reason}`, see
+[Server shutdown](protocol/README.md#server-shutdown)). When a stream ends or
+fails, the TUI probes the server twice, 500 ms apart; a server that still
+answers was a blip, and the stream just reconnects (with the usual backoff).
+A TUI that knows its database (started without `--server`, or with `--db`)
+then acts on the reason:
+
+| Reason | What the TUI does | Status line |
+| --- | --- | --- |
+| `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the status bar shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
+| `signal` (SIGTERM/SIGINT/SIGHUP from anything but `hya serve stop`, for example Ctrl+C on a foreground `hya serve`), or an unknown reason | As `stop`. | `Backend stopped (signal) · /reconnect starts it again` |
+| `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
+| none (the stream ended without the frame: a crash, `kill -9`, a lost connection) | Runs the same find-or-start as at launch. | `Server stopped · reconnecting…`, then `Started a new server · pid <pid>` when it started the daemon, or `Server moved · now pid <pid>` when it found one |
+
+`/reconnect` runs find-or-start at once, from any state, and says `Started a
+new server · pid <pid>`, `Server moved · now pid <pid>`, or `Connected · pid
+<pid>` (the current server is the live one); a failure says `Reconnect
+failed: <reason> · /reconnect to try again`.
+
+Whenever it moves to another server the TUI:
 
 1. switches every later request to the new server's URL (header, sidebar,
    and `/status` show it),
 2. resubscribes the session stream and the global ask stream,
 3. reloads the catalogs, the pending asks, and the open session's transcript
-   from the database,
-4. says `Started a new server · pid <pid>` when it started the daemon, or
-   `Server moved · now pid <pid>` when it found one (another client's, or the
-   one `hya serve restart` started).
+   from the database.
 
 Several TUIs that lose the server together end up on one new daemon: one
-starts it, the others find it. A turn that was running on the old server
+starts it (after a crash, or on `/reconnect`), the others find it. Example:
+`hya serve stop` with a terminal TUI and two WebUI tabs open leaves all three
+showing `Backend stopped`; `/reconnect` in the terminal starts the daemon and
+the tabs move to it by themselves. A turn that was running on the old server
 ends with it (the transcript shows how far it got; the server's shutdown
 closes it as cancelled). Prompts queued in the TUI are dropped. If no server
-can be found or started, the status line says `Server lost: <reason> ·
-retrying`, and the next stream retry tries again. A TUI with a fixed
-`--server` and no `--db` never moves; it keeps retrying that URL.
+can be found or started after a crash, the status line says `Server lost:
+<reason> · retrying`, and the next stream retry tries again. A TUI whose
+stream was down at the moment of a stop never gets the reason and treats the
+stop as a crash. A TUI with a fixed `--server` and no `--db` never moves; it
+keeps retrying that URL.
 
 To add a provider or set its API key, type `/key`: the full-screen
 [Provider View](#provider-view) lists the providers, adds one through a short
@@ -246,6 +264,7 @@ Changes apply to the running backend at once; no restart is needed.
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
+| `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db` it only resubscribes to that URL. |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
@@ -553,7 +572,8 @@ directory is not a repository), the WebUI that bare `hya` serves
 see [Start it](#start-it)), a compact todo count (`Todos <completed>/
 <total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
 box already lists them), and `reconnecting` (warning color) while the
-session event stream is down. Segments with no data are omitted rather than
+session event stream is down, or `backend stopped` (error color) after
+`hya serve stop` (see [When the server goes away](#when-the-server-goes-away)). Segments with no data are omitted rather than
 shown empty; on a narrow terminal the least essential segments (from the
 end) drop first, then the whole line clips, so it always fits the terminal
 width. The header line above it already carries agent, model, session, and

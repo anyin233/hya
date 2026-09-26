@@ -8,7 +8,8 @@
  * the session token total (`12.3k tok`, `SessionInfo.usage`), the workspace
  * directory (shortened), the git branch (`GetVcsStatus`, refreshed on
  * session open and after turns), a compact todo count while the sidebar is
- * hidden, and the connection state. Segments with no data are hidden.
+ * hidden, and the connection state (`reconnecting`, or `backend stopped`
+ * after `hya serve stop`). Segments with no data are hidden.
  * Agent, model, session, and server already appear on the header line
  * (components/Header.tsx); this line does not repeat them, so both stay
  * within 80 columns.
@@ -38,6 +39,7 @@ export function StatusBar() {
       branch: state.gitBranch,
       todos: shown ? undefined : todosCompactText(state.todos),
       connected: state.connected,
+      stopped: state.backendStopped,
       ...(state.web ? { web: state.web } : {}),
       ...(state.vim ? { vim: { mode: state.vimMode, pending: state.vimPending } } : {}),
     }, state.columns)

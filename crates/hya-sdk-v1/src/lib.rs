@@ -274,6 +274,83 @@ impl V1Sdk {
         .await
     }
 
+    /// `GET /v1/sessions/{id}/events?includeRaw=true` — replay events after
+    /// `since_seq` together with the canonical durable envelope JSON lines
+    /// (`raw_envelopes`; an opaque internal shape for tooling).
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn list_raw_events(
+        &self,
+        session: &str,
+        since_seq: u64,
+    ) -> Result<pb::ListEventsResponse, SdkError> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("/v1/sessions/{session}/events"),
+            Some(format!("sinceSeq={since_seq}&includeRaw=true")),
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `PATCH /v1/sessions/{id}` — update title, model, agent, background,
+    /// permission mode, or archived state (only the fields that are set).
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn update_session(
+        &self,
+        request: pb::UpdateSessionRequest,
+    ) -> Result<pb::SessionInfo, SdkError> {
+        let path = format!("/v1/sessions/{}", request.session);
+        self.call(reqwest::Method::PATCH, &path, None, Some(&request))
+            .await
+    }
+
+    /// `POST /v1/sessions/{id}/turns/{turn}/cancel` — cancel a running turn.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn cancel_turn(&self, session: &str, turn: &str) -> Result<pb::TurnInfo, SdkError> {
+        self.call(
+            reqwest::Method::POST,
+            &format!("/v1/sessions/{session}/turns/{turn}/cancel"),
+            None,
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `GET /v1/sessions/{id}/workflow` — the session's workflow state.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn workflow_state(&self, session: &str) -> Result<pb::WorkflowState, SdkError> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("/v1/sessions/{session}/workflow"),
+            None,
+            None::<&Value>,
+        )
+        .await
+    }
+
+    /// `POST /v1/sessions/{id}/workflow` — submit one workflow command. A
+    /// run returns once it is admitted; follow it with
+    /// [`workflow_state`](Self::workflow_state).
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn submit_workflow_command(
+        &self,
+        request: pb::SubmitWorkflowCommandRequest,
+    ) -> Result<pb::SubmitWorkflowCommandResponse, SdkError> {
+        let path = format!("/v1/sessions/{}/workflow", request.session);
+        self.call(reqwest::Method::POST, &path, None, Some(&request))
+            .await
+    }
+
     /// `GET /v1/interactions` — pending permission/question requests.
     ///
     /// # Errors
