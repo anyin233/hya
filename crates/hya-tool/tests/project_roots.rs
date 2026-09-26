@@ -201,7 +201,13 @@ async fn file_tools_ask_when_a_symlink_in_a_root_escapes_it() {
         let layout = layout();
         let through_link = layout.one.join("escape");
         let (result, asks) = run(&layout, tool, input_for(tool, &through_link), None).await;
-        assert_eq!(external(&asks).len(), 1, "{tool}: {asks:?}");
+        // The ask names the canonical directory the link lands in, never
+        // the link's own lexical spelling.
+        let expected = match tool {
+            "glob" | "grep" => format!("{}/*", text(layout.outside.parent().unwrap())),
+            _ => format!("{}/*", text(&layout.outside)),
+        };
+        assert_eq!(external(&asks), vec![expected], "{tool}");
         assert!(
             matches!(result, Err(ToolError::Permission(_))),
             "{tool}: {result:?}"

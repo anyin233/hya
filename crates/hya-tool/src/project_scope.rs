@@ -95,22 +95,35 @@ impl ProjectScope {
         }
     }
 
-    /// The `ExternalDirectory` resource for a file path: its lexical parent
-    /// directory followed by `/*`.
+    /// The `ExternalDirectory` resource for a file path: the canonical
+    /// directory the file lives in, followed by `/*`.
+    ///
+    /// The path is resolved like [`Self::contains`] (symlinks followed, a
+    /// missing tail re-appended to its nearest existing ancestor) before its
+    /// parent is taken, so a file reached through a symlinked directory, or a
+    /// file that is itself a symlink, names the directory it really lives in.
+    /// A path that cannot be resolved falls back to its lexical form.
     #[must_use]
     pub fn outside_dir_pattern(&self, path: &Path) -> String {
-        let absolute = lexical_absolute(&self.workdir.join(path));
-        let parent = absolute
+        let resolved = self.canonical(path);
+        let parent = resolved
             .parent()
             .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
         display(&parent.join("*"))
     }
 
-    /// The `ExternalDirectory` resource for a directory path: the directory
-    /// itself followed by `/*`.
+    /// The `ExternalDirectory` resource for a directory path: the canonical
+    /// directory itself followed by `/*`.
     #[must_use]
     pub fn outside_directory_pattern(&self, directory: &Path) -> String {
-        display(&lexical_absolute(&self.workdir.join(directory)).join("*"))
+        display(&self.canonical(directory).join("*"))
+    }
+
+    /// `path` resolved against the workdir with symlinks followed, or its
+    /// lexical absolute form when it cannot be resolved.
+    fn canonical(&self, path: &Path) -> PathBuf {
+        let candidate = self.workdir.join(path);
+        resolve(&candidate, MAX_SYMLINK_HOPS).unwrap_or_else(|_| lexical_absolute(&candidate))
     }
 
     /// Ask `ExternalDirectory` for `pattern` unless `path` is inside the scope.
@@ -422,16 +435,55 @@ mod tests {
     #[test]
     fn outside_patterns_name_the_concrete_directory() {
         let root = tempdir();
+        let outside = tempdir();
+        std::fs::write(outside.join("hosts"), "h").unwrap();
         let scope = scope(&root, &[&root]);
+        let expected = format!("{}/*", display(&outside));
 
+        assert_eq!(scope.outside_dir_pattern(&outside.join("hosts")), expected);
         assert_eq!(
-            scope.outside_dir_pattern(Path::new("/etc/hosts")),
-            "/etc/*".to_string()
+            scope.outside_dir_pattern(&outside.join("new.txt")),
+            expected
         );
-        assert_eq!(
-            scope.outside_directory_pattern(Path::new("/etc")),
-            "/etc/*".to_string()
-        );
+        assert_eq!(scope.outside_directory_pattern(&outside), expected);
         assert_eq!(scope.outside_dir_pattern(Path::new("/")), "/*".to_string());
+    }
+
+    #[test]
+    fn outside_patterns_name_the_canonical_directory() {
+        let root = tempdir();
+        let real = tempdir();
+        let holder = tempdir();
+        let secret = tempdir();
+        std::fs::write(real.join("a.txt"), "a").unwrap();
+        std::fs::write(secret.join("id"), "k").unwrap();
+        symlink(&real, holder.join("link")).unwrap();
+        symlink(secret.join("id"), holder.join("notes.txt")).unwrap();
+        let scope = scope(&root, &[&root]);
+        let real_pattern = format!("{}/*", display(&real));
+
+        // A directory reached through a symlink names where it lands.
+        assert_eq!(
+            scope.outside_dir_pattern(&holder.join("link/a.txt")),
+            real_pattern
+        );
+        assert_eq!(
+            scope.outside_dir_pattern(&holder.join("link/missing/new.txt")),
+            format!("{}/missing/*", display(&real))
+        );
+        assert_eq!(
+            scope.outside_directory_pattern(&holder.join("link")),
+            real_pattern
+        );
+        // A file that is itself a symlink names its target's directory.
+        assert_eq!(
+            scope.outside_dir_pattern(&holder.join("notes.txt")),
+            format!("{}/*", display(&secret))
+        );
+        // `..` through a symlink is judged physically.
+        assert_eq!(
+            scope.outside_directory_pattern(&holder.join("link/..")),
+            format!("{}/*", display(real.parent().unwrap()))
+        );
     }
 }

@@ -151,12 +151,23 @@ mod tests {
         session: SessionId,
         reply: PermissionReply,
     ) -> bool {
+        ask_and_reply_for(requests, plane, session, DIR, reply).await
+    }
+
+    /// [`ask_and_reply`] for the resource `dir` instead of [`DIR`].
+    async fn ask_and_reply_for(
+        requests: &PermissionRequests,
+        plane: &PermissionPlane,
+        session: SessionId,
+        dir: &'static str,
+        reply: PermissionReply,
+    ) -> bool {
         let mut events = requests.subscribe();
         let task = {
             let plane = plane.clone();
             tokio::spawn(async move {
                 plane
-                    .assert(Action::ExternalDirectory, Resource::Path(DIR.to_string()))
+                    .assert(Action::ExternalDirectory, Resource::Path(dir.to_string()))
                     .await
             })
         };
@@ -268,6 +279,22 @@ mod tests {
         in_b.assert(Action::WebFetch, Resource::Url("https://x".to_string()))
             .await
             .expect("global rows apply to every project");
+
+        assert!(
+            ask_and_reply_for(
+                &requests,
+                &in_a,
+                a,
+                "/outside/a/nested/*",
+                PermissionReply::Once
+            )
+            .await,
+            "a restored `<dir>/*` row grants exactly that directory, not a subdirectory"
+        );
+        assert!(
+            ask_and_reply_for(&requests, &in_a, a, "/outside/*", PermissionReply::Once).await,
+            "nor its parent"
+        );
 
         requests.remove_saved("psv_a", &plane).await.unwrap();
         assert!(ask_and_reply(&requests, &in_a, a, PermissionReply::Once).await);

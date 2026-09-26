@@ -69,7 +69,8 @@ fn tempdir() -> PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    // Canonical, like the `ExternalDirectory` resources tools ask for.
+    std::fs::canonicalize(dir).unwrap()
 }
 
 /// Construct a permissive Grep/Read/Edit context with a fresh cancellation token.

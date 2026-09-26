@@ -150,7 +150,7 @@ async fn t2_32_manual_mode_project_scoped_external_directory_ask() {
     );
 
     // 2. A read outside every root asks `ExternalDirectory` for the
-    //    concrete `<dir>/*` pattern of the outside directory.
+    //    concrete `<dir>/*` pattern of the canonical outside directory.
     let before = env.fake_requests().expect("requests").len();
     let (turn, ask) =
         prompt_capturing_ask(&env, session1, "read foo outside the project", "always").await;
@@ -159,7 +159,12 @@ async fn t2_32_manual_mode_project_scoped_external_directory_ask() {
     assert_eq!(ask["payload"]["action"], json!("externaldirectory"));
     assert_eq!(
         ask["payload"]["resource"],
-        json!(format!("{}/*", outside.display())),
+        json!(format!(
+            "{}/*",
+            std::fs::canonicalize(&outside)
+                .expect("canonical outside dir")
+                .display()
+        )),
         "the ask names the concrete outside directory, not a global `*`"
     );
     let requests = env.fake_requests().expect("requests");

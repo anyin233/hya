@@ -95,7 +95,7 @@ pub use permission::{
     Action, AskRequest, Decision, ExactSubject, GrantScope, Invocation, InvocationDecision,
     InvocationPolicy, InvocationRule, Mode, PermissionError, PermissionInterceptor,
     PermissionModel, PermissionPlane, PermissionRules, PermissionTarget, RememberScope, Resource,
-    Rule, glob_match,
+    Rule, external_directory_grant_matches, glob_match,
 };
 pub use project_scope::ProjectScope;
 pub use skill::{SkillError, SkillInfo, SkillPlane};

@@ -49,6 +49,17 @@ path boundary.
   session's Project. The `*` rule is no longer written for
   ExternalDirectory. A temporary session has no Project, so its "allow
   always" lasts for the session only.
+- **A grant is exactly one canonical directory.** (Amended 2026-09-26.) The
+  ask names the canonical directory: the path is resolved like a
+  containment check, so a symlinked directory or file names where it really
+  lives. A remembered ExternalDirectory grant (scoped, saved, or plane-wide)
+  is matched by directory equality, not as a glob: `<dir>/*` covers the
+  files and entries of `<dir>` only, never its subdirectories, and glob
+  characters in a path are never interpreted. The literal `*` pattern still
+  means every directory (legacy global rows); any other stored pattern,
+  including a `<dir>/*` row saved before this amendment or a bare `<dir>`,
+  grants exactly `<dir>`. Rules a user writes in configuration (the plane's
+  snapshot, and a turn's attached directories) keep glob semantics.
 - **Bash has no path control.** `bash` drops its external-`cwd` check
   (`assert_external_workdir`): its `cwd` may be any directory, and its
   command's file effects are not inspected. It keeps its `Action::Bash`
@@ -63,7 +74,11 @@ path boundary.
   shared.
 - **Remember what was approved.** The user approved one directory, not the
   disk. Storing `<dir>/*` scoped to the Project makes the remembered grant say
-  exactly that, and keeps it from leaking into other Projects.
+  exactly that, and keeps it from leaking into other Projects. Matching it as
+  a glob did not: `*` crosses `/`, so approving `~/notes.txt` (`~/*`)
+  silently approved `~/.ssh`, and a lexical directory could be a symlink to
+  anywhere. Exact comparison of canonical directories keeps the grant to
+  what the user saw.
 - **Bash cannot be bounded by paths.** A shell command can reach any path
   through variables, `cd`, subshells, or programs it runs. A path check on
   bash would suggest a guarantee it cannot give. Invocation rules on the
@@ -86,6 +101,10 @@ path boundary.
 - Existing saved `*` ExternalDirectory rules keep working (they are global
   and broad). New approvals no longer create them; users can remove old ones
   with the rules view.
+- Existing saved `<dir>/*` rows now grant exactly `<dir>`, no longer its
+  subtree; reaching a subdirectory asks once more for it. A row saved with a
+  non-canonical spelling (for example `/tmp/...` on macOS, where asks now
+  name `/private/tmp/...`) no longer matches and asks again once.
 - `bash` is now the one way to touch files outside the roots without an ask.
   Users who need that closed should restrict `bash` with invocation rules or a
   permission bundle.

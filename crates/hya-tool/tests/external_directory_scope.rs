@@ -1,6 +1,9 @@
 //! ADR-0026: "allow always" on an `ExternalDirectory` ask remembers the
 //! concrete `<dir>/*` pattern, scoped to the session's Project (or to the
-//! session itself when it has no Project), never the action-wide `*`.
+//! session itself when it has no Project), never the action-wide `*`. A
+//! remembered grant covers exactly that one directory: it is compared by
+//! equality, never as a glob, so it neither reaches subdirectories nor widens
+//! through a literal `*` in a path.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -76,16 +79,16 @@ async fn allow_always_remembers_the_concrete_directory_for_the_project() {
         None,
         "the same directory is remembered"
     );
-    assert_eq!(
+    assert!(
         assert_external(
             &session,
             &mut rx,
             "/outside/a/nested/*",
             Decision::AllowOnce
         )
-        .await,
-        None,
-        "a subdirectory of the remembered directory is covered"
+        .await
+        .is_some(),
+        "a subdirectory of the remembered directory asks again"
     );
     assert!(
         assert_external(&session, &mut rx, DIR_B, Decision::AllowOnce)
@@ -321,4 +324,182 @@ async fn an_approver_receives_external_directory_asks_and_its_always_is_scoped()
             .is_some(),
         "the approver's allow-always stays in project A"
     );
+}
+
+#[tokio::test]
+async fn approving_a_home_file_does_not_allow_the_rest_of_home() {
+    // Approving `/home/u/notes.txt` asks for (and remembers) `/home/u/*`.
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    let session = plane
+        .for_session(SessionId::new())
+        .with_grant_scope(project("prj_a"));
+    assert!(
+        assert_external(&session, &mut rx, "/home/u/*", Decision::AllowAlways)
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        assert_external(&session, &mut rx, "/home/u/*", Decision::AllowOnce).await,
+        None,
+        "another file of the approved directory is covered"
+    );
+    for deeper in ["/home/u/.ssh/*", "/home/u/.config/gh/*", "/home/*", "/*"] {
+        assert!(
+            assert_external(&session, &mut rx, deeper, Decision::AllowOnce)
+                .await
+                .is_some(),
+            "{deeper} must ask again"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_literal_star_in_a_directory_name_does_not_widen_the_grant() {
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    let session = plane
+        .for_session(SessionId::new())
+        .with_grant_scope(project("prj_a"));
+    assert!(
+        assert_external(&session, &mut rx, "/outside/a*/*", Decision::AllowAlways)
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        assert_external(&session, &mut rx, "/outside/a*/*", Decision::AllowOnce).await,
+        None
+    );
+    for other in ["/outside/abc/*", "/outside/a/*", "/outside/a*/sub/*"] {
+        assert!(
+            assert_external(&session, &mut rx, other, Decision::AllowOnce)
+                .await
+                .is_some(),
+            "{other} must ask again"
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_saved_directory_rows_grant_exactly_that_directory() {
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    // A Project row saved before this change (`<dir>/*`) and a global
+    // non-`*` row both mean one directory, never a subtree.
+    plane
+        .grant_scoped(project("prj_a"), Action::ExternalDirectory, DIR_A)
+        .await;
+    plane
+        .grant_saved(Action::ExternalDirectory, "/outside/legacy/*")
+        .await;
+    let a = plane
+        .for_session(SessionId::new())
+        .with_grant_scope(project("prj_a"));
+
+    for granted in [DIR_A, "/outside/legacy/*"] {
+        assert_eq!(
+            assert_external(&a, &mut rx, granted, Decision::AllowOnce).await,
+            None,
+            "{granted} is granted"
+        );
+    }
+    for other in [
+        "/outside/a/nested/*",
+        "/outside/legacy/deeper/*",
+        "/outside/*",
+    ] {
+        assert!(
+            assert_external(&a, &mut rx, other, Decision::AllowOnce)
+                .await
+                .is_some(),
+            "{other} must ask"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_bare_directory_row_grants_that_directory() {
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    plane
+        .grant_scoped(project("prj_a"), Action::ExternalDirectory, "/outside/a")
+        .await;
+    let a = plane
+        .for_session(SessionId::new())
+        .with_grant_scope(project("prj_a"));
+    assert_eq!(
+        assert_external(&a, &mut rx, DIR_A, Decision::AllowOnce).await,
+        None
+    );
+    assert!(
+        assert_external(&a, &mut rx, "/outside/a/nested/*", Decision::AllowOnce)
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn an_unscoped_planes_allow_always_covers_exactly_that_directory() {
+    // A plane with neither a Project nor a session remembers plane-wide.
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    let remember = assert_external(&plane, &mut rx, DIR_A, Decision::AllowAlways).await;
+    assert_eq!(
+        remember,
+        Some(RememberScope::Scoped {
+            pattern: DIR_A.to_string(),
+            scope: None,
+        })
+    );
+    assert_eq!(
+        assert_external(&plane, &mut rx, DIR_A, Decision::AllowOnce).await,
+        None
+    );
+    assert!(
+        assert_external(&plane, &mut rx, "/outside/a/nested/*", Decision::AllowOnce)
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn configured_rules_keep_glob_semantics() {
+    // Rules a user writes in configuration (snapshot rules) are globs; only
+    // remembered grants are exact.
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::new(vec![hya_tool::Rule::new(
+        Action::ExternalDirectory,
+        "/outside/a/*",
+        Mode::Allow,
+    )]));
+    let session = plane
+        .for_session(SessionId::new())
+        .with_grant_scope(project("prj_a"));
+    assert_eq!(
+        assert_external(
+            &session,
+            &mut rx,
+            "/outside/a/nested/*",
+            Decision::AllowOnce
+        )
+        .await,
+        None
+    );
+    assert!(
+        assert_external(&session, &mut rx, DIR_B, Decision::AllowOnce)
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_global_star_rule_still_allows_every_directory() {
+    let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+    plane
+        .grant_scoped(project("prj_a"), Action::ExternalDirectory, "*")
+        .await;
+    let a = plane
+        .for_session(SessionId::new())
+        .with_grant_scope(project("prj_a"));
+    for any in [DIR_A, "/outside/a/nested/*", "/*"] {
+        assert_eq!(
+            assert_external(&a, &mut rx, any, Decision::AllowOnce).await,
+            None,
+            "{any}"
+        );
+    }
 }
