@@ -83,3 +83,12 @@ test("--remote starts without a Project for the working directory", () => {
   expect(parseArguments([], "/cwd")).not.toHaveProperty("remote")
   expect(usage).toContain("--remote")
 })
+
+test("--server-label shows a name for the server instead of its URL (bare hya --connect: the relay and room)", () => {
+  expect(parseArguments(["--server", "http://127.0.0.1:1", "--remote", "--server-label", "remote: relay.example.com/abc"], "/cwd")).toEqual({
+    server: "http://127.0.0.1:1/", directory: "/cwd", continue: false, remote: true, serverLabel: "remote: relay.example.com/abc",
+  })
+  expect(parseArguments([], "/cwd")).not.toHaveProperty("serverLabel")
+  expect(() => parseArguments(["--server-label"], "/cwd")).toThrow("--server-label")
+  expect(usage).toContain("--server-label")
+})

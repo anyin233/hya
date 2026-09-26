@@ -18,10 +18,11 @@ implemented yet.
 The proxy server library (`hya_relay::server`, see [Bindings](#bindings)),
 the client library (`hya_relay::client`, see
 [Client transport](#client-transport)), the `hya proxy` command, and
-`hya relay doctor` exist. *Coming in a later step:* `hya serve --relay`,
-`hya serve relay …`, `hya bridge`, `hya --connect <link>`, and
-`/connect-remote` (Phase 6 — the host connector and client bridge that put a
-backend or client on the other end of a link).
+`hya relay doctor` exist, and so do the client side, `hya bridge` and
+`hya --connect <link>` ([Connecting from a client](#connecting-from-a-client)).
+*Coming in a later step:* `hya serve --relay`, `hya serve relay …`, and
+`/connect-remote` (Phase 6 — the host connector that puts a backend on the
+other end of a link, and the TUI command).
 
 ### `hya proxy`
 
@@ -109,6 +110,90 @@ Exit status: **0** when at least one binding works, **1** when neither does.
 See each [deployment recipe](#deployment-recipes) for the matching `hya
 relay doctor` command and expected recommendation, and the
 [troubleshooting table](#troubleshooting) keyed by doctor output.
+
+### Connecting from a client
+
+A relay link (`hya://…#<key>.<psk>`, see [Relay link grammar](#relay-link-grammar))
+is all a client needs. The client side of the tunnel runs in `hya`: a
+**bridge** listens on a loopback port and carries every TCP connection made
+to it, end-to-end encrypted, to the backend behind the link. The TUI and the
+WebUI keep their plain HTTP/SSE/WebSocket client and use the bridge's URL as
+their `--server`; the loopback URL is never shown to the user in place of the
+remote (the header says `remote: <relay>/<room>`).
+
+```sh
+hya --connect -                  # paste the link (not echoed); TUI + WebUI on the remote backend
+printf '%s\n' "$LINK" | hya bridge -     # a standalone bridge; prints its URL
+HYA_RELAY_LINK="$LINK" hya bridge --json # the same, for a parent process
+```
+
+**Keep the link out of process listings.** The link is the credential
+(ADR-0025): whoever holds it controls the backend. Pass it on stdin (`-`;
+on a terminal `hya` prompts for it with echo turned off) or in
+`HYA_RELAY_LINK`. A link given as an argument works but is visible to every
+local user in `ps`, so `hya` warns (`the relay link was given as an argument,
+so it is visible in process listings; …`). Only the redacted form
+(`hya[+insecure]://host[:port][/prefix]/<room_id>`) ever appears in output
+or logs.
+
+**`hya bridge [<LINK>|-]`.** Dispatched before any runtime composition (no
+config, providers, or database), like `hya proxy`.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `<LINK>` | `$HYA_RELAY_LINK` | The link; `-` reads one line from stdin (recommended). |
+| `--listen <ADDR>` | `127.0.0.1:0` | Loopback address (`127.0.0.1:PORT`, `[::1]:PORT`, `localhost:PORT`, or a port). Any other address is refused: the bridge adds no authentication of its own, so reaching it means controlling the backend. |
+| `--relay-ca <PEM>` | none | Extra trusted CA certificates for a relay behind a private CA. |
+| `--transport auto\|grpc\|ws` | the link's `t=` | Relay binding, overriding the link. |
+| `--json` | off | Print one JSON line instead of the plain readiness line. |
+| `--exit-with-stdin` | off | Exit when stdin reaches end of file, so a parent that holds the pipe takes the bridge down with it. |
+
+Readiness (stdout, exactly one line, once listening and after the start-up
+check below):
+
+```text
+hya bridge listening on http://127.0.0.1:<port>
+{"url":"http://127.0.0.1:<port>","room":"<room_id>","proxy":"hya+insecure://relay.lan:8766","label":"remote: relay.lan:8766/<room_id>"}
+```
+
+`proxy` is the redacted link without the room; `label` is what a TUI shows
+for the server (`--server-label`). Status lines go to stderr, prefixed
+`hya bridge:`: the binding and why it was chosen (`relay hya://…: grpc
+binding (gRPC works on this path)`), and every change of the backend's
+state (online, offline, relay unreachable, reachable again). SIGINT, SIGTERM,
+or SIGHUP stops accepting, gives open connections 1 s, and exits **0**.
+
+**Start-up check.** Before it prints the readiness line, the bridge picks the
+relay binding (`t=auto` probes, see [Client transport](#client-transport))
+and opens one tunnel to check the link. It exits **1** when no binding
+reaches the relay (`cannot reach the relay …`) or when the backend rejects the
+handshake (`the remote backend rejected the relay link <redacted> (rotated or
+wrong link); ask for a new one`). An **offline** backend (its room has no
+host) is not an error: the bridge starts and says so.
+
+**Per connection.** Each accepted TCP connection opens its own relay stream
+and Noise tunnel (`RelayClient::open`, then `NoiseStream::initiate_link`
+within 15 s) and is then spliced byte for byte, so REST, SSE, and the PTY
+WebSocket upgrade work unchanged. There is no persistent session to lose: a
+TUI that reconnects simply opens new connections to the same URL.
+
+| Situation | What the client connection sees |
+| --- | --- |
+| Tunnel open | The backend's bytes, unchanged; a clean close when both sides finish. |
+| A record fails authentication (tampered) or the stream ends without the close record (truncated) | A **TCP reset** (`SO_LINGER 0`), never a clean close, so a cut or forged response cannot pass for a complete one. The bridge logs `… failed its integrity check …; the connection was reset`. |
+| The room is offline, the relay is unreachable (`Unavailable`, `NoBinding`, `Timeout`, …), or the backend rejects the link | If the first bytes are an HTTP request line: `503 Service Unavailable` with the hya server's error envelope, `{"error":{"code":"unavailable","message":"remote backend is offline"}}` (or `the relay is unreachable: …`, `the remote backend rejected the relay link …`), then a clean close. Anything else: a TCP reset. |
+
+A failed connection after a binding error clears the remembered binding, so
+the next connection probes again.
+
+**`hya --connect [<LINK>|-]`.** Bare `hya` without the local daemon: it
+starts the bridge in its own process (with the checks above, before the
+terminal is touched), then the WebUI host and the terminal TUI exactly like
+`hya --backend <url>`, with `--server <bridge-url> --remote --server-label
+"remote: <relay>/<room>"` in both TUI commands and no `--db`/`--hya`
+([cli.md](cli.md#bare-hya)). `--connect` conflicts with `--backend`; without
+a value it reads `HYA_RELAY_LINK`. The bridge lives as long as that `hya`;
+its status lines go to `hya.log`.
 
 ## Interfaces
 

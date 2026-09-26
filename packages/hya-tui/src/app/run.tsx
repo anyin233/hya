@@ -103,6 +103,7 @@ export async function run(options: Options): Promise<void> {
   const client = new HyaClient(server, options.directory)
   const store = createAppStore()
   store.setServerUrl(server)
+  if (options.serverLabel) store.setServerLabel(options.serverLabel)
   store.setBackend(backend)
   if (options.web) store.setWeb(options.web)
   if (options.webTab) store.setWebTab(true)

@@ -382,7 +382,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ store, client }) => {
       const selected = store.state.selected
       const lines = [
-        `Server      ${client.baseUrl}`,
+        `Server      ${store.state.serverLabel ? `${store.state.serverLabel} · via ${client.baseUrl}` : client.baseUrl}`,
         `Version     ${store.state.serverVersion || "unknown"}`,
         `Directory   ${client.directory}`,
         `Session     ${selected ? (selected.title || selected.id) : "none"}`,

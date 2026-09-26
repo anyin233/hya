@@ -149,6 +149,18 @@ test.describe("--remote start", () => {
     // (the status line's `noProjectStatus` sits underneath the full-screen view).
     await term.waitForText("No projects yet · n creates one")
   })
+
+  test("--server-label names the remote in the header and /status instead of the local bridge URL", async ({ backend, tui }) => {
+    const label = "remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4"
+    const term = await tui(["bun", tuiMain, "--server", backend.url, "--remote", "--server-label", label])
+    await term.waitForText("No projects yet · n creates one")
+    await esc(term, "No projects yet")
+    await term.waitForText(`hya · no session · ${label}`)
+    const host = backend.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    expect(await term.find(host), "the loopback URL is not the shown server").toBeNull()
+    await prompt(term, "/status")
+    await term.waitForText(`Server      ${label} · via ${backend.url.replace(/\/$/, "")}`)
+  })
 })
 
 test.describe("/sessions is scoped to the active Project", () => {

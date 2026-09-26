@@ -7,7 +7,7 @@
 import { For, Show } from "solid-js"
 import { useApp } from "../app/context"
 import type { TodoItem } from "../client"
-import { contextText, sessionListText, todoGlyphs, todoStatusText, truncate } from "../state/format"
+import { contextText, sessionListText, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
 import { colors, toolColors } from "../theme"
 
 function SideBox(props: { title: string; grow?: boolean; children: import("solid-js").JSX.Element }) {
@@ -86,7 +86,7 @@ export function Sidebar(props: { width: number }) {
         <TodoList items={store.state.todos} width={inner()} />
       </SideBox>
       <SideBox title="Context">
-        <text width="100%" wrapMode="none" fg={colors.fg}>{contextText(store.state, store.state.serverUrl || server, inner())}</text>
+        <text width="100%" wrapMode="none" fg={colors.fg}>{contextText(store.state, shownServer(store.state, server), inner())}</text>
       </SideBox>
     </box>
   )

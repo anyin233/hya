@@ -38,6 +38,12 @@ export interface Options {
    * and let the user choose a Project or a temporary session.
    */
   remote?: boolean
+  /**
+   * `--server-label <text>`: show this instead of the server URL (header,
+   * sidebar, `/status`). Bare `hya --connect` passes `remote: <relay>/<room>`
+   * because `--server` is only the local bridge's loopback address.
+   */
+  serverLabel?: string
 }
 
 /** The WebUI state bare `hya` passes to its terminal TUI: exactly one of the two is set. */
@@ -72,6 +78,10 @@ Options:
   --remote          The backend runs on another machine: start without a
                     Project for --dir; choose a Project (or a temporary
                     session) before the first prompt
+  --server-label TEXT
+                    Show TEXT instead of the server URL in the header,
+                    sidebar, and /status (bare hya --connect passes
+                    "remote: <relay>/<room>")
   -s, --session ID  Open the session with this id
   --resume [ID]     Open this session and unarchive it; without an id, pick
                     one of the active Project's sessions, archived ones
@@ -103,6 +113,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let remote = false
   let reopen: { id?: string } | undefined
   let webTab = false
+  let serverLabel: string | undefined
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
     const value = argv[index + 1]
@@ -123,6 +134,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     else if (arg === "--session" || arg === "-s") session = argv[++index]!
     else if (arg === "--web-url") webUrl = argv[++index]!
     else if (arg === "--web-error") webError = argv[++index]!
+    else if (arg === "--server-label") serverLabel = argv[++index]!
     else throw new Error(`Unknown or incomplete option: ${arg}`)
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
@@ -134,6 +146,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     options.server = url.toString()
   }
   if (remote) options.remote = true
+  if (serverLabel !== undefined && serverLabel.trim()) options.serverLabel = serverLabel.trim()
   if (hya !== undefined) options.hya = hya
   if (db !== undefined) options.db = db
   if (session !== undefined) options.session = session
