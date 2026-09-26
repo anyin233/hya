@@ -3,7 +3,7 @@
 // "Notices"; Tier 1 E21-E24), driven against the scripted fake model: the
 // status bar's `ctx N%` and token total from reported usage and a model
 // context limit, `todoUpdated` frames (no todo re-reads, checked through a
-// logging proxy), and the `/compact` divider.
+// logging proxy), and the `/compact` divider, live and after reopening.
 
 import type { Tui } from "./harness"
 import { expect, hyaTui, initGitRepo, test, textStep, toolStep, toolsStep } from "./hya"
@@ -205,5 +205,65 @@ test.describe("compaction divider", () => {
     expect(divider.row).toBeGreaterThan((await at(term, "First answer before compaction.")).row)
     expect((await term.cell(divider.row, divider.col))?.fg).toBe(colors.muted)
     await term.attach(testInfo, "compacted")
+  })
+})
+
+test.describe("compaction divider in history", () => {
+  test.use({ model: { steps: [textStep("First answer before compaction."), textStep("Summary: the user said hi.")] } })
+
+  /** The divider sits between the folded answer and the summary, exactly once. */
+  async function dividerOnce(term: Tui): Promise<void> {
+    await term.waitForText(/── context compacted ──/, 20_000)
+    await term.waitForText("First answer before compaction.")
+    const text = await term.text()
+    expect(text.match(/context compacted/g)).toHaveLength(1)
+    const divider = await match(term, /── context compacted ──/)
+    expect(divider.row).toBeGreaterThan((await at(term, "First answer before compaction.")).row)
+    expect(divider.row).toBeLessThan((await at(term, "Summary: the user said hi.")).row)
+    expect((await term.cell(divider.row, divider.col))?.fg).toBe(colors.muted)
+  }
+
+  test("a session opened later (a new TUI, or switching back) shows its past compaction at the same place, once", async ({ tui, backend }, testInfo) => {
+    const first = await tui(hyaTui(backend))
+    await first.waitForText("Connected to hya")
+    await prompt(first, "hi there")
+    await first.waitForText("First answer before compaction.", 20_000)
+    await first.waitForText(/^Ready/m)
+    await prompt(first, "/compact")
+    await first.waitForText(/── context compacted · \d+ messages? · manual ──/, 20_000)
+    await first.waitForText("Summary: the user said hi.", 20_000)
+    const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+    await prompt(first, "/exit")
+    await first.waitForExit()
+
+    // A new TUI on the same session: the compaction happened before it opened.
+    const second = await tui([...hyaTui(backend), "--session", session])
+    await second.waitForText("Connected to hya")
+    await dividerOnce(second)
+    await second.attach(testInfo, "reopened")
+
+    // Switch away and back.
+    await prompt(second, "/new")
+    await second.waitForText(/Created hysec_/, 20_000)
+    expect(await second.find("context compacted")).toBeNull()
+    await prompt(second, `/open ${session}`)
+    await dividerOnce(second)
+  })
+
+  test("about 80 columns: the history divider fits one line", async ({ tui, backend }) => {
+    const first = await tui(hyaTui(backend))
+    await first.waitForText("Connected to hya")
+    await prompt(first, "hi there")
+    await first.waitForText("First answer before compaction.", 20_000)
+    await first.waitForText(/^Ready/m)
+    await prompt(first, "/compact")
+    await first.waitForText("Summary: the user said hi.", 20_000)
+    const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+    await prompt(first, "/exit")
+    await first.waitForExit()
+
+    const narrow = await tui([...hyaTui(backend), "--session", session], { viewport: { width: 690, height: 480 } })
+    expect((await narrow.size()).cols).toBeLessThanOrEqual(84)
+    await dividerOnce(narrow)
   })
 })

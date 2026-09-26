@@ -1,5 +1,10 @@
 # 0.41.0
 
+## TUI: dividers for earlier compactions, and live prompts from other sessions
+
+- An opened session now shows a `context compacted` divider before every compaction summary, including compactions that happened before the TUI opened it (`--session`, `--continue`, `/open`, `/sessions`, and subagent views).
+- A permission or question prompt from another session on the same server now appears as soon as it is raised. The TUI subscribes to `GET /v1/events/stream` for this. The status line reads `Permission needed in <n>. <session> · /open <n> to answer there`, and the pending block names the session. It also sends a desktop notification while the TUI is unfocused. You answer the prompt after opening that session. See [TUI](docs/tui.md).
+
 ## Providers can be managed live; model lists are cached in `model_cache.db`
 
 - New v1 routes to manage providers without restarting the server:

@@ -34,6 +34,16 @@
  * refreshes (start, Ctrl+R). `answer()` responds to a prompt
  * (app/prompts.ts).
  *
+ * Asks of other sessions: from start, the global stream
+ * (`GET /v1/events/stream`, subscribed past every durable seq so only
+ * live frames arrive) feeds the ask and resolve frames of every session
+ * into the pending list at once (state/prompts.ts `globalAskRoute`); an ask
+ * of a session outside the open tree also sets a status notice naming the
+ * session and sends a desktop notification. The listing is re-read on every
+ * (re)subscribe and `resync`; the stream reconnects with a backoff. The
+ * open tree's asks arrive on both streams and are kept by id, and each ask
+ * notifies at most once.
+ *
  * Usage and todos: `tokensRecorded`, `todoUpdated`, and `compactionApplied`
  * fold in the store; a `tokensRecorded` also re-reads the open session
  * (debounced) for its authoritative `SessionInfo.usage` total.
@@ -46,13 +56,13 @@ import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
 import { initialSessionId } from "../launch"
-import { webNotice } from "../state/format"
+import { askSessionLabel, otherAskNotice, webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { editText } from "../composer/editor"
 import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
-import { askFrameRoute, type PromptChoice } from "../state/prompts"
+import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
 import type { AppStore } from "../state/store"
 import { createModeSwitcher } from "./modes"
 import { answerPrompt } from "./prompts"
@@ -69,6 +79,9 @@ const refreshMaxWaitMs = 400
 const streamWaitMs = 3000
 /** Child-session re-read interval while a child is busy or a turn runs. */
 export const childPollMs = 1500
+/** Global stream reconnect backoff: the session stream's 800 ms, doubling up to 15 s while it keeps failing (an older backend without the route). */
+const globalRetryMs = 800
+const globalRetryMaxMs = 15_000
 
 export interface ControllerOptions {
   client: HyaClient
@@ -120,6 +133,9 @@ export const fileSuggestionLimit = 8
 
 export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env }: ControllerOptions) {
   let streamAbort: AbortController | undefined
+  let globalAbort: AbortController | undefined
+  /** Asks a desktop notification was considered for: the open tree's asks arrive on both streams. */
+  const notifiedAsks = new Set<string>()
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let streamReady: Promise<void> = Promise.resolve()
   let closing = false
@@ -141,6 +157,13 @@ export function createController({ client, store, directory, registry = createCo
     if (!terminal?.notify) return
     if (!shouldNotify({ notifications: store.state.notifications, focused: store.state.focused })) return
     terminal.notify(notificationSequence(notificationBody(kind, detail)))
+  }
+
+  /** Notify about one ask at most once, however many streams carry it. */
+  function notifyAsk(id: string, kind: "permission" | "question", detail: string): void {
+    if (!id || notifiedAsks.has(id)) return
+    notifiedAsks.add(id)
+    sendNotification(kind, detail)
   }
 
   const turns = createTurnRunner({
@@ -289,7 +312,7 @@ export function createController({ client, store, directory, registry = createCo
     const ask = event.permissionRequested || event.questionRequested || event.interactionResolved
     // A fresh ask of the open session's own turn (not a descendant's, which never reaches applyEvent).
     const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
-    if (asked) sendNotification(event.permissionRequested ? "permission" : "question", asked.title ?? "")
+    if (asked) notifyAsk(asked.id, event.permissionRequested ? "permission" : "question", asked.title ?? "")
     if (event.tokensRecorded && effect.durable) sessionDue = true
     if (!delta && !ask && (effect.durable || !event.seq)) scheduleRefresh()
     // A turn ended: the working directory's git status may have changed (E22).
@@ -350,6 +373,63 @@ export function createController({ client, store, directory, registry = createCo
         }
         ready()
         if (!controller.signal.aborted) await Bun.sleep(800)
+      }
+    })()
+  }
+
+  /**
+   * One frame of the global stream: asks and resolves only. The open tree's
+   * are also on its session stream (applied there; kept by id here too). An
+   * ask of another session is shown in the pending block with its session,
+   * announced on the status line, and notified while unfocused.
+   */
+  async function onGlobalFrame(frame: StreamFrame): Promise<void> {
+    if (frame.resync) {
+      // Ask frames in the gap are lost: list the pending asks again.
+      await refreshInteractions().catch(() => undefined)
+      return
+    }
+    const event = frame.event
+    if (!event) return
+    const route = globalAskRoute(event, store.state)
+    if (route === "ignore") return
+    const raw = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
+    const asked = raw && { ...raw, session: raw.session || event.session }
+    const fresh = asked !== undefined && !store.state.interactions.some((row) => row.id === asked.id)
+    store.applyAsk(event)
+    if (route !== "other" || !asked || !fresh || !store.state.interactions.some((row) => row.id === asked.id)) return
+    // A session created since the last listing (another client's, a headless run): list it, so the ask can name it.
+    if (asked.session && !store.state.sessions.some((row) => row.id === asked.session)) {
+      await client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
+    }
+    status(otherAskNotice(asked, store.state.sessions))
+    const where = asked.session ? ` · in ${askSessionLabel(asked.session, store.state.sessions)}` : ""
+    notifyAsk(asked.id, event.permissionRequested ? "permission" : "question", `${asked.title ?? ""}${where}`)
+  }
+
+  /** Subscribe to the global stream for the life of the TUI; reconnect with a backoff. */
+  function startGlobalStream(): void {
+    globalAbort?.abort()
+    const controller = new AbortController()
+    globalAbort = controller
+    let delay = globalRetryMs
+    void (async () => {
+      while (!closing && !controller.signal.aborted) {
+        try {
+          await client.streamGlobal((frame) => onGlobalFrame(frame), controller.signal, async () => {
+            delay = globalRetryMs
+            // Asks raised before this subscription are not replayed: list them once.
+            await refreshInteractions().catch(() => undefined)
+          })
+        } catch {
+          // Silent: the session stream owns the connection state; this one only adds other sessions' asks.
+        }
+        if (controller.signal.aborted) break
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, delay)
+          controller.signal.addEventListener("abort", () => { clearTimeout(timer); resolve() }, { once: true })
+        })
+        delay = Math.min(delay * 2, globalRetryMaxMs)
       }
     })()
   }
@@ -617,6 +697,7 @@ export function createController({ client, store, directory, registry = createCo
       store.applyBootstrap(bootstrap)
       await refresh()
       void refreshVcs()
+      startGlobalStream()
       const target = initialSessionId(store.state.sessions, startup, directory)
       let missing = ""
       if (target) await openSession(target).catch(() => { missing = ` · session ${target} not found` })
@@ -637,6 +718,7 @@ export function createController({ client, store, directory, registry = createCo
   function dispose(): void {
     closing = true
     streamAbort?.abort()
+    globalAbort?.abort()
     if (childTimer) clearTimeout(childTimer)
     refreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)

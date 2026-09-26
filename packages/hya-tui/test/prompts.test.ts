@@ -3,6 +3,7 @@ import type { Interaction, MemberInfo, MessageInfo, SessionInfo } from "../src/c
 import type { KeyLike } from "../src/keys/bindings"
 import {
   currentPrompt,
+  globalAskRoute,
   mergeInteractions,
   promptKey,
   promptQueue,
@@ -196,4 +197,19 @@ test("the shown prompt is the oldest ask of the tree, with its place in the queu
   expect(shown?.interaction.id).toBe("perm_1")
   expect(shown?.view).toMatchObject({ position: 0, total: 2 })
   expect(currentPrompt({ ...context(), interactions: [] })).toBeUndefined()
+})
+
+test("the global stream's frames: only asks and resolves count; the open tree's are the session stream's, anything else is another session's", () => {
+  const ctx = context({ sessions: [session("hysec_p"), session("hysec_c", { parent: "hysec_p" }), session("hysec_o")] })
+  const ask = (sessionId: string) => ({ session: sessionId, permissionRequested: { interaction: permission("perm_1", sessionId, {}) } })
+  expect(globalAskRoute(ask("hysec_p"), ctx)).toBe("tree")
+  expect(globalAskRoute(ask("hysec_c"), ctx)).toBe("tree")
+  expect(globalAskRoute(ask("hysec_o"), ctx)).toBe("other")
+  expect(globalAskRoute({ session: "hysec_o", questionRequested: { interaction: question("que_1", "hysec_o", "Why?") } }, ctx)).toBe("other")
+  expect(globalAskRoute({ session: "hysec_o", interactionResolved: { request: "perm_1" } }, ctx)).toBe("other")
+  // Transcript frames of any session are not this stream's business.
+  expect(globalAskRoute({ seq: "0", session: "hysec_o", partAppended: { message: "m", part: "p", textDelta: "x" } }, ctx)).toBe("ignore")
+  expect(globalAskRoute({ seq: "0", session: "hysec_p", partAppended: { message: "m", part: "p", textDelta: "x" } }, ctx)).toBe("ignore")
+  // No open session: every ask is another session's.
+  expect(globalAskRoute(ask("hysec_p"), context({ selected: undefined }))).toBe("other")
 })

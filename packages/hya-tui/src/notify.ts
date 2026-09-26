@@ -9,9 +9,12 @@
  * unfocused (state/focus, tracked through the terminal's focus reporting)
  * and the `notifications` preference (default on, `/notifications`) is on.
  *
- * A subagent's turn end or ask never reaches this: only the open session's
- * own (app/controller.ts routes by `askFrameRoute`/the turn runner's own
- * queue), so no per-subagent notification decision is needed here.
+ * An ask of a session outside the open tree (another TUI's or WebUI tab's
+ * session, a headless run; delivered by the global stream) notifies too,
+ * its detail naming the session (`<title> · in <n>. <session>`). A
+ * subagent's turn end or ask does not notify: app/controller.ts routes by
+ * `askFrameRoute`/`globalAskRoute` and the turn runner's own queue, and
+ * notifies each ask id at most once.
  *
  * The WebUI host (`packages/hya-tui-web`) maps the same two OSC sequences to
  * a browser `Notification`, generically (ADR-0021): it does not know these

@@ -135,6 +135,46 @@ test("a compaction divider is spliced right after the message that was newest wh
   expect(transcriptViews(store.state).map((view) => view.role)).toEqual(["user", "assistant", "divider", "user"])
 })
 
+const text = (id: string, role: string, body: string): MessageInfo => ({ id, role, finish: "FINISH_REASON_STOP", parts: [{ id: `p_${id}`, text: { text: body } }] })
+const summary = (id: string, body = "Summary so far."): MessageInfo => text(id, "ROLE_SYSTEM", `HYA_COMPACTED_CONTEXT\n${body}`)
+
+test("an opened session shows a divider before every compaction summary already in its history", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", lastSeq: "40" })
+  store.setMessages("hysec_1", [
+    text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello"), summary("s1"),
+    text("m3", "ROLE_USER", "more"), text("m4", "ROLE_ASSISTANT", "sure"), summary("s2"),
+    text("m5", "ROLE_USER", "last"),
+  ])
+  const views = transcriptViews(store.state)
+  expect(views.map((view) => view.role)).toEqual(["user", "assistant", "divider", "system", "user", "assistant", "divider", "system", "user"])
+  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted ──" })
+  expect(views[6]!.blocks[0]).toMatchObject({ text: "── context compacted ──" })
+  // Stable ids: re-deriving the same history yields the same rows.
+  expect(transcriptViews(store.state).map((view) => view.id)).toEqual(views.map((view) => view.id))
+  // An ordinary system message gets no divider.
+  store.setMessages("hysec_1", [text("m1", "ROLE_USER", "hi"), text("x", "ROLE_SYSTEM", "TEAM QUIESCED")])
+  expect(transcriptViews(store.state).map((view) => view.role)).toEqual(["user", "system"])
+})
+
+test("a live CompactionApplied for a summary in the history replaces its divider instead of adding a second", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", lastSeq: "10" })
+  store.setMessages("hysec_1", [text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello"), summary("s1")])
+  store.applyEvent({ seq: "11", session: "hysec_1", compactionApplied: { untilSeq: "11", strategy: "LocalSummarizer", message: "s1", foldedCount: 2, manual: true } })
+  const views = transcriptViews(store.state)
+  expect(views.map((view) => view.role)).toEqual(["user", "assistant", "divider", "system"])
+  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · 2 messages · manual ──" })
+  // The live event arrived before its summary message reached the transcript: still one divider, before it.
+  const live = createAppStore()
+  live.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })
+  live.setMessages("hysec_2", [text("m1", "ROLE_USER", "hi")])
+  live.applyEvent({ seq: "3", session: "hysec_2", compactionApplied: { untilSeq: "3", strategy: "SnapCompact", message: "s9", foldedCount: 1 } })
+  live.setMessages("hysec_2", [text("m1", "ROLE_USER", "hi"), summary("s9")])
+  expect(transcriptViews(live.state).map((view) => view.role)).toEqual(["user", "divider", "system"])
+  expect(transcriptViews(live.state)[1]!.blocks[0]).toMatchObject({ text: "── context compacted · 1 message · SnapCompact ──" })
+})
+
 test("a bash tool call shows its command and output when the part carries them", () => {
   const view = messageView({
     id: "a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP",

@@ -333,3 +333,21 @@ export function askFrameRoute(event: StreamEvent, sessionId: string): "own" | "d
   if (event.permissionRequested || event.questionRequested || event.interactionResolved) return "descendantAsk"
   return "ignore"
 }
+
+/**
+ * How the controller routes one frame of the global stream
+ * (`GET /v1/events/stream`, app/controller.ts): only asks and resolves
+ * count (`ignore` for everything else — transcripts come from the open
+ * session's own stream). `tree`: the asking session is the open session or
+ * below it, so its own stream delivers the frame too (applying it twice is
+ * harmless: asks are kept by id). `other`: a session this TUI does not have
+ * open (another TUI's or WebUI tab's session, a headless run); with no
+ * session open, every ask is `other`.
+ */
+export function globalAskRoute(event: StreamEvent, context: PromptContext): "tree" | "other" | "ignore" {
+  if (!event.permissionRequested && !event.questionRequested && !event.interactionResolved) return "ignore"
+  const selected = context.selected
+  const asking = event.session || event.permissionRequested?.interaction?.session || event.questionRequested?.interaction?.session
+  if (!selected || !asking) return "other"
+  return treeSessionIds(selected.id, context.sessions, childSessionIds(context.members, context.messages)).has(asking) ? "tree" : "other"
+}

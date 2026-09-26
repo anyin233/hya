@@ -1,6 +1,6 @@
 /** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
 import type { WebInfo } from "../cli"
-import type { SessionInfo, TodoItem, TokenUsage } from "../client"
+import type { Interaction, SessionInfo, TodoItem, TokenUsage } from "../client"
 import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
@@ -88,11 +88,38 @@ export function sessionListText(state: AppState, width?: number): string {
 
 /**
  * One line per pending interaction the prompt does not show (asks of other
- * session trees): `! title · id` for permissions, `? title · id` for questions.
+ * session trees): `! title · session · id` for permissions, `? title ·
+ * session · id` for questions, where `session` is `askSessionLabel` (the
+ * session is omitted when the ask names none).
  */
 export function pendingLines(state: AppState, width?: number): string[] {
   const prompted = new Set(promptQueue(state.interactions, state).map((item) => item.id))
-  return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title} · ${item.id}`, width))
+  return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => {
+    const session = item.session ? ` · ${askSessionLabel(item.session, state.sessions)}` : ""
+    return truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}${session} · ${item.id}`, width)
+  })
+}
+
+/** The session list number `/open <n>` takes (sidebar order), or `undefined` when the list does not have it. */
+function sessionNumber(sessionId: string, sessions: readonly SessionInfo[]): number | undefined {
+  const index = sessionTree(sessions).findIndex((row) => row.session.id === sessionId)
+  return index < 0 ? undefined : index + 1
+}
+
+/** Which session an ask belongs to: `<n>. <title>` (its `/open` number), or its id when the session list does not have it. */
+export function askSessionLabel(sessionId: string, sessions: readonly SessionInfo[]): string {
+  const number = sessionNumber(sessionId, sessions)
+  if (number === undefined) return sessionId
+  const session = sessions.find((row) => row.id === sessionId)!
+  return `${number}. ${session.title || session.id}`
+}
+
+/** Status line when an ask arrives for a session this TUI does not have open: which session, and how to go answer it. */
+export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[]): string {
+  const sessionId = interaction.session ?? ""
+  const kind = interaction.type?.includes("QUESTION") ? "Question" : "Permission needed"
+  const target = sessionNumber(sessionId, sessions) ?? sessionId
+  return `${kind} in ${askSessionLabel(sessionId, sessions)} · /open ${target} to answer there`
 }
 
 /** The sidebar's context box: the open session, its agent and model, message count, context occupancy and session tokens (when known), directory, server. */
@@ -177,6 +204,14 @@ export function compactionText(payload: { untilSeq?: string; strategy?: string; 
   const folded = count > 0 ? ` · ${count} message${count === 1 ? "" : "s"}` : ""
   return `── context compacted${folded} · ${payload.manual ? "manual" : payload.strategy || "unknown"} ──`
 }
+
+/**
+ * The divider of a compaction from before the session was opened, derived
+ * from its summary message (state/messages.ts `withDividers`): the strategy
+ * and folded count live only in the `CompactionApplied` event, which the
+ * TUI does not replay.
+ */
+export const historyCompactionText = "── context compacted ──"
 
 /** A uint64 count (a decimal string) as a number; exact up to 2^53, which token counts never reach. */
 const count = (value: string | number | undefined): number => Number(value ?? 0) || 0
