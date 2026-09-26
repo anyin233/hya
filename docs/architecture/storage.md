@@ -210,6 +210,8 @@ Store API ([`project.rs`](../../crates/hya-store/src/project.rs)):
 | `list_projects() -> Vec<ProjectSummary>` | Non-archived Projects, most recently updated first; `session_count` = root sessions of the Project that still have an event log (archived ones included, subagent sessions not) |
 | `rename_project(id, name) -> Project` | Bumps `updated_at` (strictly increasing) |
 | `replace_project_roots(id, roots) -> Project` | Replaces the whole ordered list; bumps `updated_at`. Running sessions see the new roots from their next turn |
+| `update_project(id, name?, roots?) -> Project` | Rename and/or replace the roots in one transaction (both inputs validated first; all or nothing); bumps `updated_at` when either is given. `rename_project` / `replace_project_roots` delegate to it |
+| `project_session_count(id) -> u64` | The `session_count` of one Project, as `list_projects` computes it |
 | `delete_project(id) -> bool` | Deletes the Project and (by cascade) its roots; `false` when absent. Refused with `ProjectInUse` while a non-archived root session with an event log belongs to it |
 | `resolve_project_by_path(path) -> Option<Project>` | The non-archived Project with a root that contains `path`, component-wise (`/a/b` contains `/a/b/c`, not `/a/bc`). Longest matching root wins; among equal lengths, the most recently updated Project |
 | `list_sessions_in(project: Option<ProjectId>)` | `list_sessions`, narrowed to sessions (root and subagent) whose `session_created` named the Project; `None` lists all |

@@ -506,3 +506,65 @@ async fn project_migration_upgrades_a_database_with_sessions() {
     pool.close().await;
     remove_db(&path);
 }
+
+#[tokio::test]
+async fn update_project_renames_and_replaces_roots_in_one_step() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let project = store.create_project("app", &roots(&["/a"])).await.unwrap();
+    tick().await;
+    let both = store
+        .update_project(project.id, Some("renamed"), Some(&roots(&["/b", "/c/"])))
+        .await
+        .unwrap();
+    assert_eq!(both.name, "renamed");
+    assert_eq!(both.roots, roots(&["/b", "/c"]));
+    assert!(both.updated_at_ms > project.updated_at_ms);
+
+    // Neither change: still bumps nothing but returns the Project.
+    let same = store.update_project(project.id, None, None).await.unwrap();
+    assert_eq!(same.name, "renamed");
+    assert_eq!(same.roots, roots(&["/b", "/c"]));
+
+    // One invalid half leaves the other half unapplied.
+    let error = store
+        .update_project(project.id, Some("other"), Some(&roots(&["relative"])))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, StoreError::ProjectRootNotAbsolute { .. }),
+        "{error:?}"
+    );
+    let error = store
+        .update_project(project.id, Some("  "), Some(&roots(&["/d"])))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::ProjectNameEmpty), "{error:?}");
+    let unchanged = store.get_project(project.id).await.unwrap().unwrap();
+    assert_eq!(unchanged.name, "renamed");
+    assert_eq!(unchanged.roots, roots(&["/b", "/c"]));
+
+    let missing = ProjectId::new();
+    let error = store
+        .update_project(missing, Some("x"), None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, StoreError::ProjectNotFound { project } if project == missing),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn project_session_count_matches_the_listing() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let project = store.create_project("app", &roots(&["/a"])).await.unwrap();
+    assert_eq!(store.project_session_count(project.id).await.unwrap(), 0);
+    let root = create_session(&store, None, Some(project.id), SessionKind::Project).await;
+    create_session(&store, Some(root), Some(project.id), SessionKind::Project).await;
+    create_session(&store, None, Some(project.id), SessionKind::Project).await;
+    assert_eq!(store.project_session_count(project.id).await.unwrap(), 2);
+    assert!(store.delete_session(root).await.unwrap());
+    assert_eq!(store.project_session_count(project.id).await.unwrap(), 1);
+    let listed = store.list_projects().await.unwrap();
+    assert_eq!(listed[0].session_count, 1);
+}
