@@ -230,6 +230,33 @@ Controller actions: `newSession(agent?, model?)`,
 `newTemporarySession(agent?, model?)`, `switchProject(id)`,
 `refreshProjects()`.
 
+### Project view
+
+`/project` (and its alias `/projects`) opens a full-screen list of every
+Project (the RulesView pattern: `state/projectView.ts` owns the state and
+keys, `app/projectView.ts` the calls, `components/ProjectView.tsx` the
+rendering). Up/Down move the highlight; the active Project is marked and, in
+`--remote` mode with none active yet, the view opens by itself (see
+"`--remote`" above) and a new-session attempt without an active Project
+opens it too, instead of only setting the status line.
+
+| Key | Effect |
+| --- | --- |
+| Enter | Open/switch to the highlighted Project (`switchProject`), then close the view. |
+| `n` | Create a Project: a name prompt, then one root per step (path completion from the backend filesystem, `GET /v1/fs/find` — remote workspaces live on the backend machine, not this one); Enter on an empty root finishes, at least one root is required, the first root is primary. `CreateProject`. |
+| `e` | Edit the highlighted Project's roots: Up/Down select a root, Shift+Up/Down reorders it (the first root is primary), `a` adds one (the same path-completing prompt as create), `d` removes the selected one (refused when it is the only root), Enter saves the whole list (`UpdateProject`), Esc cancels. |
+| `r` | Rename the highlighted Project (`UpdateProject`). |
+| `d` | Ask to delete the highlighted Project; Enter confirms (`DeleteProject`), Esc cancels. A live root session belonging to it fails the call with `failed_precondition`, shown on the notice line verbatim. |
+| `t` | Start a temporary session (`newTemporarySession`) and close the view; `/new --temp` does the same from the composer without opening it. |
+| Esc | Close the view (cancels a sub-flow first, if one is open). |
+
+### Left Projects sidebar
+
+A second, narrower sidebar on the left lists every Project live
+(`state/projectsSidebar.ts`, `components/ProjectsSidebar.tsx`): see
+[Layout](#layout) for its visibility threshold, Ctrl+P, and
+`/projects-sidebar`.
+
 ## Commands and keys
 
 | Input | Effect |
@@ -245,8 +272,10 @@ Controller actions: `newSession(agent?, model?)`,
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
-| `/new [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default. |
-| `/sessions` | Open the sessions picker: a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation (see [Pickers](#pickers)). |
+| `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
+| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
+| `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
+| `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. With no session yet, a picker or direct choice is remembered for the next one (see [Pickers](#pickers)). |
 | `/agent [name]` | Open the agent picker (visible agents, tagged with their default model); `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -409,7 +438,21 @@ the bordered input, and the instruction line. The permission mode picker
   columns or more, hidden below, so an 80-column terminal gets the full
   width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
   any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
-  line confirms the change (`Sidebar shown · Ctrl+B toggles`).
+  line confirms the change (`Sidebar shown · Ctrl+B toggles`). Its `Sessions`
+  box (and the `/sessions` picker) is scoped to the active Project, with
+  temporary sessions under their own `— Temporary —` heading (see
+  [Projects](#projects) and [Pickers](#pickers)).
+- **Left Projects sidebar.** A second, narrower (16–28 columns) titled box on
+  the left: one row per Project (`ListProjects`, live via `projectsUpdated`
+  the same as the Project view), the active one marked `▸`, a busy marker
+  `●` while a session of it runs a turn, and its session count. It needs
+  both sidebars and the chat column to fit, so it follows a wider threshold
+  than the right sidebar (150 columns; an 80-column or even a 130-column
+  terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
+  hidden — Up/Down move the highlight, Enter switches (`switchProject`),
+  Esc (or Ctrl+P again) returns focus to the composer without closing it;
+  `/projects-sidebar [on|off]` toggles visibility alone, the same way
+  `/sidebar` does for the right one. See [Projects](#projects).
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
   above the status line; see
@@ -422,11 +465,15 @@ the bordered input, and the instruction line. The permission mode picker
   that session to answer with its prompt. They arrive live — see
   [Asks of other sessions](#asks-of-other-sessions). `/interactions` lists
   every detail. It disappears when nothing else is pending.
-- **Keys and the browser.** Ctrl+B, Ctrl+O, and Ctrl+G are not reserved by
-  browsers, so they also work in the WebUI (`packages/hya-tui-web`). Ctrl+B is tmux's
-  default prefix; inside tmux press it twice (tmux passes the second one
-  through) or use `/sidebar`. Ctrl+B would otherwise move the input cursor
-  left; the Left arrow still does.
+- **Keys and the browser.** Ctrl+B, Ctrl+O, Ctrl+G, and Ctrl+P are not
+  reserved by browsers, so they also work in the WebUI
+  (`packages/hya-tui-web`). Ctrl+B is tmux's default prefix; inside tmux
+  press it twice (tmux passes the second one through) or use `/sidebar`.
+  Ctrl+B would otherwise move the input cursor left; the Left arrow still
+  does. (Alt/Option+letter combos are not used for any binding here: macOS
+  keyboard layouts often remap them to accented or symbol characters instead
+  of delivering a plain modified keypress, in a browser and in a native
+  terminal alike.)
 - **Focus.** The input keeps the keyboard focus. Mouse clicks (on the
   transcript, a `Thinking` line, a tool card, or the sidebar) never move it (the renderer
   runs with `autoFocus: false`).
@@ -2233,17 +2280,19 @@ together.
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
-| `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()` (right sidebar), `projectsSidebarVisible()`, `toggledProjectsSidebar()`, `projectsSidebarWidth()` (left Projects sidebar), and `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
+| `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
 | `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, routing keys and pastes to an open Provider View, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, routing keys and pastes to an open Provider View, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
-| `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
+| `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z, and `toggleProjectsSidebar` on Ctrl+P) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
