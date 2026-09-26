@@ -1,9 +1,9 @@
-use std::path::Path;
-
 use hya_tool::{
-    SkillCatalogOrigin, discover_skills_with_builtins, discover_user_skills_with_builtins,
+    SkillCatalogOrigin, discover_skills_for_roots_with_builtins, discover_user_skills_with_builtins,
 };
 use serde::Serialize;
+
+use crate::support::catalog_place::CatalogPlace;
 
 #[derive(Clone, Serialize)]
 pub(crate) struct SkillInfo {
@@ -13,13 +13,14 @@ pub(crate) struct SkillInfo {
     pub(crate) content: String,
 }
 
-/// Skills visible in `workdir`; with no workdir, user skills and builtins.
-pub(crate) fn list(workdir: Option<&Path>) -> Vec<SkillInfo> {
-    workdir
-        .map_or_else(
-            discover_user_skills_with_builtins,
-            discover_skills_with_builtins,
-        )
+/// Skills visible at `place`: its directory first, then each Project root
+/// in order (first wins); the global view lists user skills and builtins.
+pub(crate) fn list(place: &CatalogPlace) -> Vec<SkillInfo> {
+    place
+        .workdir()
+        .map_or_else(discover_user_skills_with_builtins, |workdir| {
+            discover_skills_for_roots_with_builtins(workdir, place.roots())
+        })
         .into_iter()
         .map(|skill| {
             let location = match skill.origin {

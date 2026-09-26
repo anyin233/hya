@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 
@@ -116,11 +116,28 @@ pub(crate) fn parse_method(method: &str) -> Result<ApiMethod, BundleApiError> {
     })
 }
 
+/// Endpoints of the request's catalog scope: a session's own scope, else
+/// the directory's ([`super::catalog_scope`]), else the global view (the
+/// base catalog only: Project bundle APIs are never listed globally).
 async fn list_bundle_apis(
     State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
 ) -> Result<Json<pb::ListBundleApisResponse>, V1Error> {
+    let request: pb::ListBundleApisRequest = super::query_request(&[], &query)?;
+    let published = match super::scope_session(&st, &request.session).await? {
+        Some(session) => st.engine.session_bundle_apis(session).await?,
+        None => {
+            let place = super::catalog_scope(&st, &headers, &request.directory).await?;
+            if matches!(place.scope(), hya_core::CatalogScope::Global) {
+                st.engine.bundle_apis().await
+            } else {
+                place.bind(&st).await?.published_bundle_apis()
+            }
+        }
+    };
     let mut apis = Vec::new();
-    for bundle in st.engine.bundle_apis().await {
+    for bundle in published {
         for api in bundle.apis {
             apis.push(pb::BundleApiInfo {
                 bundle: bundle.bundle.clone(),

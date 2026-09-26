@@ -2,7 +2,6 @@
 //! tools, permission modes, and saved permission rules.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -15,7 +14,8 @@ use crate::ServerState;
 use hya_api::v1 as pb;
 use serde_json::{Value, json};
 
-use super::{V1Error, request_scope};
+use super::{V1Error, catalog_scope};
+use crate::support::catalog_place::CatalogPlace;
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -54,18 +54,17 @@ async fn list_agents(
     headers: HeaderMap,
 ) -> Result<Json<pb::ListAgentsResponse>, V1Error> {
     let request: pb::ListAgentsRequest = super::query_request(&[], &query)?;
-    let workdir = request_scope(&headers, &request.directory)?;
-    let agents = agent_rows(&st, workdir.as_deref()).await?;
+    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let agents = agent_rows(&st, &place).await?;
     Ok(Json(paginated_agents(agents, &request.page)))
 }
 
-/// Agent rows shared with the bootstrap snapshot; `None` lists the global
-/// (project-less) view.
+/// Agent rows shared with the bootstrap snapshot.
 pub(crate) async fn agent_rows(
     st: &ServerState,
-    workdir: Option<&Path>,
+    place: &CatalogPlace,
 ) -> Result<Vec<pb::AgentSummary>, V1Error> {
-    let rows = crate::support::bound_agent_metadata::list(st, workdir)
+    let rows = crate::support::bound_agent_metadata::list(st, place)
         .await
         .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
     Ok(rows
@@ -363,13 +362,13 @@ async fn get_provider(
 }
 
 async fn list_commands(
-    State(_st): State<ServerState>,
+    State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
 ) -> Result<Json<pb::ListCommandsResponse>, V1Error> {
     let request: pb::ListCommandsRequest = super::query_request(&[], &query)?;
-    let workdir = request_scope(&headers, &request.directory)?;
-    let commands = command_rows(workdir.as_deref());
+    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let commands = command_rows(&place);
     let (commands, page) = paginate(commands, &request.page);
     Ok(Json(pb::ListCommandsResponse {
         commands,
@@ -377,10 +376,9 @@ async fn list_commands(
     }))
 }
 
-/// Command rows shared with the bootstrap snapshot; `None` lists global
-/// commands only.
-pub(crate) fn command_rows(workdir: Option<&Path>) -> Vec<pb::CommandSummary> {
-    crate::support::command_catalog::list(workdir)
+/// Command rows shared with the bootstrap snapshot.
+pub(crate) fn command_rows(place: &CatalogPlace) -> Vec<pb::CommandSummary> {
+    crate::support::command_catalog::list(place)
         .into_iter()
         .map(|row| pb::CommandSummary {
             name: row.name.clone(),
@@ -397,13 +395,13 @@ pub(crate) fn command_rows(workdir: Option<&Path>) -> Vec<pb::CommandSummary> {
 }
 
 async fn list_skills(
-    State(_st): State<ServerState>,
+    State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
 ) -> Result<Json<pb::ListSkillsResponse>, V1Error> {
     let request: pb::ListSkillsRequest = super::query_request(&[], &query)?;
-    let workdir = request_scope(&headers, &request.directory)?;
-    let skills = skill_rows(workdir.as_deref());
+    let place = catalog_scope(&st, &headers, &request.directory).await?;
+    let skills = skill_rows(&place);
     let (skills, page) = paginate(skills, &request.page);
     Ok(Json(pb::ListSkillsResponse {
         skills,
@@ -411,10 +409,10 @@ async fn list_skills(
     }))
 }
 
-/// Skill rows shared with the bootstrap snapshot; `None` lists user skills
-/// and builtins only.
-pub(crate) fn skill_rows(workdir: Option<&Path>) -> Vec<pb::SkillSummary> {
-    crate::support::skill_catalog::list(workdir)
+/// Skill rows shared with the bootstrap snapshot; the global view lists
+/// user skills and builtins only.
+pub(crate) fn skill_rows(place: &CatalogPlace) -> Vec<pb::SkillSummary> {
+    crate::support::skill_catalog::list(place)
         .into_iter()
         .map(|row| pb::SkillSummary {
             name: row.name.clone(),
@@ -441,11 +439,25 @@ async fn list_tools(
 
 async fn list_permission_modes(
     State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
 ) -> Result<Json<pb::ListPermissionModesResponse>, V1Error> {
-    let modes = st
-        .engine
-        .permission_modes()
-        .await
+    let request: pb::ListPermissionModesRequest = super::query_request(&[], &query)?;
+    let modes = match super::scope_session(&st, &request.session).await? {
+        Some(session) => st.engine.session_permission_modes(session).await?,
+        None => {
+            let place = catalog_scope(&st, &headers, &request.directory).await?;
+            if matches!(place.scope(), hya_core::CatalogScope::Global) {
+                // Q7: the global view is the base catalog only.
+                st.engine.permission_modes().await
+            } else {
+                let mut modes = hya_core::permission_mode::builtin_permission_modes();
+                modes.extend(place.bind(&st).await?.published_permission_modes());
+                modes
+            }
+        }
+    };
+    let modes = modes
         .into_iter()
         .map(|mode| pb::PermissionModeSummary {
             id: mode.id,

@@ -211,6 +211,10 @@ async fn update_project(
     let id = parse_project(&project)?;
     // Empty `roots` keeps the current roots (a Project always has one).
     let roots = (!request.roots.is_empty()).then_some(request.roots.as_slice());
+    let previous_roots = match roots {
+        Some(_) => Some(load_project(&st, id).await?.roots),
+        None => None,
+    };
     let project = st
         .engine
         .store()
@@ -218,6 +222,11 @@ async fn update_project(
         .await?;
     if request.name.is_some() || roots.is_some() {
         st.notify_projects_updated();
+    }
+    // New roots change the Project's catalog (skills, commands, bundles,
+    // plugins): drop its scope, which emits one `catalogUpdated {projectId}`.
+    if previous_roots.is_some_and(|previous| previous != project.roots) {
+        st.engine.invalidate_catalog_scope(id);
     }
     Ok(Json(project_info(&st, &project, None).await?))
 }
@@ -231,6 +240,8 @@ async fn delete_project(
         return Err(V1Error::not_found(format!("project not found: {id}")));
     }
     st.notify_projects_updated();
+    // Its directories fall back to plain-directory catalogs.
+    st.engine.invalidate_catalog_scope(id);
     Ok(Json(pb::DeleteProjectResponse {}))
 }
 

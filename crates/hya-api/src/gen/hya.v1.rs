@@ -1007,8 +1007,17 @@ pub struct ListToolsResponse {
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct ListPermissionModesRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListPermissionModesRequest {
+    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// with neither it nor `session`, the global view is listed.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// List the modes `UpdateSession.permission_mode` accepts for this
+    /// session (its own catalog scope). Wins over `directory`.
+    #[prost(string, tag = "2")]
+    pub session: ::prost::alloc::string::String,
+}
 /// One selectable session permission mode.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PermissionModeSummary {
@@ -1487,8 +1496,11 @@ pub mod catalog_client {
             self.inner.unary(req, path, codec).await
         }
         /// Session permission modes accepted by `UpdateSession.permission_mode`:
-        /// the built-in `manual` and `yolo`, then every installed bundle's
-        /// `permission_modes:` as `<bundle-id>/<mode-id>`.
+        /// the built-in `manual` and `yolo`, then every bundle's
+        /// `permission_modes:` as `<bundle-id>/<mode-id>` in the request's catalog
+        /// scope: a session's own scope, else the directory's (its Project's
+        /// bundles when it lies inside one), else the global view (installed and
+        /// first-party bundles only; no Project bundle).
         ///
         /// hya.http: GET /v1/permission-modes
         pub async fn list_permission_modes(
@@ -1645,8 +1657,11 @@ pub mod catalog_server {
             tonic::Status,
         >;
         /// Session permission modes accepted by `UpdateSession.permission_mode`:
-        /// the built-in `manual` and `yolo`, then every installed bundle's
-        /// `permission_modes:` as `<bundle-id>/<mode-id>`.
+        /// the built-in `manual` and `yolo`, then every bundle's
+        /// `permission_modes:` as `<bundle-id>/<mode-id>` in the request's catalog
+        /// scope: a session's own scope, else the directory's (its Project's
+        /// bundles when it lies inside one), else the global view (installed and
+        /// first-party bundles only; no Project bundle).
         ///
         /// hya.http: GET /v1/permission-modes
         async fn list_permission_modes(
@@ -3115,8 +3130,18 @@ pub mod auth_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct ListBundleApisRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListBundleApisRequest {
+    /// Directory scope (absolute; or the x-hya-directory header). Optional:
+    /// with neither it nor `session`, the global view (installed and
+    /// first-party bundles; no Project bundle) is listed.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// List the endpoints visible to this session (its own catalog scope,
+    /// Project bundles included). Wins over `directory`.
+    #[prost(string, tag = "2")]
+    pub session: ::prost::alloc::string::String,
+}
 /// One endpoint a published bundle registers.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BundleApiInfo {
@@ -3321,8 +3346,9 @@ pub mod bundle_api_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
-        /// List every endpoint the published bundles register, sorted by bundle id
-        /// then endpoint id.
+        /// List every endpoint the bundles of the request's catalog scope register
+        /// (a session's scope, else the directory's, else the global view), sorted
+        /// by bundle id then endpoint id.
         ///
         /// hya.http: GET /v1/bundle-apis
         pub async fn list_bundle_apis(
@@ -3426,8 +3452,9 @@ pub mod bundle_api_server {
     /// Generated trait containing gRPC methods that should be implemented for use with BundleApiServer.
     #[async_trait]
     pub trait BundleApi: std::marker::Send + std::marker::Sync + 'static {
-        /// List every endpoint the published bundles register, sorted by bundle id
-        /// then endpoint id.
+        /// List every endpoint the bundles of the request's catalog scope register
+        /// (a session's scope, else the directory's, else the global view), sorted
+        /// by bundle id then endpoint id.
         ///
         /// hya.http: GET /v1/bundle-apis
         async fn list_bundle_apis(
@@ -6601,11 +6628,14 @@ pub mod stream_event {
         /// bytes. Append them to the message after its text.
         #[prost(message, tag = "24")]
         PartsAdded(super::PartsAdded),
-        /// The provider/model catalog changed (a provider was added, edited, or
-        /// refreshed, a key was set or removed, or startup discovery finished).
-        /// Live-only and process-wide: `seq` is 0 and `session` is empty on every
-        /// stream it reaches (global and session). Re-read `ListModels` /
-        /// `ListProviders`.
+        /// A catalog changed: the provider/model catalog (a provider was added,
+        /// edited, or refreshed, a key was set or removed, or startup discovery
+        /// finished; `project_id` empty), or one Project's catalog tier (its
+        /// roots changed or it was deleted; `project_id` names it). Live-only
+        /// and process-wide: `seq` is 0 and `session` is empty on every stream
+        /// it reaches (global and session). Re-read `ListModels` /
+        /// `ListProviders`, and the agent/command/skill catalogs of the affected
+        /// scope (every scope when `project_id` is empty).
         #[prost(message, tag = "25")]
         CatalogUpdated(super::CatalogUpdated),
         /// The server is shutting down (ADR-0023): the last frame of every live
@@ -6624,9 +6654,14 @@ pub mod stream_event {
         ProjectsUpdated(super::ProjectsUpdated),
     }
 }
-/// The provider/model catalog changed; carries no fields.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct CatalogUpdated {}
+/// A catalog changed.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CatalogUpdated {
+    /// The Project whose catalog tier changed; empty for a global change
+    /// (provider/model catalog, or an unknown set of scopes).
+    #[prost(string, tag = "1")]
+    pub project_id: ::prost::alloc::string::String,
+}
 /// The Project list changed; carries no fields.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ProjectsUpdated {}

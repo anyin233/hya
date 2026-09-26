@@ -11,7 +11,7 @@ use hya_bundle::{
     PreparedInstallableBundle, ResourceView,
 };
 use hya_core::runtime_registry::RuntimeSourceSkill;
-use hya_core::{RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
+use hya_core::{AgentCatalog, RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
 use hya_proto::AgentName;
 use hya_tool::{SkillCatalogEntry, ToolRegistry};
 
@@ -80,8 +80,50 @@ pub fn runtime_with_catalog(
     tools: Arc<ToolRegistry>,
     agents: &[AgentFixture],
 ) -> Arc<RuntimeRegistry> {
-    // One bundle per agent, over the compiled-in built-ins.
-    let bundles: Vec<PreparedInstallableBundle> = agents
+    let bundles = prepared_bundles(agents);
+    let sources = bundles
+        .iter()
+        .filter_map(bundle_skill_source)
+        .collect::<Vec<_>>();
+    let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+        tools.snapshot(),
+        agent_catalog_of(&bundles),
+    ));
+    if !sources.is_empty() {
+        runtime
+            .refresh(|candidate| {
+                candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources)
+            })
+            .expect("server test bundle Skill sources must publish");
+    }
+    runtime
+}
+
+/// The agent catalog of explicit fixtures (for a scope overlay).
+pub fn agent_catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
+    agent_catalog_of(&prepared_bundles(agents))
+}
+
+fn agent_catalog_of(bundles: &[PreparedInstallableBundle]) -> Arc<AgentCatalog> {
+    let catalog = BundleCatalog::from_prepared(bundles).expect("server test catalog");
+    Arc::new(AgentCatalog::new(Arc::new(catalog)).expect("server agent catalog"))
+}
+
+/// The builtin server fixture agents ([`test_runtime`]'s catalog).
+pub fn test_agents() -> Vec<AgentFixture> {
+    vec![
+        AgentFixture::main("build").can_spawn(&["build", "plan", "general"]),
+        AgentFixture::main("plan").can_spawn(&["build", "plan", "general"]),
+        AgentFixture::subagent("general"),
+        AgentFixture::subagent("compaction").prompt("compaction prompt"),
+        AgentFixture::subagent("title").prompt("title prompt"),
+        AgentFixture::subagent("summary").prompt("summary prompt"),
+    ]
+}
+
+/// One prepared bundle per agent, over the compiled-in built-ins.
+fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
+    agents
         .iter()
         .filter(|agent| !hya_core::is_builtin_id(agent.stable_id))
         .map(|agent| PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
@@ -136,25 +178,7 @@ pub fn runtime_with_catalog(
             hooks: Vec::new(),
             extensions: Vec::new(),
         })))
-        .collect();
-    let sources = bundles
-        .iter()
-        .filter_map(bundle_skill_source)
-        .collect::<Vec<_>>();
-    let catalog = BundleCatalog::from_prepared(&bundles).expect("server test catalog");
-    let catalog = hya_core::AgentCatalog::new(Arc::new(catalog)).expect("server agent catalog");
-    let runtime = Arc::new(RuntimeRegistry::from_snapshot(
-        tools.snapshot(),
-        Arc::new(catalog),
-    ));
-    if !sources.is_empty() {
-        runtime
-            .refresh(|candidate| {
-                candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, sources)
-            })
-            .expect("server test bundle Skill sources must publish");
-    }
-    runtime
+        .collect()
 }
 
 /// Adapt one server fixture bundle's prepared Skill into its runtime source.
@@ -209,17 +233,7 @@ fn bundle_skill_source(bundle: &PreparedInstallableBundle) -> Option<RuntimeSour
 /// Matches builtin Bundle roles: `build`/`plan` are main; `general` is subagent.
 /// Compaction/title/summary are fixed system subagents (ordinarily unreachable).
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    runtime_with_catalog(
-        tools,
-        &[
-            AgentFixture::main("build").can_spawn(&["build", "plan", "general"]),
-            AgentFixture::main("plan").can_spawn(&["build", "plan", "general"]),
-            AgentFixture::subagent("general"),
-            AgentFixture::subagent("compaction").prompt("compaction prompt"),
-            AgentFixture::subagent("title").prompt("title prompt"),
-            AgentFixture::subagent("summary").prompt("summary prompt"),
-        ],
-    )
+    runtime_with_catalog(tools, &test_agents())
 }
 
 pub fn tempdir(label: &str) -> PathBuf {

@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::ServerState;
 use hya_api::v1 as pb;
 
-use super::{V1Error, request_scope};
+use super::{V1Error, catalog_scope, request_scope};
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -147,17 +147,17 @@ async fn bootstrap(
 ) -> Result<Json<pb::Bootstrap>, V1Error> {
     let request: pb::GetBootstrapRequest = super::query_request(&[], &query)?;
     // Without a scope the catalog rows are the global (project-less) view.
-    let workdir = request_scope(&headers, &request.directory)?;
+    let place = catalog_scope(&st, &headers, &request.directory).await?;
 
-    let agents = super::catalog::agent_rows(&st, workdir.as_deref()).await?;
+    let agents = super::catalog::agent_rows(&st, &place).await?;
     let models = super::catalog::model_rows(&st);
     let providers = super::catalog::provider_rows(&st, &models).await;
-    let commands = super::catalog::command_rows(workdir.as_deref());
-    let skills = super::catalog::skill_rows(workdir.as_deref());
+    let commands = super::catalog::command_rows(&place);
+    let skills = super::catalog::skill_rows(&place);
     let tools = super::catalog::tool_rows(&st);
 
     Ok(Json(pb::Bootstrap {
-        location: Some(location_info(workdir.as_deref())),
+        location: Some(location_info(place.workdir())),
         config: Some(super::convert::to_struct(st.global.config().await)),
         agents,
         models: models.clone(),

@@ -292,20 +292,10 @@ impl AppState {
     }
 
     /// Publish a provider-catalog change: every v1 event stream (global and
-    /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame.
+    /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame
+    /// with an empty `projectId`.
     pub fn notify_catalog_updated(&self) {
-        let payload = serde_json::json!({
-            "id": format!(
-                "catalog-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|duration| duration.as_millis())
-                    .unwrap_or(0)
-            ),
-            "type": "catalog.updated",
-            "properties": {}
-        });
-        let _ = self.catalog_updates.send(payload);
+        let _ = self.catalog_updates.send(catalog_notice(None));
     }
 
     /// Subscribe to provider-catalog refresh notifications.
@@ -453,4 +443,24 @@ impl ServerState {
         let workflow = self.workflow_control.cancel(session);
         turn || model || workflow
     }
+}
+
+/// A `catalog.updated` notice; `project` names the Project whose catalog
+/// tier changed (`properties.projectId`), `None` a global change.
+pub(crate) fn catalog_notice(project: Option<hya_proto::ProjectId>) -> Value {
+    let properties = match project {
+        Some(project) => serde_json::json!({ "projectId": project.to_string() }),
+        None => serde_json::json!({}),
+    };
+    serde_json::json!({
+        "id": format!(
+            "catalog-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0)
+        ),
+        "type": "catalog.updated",
+        "properties": properties
+    })
 }

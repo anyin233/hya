@@ -239,6 +239,44 @@ pub(crate) fn request_scope(
     Ok(Some(path))
 }
 
+/// The catalog place of a catalog read: the request's directory scope
+/// ([`request_scope`]) resolved through the Project that contains it.
+///
+/// Every catalog rpc (agents, commands, skills, bootstrap, agent models,
+/// permission modes, bundle APIs) answers from this one helper so they
+/// agree: a directory inside a registered Project lists that Project's
+/// catalog (every root, first root wins); a directory in no Project lists
+/// only its own inert tiers (no Project bundle); no directory is the
+/// global view.
+pub(crate) async fn catalog_scope(
+    st: &crate::ServerState,
+    headers: &axum::http::HeaderMap,
+    requested: &str,
+) -> Result<crate::support::catalog_place::CatalogPlace, V1Error> {
+    let directory = request_scope(headers, requested)?;
+    Ok(crate::support::catalog_place::CatalogPlace::for_directory(st, directory).await)
+}
+
+/// The session a catalog read is scoped to, if its `session` field names
+/// one: `invalid_argument` for a malformed id, `not_found` for an unknown
+/// session.
+pub(crate) async fn scope_session(
+    st: &crate::ServerState,
+    session: &str,
+) -> Result<Option<hya_proto::SessionId>, V1Error> {
+    let session = session.trim();
+    if session.is_empty() {
+        return Ok(None);
+    }
+    let id = session
+        .parse::<hya_proto::SessionId>()
+        .map_err(|_| V1Error::invalid_argument(format!("invalid session id: {session}")))?;
+    if !st.engine.session_exists(id).await? {
+        return Err(V1Error::session_not_found(session));
+    }
+    Ok(Some(id))
+}
+
 /// The directory scope of an rpc that cannot work without one.
 ///
 /// Fails with `invalid_argument` when the request names none; the server

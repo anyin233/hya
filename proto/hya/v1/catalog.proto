@@ -82,8 +82,11 @@ service Catalog {
   rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
 
   // Session permission modes accepted by `UpdateSession.permission_mode`:
-  // the built-in `manual` and `yolo`, then every installed bundle's
-  // `permission_modes:` as `<bundle-id>/<mode-id>`.
+  // the built-in `manual` and `yolo`, then every bundle's
+  // `permission_modes:` as `<bundle-id>/<mode-id>` in the request's catalog
+  // scope: a session's own scope, else the directory's (its Project's
+  // bundles when it lies inside one), else the global view (installed and
+  // first-party bundles only; no Project bundle).
   //
   // hya.http: GET /v1/permission-modes
   rpc ListPermissionModes(ListPermissionModesRequest) returns (ListPermissionModesResponse);
@@ -456,7 +459,14 @@ message ListToolsResponse {
   PageInfo page = 2;
 }
 
-message ListPermissionModesRequest {}
+message ListPermissionModesRequest {
+  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // with neither it nor `session`, the global view is listed.
+  string directory = 1;
+  // List the modes `UpdateSession.permission_mode` accepts for this
+  // session (its own catalog scope). Wins over `directory`.
+  string session = 2;
+}
 
 // One selectable session permission mode.
 message PermissionModeSummary {

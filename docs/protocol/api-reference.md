@@ -116,8 +116,9 @@ session. Write methods only change state the bundle process owns itself.
 
 ### `BundleApi.ListBundleApis`
 
-List every endpoint the published bundles register, sorted by bundle id
-then endpoint id.
+List every endpoint the bundles of the request's catalog scope register
+(a session's scope, else the directory's, else the global view), sorted
+by bundle id then endpoint id.
 
 
 ### `BundleApi.InvokeSessionBundleApi`
@@ -235,8 +236,11 @@ Tool registry entries including hidden aliases.
 ### `Catalog.ListPermissionModes`
 
 Session permission modes accepted by `UpdateSession.permission_mode`:
-the built-in `manual` and `yolo`, then every installed bundle's
-`permission_modes:` as `<bundle-id>/<mode-id>`.
+the built-in `manual` and `yolo`, then every bundle's
+`permission_modes:` as `<bundle-id>/<mode-id>` in the request's catalog
+scope: a session's own scope, else the directory's (its Project's
+bundles when it lies inside one), else the global view (installed and
+first-party bundles only; no Project bundle).
 
 
 ## Service `Events`
@@ -1012,6 +1016,14 @@ OAuth tokens captured from a completed provider flow.
 |---|---|---|
 | `status` (1) | `AuthStatus` | Resulting auth status for the provider. |
 
+### `ListBundleApisRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: with neither it nor `session`, the global view (installed and first-party bundles; no Project bundle) is listed. |
+| `session` (2) | `string` | List the endpoints visible to this session (its own catalog scope, Project bundles included). Wins over `directory`. |
+
 ### `BundleApiInfo`
 
 One endpoint a published bundle registers.
@@ -1361,6 +1373,14 @@ One tool registry entry.
 | `tools` (1) | `repeated ToolSummary` | Tools visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
 
+### `ListPermissionModesRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: with neither it nor `session`, the global view is listed. |
+| `session` (2) | `string` | List the modes `UpdateSession.permission_mode` accepts for this session (its own catalog scope). Wins over `directory`. |
+
 ### `PermissionModeSummary`
 
 One selectable session permission mode.
@@ -1495,13 +1515,20 @@ One curated projected event from the event log.
 | `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
 | `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
 | `parts_added` (24) | `oneof `payload`: PartsAdded` | Complete parts were added to a message in one step (durable): the images attached to a prompt turn, as `AttachmentPart`s without their bytes. Append them to the message after its text. |
-| `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | The provider/model catalog changed (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`. |
+| `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | A catalog changed: the provider/model catalog (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished; `project_id` empty), or one Project's catalog tier (its roots changed or it was deleted; `project_id` names it). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`, and the agent/command/skill catalogs of the affected scope (every scope when `project_id` is empty). |
 | `server_stopping` (26) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
 | `projects_updated` (27) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
 
+### `CatalogUpdated`
+
+A catalog changed.
+
+| Field | Type | Description |
+|---|---|---|
+| `project_id` (1) | `string` | The Project whose catalog tier changed; empty for a global change (provider/model catalog, or an unknown set of scopes). |
+
 ### `ServerStopping`
 
-The provider/model catalog changed; carries no fields.
 The Project list changed; carries no fields.
 Why the server is going away.
 

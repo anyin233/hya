@@ -201,11 +201,14 @@ message StreamEvent {
     // images attached to a prompt turn, as `AttachmentPart`s without their
     // bytes. Append them to the message after its text.
     PartsAdded parts_added = 24;
-    // The provider/model catalog changed (a provider was added, edited, or
-    // refreshed, a key was set or removed, or startup discovery finished).
-    // Live-only and process-wide: `seq` is 0 and `session` is empty on every
-    // stream it reaches (global and session). Re-read `ListModels` /
-    // `ListProviders`.
+    // A catalog changed: the provider/model catalog (a provider was added,
+    // edited, or refreshed, a key was set or removed, or startup discovery
+    // finished; `project_id` empty), or one Project's catalog tier (its
+    // roots changed or it was deleted; `project_id` names it). Live-only
+    // and process-wide: `seq` is 0 and `session` is empty on every stream
+    // it reaches (global and session). Re-read `ListModels` /
+    // `ListProviders`, and the agent/command/skill catalogs of the affected
+    // scope (every scope when `project_id` is empty).
     CatalogUpdated catalog_updated = 25;
     // The server is shutting down (ADR-0023): the last frame of every live
     // stream (global and session, SSE and gRPC) before it ends, and the only
@@ -222,8 +225,12 @@ message StreamEvent {
   }
 }
 
-// The provider/model catalog changed; carries no fields.
-message CatalogUpdated {}
+// A catalog changed.
+message CatalogUpdated {
+  // The Project whose catalog tier changed; empty for a global change
+  // (provider/model catalog, or an unknown set of scopes).
+  string project_id = 1;
+}
 
 // The Project list changed; carries no fields.
 message ProjectsUpdated {}
