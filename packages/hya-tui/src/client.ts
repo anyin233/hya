@@ -499,6 +499,24 @@ export interface ApiCommand {
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
+/**
+ * The header carrying a relay bridge's per-bridge token (`hya bridge`'s
+ * readiness `token`; docs/relay.md). The bridge refuses a connection whose
+ * first request lacks it (401 `unauthenticated`); a server ignores it.
+ */
+export const bridgeTokenHeader = "x-hya-bridge-token"
+
+/**
+ * The environment variable bare `hya --connect` passes its bridge's token
+ * in (never argv). app/run.tsx reads it and removes it at startup.
+ */
+export const serverTokenEnv = "HYA_SERVER_TOKEN"
+
+/** `{ x-hya-bridge-token }` when `token` is set, else nothing. */
+export function bridgeTokenHeaders(token: string | undefined): Record<string, string> {
+  return token ? { [bridgeTokenHeader]: token } : {}
+}
+
 /** An HTTP failure with its status preserved for optional v1 capabilities. */
 export class HttpError extends Error {
   /** `detail` is the server's `code: message` (or `HTTP <status>`), without the method and path. */
@@ -534,14 +552,18 @@ export interface ReadFileResult {
 export class HyaClient {
   private base: string
   private scope: string
+  private bridgeToken: string | undefined
 
+  /** `token`: the relay bridge's token when `baseUrl` is a bridge (sent as `x-hya-bridge-token`). */
   constructor(
     baseUrl: string,
     directory: string,
     private readonly fetcher: FetchLike = fetch,
+    token?: string,
   ) {
     this.base = baseUrl.replace(/\/+$/, "")
     this.scope = directory
+    this.bridgeToken = token || undefined
   }
 
   /**
@@ -557,9 +579,17 @@ export class HyaClient {
   /** The server's base URL (`/status`). */
   get baseUrl(): string { return this.base }
 
-  /** Move every later call to another server (the database's next daemon, app/reconnect.ts). */
-  setBaseUrl(baseUrl: string): void {
+  /** The relay bridge token sent with every call, if any. */
+  get token(): string | undefined { return this.bridgeToken }
+
+  /**
+   * Move every later call to another server (the database's next daemon,
+   * app/reconnect.ts; a relay bridge, `/connect-remote`). The token belongs
+   * to one bridge URL: it is replaced, and cleared when not given.
+   */
+  setBaseUrl(baseUrl: string, token?: string): void {
     this.base = baseUrl.replace(/\/+$/, "")
+    this.bridgeToken = token || undefined
   }
 
   /**
@@ -575,6 +605,7 @@ export class HyaClient {
     const response = await this.fetcher(`${this.base}${path}`, {
       method,
       headers: {
+        ...bridgeTokenHeaders(this.bridgeToken),
         ...(scope ? { "x-hya-directory": scope } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
@@ -1042,7 +1073,7 @@ export class HyaClient {
     onOpen?: () => void | Promise<void>,
   ): Promise<void> {
     const response = await this.fetcher(`${this.base}${path}`, {
-      headers: { ...(this.directory ? { "x-hya-directory": this.directory } : {}), accept: "text/event-stream" },
+      headers: { ...bridgeTokenHeaders(this.bridgeToken), ...(this.directory ? { "x-hya-directory": this.directory } : {}), accept: "text/event-stream" },
       signal,
     })
     if (!response.ok || !response.body) throw new Error(`Event stream: HTTP ${response.status}`)

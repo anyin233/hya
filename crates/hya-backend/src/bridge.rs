@@ -11,13 +11,26 @@
 //! - A tunnel that fails its integrity checks (tampered or truncated records)
 //!   resets the TCP connection (`SO_LINGER 0`) instead of closing it, so a
 //!   cut response never looks complete.
-//! - When no tunnel can be opened (the backend is offline, the relay is
-//!   unreachable, the link was rejected) an HTTP request gets a
+//! - When no tunnel can be opened (the backend is offline, or the link was
+//!   rotated or is wrong, which the proxy answers like an offline room; the
+//!   relay is unreachable; the backend rejected the handshake) an
+//!   authenticated HTTP request gets a
 //!   `503 {"error":{"code":"unavailable","message":…}}` answer, the error
 //!   envelope of the hya server, so health probes and error displays make
-//!   sense; anything else is reset.
+//!   sense.
 //! - The link is the credential: it is read from an argument, stdin (`-`),
-//!   or `HYA_RELAY_LINK`, and only its redacted form is ever printed.
+//!   or `HYA_RELAY_LINK` (removed from the environment once read), and only
+//!   its redacted form is ever printed.
+//! - The bridge has its own credential: a random 256-bit token made at start
+//!   ([`Bridge::token`]; the `--json` readiness line's `token`, `HYA_SERVER_TOKEN`
+//!   for bare `hya --connect`'s TUIs). The first HTTP request of every TCP
+//!   connection must carry it as `x-hya-bridge-token: <token>`; without it
+//!   the connection gets `401 {"error":{"code":"unauthenticated",…}}` and no
+//!   relay stream is opened. The header is removed before the request enters
+//!   the tunnel. The bridge splices bytes after that first request, so later
+//!   requests on an authenticated keep-alive connection (and an upgraded
+//!   WebSocket) are trusted as the same client — only the peer that sent the
+//!   token can write on that connection. The token is never logged.
 //!
 //! Dispatched before any runtime composition, like `hya proxy`: no config,
 //! providers, or database.
@@ -45,13 +58,18 @@ use tokio_util::task::TaskTracker;
 
 /// Environment variable holding a relay link (instead of an argument).
 pub(crate) const LINK_ENV: &str = "HYA_RELAY_LINK";
+/// Request header carrying the bridge token.
+pub(crate) const TOKEN_HEADER: &str = "x-hya-bridge-token";
+/// Environment variable through which bare `hya --connect` hands the bridge
+/// token to its TUIs (never argv: process listings).
+pub(crate) const TOKEN_ENV: &str = "HYA_SERVER_TOKEN";
+/// How long a new connection may take to send its first request head.
+const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default `--listen`: a free loopback port.
 pub(crate) const DEFAULT_LISTEN: &str = "127.0.0.1:0";
 /// Deadline of the Noise handshake after the relay opened the stream.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long a refused connection may take to send its request head.
-const REQUEST_HEAD_TIMEOUT: Duration = Duration::from_secs(2);
-/// Most bytes of a refused connection's request head that are read.
+/// Most bytes of a first request head that are read.
 const REQUEST_HEAD_LIMIT: usize = 16 * 1024;
 /// How long a refused connection is drained after the answer.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -78,8 +96,9 @@ pub(crate) struct BridgeArgs {
     /// Relay binding, overriding the link's `t=`.
     #[arg(long, value_parser = ["auto", "grpc", "ws"])]
     pub(crate) transport: Option<String>,
-    /// Print one JSON line `{"url","room","proxy","label"}` to stdout once
-    /// listening (for a parent process), instead of the plain line.
+    /// Print one JSON line `{"url","room","proxy","label","token"}` to
+    /// stdout once listening (for a parent process), instead of the plain
+    /// lines. `token` is the bridge token every connection must send.
     #[arg(long)]
     pub(crate) json: bool,
     /// Exit when stdin reaches end of file: a parent process that holds the
@@ -113,10 +132,10 @@ impl LinkSource {
 /// Read and parse the link. `flag` names the option in messages
 /// (`hya bridge`, `--connect`).
 pub(crate) fn read_link(source: &LinkSource, flag: &str) -> anyhow::Result<RelayLink> {
+    let from_env = take_link_env();
     let text = match source {
         LinkSource::Arg(text) => text.clone(),
-        LinkSource::Env => std::env::var(LINK_ENV)
-            .ok()
+        LinkSource::Env => from_env
             .filter(|value| !value.trim().is_empty())
             .with_context(|| {
                 format!(
@@ -126,6 +145,68 @@ pub(crate) fn read_link(source: &LinkSource, flag: &str) -> anyhow::Result<Relay
         LinkSource::Stdin => read_stdin_line()?,
     };
     parse_link(&text).map_err(|error| anyhow::anyhow!("{flag}: {error}"))
+}
+
+/// Read `HYA_RELAY_LINK` and remove it from this process's environment, so
+/// no child process (the daemon, the TUIs, the web host, a shell) inherits
+/// the credential. Children are also spawned with it removed explicitly.
+pub(crate) fn take_link_env() -> Option<String> {
+    let value = std::env::var(LINK_ENV).ok();
+    if std::env::var_os(LINK_ENV).is_some() {
+        // SAFETY: called on the main task while the command line is being
+        // handled, before this process starts its own tasks or children;
+        // std's environment accessors are serialized by its lock, and no
+        // foreign code reads the environment concurrently at this point.
+        unsafe { std::env::remove_var(LINK_ENV) };
+    }
+    value
+}
+
+/// A new bridge token: 32 random bytes from the OS, lowercase hex.
+pub(crate) fn new_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 32];
+    // SAFETY: `getentropy` writes at most 256 bytes into the valid, writable
+    // 32-byte buffer it is given.
+    let status = unsafe { libc::getentropy(bytes.as_mut_ptr().cast(), bytes.len()) };
+    if status != 0 {
+        anyhow::bail!(
+            "could not make the bridge token: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Whether `a` and `b` are equal, in time independent of where they differ.
+fn same_secret(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Check the first request head (`head`, up to and including the blank
+/// line) for the bridge token and return it without the token header
+/// lines; `None` when no token header is present or any one is wrong.
+pub(crate) fn authorize(head: &[u8], token: &str) -> Option<Vec<u8>> {
+    let mut kept = Vec::with_capacity(head.len());
+    let mut found = false;
+    let mut lines = head.split_inclusive(|byte| *byte == b'\n');
+    // The request line.
+    kept.extend_from_slice(lines.next()?);
+    for line in lines {
+        let text = line.strip_suffix(b"\n").unwrap_or(line);
+        let text = text.strip_suffix(b"\r").unwrap_or(text);
+        if let Some(colon) = text.iter().position(|byte| *byte == b':')
+            && text[..colon].eq_ignore_ascii_case(TOKEN_HEADER.as_bytes())
+        {
+            let value = text[colon + 1..].trim_ascii();
+            if !same_secret(value, token.as_bytes()) {
+                return None;
+            }
+            found = true;
+            continue;
+        }
+        kept.extend_from_slice(line);
+    }
+    found.then_some(kept)
 }
 
 /// Parse a link; errors never contain key material.
@@ -279,14 +360,37 @@ struct Ready<'a> {
     room: &'a str,
     proxy: &'a str,
     label: &'a str,
+    token: &'a str,
 }
+
+/// Why no tunnel opened when the proxy says the room is not there. The
+/// proxy answers a wrong or rotated link's open token exactly like a room
+/// without a host, so the bridge cannot tell the two apart.
+pub(crate) const OFFLINE_MESSAGE: &str = "remote backend is offline, or the relay link was rotated or is wrong (ask for a new link: `hya serve relay link`)";
 
 /// The HTTP answer to a request that cannot reach the remote backend.
 pub(crate) fn unavailable_response(message: &str) -> String {
-    let body =
-        serde_json::json!({"error": {"code": "unavailable", "message": message}}).to_string();
+    error_response("503 Service Unavailable", "unavailable", message)
+}
+
+/// The message of the `401` answer to a connection without the token.
+pub(crate) const UNAUTHENTICATED_MESSAGE: &str = "the hya bridge needs its token: send the x-hya-bridge-token header (the token is the `token` of `hya bridge --json`, or HYA_SERVER_TOKEN for the TUIs of bare `hya --connect`)";
+
+/// The HTTP answer to a connection whose first request lacks the token.
+pub(crate) fn unauthenticated_response() -> String {
+    error_response(
+        "401 Unauthorized",
+        "unauthenticated",
+        UNAUTHENTICATED_MESSAGE,
+    )
+}
+
+/// An HTTP/1.1 answer with the hya server's error envelope; the connection
+/// closes after it.
+fn error_response(status: &str, code: &str, message: &str) -> String {
+    let body = serde_json::json!({"error": {"code": code, "message": message}}).to_string();
     format!(
-        "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n{body}",
         body.len()
     )
 }
@@ -310,9 +414,10 @@ pub(crate) fn looks_like_http(head: &[u8]) -> bool {
 /// Where status lines go (stderr for the CLI; the log file for bare `hya`).
 pub(crate) type Log = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// Status lines on stderr, prefixed `hya bridge:`.
+/// Status lines on stderr, prefixed `hya bridge:`. Text that came from the
+/// relay (an error message) is stripped of terminal controls.
 pub(crate) fn stderr_log() -> Log {
-    Arc::new(|line| eprintln!("hya bridge: {line}"))
+    Arc::new(|line| eprintln!("hya bridge: {}", hya_server::display_text(line)))
 }
 
 /// Settings of a [`Bridge`].
@@ -376,7 +481,7 @@ impl OpenError {
     /// never contain key material).
     fn message(&self) -> String {
         match self {
-            OpenError::Offline => "remote backend is offline".to_owned(),
+            OpenError::Offline => OFFLINE_MESSAGE.to_owned(),
             OpenError::Relay(error) => format!("the relay is unreachable: {error}"),
             OpenError::Rejected => {
                 "the remote backend rejected the relay link (rotated or wrong link)".to_owned()
@@ -402,6 +507,10 @@ struct Shared {
     link: RelayLink,
     log: Log,
     health: AtomicU8,
+    /// The bridge token (never logged).
+    token: String,
+    /// A refused connection was logged already (only the first one is).
+    refusal_logged: std::sync::atomic::AtomicBool,
 }
 
 impl Shared {
@@ -459,10 +568,9 @@ impl Shared {
                     format!("remote backend reachable again over the {binding} binding")
                 }
             }
-            Health::Offline => {
-                "remote backend is offline (its room has no host); HTTP requests get 503 until it is back"
-                    .to_owned()
-            }
+            Health::Offline => format!(
+                "{OFFLINE_MESSAGE}; HTTP requests get 503 until it answers"
+            ),
             Health::Unreachable => format!("{detail}; retrying on the next connection"),
             Health::Rejected => {
                 "the remote backend rejected the relay link (rotated or wrong link); ask for a new one (`hya serve relay link`)"
@@ -481,6 +589,7 @@ pub(crate) struct Bridge {
     room: String,
     proxy: String,
     label: String,
+    token: String,
     stop: CancellationToken,
     hard_stop: CancellationToken,
     tasks: TaskTracker,
@@ -501,8 +610,11 @@ impl Bridge {
     ///
     /// # Errors
     /// A non-loopback or busy listen address, an unreadable CA file, a relay
-    /// that no binding reaches, or a backend that rejects the link. An
-    /// offline backend is not an error (requests get 503 until it is back).
+    /// that no binding reaches, or a backend that rejects the handshake (a
+    /// link with the current PSK but a wrong server key). An offline backend
+    /// is not an error (requests get 503 until it answers) — nor is a
+    /// rotated or wrong PSK, which the proxy answers exactly like an offline
+    /// room.
     pub(crate) async fn start(
         link: RelayLink,
         options: BridgeOptions,
@@ -524,14 +636,18 @@ impl Bridge {
             "relay {proxy}: {} binding ({})",
             choice.binding, choice.reason
         ));
+        let token = new_token()?;
         let shared = Arc::new(Shared {
             client,
             link,
             log,
             health: AtomicU8::new(Health::Unknown as u8),
+            token: token.clone(),
+            refusal_logged: std::sync::atomic::AtomicBool::new(false),
         });
-        // Check the link once now: a rejected link is an error at start,
-        // not a stream of 503s.
+        // Check the link once now: a link the backend rejects is an error at
+        // start, not a stream of 503s. (A rotated or wrong PSK never reaches
+        // the backend: the proxy says the room is offline.)
         match shared.open().await {
             Ok(tunnel) => {
                 tokio::spawn(close_quietly(tunnel));
@@ -558,6 +674,7 @@ impl Bridge {
             room: shared.link.room_id().to_string(),
             label: remote_label(&shared.link),
             proxy,
+            token,
             stop,
             hard_stop,
             tasks,
@@ -575,7 +692,13 @@ impl Bridge {
         &self.label
     }
 
-    /// The `--json` readiness line.
+    /// The bridge token every connection's first request must carry
+    /// (`x-hya-bridge-token`). A secret: never log it.
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// The `--json` readiness line (holds the token).
     pub(crate) fn ready_json(&self) -> String {
         let url = self.url();
         serde_json::to_string(&Ready {
@@ -583,6 +706,7 @@ impl Bridge {
             room: &self.room,
             proxy: &self.proxy,
             label: &self.label,
+            token: &self.token,
         })
         .unwrap_or_default()
     }
@@ -629,19 +753,52 @@ async fn accept_loop(
     }
 }
 
-/// One client connection: a tunnel spliced to it, or a refusal.
+/// One client connection: its first request is checked for the token, then
+/// a tunnel is spliced to it; or a refusal.
 async fn serve_connection(mut tcp: TcpStream, shared: &Shared) {
     let _ = tcp.set_nodelay(true);
+    let received = read_head(&mut tcp).await;
+    if !looks_like_http(&received) {
+        reset(tcp);
+        return;
+    }
+    let authorized = received
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .and_then(|end| {
+            let (head, rest) = received.split_at(end + 4);
+            authorize(head, &shared.token).map(|mut first| {
+                first.extend_from_slice(rest);
+                first
+            })
+        });
+    let Some(first) = authorized else {
+        if !shared
+            .refusal_logged
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            (shared.log)(
+                "refused a connection without the bridge token (401; further refusals are not logged)",
+            );
+        }
+        answer(tcp, &unauthenticated_response()).await;
+        return;
+    };
     let mut tunnel = match shared.open().await {
         Ok(tunnel) => tunnel,
         Err(error) => {
-            let message = error.message();
+            // Relay errors may carry the relay's text: no terminal controls.
+            let message = hya_server::display_text(&error.message());
             shared.report(error.health(), &message).await;
-            refuse(tcp, &message).await;
+            answer(tcp, &unavailable_response(&message)).await;
             return;
         }
     };
     shared.report(Health::Online, "").await;
+    if tunnel.write_all(&first).await.is_err() {
+        reset(tcp);
+        return;
+    }
     if let Err(error) = tokio::io::copy_bidirectional(&mut tcp, &mut tunnel).await {
         let integrity = error
             .get_ref()
@@ -679,18 +836,10 @@ fn reset(tcp: TcpStream) {
     drop(tcp);
 }
 
-/// Answer an HTTP request with 503 `message`; reset anything else.
-async fn refuse(mut tcp: TcpStream, message: &str) {
-    let head = read_head(&mut tcp).await;
-    if !looks_like_http(&head) {
-        reset(tcp);
-        return;
-    }
-    if tcp
-        .write_all(unavailable_response(message).as_bytes())
-        .await
-        .is_err()
-    {
+/// Answer an HTTP request (its head already read) with `response`, then
+/// close.
+async fn answer(mut tcp: TcpStream, response: &str) {
+    if tcp.write_all(response.as_bytes()).await.is_err() {
         reset(tcp);
         return;
     }
@@ -708,10 +857,11 @@ async fn refuse(mut tcp: TcpStream, message: &str) {
     .await;
 }
 
-/// The request head (up to the blank line, a limit, EOF, or a timeout).
+/// The first request head (up to the blank line, a limit, EOF, or a
+/// timeout), with whatever else arrived in the same reads.
 async fn read_head(tcp: &mut TcpStream) -> Vec<u8> {
     let mut head = Vec::new();
-    let _ = timeout(REQUEST_HEAD_TIMEOUT, async {
+    let _ = timeout(FIRST_REQUEST_TIMEOUT, async {
         let mut buf = [0u8; 2048];
         while head.len() < REQUEST_HEAD_LIMIT && !head.windows(4).any(|w| w == b"\r\n\r\n") {
             match tcp.read(&mut buf).await {
@@ -754,11 +904,17 @@ pub(crate) async fn cmd_bridge(args: BridgeArgs) -> anyhow::Result<()> {
         },
     };
     let bridge = Bridge::start(link, options, log.clone()).await?;
+    // The token goes to stdout only (the caller's channel), never to the
+    // status log.
     if args.json {
         println!("{}", bridge.ready_json());
     } else {
         println!("hya bridge listening on {}", bridge.url());
-        log(&format!("{}; Ctrl+C stops the bridge", bridge.label()));
+        println!("hya bridge token {}", bridge.token());
+        log(&format!(
+            "{}; send the token as the {TOKEN_HEADER} header on every request (HYA_SERVER_TOKEN=<token> for the TUI); Ctrl+C stops the bridge",
+            bridge.label()
+        ));
     }
     let _ = std::io::stdout().flush();
     let stdin_closed = CancellationToken::new();
@@ -901,7 +1057,7 @@ mod tests {
 
     #[test]
     fn the_503_answer_is_the_server_error_envelope() {
-        let text = unavailable_response("remote backend is offline");
+        let text = unavailable_response(OFFLINE_MESSAGE);
         let (head, body) = text.split_once("\r\n\r\n").unwrap();
         assert!(
             head.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
@@ -916,8 +1072,73 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"error": {"code": "unavailable", "message": "remote backend is offline"}})
+            serde_json::json!({"error": {"code": "unavailable", "message": OFFLINE_MESSAGE}})
         );
+    }
+
+    #[test]
+    fn tokens_are_random_256_bit_hex() {
+        let one = new_token().unwrap();
+        let two = new_token().unwrap();
+        assert_eq!(one.len(), 64);
+        assert!(
+            one.bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn the_first_request_must_carry_the_token_which_is_stripped() {
+        let token = "ab".repeat(32);
+        let head = format!(
+            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\nX-Hya-Bridge-Token:  {token} \r\naccept: */*\r\n\r\n"
+        );
+        let kept = authorize(head.as_bytes(), &token).unwrap();
+        assert_eq!(
+            String::from_utf8(kept).unwrap(),
+            "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1:9\r\naccept: */*\r\n\r\n"
+        );
+        // Missing, wrong, or one wrong among several.
+        let missing = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert!(authorize(missing.as_bytes(), &token).is_none());
+        let wrong = format!(
+            "GET / HTTP/1.1\r\n{TOKEN_HEADER}: {}\r\n\r\n",
+            "cd".repeat(32)
+        );
+        assert!(authorize(wrong.as_bytes(), &token).is_none());
+        let short = format!("GET / HTTP/1.1\r\n{TOKEN_HEADER}: ab\r\n\r\n");
+        assert!(authorize(short.as_bytes(), &token).is_none());
+        let mixed =
+            format!("GET / HTTP/1.1\r\n{TOKEN_HEADER}: {token}\r\n{TOKEN_HEADER}: nope\r\n\r\n");
+        assert!(authorize(mixed.as_bytes(), &token).is_none());
+        // Another header that merely contains the name is not the token.
+        let lookalike = format!("GET / HTTP/1.1\r\nx-note: {TOKEN_HEADER}: {token}\r\n\r\n");
+        assert!(authorize(lookalike.as_bytes(), &token).is_none());
+    }
+
+    #[test]
+    fn the_401_answer_is_the_error_envelope_without_the_token() {
+        let text = unauthenticated_response();
+        let (head, body) = text.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("HTTP/1.1 401 Unauthorized\r\n"), "{head}");
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json["error"]["code"], "unauthenticated");
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(TOKEN_HEADER)
+        );
+    }
+
+    #[test]
+    fn the_link_is_taken_out_of_the_environment() {
+        // SAFETY: test-only; no other test of this binary reads LINK_ENV.
+        unsafe { std::env::set_var(LINK_ENV, "hya://example/room#k.p") };
+        assert_eq!(take_link_env().as_deref(), Some("hya://example/room#k.p"));
+        assert!(std::env::var_os(LINK_ENV).is_none());
+        assert_eq!(take_link_env(), None);
     }
 
     #[test]

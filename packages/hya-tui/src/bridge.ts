@@ -8,10 +8,22 @@
  * The link is never put in argv (process listings), never kept here after
  * it is written, and never part of an error or status text.
  *
- * Readiness is the first stdout line, JSON `{url, room, proxy, label}`.
- * stderr lines are the bridge's status (prefixed `hya bridge:`); a failure is
- * exit status 1 with a one-line reason on stderr.
+ * Readiness is the first stdout line, JSON `{url, room, proxy, label, token}`:
+ * `token` is the bridge's random per-bridge token, which every request to
+ * `url` carries as `x-hya-bridge-token` (src/client.ts; without it the
+ * bridge answers 401). stderr lines are the bridge's status (prefixed
+ * `hya bridge:`); a failure is exit status 1 with a one-line reason on
+ * stderr. Both may carry text from the remote side, so every stderr line and
+ * the shown readiness fields lose terminal controls first (src/sanitize.ts).
+ *
+ * The child's environment is this process's without `HYA_RELAY_LINK` and
+ * `HYA_SERVER_TOKEN` (`bridgeEnv`).
  */
+import { serverTokenEnv } from "./client"
+import { stripTerminalControls } from "./sanitize"
+
+/** The environment variable bare `hya --connect` may read a relay link from; never passed to a child. */
+export const relayLinkEnv = "HYA_RELAY_LINK"
 
 /** `/connect-remote` flags passed through to `hya bridge`. */
 export interface BridgeFlags {
@@ -29,6 +41,8 @@ export interface BridgeReady {
   proxy: string
   /** What the TUI shows for the server: `remote: <relay>/<room>`. */
   label: string
+  /** The bridge's per-bridge token (`x-hya-bridge-token`); absent from an older `hya bridge`. */
+  token?: string
 }
 
 /** The child process as `startBridge` needs it (Bun.spawn in production, a fake in tests). */
@@ -50,7 +64,7 @@ export interface Bridge extends BridgeReady {
   /** Resolves with the exit status; `stop()` sets `stopping` first, so an unexpected exit is one without it. */
   exited: Promise<number>
   readonly stopping: boolean
-  /** The latest stderr line (prefix kept), for the status line after an unexpected exit. */
+  /** The latest stderr line (prefix kept, terminal controls stripped), for the status line after an unexpected exit. */
   lastLine(): string | undefined
   /** Close stdin; SIGTERM after `graceMs` when it is still alive. */
   stop(graceMs?: number): Promise<void>
@@ -136,14 +150,39 @@ export function parseBridgeReady(line: string): BridgeReady | undefined {
     return undefined
   }
   if (!value || typeof value !== "object") return undefined
-  const { url, room, proxy, label } = value as Record<string, unknown>
+  const { url, room: rawRoom, proxy, label: rawLabel, token } = value as Record<string, unknown>
   if (typeof url !== "string" || !/^https?:\/\//.test(url)) return undefined
+  const room = typeof rawRoom === "string" ? stripTerminalControls(rawRoom) : undefined
+  const label = typeof rawLabel === "string" ? stripTerminalControls(rawLabel).trim() : ""
   return {
     url,
-    room: typeof room === "string" ? room : "",
-    proxy: typeof proxy === "string" ? proxy : "",
-    label: typeof label === "string" && label.trim() ? label.trim() : `remote: ${typeof room === "string" ? room : url}`,
+    room: room ?? "",
+    proxy: typeof proxy === "string" ? stripTerminalControls(proxy) : "",
+    label: label || `remote: ${room ?? url}`,
+    ...(typeof token === "string" && /^[\x21-\x7e]+$/.test(token) ? { token } : {}),
   }
+}
+
+/**
+ * `HYA_SERVER_TOKEN` (bare `hya --connect`'s bridge token for `--server`;
+ * empty = none), removed from `env` together with `HYA_RELAY_LINK` so no
+ * child (editor, shell, bridge) inherits either (app/run.tsx, at startup).
+ */
+export function takeServerToken(env: Record<string, string | undefined> = process.env): string | undefined {
+  const token = env[serverTokenEnv]
+  delete env[serverTokenEnv]
+  delete env[relayLinkEnv]
+  return token || undefined
+}
+
+/** The bridge child's environment: `env` without `HYA_RELAY_LINK` and `HYA_SERVER_TOKEN` (the link goes to stdin). */
+export function bridgeEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined || name === relayLinkEnv || name === serverTokenEnv) continue
+    result[name] = value
+  }
+  return result
 }
 
 /** Call `onLine` for every line of `stream` until it ends. */
@@ -169,7 +208,7 @@ async function readLines(stream: ReadableStream<Uint8Array>, onLine: (line: stri
 
 /** Spawn with Bun: stdin piped (the link, then held open), stdout/stderr piped. */
 export const spawnBridge: BridgeSpawner = (argv) => {
-  const child = Bun.spawn(argv, { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: process.env })
+  const child = Bun.spawn(argv, { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: bridgeEnv() })
   return {
     pid: child.pid,
     write: (text) => { child.stdin.write(text); void child.stdin.flush() },
@@ -189,7 +228,7 @@ export interface StartBridgeOptions {
   spawn?: BridgeSpawner
   /** Longest wait for the readiness line (default 20 s). */
   timeoutMs?: number
-  /** Every stderr line (redacted), as it arrives. */
+  /** Every stderr line (terminal controls stripped, relay links redacted), as it arrives. */
   onLine?: (line: string) => void
 }
 
@@ -211,7 +250,8 @@ export async function startBridge({ bin, link, flags = {}, spawn = spawnBridge, 
   let last: string | undefined
   let stopping = false
   const stderrDone = readLines(child.stderr, (raw) => {
-    const line = redactRelayLinks(raw)
+    const line = redactRelayLinks(stripTerminalControls(raw))
+    if (!line.trim()) return
     last = line
     onLine?.(line)
   })

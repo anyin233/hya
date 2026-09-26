@@ -188,7 +188,14 @@ fn state_word(status: &Value) -> String {
 /// The human `hya serve relay status` lines.
 pub(crate) fn status_lines(status: &Value) -> Vec<String> {
     let state = state_word(status);
-    let text = |key: &str| status[key].as_str().filter(|value| !value.is_empty());
+    // Values may carry text from the relay (`lastError`): no terminal
+    // controls, one line each.
+    let text = |key: &str| {
+        status[key]
+            .as_str()
+            .map(|value| hya_server::display_text(value).replace('\n', " "))
+            .filter(|value| !value.is_empty())
+    };
     let mut lines = vec![format!("relay {state}")];
     if let Some(proxy) = text("proxy") {
         lines.push(format!("  proxy      {proxy}"));
@@ -320,7 +327,10 @@ pub(crate) async fn run(action: ServeRelayAction, db: &str) -> anyhow::Result<()
         }),
     };
     if let Err(error) = outcome {
-        eprintln!("hya serve relay: {error:#}");
+        eprintln!(
+            "hya serve relay: {}",
+            hya_server::display_text(&format!("{error:#}"))
+        );
         std::process::exit(EXIT_RELAY_FAILED);
     }
     Ok(())
@@ -409,5 +419,17 @@ mod tests {
         assert!(lines.contains("streams    2"), "{lines}");
         assert!(lines.contains("persistent"), "{lines}");
         assert_eq!(status_lines(&json!({})), ["relay disconnected"]);
+    }
+
+    #[test]
+    fn status_lines_strip_terminal_controls_from_relay_text() {
+        let status = json!({
+            "state": "RELAY_STATE_BACKOFF",
+            "lastError": "relay says \u{1b}]0;pwned\u{7}\u{1b}[2Jno\nforged line\u{9b}",
+        });
+        let lines = status_lines(&status);
+        let error = lines.iter().find(|line| line.contains("error")).unwrap();
+        assert_eq!(error, "  error      relay says no forged line");
+        assert!(!lines.iter().any(|line| line.contains('\u{1b}')));
     }
 }

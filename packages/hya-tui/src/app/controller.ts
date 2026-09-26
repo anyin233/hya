@@ -121,6 +121,7 @@ import { createResumer } from "./resume"
 import { probeHealth } from "../launch"
 import { tuiVersion } from "../version"
 import { containsRelayLink, parseConnectRemote, redactRelayLinks, type Bridge, type BridgeFlags } from "../bridge"
+import { stripTerminalControls } from "../sanitize"
 import { SecretEntry } from "../completion"
 
 /** Overlay flush interval: coalesces stream deltas into one render per display frame. */
@@ -166,7 +167,7 @@ export interface ControllerOptions {
   reconnect?: () => Promise<ServerSwitch>
   /** Find the database's running server without starting one (src/launch.ts `findRunningServer`): how a stopped TUI notices a server another client started, and how it follows `hya serve restart`. */
   find?: () => Promise<ServerSwitch | undefined>
-  /** Health probe of a server URL (default src/launch.ts `probeHealth`). */
+  /** Health probe of a server URL (default src/launch.ts `probeHealth`, with the client's bridge token for its own URL). */
   probe?: (url: string) => Promise<boolean>
   /**
    * `/connect-remote`: start a relay bridge child for `link` (app/run.tsx:
@@ -213,7 +214,7 @@ type FileRead = { size: number; data?: string } | { error: string }
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url), bridge: startRemoteBridge, home }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   let remote = startedRemote
   let streamAbort: AbortController | undefined
@@ -1285,13 +1286,14 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   /**
-   * Point the client at `url` and load it like a start: bootstrap, the
+   * Point the client at `url` (with a relay bridge's `token`; none for a
+   * local backend) and load it like a start: bootstrap, the
    * Project of `--dir` unless remote, catalogs, the global stream. A remote
    * opens the Project view (no session is created); a local backend opens a
    * new session in the ensured Project, like a plain start.
    */
-  async function enterServer(url: string): Promise<{ ok: boolean; detail: string }> {
-    client.setBaseUrl(url)
+  async function enterServer(url: string, token?: string): Promise<{ ok: boolean; detail: string }> {
+    client.setBaseUrl(url, token)
     store.setServerUrl(url)
     // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
     client.setDirectory(remote ? "" : directory)
@@ -1330,7 +1332,7 @@ export function createController({ client, store, directory, remote: startedRemo
     remoteBridge = undefined
     bridgeDown = true
     store.setConnected(false)
-    const last = child.lastLine()?.replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
+    const last = stripTerminalControls(child.lastLine() ?? "").replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
     status(`Remote bridge exited (${last ? last : `code ${code}`}) · ${bridgeExitedStatus(home !== undefined)}`)
   }
 
@@ -1366,7 +1368,9 @@ export function createController({ client, store, directory, remote: startedRemo
       }
       progress()
       let child: Bridge | undefined
-      child = await startRemoteBridge(link, flags, (line) => {
+      child = await startRemoteBridge(link, flags, (raw) => {
+        // src/bridge.ts already strips them; the status line never takes terminal controls.
+        const line = stripTerminalControls(raw)
         latest = line.replace(/^(?:error:\s*)?(?:hya bridge:\s*)?/i, "")
         // After start-up the bridge only reports changes (online, offline, relay unreachable).
         if (child && child === remoteBridge) status(line)
@@ -1381,7 +1385,7 @@ export function createController({ client, store, directory, remote: startedRemo
       store.setRemote(true)
       store.setServerLabel(child.label)
       store.setBackend({ remoteBridge: true })
-      const entered = await enterServer(child.url)
+      const entered = await enterServer(child.url, child.token)
       status(entered.ok
         ? `Connected to ${child.label} · choose a project, or t for a temporary session`
         : `Connected to the relay, but the remote backend did not answer${entered.detail} · the TUI loads it when it comes online`)

@@ -327,12 +327,15 @@ backend without restarting it; `/disconnect-remote` brings it back. Bare
 no `--hya`, so there it needs `HYA_BIN` or `hya` on PATH), writes the link and a newline to the
 child's stdin, and keeps that pipe open. The status line counts
 `Connecting to the relay… Ns · <the bridge's latest line>` for up to 20 s.
-When the bridge prints its readiness line (`{"url","room","proxy","label"}`),
-the TUI:
+When the bridge prints its readiness line
+(`{"url","room","proxy","label","token"}`), the TUI:
 
 1. drops the open session when this client created it and never used it
    (on the server it leaves; a used one keeps running there),
-2. switches every request to the bridge's loopback URL, and shows the label
+2. switches every request to the bridge's loopback URL, each carrying the
+   bridge's per-bridge `token` as `x-hya-bridge-token` (the bridge answers
+   `401 unauthenticated` to a connection without it, so another local
+   process cannot use the remote through it), and shows the label
    (`remote: <relay>/<room>`) instead of that URL in the header, the sidebar
    `Context` box, `/status` (`Server      <label> · via <url>`, `Backend
    remote · through this TUI's relay bridge …`), and every status line,
@@ -343,7 +346,7 @@ the TUI:
 4. never replaces the server by itself: a failing stream does not start or
    look for a local daemon ([When the server goes away](#when-the-server-goes-away)
    does not apply); the streams keep retrying the bridge, which answers
-   `503 unavailable: remote backend is offline` while the remote is down, and
+   `503 unavailable: remote backend is offline, or the relay link was rotated or is wrong …` while the remote is down (or the link was rotated), and
    the TUI picks up where it was when it comes back. The bridge's state
    changes (`hya bridge: remote backend online …`, `… offline`, `relay
    unreachable`) appear on the status line. `/reconnect` only resubscribes.
@@ -370,8 +373,15 @@ started with `hya serve start`) or the fixed local `--server`, the Project
 of `--dir`, and a new session; `Back on the local backend · pid <pid>`. A
 TUI started by bare `hya --connect` has no local backend (no `--db`, no local
 `--server`): it says `No local backend to go back to: … · quit and run hya
-for a local one` and stays on the remote. Quitting the TUI closes the pipe,
-so the bridge exits with it.
+for a local one` and stays on the remote. Going back to a local backend
+drops the bridge token. Quitting the TUI closes the pipe, so the bridge
+exits with it.
+
+Bare `hya --connect` runs the bridge itself and passes its token to each TUI
+in the environment variable `HYA_SERVER_TOKEN` (never argv); the TUI sends
+it with every request to `--server` and removes `HYA_SERVER_TOKEN` and
+`HYA_RELAY_LINK` from its environment at startup, so no child (an editor,
+a shell, a `/connect-remote` bridge) inherits them.
 
 **The link is a secret** (ADR-0025: whoever holds it controls the backend):
 
@@ -391,6 +401,10 @@ so the bridge exits with it.
   /connect-remote takes it`.
 - Status lines show relay links only in their redacted form (`hya://host/room#…`);
   the bridge itself only prints the redacted form.
+- The bridge's stderr lines and the readiness line's `room`, `proxy`, and
+  `label` can carry text from the remote side: terminal controls (escape
+  sequences, C0/C1 control characters, DEL) are stripped before any of it
+  reaches the status line or the header.
 - Each WebUI tab is its own TUI process: `/connect-remote` in one tab moves
   only that tab. The WebUI shows exactly what the TUI draws.
 
@@ -2548,7 +2562,7 @@ together.
 | `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text (which also names `HYA_TUI_CONFIG`). |
 | `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences`. |
 | `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
-| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`). |
+| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`); an optional relay bridge token sent as `x-hya-bridge-token`. |
 | `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, the open Provider View's state, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`; transcript notices spliced in by `withDividers()`, including the dividers derived from compaction summaries in the history. |

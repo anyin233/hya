@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { HyaClient, SseDecoder, parseApiCommand, type FetchLike } from "../src/client"
+import { HyaClient, SseDecoder, bridgeTokenHeader, parseApiCommand, serverTokenEnv, type FetchLike } from "../src/client"
 
 test("creates a session and admits a prompt through scoped v1 requests", async () => {
   const calls: Array<{ url: string; method: string; directory: string | null; body: unknown }> = []
@@ -318,5 +318,47 @@ test("readFile sends its own scope and cap and decodes the size; an empty scope 
   expect(calls).toEqual([
     { url: "http://127.0.0.1:8080/v1/fs/find?pattern=**%2F*a*&limit=5", directory: null },
     { url: "http://127.0.0.1:8080/v1/fs/read?path=shots%2Fa%20b.png&maxBytes=11", directory: "/srv/app" },
+  ])
+})
+
+test("a bridge token goes in x-hya-bridge-token on every request and stream; none without one", async () => {
+  const seen: Array<{ url: string; token: string | null }> = []
+  const fetcher: FetchLike = async (input, init) => {
+    seen.push({ url: String(input), token: new Headers(init?.headers).get(bridgeTokenHeader) })
+    return String(input).includes("/stream")
+      ? new Response("", { headers: { "content-type": "text/event-stream" } })
+      : Response.json({ projects: [] })
+  }
+  const token = "a".repeat(64)
+  expect(bridgeTokenHeader).toBe("x-hya-bridge-token")
+  expect(serverTokenEnv).toBe("HYA_SERVER_TOKEN")
+
+  const plain = new HyaClient("http://127.0.0.1:1", "/w", fetcher)
+  expect(plain.token).toBeUndefined()
+  await plain.request("GET", "/v1/projects")
+  await plain.streamGlobal(() => undefined, new AbortController().signal)
+
+  const bridged = new HyaClient("http://127.0.0.1:2", "/w", fetcher, token)
+  expect(bridged.token).toBe(token)
+  await bridged.request("GET", "/v1/projects")
+  await bridged.streamGlobal(() => undefined, new AbortController().signal)
+  await bridged.streamSession("hysec_1", "0", () => undefined, new AbortController().signal)
+
+  // The token belongs to one bridge URL: a new base URL replaces or clears it.
+  bridged.setBaseUrl("http://127.0.0.1:3", "b".repeat(64))
+  await bridged.request("GET", "/v1/projects")
+  bridged.setBaseUrl("http://127.0.0.1:4")
+  expect(bridged.token).toBeUndefined()
+  await bridged.request("GET", "/v1/projects")
+  await bridged.streamGlobal(() => undefined, new AbortController().signal)
+  // An empty token counts as none.
+  bridged.setBaseUrl("http://127.0.0.1:5", "")
+  expect(bridged.token).toBeUndefined()
+
+  expect(seen.map((row) => [new URL(row.url).port, row.token])).toEqual([
+    ["1", null], ["1", null],
+    ["2", token], ["2", token], ["2", token],
+    ["3", "b".repeat(64)],
+    ["4", null], ["4", null],
   ])
 })

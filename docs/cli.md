@@ -514,8 +514,14 @@ link on the terminal with echo turned off, and `--connect` alone reads
 listings (a link given as the value works, with a warning). A relay that
 cannot be reached or a link the backend rejects stops `hya` with exit status
 **1** before it touches the terminal; an offline backend does not (the TUI
-shows `unavailable: remote backend is offline` until it comes back). The
-bridge lives as long as `hya`. `--connect` conflicts with `--backend`.
+shows `unavailable: remote backend is offline, or the relay link was rotated
+or is wrong …` until it comes back; a rotated link looks the same, since the
+proxy answers it like an offline room). The
+bridge lives as long as `hya`. It requires its per-bridge token on every
+connection ([`hya bridge`](#hya-bridge)); `hya` gives it to both TUIs (and the
+WebUI host) as `HYA_SERVER_TOKEN` in their environment, never in argv, and
+removes `HYA_RELAY_LINK` from its own environment and from every child's.
+`--connect` conflicts with `--backend`.
 `--relay-ca <PEM>` (extra trusted CA certificates for a relay behind a private
 CA) and `--transport auto|grpc|ws` (the relay binding, overriding the link's
 `t=`) configure that bridge, like `hya bridge`'s flags of the same names;
@@ -633,6 +639,7 @@ so Ctrl+C in the terminal reaches only the TUI and `hya`.
 | `--connect [<LINK>\|-]` | A relay link, `-` (read from the terminal, not echoed), or no value (`HYA_RELAY_LINK`); bare invocation only; conflicts with `--backend`. |
 | `--relay-ca <PEM>`, `--transport <auto\|grpc\|ws>` | Only with `--connect`: the in-process bridge's extra CA file and relay binding. |
 | `--allow-host <HOST>` | Repeatable; passed to a daemon this launch starts (not to a running one); conflicts with `--backend` and `--connect`. See [Allowed Host names](#allowed-host-names). |
+| TUI environment | `HYA_SERVER_TOKEN=<bridge token>` with `--connect` (removed otherwise); never `HYA_RELAY_LINK`. |
 | `--resume [<ID>]` | Bare invocation only (else an error); passed to the terminal TUI as `--resume [<ID>]`. |
 | TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`; `--server <bridge-url> --dir <cwd> --hya <hya> --remote --server-label <label>` with `--connect`); the terminal TUI adds exactly one of `--web-url <url>` / `--web-error <reason>` and `--resume [<id>]` when given ([tui.md](tui.md#start-it)); the WebUI tabs' command adds `--web-tab` instead. |
 | Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
@@ -1189,11 +1196,21 @@ end to end encrypted. Point a TUI at it with `--server <url> --remote`.
 Dispatched before any runtime composition, like `hya proxy`.
 
 **Readiness contract.** Once listening (after choosing the relay binding and
-checking the link), stdout gets exactly one line:
-`hya bridge listening on http://127.0.0.1:<port>`, or with `--json`
-`{"url":"http://127.0.0.1:<port>","room":"<room_id>","proxy":"<redacted relay>","label":"remote: <relay>/<room_id>"}`.
-Status lines go to stderr (`hya bridge: …`). Source:
-[`bridge.rs`](../crates/hya-backend/src/bridge.rs).
+checking the link), stdout gets two lines,
+`hya bridge listening on http://127.0.0.1:<port>` and
+`hya bridge token <token>`, or with `--json` exactly one:
+`{"url":"http://127.0.0.1:<port>","room":"<room_id>","proxy":"<redacted relay>","label":"remote: <relay>/<room_id>","token":"<token>"}`.
+Status lines go to stderr (`hya bridge: …`) and never hold the token or the
+link. Source: [`bridge.rs`](../crates/hya-backend/src/bridge.rs).
+
+**Bridge token.** `<token>` (64 lowercase hex characters, new for every
+bridge) must be sent as `x-hya-bridge-token: <token>` on the first request of
+every connection (send it on every request); without it the bridge answers
+`401 {"error":{"code":"unauthenticated",…}}` and opens no relay stream. The
+header is stripped before the request reaches the backend. A TUI takes it
+from `HYA_SERVER_TOKEN` (`HYA_SERVER_TOKEN=<token> bun packages/hya-tui/src/main.ts
+--remote --server <url>`); `/connect-remote` and bare `hya --connect` pass it
+themselves. Details: [relay.md](relay.md#connecting-from-a-client).
 
 | Flag | Default | Meaning |
 | --- | --- | --- |

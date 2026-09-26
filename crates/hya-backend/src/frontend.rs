@@ -221,6 +221,20 @@ pub(crate) struct BackendLink {
     pub(crate) db: Option<String>,
     pub(crate) hya: Option<PathBuf>,
     pub(crate) remote: Option<String>,
+    /// The in-process bridge's token (`--connect`), handed to the TUIs as
+    /// `HYA_SERVER_TOKEN` in their environment (never argv).
+    pub(crate) token: Option<String>,
+}
+
+/// The environment of a frontend child (web host or TUI): never the relay
+/// link (`HYA_RELAY_LINK`), and `HYA_SERVER_TOKEN` only as the bridge token
+/// of `backend` (a remote backend), else removed.
+pub(crate) fn frontend_env(command: &mut std::process::Command, backend: &BackendLink) {
+    command.env_remove(crate::bridge::LINK_ENV);
+    match &backend.token {
+        Some(token) => command.env(crate::bridge::TOKEN_ENV, token),
+        None => command.env_remove(crate::bridge::TOKEN_ENV),
+    };
 }
 
 /// `hya --resume [id]`: what the terminal TUI opens at start.
@@ -328,6 +342,7 @@ pub(crate) async fn connect(
             db: None,
             hya: None,
             remote: None,
+            token: None,
         };
         return Ok((link, vec![format!("hya: using --backend {url}")]));
     }
@@ -362,6 +377,7 @@ pub(crate) async fn connect(
         db: Some(request.db.clone()),
         hya: Some(exe.to_path_buf()),
         remote: None,
+        token: None,
     };
     Ok((link, notes))
 }
@@ -391,6 +407,7 @@ pub(crate) async fn connect_remote(
         db: None,
         hya: Some(exe.to_path_buf()),
         remote: Some(bridge.label().to_owned()),
+        token: Some(bridge.token().to_owned()),
     };
     let notes = vec![format!(
         "hya: relay bridge to {} on {}",
@@ -549,7 +566,7 @@ async fn run_frontends(
     let Resolved { bun, tui, web, cwd } = resolved;
     let host_argv = web_host_argv(bun, web, tui, port, cwd, backend);
     let started = tokio::select! {
-        started = start_web_host(&host_argv, cwd, port) => started,
+        started = start_web_host(&host_argv, cwd, port, backend) => started,
         signal = signals.recv() => return Ok(128 + signal),
     };
     let (host, web_status) = match started {
@@ -558,7 +575,7 @@ async fn run_frontends(
     };
     eprintln!("hya: WebUI {web_status:?}");
     let argv = tui_argv(bun, tui, backend, cwd, &web_status, resume);
-    let code = match spawn_tui(&argv, cwd, terminal) {
+    let code = match spawn_tui(&argv, cwd, terminal, backend) {
         Ok(mut child) => {
             tokio::select! {
                 status = child.wait() => status.map(exit_code).context("wait for the TUI"),
@@ -584,11 +601,13 @@ async fn start_web_host(
     argv: &[OsString],
     cwd: &Path,
     port: u16,
+    backend: &BackendLink,
 ) -> Result<(Child, String), String> {
     let Some((program, args)) = argv.split_first() else {
         return Err("empty web host command".to_string());
     };
     let mut command = Command::new(program);
+    frontend_env(command.as_std_mut(), backend);
     command
         .args(args)
         .current_dir(cwd)
@@ -665,12 +684,19 @@ async fn start_web_host(
     }
 }
 
-fn spawn_tui(argv: &[OsString], cwd: &Path, terminal: &Terminal) -> anyhow::Result<Child> {
+fn spawn_tui(
+    argv: &[OsString],
+    cwd: &Path,
+    terminal: &Terminal,
+    backend: &BackendLink,
+) -> anyhow::Result<Child> {
     let Some((program, args)) = argv.split_first() else {
         anyhow::bail!("empty TUI command");
     };
     let (stdin, stdout, stderr) = terminal.stdio().context("pass the terminal to the TUI")?;
-    Command::new(program)
+    let mut command = Command::new(program);
+    frontend_env(command.as_std_mut(), backend);
+    command
         .args(args)
         .current_dir(cwd)
         .stdin(stdin)
@@ -958,6 +984,7 @@ mod tests {
             db: Some("/state/hya/sessions.db".into()),
             hya: Some(PathBuf::from("/bin/hya")),
             remote: None,
+            token: None,
         }
     }
 
@@ -1063,6 +1090,7 @@ mod tests {
             db: None,
             hya: None,
             remote: None,
+            token: None,
         };
         let argv = tui_argv(
             Path::new("/b/bun"),
@@ -1083,6 +1111,7 @@ mod tests {
             db: None,
             hya: Some(PathBuf::from("/opt/hya/bin/hya")),
             remote: Some("remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4".into()),
+            token: Some("ab".repeat(32)),
         }
     }
 
@@ -1207,6 +1236,8 @@ mod tests {
             "{link_out:?}"
         );
         assert_eq!(link_out.url, bridge.url());
+        // The bridge token reaches the TUIs through the environment only.
+        assert_eq!(link_out.token.as_deref(), Some(bridge.token()));
         assert_eq!(link_out.db, None);
         assert_eq!(link_out.hya.as_deref(), Some(exe));
         assert_eq!(
@@ -1217,8 +1248,49 @@ mod tests {
         let fragment = secret.split_once('#').unwrap().1;
         for line in notes.iter().chain(lines.lock().unwrap().iter()) {
             assert!(!line.contains(fragment), "{line}");
+            assert!(
+                !line.contains(bridge.token()),
+                "the token was logged: {line}"
+            );
         }
         relay_task.abort();
+    }
+
+    #[test]
+    fn frontend_children_get_the_token_but_never_the_link() {
+        let envs = |backend: &BackendLink| {
+            let mut command = std::process::Command::new("true");
+            frontend_env(&mut command, backend);
+            command
+                .get_envs()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.map(|value| value.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let remote = envs(&remote_link());
+        assert_eq!(remote.get("HYA_RELAY_LINK"), Some(&None));
+        assert_eq!(remote.get("HYA_SERVER_TOKEN"), Some(&Some("ab".repeat(32))));
+        let local = envs(&daemon_link());
+        assert_eq!(local.get("HYA_RELAY_LINK"), Some(&None));
+        assert_eq!(local.get("HYA_SERVER_TOKEN"), Some(&None));
+        // Never in argv.
+        let argv = tui_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui"),
+            &remote_link(),
+            Path::new("/work"),
+            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            None,
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg.to_string_lossy().contains(&"ab".repeat(32)))
+        );
     }
 
     #[tokio::test]
@@ -1234,6 +1306,7 @@ mod tests {
                 db: None,
                 hya: None,
                 remote: None,
+                token: None,
             }
         );
     }

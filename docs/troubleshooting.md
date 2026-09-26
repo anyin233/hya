@@ -391,6 +391,17 @@ remote backend through a bridge. Use the TUI or the WebUI of `hya --connect`
 (its browser tab talks to the TUI, not to the bridge), `hya-client`, or
 curl; none of them send those headers.
 
+## `401 unauthenticated: the hya bridge needs its token`
+
+A `hya bridge` (standalone, the TUI's `/connect-remote` child, or bare `hya
+--connect`'s in-process one) requires its per-bridge token on the first
+request of every connection, as `x-hya-bridge-token: <token>`. Take the token
+from the bridge's stdout (`hya bridge token …`, or `token` in `--json`) and
+send it (`curl -H "x-hya-bridge-token: $TOKEN" …`; for the TUI,
+`HYA_SERVER_TOKEN=$TOKEN … --server <bridge url>`). An older TUI that does not
+know the token gets this error from a newer `hya bridge`: use the TUI of the
+same release. See [docs/relay.md](relay.md#connecting-from-a-client).
+
 ## Relay: `hya proxy`/`hya relay doctor` Cannot Reach Each Other
 
 The secure relay (`hya proxy`, `hya relay doctor`) works through nginx,

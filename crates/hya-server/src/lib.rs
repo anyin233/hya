@@ -25,6 +25,7 @@ mod pending;
 mod provider_control;
 pub mod relay_host;
 mod runs;
+mod sanitize;
 mod session_list;
 mod state;
 mod streams;
@@ -51,6 +52,7 @@ pub use provider_control::{
     ProviderSettings, ProviderUpsert, valid_provider_id,
 };
 pub use relay_host::{RelayHost, RelayHostConfig, RelaySettings};
+pub use sanitize::display_text;
 pub use state::AppState;
 pub(crate) use state::ServerState;
 pub use streams::{ShutdownReason, StreamShutdown};

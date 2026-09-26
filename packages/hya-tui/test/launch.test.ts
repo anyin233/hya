@@ -204,3 +204,15 @@ test("a failed start is reported, not retried", async () => {
   expect(starts).toBe(1)
   expect((error as Error).message).toContain("code 1")
 })
+
+test("the health probe sends the bridge token only when one is given", async () => {
+  const tokens: Array<string | null> = []
+  const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+    tokens.push(new Headers(init?.headers).get("x-hya-bridge-token"))
+    return Response.json({ ok: true })
+  }) as typeof fetch
+  expect(await probeHealth("http://good:1", fetcher)).toBe(true)
+  expect(await probeHealth("http://good:1", fetcher, 2_000, "c".repeat(64))).toBe(true)
+  expect(await probeHealth("http://good:1", fetcher, 2_000, "")).toBe(true)
+  expect(tokens).toEqual([null, "c".repeat(64), null])
+})

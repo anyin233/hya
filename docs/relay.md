@@ -298,8 +298,10 @@ remote (the header says `remote: <relay>/<room>`).
 
 ```sh
 hya --connect -                  # paste the link (not echoed); TUI + WebUI on the remote backend
-printf '%s\n' "$LINK" | hya bridge -     # a standalone bridge; prints its URL
+printf '%s\n' "$LINK" | hya bridge -     # a standalone bridge; prints its URL and token
 HYA_RELAY_LINK="$LINK" hya bridge --json # the same, for a parent process
+curl -H "x-hya-bridge-token: $TOKEN" http://127.0.0.1:$PORT/v1/health
+HYA_SERVER_TOKEN="$TOKEN" bun packages/hya-tui/src/main.ts --remote --server http://127.0.0.1:$PORT
 ```
 
 **Keep the link out of process listings.** The link is the credential
@@ -309,7 +311,35 @@ on a terminal `hya` prompts for it with echo turned off) or in
 local user in `ps`, so `hya` warns (`the relay link was given as an argument,
 so it is visible in process listings; …`). Only the redacted form
 (`hya[+insecure]://host[:port][/prefix]/<room_id>`) ever appears in output
-or logs.
+or logs. `hya bridge` and bare `hya --connect` remove `HYA_RELAY_LINK` from
+their own environment once they read it, and every child they start (the
+backend daemon, the TUIs, the WebUI host; the TUI's own `hya bridge` child)
+is started without it.
+
+**The bridge token.** Reaching the bridge's loopback port would otherwise mean
+controlling the remote backend — for every local user and every web page the
+browser runs. So each bridge makes a random 256-bit token at start (64
+lowercase hex characters) and requires it on the **first HTTP request of
+every TCP connection**, as the header `x-hya-bridge-token: <token>`. The
+header is removed before the request enters the tunnel (the backend never
+sees it). A connection without it, or with a wrong one, gets
+
+```text
+HTTP/1.1 401 Unauthorized
+{"error":{"code":"unauthenticated","message":"the hya bridge needs its token: send the x-hya-bridge-token header (…)"}}
+```
+
+and is closed **without opening a relay stream**; the bridge logs the first
+refusal only (`refused a connection without the bridge token …`). The bridge
+splices raw bytes once a tunnel is open, so it checks the first request of a
+connection only: later requests on an authenticated keep-alive connection,
+and an upgraded WebSocket, are trusted as the same client — only the peer
+that presented the token can write on that connection. Clients simply send
+the header on every request. The token is printed on stdout (the plain
+`hya bridge token <token>` line, or the `--json` line's `token`), handed to
+bare `hya --connect`'s TUIs in the environment variable `HYA_SERVER_TOKEN`
+(never argv; the TUI reads it and removes it from its environment at
+start), and never written to a log.
 
 **`hya bridge [<LINK>|-]`.** Dispatched before any runtime composition (no
 config, providers, or database), like `hya proxy`.
@@ -317,46 +347,61 @@ config, providers, or database), like `hya proxy`.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `<LINK>` | `$HYA_RELAY_LINK` | The link; `-` reads one line from stdin (recommended). |
-| `--listen <ADDR>` | `127.0.0.1:0` | Loopback address (`127.0.0.1:PORT`, `[::1]:PORT`, `localhost:PORT`, or a port). Any other address is refused: the bridge adds no authentication of its own, so reaching it means controlling the backend. |
+| `--listen <ADDR>` | `127.0.0.1:0` | Loopback address (`127.0.0.1:PORT`, `[::1]:PORT`, `localhost:PORT`, or a port). Any other address is refused: the bridge token is the only credential between a caller and the backend, so it never listens beyond this machine. |
 | `--relay-ca <PEM>` | none | Extra trusted CA certificates for a relay behind a private CA. |
 | `--transport auto\|grpc\|ws` | the link's `t=` | Relay binding, overriding the link. |
-| `--json` | off | Print one JSON line instead of the plain readiness line. |
+| `--json` | off | Print one JSON line instead of the plain readiness lines. |
 | `--exit-with-stdin` | off | Exit when stdin reaches end of file, so a parent that holds the pipe takes the bridge down with it. |
 
-Readiness (stdout, exactly one line, once listening and after the start-up
-check below):
+Readiness (stdout, once listening and after the start-up check below): two
+plain lines, or exactly one JSON line with `--json`:
 
 ```text
 hya bridge listening on http://127.0.0.1:<port>
-{"url":"http://127.0.0.1:<port>","room":"<room_id>","proxy":"hya+insecure://relay.lan:8766","label":"remote: relay.lan:8766/<room_id>"}
+hya bridge token <64 hex characters>
+
+{"url":"http://127.0.0.1:<port>","room":"<room_id>","proxy":"hya+insecure://relay.lan:8766","label":"remote: relay.lan:8766/<room_id>","token":"<64 hex characters>"}
 ```
 
 `proxy` is the redacted link without the room; `label` is what a TUI shows
-for the server (`--server-label`). Status lines go to stderr, prefixed
+for the server (`--server-label`); `token` is the bridge token (a secret for
+as long as the bridge runs). Status lines go to stderr, prefixed
 `hya bridge:`: the binding and why it was chosen (`relay hya://…: grpc
 binding (gRPC works on this path)`), and every change of the backend's
-state (online, offline, relay unreachable, reachable again). SIGINT, SIGTERM,
-or SIGHUP stops accepting, gives open connections 1 s, and exits **0**.
+state (online, offline, relay unreachable, reachable again); text that came
+from the relay (an error message) is stripped of terminal escape sequences
+and control characters. SIGINT, SIGTERM, or SIGHUP stops accepting, gives
+open connections 1 s, and exits **0**.
 
 **Start-up check.** Before it prints the readiness line, the bridge picks the
 relay binding (`t=auto` probes, see [Client transport](#client-transport))
 and opens one tunnel to check the link. It exits **1** when no binding
 reaches the relay (`cannot reach the relay …`) or when the backend rejects the
 handshake (`the remote backend rejected the relay link <redacted> (rotated or
-wrong link); ask for a new one`). An **offline** backend (its room has no
-host) is not an error: the bridge starts and says so.
+wrong link); ask for a new one`) — which now happens only for a link with the
+current PSK but a wrong server key. An **offline** backend (its room has no
+host) is not an error: the bridge starts and says so. Neither is a **rotated
+or wrong PSK**: the proxy refuses its open token exactly like a room without a
+host (so a link holder cannot probe which rooms exist), so the bridge starts
+and reports ``remote backend is offline, or the relay link was rotated or is
+wrong (ask for a new link: `hya serve relay link`)``, and requests get that
+503 until a new link is used.
 
-**Per connection.** Each accepted TCP connection opens its own relay stream
-and Noise tunnel (`RelayClient::open`, then `NoiseStream::initiate_link`
-within 15 s) and is then spliced byte for byte, so REST, SSE, and the PTY
-WebSocket upgrade work unchanged. There is no persistent session to lose: a
+**Per connection.** Each accepted TCP connection first sends its first
+request head (within 30 s, at most 16 KiB), which must be HTTP/1.x and carry
+the bridge token; then it opens its own relay stream and Noise tunnel
+(`RelayClient::open`, then `NoiseStream::initiate_link` within 15 s), the
+request head goes in without the token header, and the connection is spliced
+byte for byte, so REST, SSE, and the PTY WebSocket upgrade work unchanged. There is no persistent session to lose: a
 TUI that reconnects simply opens new connections to the same URL.
 
 | Situation | What the client connection sees |
 | --- | --- |
+| The first bytes are not an HTTP/1.x request line | A TCP reset; no relay stream. |
+| The first request lacks the token (or has a wrong one) | `401` `unauthenticated` (above), then a clean close; no relay stream. |
 | Tunnel open | The backend's bytes, unchanged; a clean close when both sides finish. |
 | A record fails authentication (tampered) or the stream ends without the close record (truncated) | A **TCP reset** (`SO_LINGER 0`), never a clean close, so a cut or forged response cannot pass for a complete one. The bridge logs `… failed its integrity check …; the connection was reset`. |
-| The room is offline, the relay is unreachable (`Unavailable`, `NoBinding`, `Timeout`, …), or the backend rejects the link | If the first bytes are an HTTP request line: `503 Service Unavailable` with the hya server's error envelope, `{"error":{"code":"unavailable","message":"remote backend is offline"}}` (or `the relay is unreachable: …`, `the remote backend rejected the relay link …`), then a clean close. Anything else: a TCP reset. |
+| The room is offline, the relay is unreachable (`Unavailable`, `NoBinding`, `Timeout`, …), or the backend rejects the link | `503 Service Unavailable` with the hya server's error envelope, `{"error":{"code":"unavailable","message":"remote backend is offline, or the relay link was rotated or is wrong (ask for a new link: …)"}}` (or `the relay is unreachable: …`, `the remote backend rejected the relay link …`), then a clean close. |
 
 A failed connection after a binding error clears the remembered binding, so
 the next connection probes again.
@@ -366,9 +411,11 @@ starts the bridge in its own process (with the checks above, before the
 terminal is touched), then the WebUI host and the terminal TUI exactly like
 `hya --backend <url>`, with `--server <bridge-url> --remote --server-label
 "remote: <relay>/<room>"` in both TUI commands and no `--db`/`--hya`
-([cli.md](cli.md#bare-hya)). `--connect` conflicts with `--backend`; without
-a value it reads `HYA_RELAY_LINK`. The bridge lives as long as that `hya`;
-its status lines go to `hya.log`.
+([cli.md](cli.md#bare-hya)); both TUIs (and the WebUI host, whose tabs run
+the TUI) get the bridge token as `HYA_SERVER_TOKEN` in their environment and
+send it on every request. `--connect` conflicts with `--backend`; without a
+value it reads `HYA_RELAY_LINK`. The bridge lives as long as that `hya`; its
+status lines go to `hya.log`.
 
 #### From a running TUI (`/connect-remote`)
 
@@ -386,14 +433,17 @@ Enter connects, Esc cancels). `--transport auto|grpc|ws` and `--relay-ca
 The TUI runs its own bridge child, `<hya> bridge - --json --exit-with-stdin
 [--transport T] [--relay-ca PEM]` (the `hya` of `--hya`, `HYA_BIN`, or PATH),
 writes the link and a newline to its stdin and holds the pipe open, so the
-bridge exits 0 when the TUI closes it or dies. It waits up to 20 s for the
-JSON readiness line, then uses `url` as its server and `label` in the header,
+bridge exits 0 when the TUI closes it or dies (the child's environment has
+no `HYA_RELAY_LINK` or `HYA_SERVER_TOKEN`). It waits up to 20 s for the JSON
+readiness line, then uses `url` as its server with `token` sent as
+`x-hya-bridge-token` on every request and stream, and `label` in the header,
 sidebar, `/status`, and status lines; stderr lines (`hya bridge: …`) are shown
 on the status line; a start-up failure (exit 1) is shown as `Remote
 connection failed: <the bridge's reason>`. On the remote the TUI behaves like
 a `--remote` start (the Project view opens, no session is created) and never
 starts or looks for a local daemon; while the remote is offline its requests
-get the bridge's `503 unavailable: remote backend is offline` and its streams
+get the bridge's `503 unavailable: remote backend is offline, or the relay
+link was rotated or is wrong …` and its streams
 keep retrying. `/disconnect-remote` closes the bridge's stdin (SIGTERM after
 2 s) and goes back to the local backend (the database's daemon, found or
 started); a TUI started by bare `hya --connect` has none to go back to.
@@ -1058,7 +1108,7 @@ unknown peer, or a browser. `RelayStatus` (protojson):
 | `redactedLink` | string | The link without its secret fragment. |
 | `transport` | string | Configured binding: `auto`, `grpc`, `ws`. |
 | `binding`, `bindingReason` | string | Binding in use and why (pinned, gRPC works, or why gRPC failed). |
-| `lastError` | string | Last connection or registration failure (cleared on success). |
+| `lastError` | string | Last connection or registration failure (cleared on success); stored with terminal escape sequences and control characters removed, since it may carry the relay's text. |
 | `connectedSince` | Timestamp | When the room was registered. |
 | `activeStreams` | uint32 | Relay connections being served (including upgraded PTY WebSockets). |
 | `ephemeral` | bool | Whether the identity is throwaway. |
