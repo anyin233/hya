@@ -110,6 +110,13 @@ Requests that arrive through the host connector carry an axum extension
 `process` stop are refused from relay origin; they stay loopback-only.
 Everything else is allowed, because holding the link means owner trust.
 
+These refusals are a **UX guard, not a security boundary**: they keep a
+remote client from locking out the local owner by accident. A link holder
+has the backend's full power — shell tools and PTYs run as its user — so they
+can reach the loopback `RelayControl` rpcs, read or rotate the link, or kill
+the process from inside. **The link is full control**; nothing below the
+link (D5 included) is meant to contain a link holder.
+
 ### D8 — Proxy limits
 
 The proxy enforces, with flags and conservative defaults: maximum rooms,
@@ -241,13 +248,39 @@ edits), the session contents, and the link secret.
   fragment so it does not end up in hop logs, and the backend never prints it
   except through `hya serve relay link`/`--relay` start output and never
   writes it to the discovery file.
-- **Remote privilege.** Relay-origin requests cannot change the relay
-  configuration or stop the process (D5), so a link holder cannot lock out the
-  local owner or rotate the key away from them.
-- **DoS and limits.** The proxy caps rooms, streams per room, idle time, and
-  per-stream rate (D8). Handshakes are cheap for the backend to reject (one
-  DH plus a failed AEAD). The proxy is not an authorization point; a flood of
-  failed handshakes costs bandwidth, not access.
+- **Remote privilege.** A link holder has full owner power: the backend runs
+  their shell commands and PTYs as its user, so they can call the loopback
+  `RelayControl` rpcs or kill the process from there. The relay-origin
+  refusals of D5 are a guard against accidents in remote clients, **not a
+  security boundary**; the boundary is the link itself (link = full control).
+- **DoS and limits.** The proxy caps rooms, streams per room and per client,
+  idle time, per-stream rate, and proxy-wide streams, registrations, and
+  early data (D8). Only link holders get past the proxy to the host (open
+  tokens, D8), so a room id alone cannot exhaust a room or make the backend
+  work; handshakes are cheap to reject anyway (one DH plus a failed AEAD) and
+  have their own small budget. The proxy is not an authorization point for
+  the backend: its gate saves resources, the Noise handshake grants access.
+- **Local web pages and other local users (H1/H2 of the 7.5 review).** The
+  backend's loopback listener and a client's loopback bridge are reachable
+  from every web page the browser runs and every local account. Mitigations:
+  (a) a router-wide **Host allowlist** — only `localhost`, `127.0.0.1`,
+  `[::1]` (any port), a non-wildcard bind host, and `--allow-host` names get
+  past it (`403 permission_denied` otherwise, CORS preflights included; the
+  gRPC listener checks `:authority`) — so DNS rebinding cannot read `GET
+  /v1/relay/link` or drive any rpc; (b) relay-origin requests carrying
+  `Origin` or `Sec-Fetch-*` are refused, so a browser cannot use a bridge
+  even without rebinding; (c) every bridge makes a random 256-bit token and
+  requires it (`x-hya-bridge-token`) on the first request of each TCP
+  connection before it opens a relay stream (`401 unauthenticated`
+  otherwise), so another local user cannot use someone else's bridge; the
+  token reaches the TUIs through the environment (`HYA_SERVER_TOKEN`), never
+  argv or logs. Later requests on an authenticated keep-alive connection are
+  trusted (the bridge splices bytes), which is safe because only the peer
+  that sent the token can write on that connection. `RelayControl` also
+  fails closed when the client address is unknown. Text from the relay is
+  stripped of terminal controls before it is shown or logged, and
+  `HYA_RELAY_LINK` is removed from the environment once read and from every
+  child's.
 - **Out of scope.** A compromised backend or client machine; traffic
   analysis resistance; availability guarantees from a third-party proxy.
 

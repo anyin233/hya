@@ -235,6 +235,13 @@ removes the record, so a later restart stays off the relay.
 the server-side request extension `hya_server::Origin::Relay`. They may use
 the whole `/v1` API — holding the link means owner trust — except:
 
+> **The link is full control of the backend.** The refusals below are a UX
+> guard against accidents, **not a security boundary**: a link holder can
+> run shell commands and PTYs as the backend's user, and from there call the
+> loopback `RelayControl` rpcs, read or rotate the link, or stop the
+> process. Share a link only with someone you would give a shell to, and
+> rotate it (`hya serve relay rotate`) when that changes.
+
 | Refused with `permission_denied` (HTTP 403) | Why |
 | --- | --- |
 | Every `RelayControl` rpc (`/v1/relay/*`) | A link holder must not change the relay, read the link, or rotate it away from the local owner. |
