@@ -41,7 +41,12 @@ service Relay {
 
   // Client side of one data stream. The first client frame must be `open`
   // naming the room; afterwards both directions carry `data`, `heartbeat`,
-  // and a final `close`. An offline room fails with `NOT_FOUND`.
+  // and a final `close`. An offline room fails with `NOT_FOUND`. Once the
+  // host has accepted the stream the proxy sends `opened`; openers should
+  // wait for it before sending `data` (the proxy buffers only a small,
+  // bounded amount of early data and otherwise stops reading until the
+  // stream is spliced). If the host does not accept in time the stream
+  // fails with `UNAVAILABLE`.
   rpc Open(stream Chunk) returns (stream Chunk);
 }
 
@@ -126,6 +131,10 @@ message Accept {
 // Orderly end of the sender's data direction.
 message Close {}
 
+// Open acknowledgement (proxy to client on an `Open` stream): the host
+// accepted the stream and both directions are now spliced.
+message Opened {}
+
 // One frame on a data stream (`Accept` or `Open`).
 message Chunk {
   // The frame kind.
@@ -142,6 +151,9 @@ message Chunk {
     Heartbeat heartbeat = 5;
     // Terminal failure (WebSocket binding); the sender closes after it.
     RelayError error = 6;
+    // Open acknowledgement (proxy to client, once per `Open` stream, before
+    // any spliced host frame). Openers should send `data` only after it.
+    Opened opened = 7;
   }
 }
 
