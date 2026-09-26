@@ -43,6 +43,9 @@ hyper-util = { version = "0.1", features = ["server", "server-auto", "http1", "h
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls-pki-types = { version = "1", features = ["std"] }
+# Relay client trust roots: the OS store plus Mozilla's bundle.
+rustls-native-certs = "0.8"
+webpki-roots = "1"
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 futures = "0.3"
 async-trait = "0.1"

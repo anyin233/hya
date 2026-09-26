@@ -605,6 +605,26 @@ async fn data_heartbeats_are_answered_locally_not_forwarded() {
 }
 
 #[tokio::test]
+async fn probe_after_a_legs_direction_closed_is_dropped_silently() {
+    let core = ProxyCore::new(ProxyLimits::default());
+    let (_host, mut opener, mut host_leg) = spliced(&core, &key(1)).await;
+    // The host finishes its direction: the proxy closes the opener's sink.
+    host_leg.send(data(b"reply")).await.unwrap();
+    host_leg.send(close()).await.unwrap();
+    assert_eq!(recv(&mut opener).await, data(b"reply"));
+    assert_eq!(recv(&mut opener).await, close());
+    expect_end(&mut opener).await;
+    // A probe on the opener's leg can no longer be answered; it must not be
+    // mistaken for the opener going away.
+    opener.send(probe(9)).await.unwrap();
+    opener.send(data(b"late")).await.unwrap();
+    opener.send(close()).await.unwrap();
+    assert_eq!(recv(&mut host_leg).await, data(b"late"));
+    assert_eq!(recv(&mut host_leg).await, close());
+    expect_end(&mut host_leg).await;
+}
+
+#[tokio::test]
 async fn opener_heartbeat_before_accept_is_answered() {
     let core = ProxyCore::new(ProxyLimits::default());
     let k = key(1);

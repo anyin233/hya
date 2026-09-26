@@ -1,6 +1,7 @@
 //! Data streams: `Open`, `Accept`, and the splice between them.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::stream::{SplitSink, SplitStream};
@@ -210,7 +211,33 @@ pub(crate) async fn run_open(inner: Arc<Inner>, mut opener: ChunkTransport, peer
     drop(slot);
 }
 
-type SharedSink = Mutex<SplitSink<ChunkTransport, Chunk>>;
+/// One leg's sending half, shared by both pumps (data one way, pongs the
+/// other), plus whether its direction was closed.
+struct SharedSink {
+    sink: Mutex<SplitSink<ChunkTransport, Chunk>>,
+    closed: AtomicBool,
+}
+
+impl SharedSink {
+    fn new(sink: SplitSink<ChunkTransport, Chunk>) -> Self {
+        Self {
+            sink: Mutex::new(sink),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    async fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        let _ = timeout(ERROR_SEND_TIMEOUT, async {
+            self.sink.lock().await.close().await
+        })
+        .await;
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+}
 
 /// How a pump (one direction of a splice) failed.
 enum Fault {
@@ -225,7 +252,7 @@ enum Fault {
 /// Send one frame on a shared sink within the idle timeout.
 async fn send_shared(inner: &Inner, sink: &SharedSink, frame: Chunk) -> Result<(), Option<()>> {
     match timeout(inner.limits.idle_timeout, async {
-        sink.lock().await.send(frame).await
+        sink.sink.lock().await.send(frame).await
     })
     .await
     {
@@ -300,17 +327,19 @@ async fn pump(
             }
             None | Some(chunk::Frame::Close(_)) => {
                 forward(inner, destination, close_chunk()).await?;
-                let _ = timeout(ERROR_SEND_TIMEOUT, async {
-                    destination.lock().await.close().await
-                })
-                .await;
+                destination.close().await;
                 return Ok(());
             }
             Some(chunk::Frame::Heartbeat(Heartbeat { seq, pong: false })) => {
-                match send_shared(inner, source_sink, pong(seq)).await {
-                    Ok(()) => {}
-                    Err(None) => return Err(gone(false)),
-                    Err(Some(())) => return Err(stalled()),
+                // After this leg's sending direction is closed a probe can no
+                // longer be answered; drop it instead of treating the failed
+                // pong as the source going away. A pong that fails to send
+                // is not fatal either: a leg that is really gone shows up on
+                // its stream.
+                if !source_sink.is_closed()
+                    && let Err(Some(())) = send_shared(inner, source_sink, pong(seq)).await
+                {
+                    return Err(stalled());
                 }
             }
             Some(chunk::Frame::Heartbeat(_)) => {}
@@ -346,8 +375,8 @@ async fn splice(
 ) {
     let (opener_sink, opener_stream) = opener.split();
     let (host_sink, host_stream) = host_leg.split();
-    let opener_sink: SharedSink = Mutex::new(opener_sink);
-    let host_sink: SharedSink = Mutex::new(host_sink);
+    let opener_sink = SharedSink::new(opener_sink);
+    let host_sink = SharedSink::new(host_sink);
 
     // Early data first, then the live pumps.
     let mut early_fault = None;
@@ -358,10 +387,7 @@ async fn splice(
             break;
         }
         if is_close {
-            let _ = timeout(ERROR_SEND_TIMEOUT, async {
-                host_sink.lock().await.close().await
-            })
-            .await;
+            host_sink.close().await;
         }
     }
 
@@ -415,8 +441,9 @@ fn from_opener(fault: Fault) -> (Option<RelayError>, Option<RelayError>) {
 
 /// Deliver a final error (if any) and close a leg's sending direction.
 async fn finish(sink: &SharedSink, relay_error: Option<RelayError>) {
+    sink.closed.store(true, Ordering::SeqCst);
     let _ = timeout(ERROR_SEND_TIMEOUT, async {
-        let mut sink = sink.lock().await;
+        let mut sink = sink.sink.lock().await;
         if let Some(relay_error) = relay_error {
             sink.send(chunk(chunk::Frame::Error(relay_error))).await?;
         }

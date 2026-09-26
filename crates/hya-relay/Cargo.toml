@@ -21,6 +21,7 @@ hyper-util = { workspace = true }
 prost = { workspace = true }
 rand_core = { workspace = true }
 rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
 rustls-pki-types = { workspace = true }
 sha2 = { workspace = true }
 snow = { workspace = true }
@@ -28,12 +29,14 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tower = { workspace = true }
+webpki-roots = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+hyper = { workspace = true, features = ["client"] }
 rcgen = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { workspace = true }

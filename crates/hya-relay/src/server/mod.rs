@@ -21,7 +21,7 @@
 //! [`RelayServer::bind`] binds the listener and returns the address plus the
 //! serve future; it shuts down gracefully when the given signal completes.
 
-mod duplex;
+pub(crate) mod duplex;
 mod grpc;
 mod peer;
 mod tls;

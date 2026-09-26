@@ -15,8 +15,9 @@ implemented yet.
 
 ## Usage
 
-The proxy server library exists (`hya_relay::server`, see
-[Bindings](#bindings)). *Coming in later steps:* `hya proxy`, `hya serve --relay`, `hya serve relay
+The proxy server library (`hya_relay::server`, see [Bindings](#bindings))
+and the client library (`hya_relay::client`, see
+[Client transport](#client-transport)) exist. *Coming in later steps:* `hya proxy`, `hya serve --relay`, `hya serve relay
 …`, `hya bridge`, `hya --connect <link>`, `/connect-remote`, `hya relay
 doctor`, and deployment recipes (Cloudflare Tunnel, nginx, Caddy, Tailscale,
 direct TLS).
@@ -142,7 +143,10 @@ early-data limit of opener `data` and then stops reading the opener
 - Heartbeats are **per leg**: the proxy answers a probe on the leg it
   arrived on and never forwards heartbeats, because each leg may cross
   different intermediaries with different idle cuts. Pongs are dropped.
-  Heartbeats count as activity for the idle timeout.
+  Heartbeats count as activity for the idle timeout. Once the proxy has
+  ended a leg's receiving side (it forwarded the other side's `close{}`), a
+  probe arriving on that leg is dropped silently: it can no longer be
+  answered, and it does not mean the other side went away.
 - An `error` frame from one side is forwarded to the other and ends the
   stream; a transport failure on one side ends the other with
   `UNAVAILABLE`. A handshake frame (`open`, `accept`, `opened`) after the
@@ -276,6 +280,148 @@ accepting (the port closes), ends every relay stream with `UNAVAILABLE`
 (gRPC status, or error frame plus close `4014`), asks every connection to
 finish (HTTP/2 `GOAWAY`, HTTP/1.1 close after the response), and waits up to
 the drain timeout before cutting what is left.
+
+### Client transport
+
+`hya_relay::client::RelayClient` is the client side of both bindings,
+shared by the host connector (in `hya serve`) and the client bridge. It
+turns a relay address into relay streams, each returned as the
+binding-independent transport type:
+
+```rust
+use hya_relay::client::{ClientConfig, RelayClient, register_host};
+
+// Client side (bridge): one tunnel per TCP connection.
+let client = RelayClient::from_link(&link, ClientConfig::default())?;
+let leg = client.open(link.room_id()).await?;          // waits for `opened`
+let tunnel = NoiseStream::initiate_link(leg, &link, TunnelConfig::default()).await?;
+
+// Host side (connector): control stream, then one Accept per `incoming`.
+let client = RelayClient::new(RelayAddress::parse_proxy_url("https://relay.example.com/hya")?, ClientConfig::default())?;
+let mut control = client.host().await?;
+let room = register_host(&mut control, &signing_key, Duration::from_secs(10)).await?;
+// on ProxyToHost::incoming{stream_id}:
+let leg = client.accept(&stream_id).await?;
+```
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `RelayClient::new(RelayAddress, ClientConfig)` | `Result<RelayClient, ClientError>` | Nothing connects yet; fails only on an unreadable CA file (`Config`). Clones share the gRPC connection. |
+| `RelayClient::from_link(&RelayLink, ClientConfig)` | same | A pinned `t=` in the link wins over `transport: Auto`; a pinned `config.transport` wins over the link. |
+| `open(&RoomId)` | `ChunkTransport` | Sends `open{room}` and returns once `opened` arrived (within `open_timeout`). |
+| `accept(&str)` | `ChunkTransport` | Sends `accept{stream_id}`; proxy errors (for example `NOT_FOUND` for an unknown id) arrive on the stream. |
+| `host()` | `HostControlTransport` | The proxy's first frame is the challenge; `register_host(&mut t, &SigningKey, deadline) -> Result<RoomId, ClientError>` answers it. |
+| `binding()` | `BindingChoice{binding, reason}` | The binding streams use: pinned, remembered, or negotiated now. |
+| `probe(Binding)` | `Result<(), ProbeFailure>` | One end-to-end check of a binding (for `hya relay doctor`). |
+| `remembered_binding()` / `forget_binding()` | | Read or clear the per-address memo. |
+
+`ClientConfig` (all public fields, `Default`):
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `transport: Transport` | `Auto` | `Auto` negotiates; `Grpc` / `Ws` pin a binding and never probe. |
+| `extra_ca_pem: Option<PathBuf>` | none | PEM file of extra trusted CA certificates (`--relay-ca`). |
+| `heartbeat: HeartbeatConfig` | every 15 s, dead after 45 s | See heartbeats below. |
+| `connect_timeout: Duration` | 10 s | TCP, TLS, HTTP/2 or WebSocket handshake of one connection, and the proxy's first answer on a new gRPC stream. |
+| `probe_timeout: Duration` | 5 s | Deadline of each binding probe. |
+| `open_timeout: Duration` | 30 s | Deadline for `open` to receive `opened`. |
+
+**Bindings on the wire.** gRPC uses one HTTP/2 connection per client
+(h2c with prior knowledge for `hya+insecure://`; ALPN `h2` under TLS, and
+the server must select it) with every rpc path below the link's prefix
+(`<prefix>/hya.relay.v1.Relay/<Method>`) and HTTP/2 keepalive pings at the
+heartbeat interval. WebSocket uses one HTTP/1.1 connection per stream
+(`ws[s]://host[:port]<prefix>/hya.relay.v1/ws/<route>`, ALPN `http/1.1`
+only). A final `RelayError` frame or a `4000 + code` close becomes
+`TransportError::Status`, the same as a gRPC status. Closing a transport's
+sink half-closes the stream (gRPC end of request stream, WebSocket close
+frame); **dropping** a stream that was not closed aborts it (gRPC
+`RST_STREAM`, WebSocket connection dropped without a closing handshake), so
+the proxy reports `UNAVAILABLE` to the other side. Frames already accepted
+by the sink are still delivered after a drop.
+
+**TLS.** `hya://` uses rustls (ring provider, TLS 1.2 and 1.3) trusting
+the operating-system roots (`rustls-native-certs`), Mozilla's webpki roots,
+and every certificate in `extra_ca_pem`. The server name (SNI and
+certificate check) is the link host; an IP host is checked as an IP.
+`hya+insecure://` is plaintext end to end of the hop (Noise still encrypts
+the payload).
+
+**Auto negotiation (`t=auto`).** The first stream to a relay address
+probes gRPC: it opens a stream to a random, well-formed, offline room and
+expects the relay's gRPC status `NOT_FOUND` within `probe_timeout`. Any
+other outcome means gRPC does not work on this path, and the client probes
+the WebSocket binding the same way (`NOT_FOUND` as a `RelayError` frame):
+
+| gRPC probe outcome | `ProbeFailureKind` | Typical hop |
+| --- | --- | --- |
+| TCP connect failed | `Connect` | wrong host or port |
+| TLS failed (certificate, name) | `Tls` | wrong CA, wrong host name |
+| TLS did not select `h2`; HTTP/2 failed after connecting | `NoHttp2` | HTTP/1.1-only hop (Cloudflare Tunnel default origin, ingresses) |
+| an HTTP status instead of gRPC (`grpc-status` missing, or a non-gRPC body) | `HopRejected` | a hop's 404/502/… |
+| the stream ended without a status | `TrailersStripped` | an HTTP/2 hop that drops trailers |
+| no answer in time | `Timeout` | a hop that buffers streaming responses |
+| the relay said `UNIMPLEMENTED "not a relay path"` (gRPC) or answered `404 hya relay` (WebSocket) | `WrongPath` | the link prefix does not match the relay's `--path-prefix` |
+| anything else | `Unexpected` | |
+
+If WebSocket works the client uses it and records
+`BindingChoice { binding: Ws, reason: GrpcFailed(ProbeFailure) }`; if gRPC
+works, `{ binding: Grpc, reason: GrpcWorks }`; pinned bindings report
+`Pinned`. The choice is remembered per (scheme, host, port, prefix) for the
+process lifetime, shared by every client in the process, so a path is
+probed once. When both probes fail, `binding()` and every stream call fail
+with `ClientError::NoBinding { grpc, ws }` carrying both reasons, and
+nothing is remembered. The host connector and the bridge negotiate
+independently.
+
+**Heartbeats and dead-peer detection.** Every stream a `RelayClient`
+returns is wrapped by `hya_relay::client::with_heartbeat(transport,
+HeartbeatConfig)` (usable on any transport):
+
+- It sends a probe (`heartbeat{seq, pong: false}`) when nothing was sent,
+  or nothing was received, for one `interval`, at most once per interval.
+  The proxy answers every probe, so both directions of every hop see
+  traffic.
+- It answers the peer's probes with pongs and swallows pongs: users never
+  see heartbeat frames.
+- It fails the stream (`TransportError::Transport`, "the connection is
+  presumed dead") when no frame at all arrived for `dead_peer_after`, and
+  drops the underlying stream.
+- Probing and dead-peer detection stop for good once this side sent
+  `close{}` (or closed the sink) or received `close{}`: the proxy may then
+  legitimately stay silent on that leg. A pong that cannot be sent is
+  dropped; it never ends the other direction.
+
+`HeartbeatConfig { interval, dead_peer_after }`: `HeartbeatConfig::every(d)`
+sets `dead_peer_after = 3 × d`; `.dead_peer_after(d)` overrides it;
+`Duration::ZERO` disables probing or dead-peer detection;
+`HeartbeatConfig::disabled()` disables both. The default is 15 s / 45 s,
+below common idle cuts (nginx 60 s, Cloudflare about 100 s) and the
+proxy's own 120 s idle timeout.
+
+**Reconnect policy.** `hya_relay::client::Backoff` paces the host
+connector's control-stream reconnects (`ReconnectPolicy`):
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `initial` | 1 s | First delay after an ordinary failure. |
+| `max` | 60 s | Cap of ordinary delays. |
+| `conflict_initial` | 30 s | First delay after `ALREADY_EXISTS` (another process holds the room identity). |
+| `conflict_max` | 10 min | Cap of those delays. |
+| `stable_after` | 60 s | A connection up this long resets the schedule. |
+
+`next_delay(RetryKind)` doubles from `initial` up to the cap with equal
+jitter (a delay is uniformly random in `[ceiling/2, ceiling]`);
+`RetryKind::of_client_error` / `of_transport_error` classify
+`ALREADY_EXISTS` as `Conflict` and everything else as `Normal`, which use
+separate schedules. Call `connected()` once the room is registered;
+`reset()` starts over. `Backoff::with_seed` makes the jitter reproducible.
+
+`ClientError` variants: `RoomOffline` (`NOT_FOUND` on open), `Unavailable`
+(`UNAVAILABLE`), `Relay{code, message}` (any other proxy status),
+`Connect{binding, failure}` (a pinned or remembered binding cannot connect),
+`NoBinding{grpc, ws}`, `Transport`, `Timeout`, `Protocol`, `Config`;
+`ClientError::code()` returns the relay code when there is one.
 
 ### The transport abstraction
 
