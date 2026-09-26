@@ -97,6 +97,46 @@ fn skill_dirs(workdir: Option<&Path>) -> Vec<PathBuf> {
     dirs
 }
 
+/// Deduplicate a directory list, keeping the first occurrence of each path.
+fn dedupe_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    dirs.into_iter()
+        .filter(|dir| seen.insert(dir.clone()))
+        .collect()
+}
+
+/// Skill search roots for a `workdir` plus a Project's additional roots.
+///
+/// Order: `workdir/.hya/skills` first, then each `root/.hya/skills` (in
+/// root order), then the user (non-project) directories, then
+/// `workdir/.agents/skills` and each `root/.agents/skills` (in root order),
+/// then the `.codex`/`.agents` user directories as today. Directories are
+/// deduped (e.g. when a root equals `workdir`).
+#[must_use]
+pub fn skill_dirs_for(workdir: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dirs = Vec::new();
+
+    dirs.push(workdir.join(".hya/skills"));
+    for root in roots {
+        dirs.push(root.join(".hya/skills"));
+    }
+    if let Some(home) = &home {
+        dirs.push(home.join(".config/hya/skills"));
+        dirs.push(home.join(".claude/skills"));
+    }
+    dirs.push(workdir.join(".agents/skills"));
+    for root in roots {
+        dirs.push(root.join(".agents/skills"));
+    }
+    if let Some(home) = &home {
+        dirs.push(home.join(".codex/skills"));
+        dirs.push(home.join(".agents/skills"));
+    }
+
+    dedupe_dirs(dirs)
+}
+
 /// Discover skills under the default roots for `workdir`.
 #[must_use]
 pub fn discover_skills(workdir: &Path) -> Vec<SkillCatalogEntry> {
@@ -114,6 +154,17 @@ pub fn discover_skills_with_builtins(workdir: &Path) -> Vec<SkillCatalogEntry> {
 #[must_use]
 pub fn discover_user_skills_with_builtins() -> Vec<SkillCatalogEntry> {
     merge_skill_catalog(discover_skills_from_dirs(&user_skill_dirs()))
+}
+
+/// [`discover_skills_with_builtins`] across a Project's roots: native
+/// discovery over [`skill_dirs_for`] (workdir + roots, first-found-wins by
+/// name), then bundled builtins appended for names not already present.
+#[must_use]
+pub fn discover_skills_for_roots_with_builtins(
+    workdir: &Path,
+    roots: &[PathBuf],
+) -> Vec<SkillCatalogEntry> {
+    merge_skill_catalog(discover_skills_from_dirs(&skill_dirs_for(workdir, roots)))
 }
 
 /// Merge the builtin `hya/core-skills` catalog after native entries.
@@ -333,5 +384,133 @@ mod tests {
     fn disabled_skill_is_skipped() {
         let md = "---\nname: off\ndescription: nope\ndisable: true\n---\nbody";
         assert!(parse_skill(md).is_none(), "disabled skills are skipped");
+    }
+
+    fn tempdir(label: &str) -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "hya-skill-catalog-{label}-{}-{id}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        dir
+    }
+
+    fn write_skill(dir: &Path, name: &str, description: &str) {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir).expect("mkdir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\nbody"),
+        )
+        .expect("write SKILL.md");
+    }
+
+    #[test]
+    fn skill_dirs_for_orders_workdir_roots_user_then_agents() {
+        let workdir = Path::new("/work");
+        let roots = vec![PathBuf::from("/root-a"), PathBuf::from("/root-b")];
+        let dirs = skill_dirs_for(workdir, &roots);
+
+        let hya_positions: Vec<&PathBuf> =
+            dirs.iter().filter(|d| d.ends_with(".hya/skills")).collect();
+        assert_eq!(
+            hya_positions,
+            vec![
+                &PathBuf::from("/work/.hya/skills"),
+                &PathBuf::from("/root-a/.hya/skills"),
+                &PathBuf::from("/root-b/.hya/skills"),
+            ],
+            "workdir .hya/skills first, then roots in order"
+        );
+
+        let idx = |needle: &PathBuf| dirs.iter().position(|d| d == needle).unwrap();
+        let workdir_hya = idx(&PathBuf::from("/work/.hya/skills"));
+        let root_a_hya = idx(&PathBuf::from("/root-a/.hya/skills"));
+        let root_b_hya = idx(&PathBuf::from("/root-b/.hya/skills"));
+        assert!(workdir_hya < root_a_hya);
+        assert!(root_a_hya < root_b_hya);
+
+        // User dirs come after all .hya/skills roots but before .agents/skills.
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            let user_dir = home.join(".config/hya/skills");
+            let user_idx = idx(&user_dir);
+            assert!(user_idx > root_b_hya, "user dirs come after project roots");
+
+            let workdir_agents_idx = idx(&PathBuf::from("/work/.agents/skills"));
+            assert!(
+                user_idx < workdir_agents_idx,
+                "user dirs come before .agents/skills"
+            );
+
+            let root_a_agents_idx = idx(&PathBuf::from("/root-a/.agents/skills"));
+            let root_b_agents_idx = idx(&PathBuf::from("/root-b/.agents/skills"));
+            assert!(workdir_agents_idx < root_a_agents_idx);
+            assert!(root_a_agents_idx < root_b_agents_idx);
+        }
+    }
+
+    #[test]
+    fn skill_dirs_for_dedupes_directories() {
+        let workdir = Path::new("/work");
+        // root equal to workdir must not duplicate workdir's directories.
+        let roots = vec![PathBuf::from("/work"), PathBuf::from("/root-a")];
+        let dirs = skill_dirs_for(workdir, &roots);
+
+        let mut seen = HashSet::new();
+        for dir in &dirs {
+            assert!(seen.insert(dir.clone()), "duplicate directory: {dir:?}");
+        }
+    }
+
+    #[test]
+    fn skill_dirs_for_puts_workdir_before_roots() {
+        let workdir = Path::new("/work");
+        let roots = vec![PathBuf::from("/root-a")];
+        let dirs = skill_dirs_for(workdir, &roots);
+
+        let workdir_pos = dirs
+            .iter()
+            .position(|d| d == &PathBuf::from("/work/.hya/skills"))
+            .expect("workdir .hya/skills present");
+        let root_pos = dirs
+            .iter()
+            .position(|d| d == &PathBuf::from("/root-a/.hya/skills"))
+            .expect("root .hya/skills present");
+        assert!(workdir_pos < root_pos);
+    }
+
+    #[test]
+    fn discover_skills_for_roots_first_found_wins_on_name_clash() {
+        let tmp = tempdir("clash");
+        let workdir = tmp.join("workdir");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(workdir.join(".hya/skills")).expect("mkdir");
+        std::fs::create_dir_all(root.join(".hya/skills")).expect("mkdir");
+
+        write_skill(&workdir.join(".hya/skills"), "shared", "from workdir");
+        write_skill(&root.join(".hya/skills"), "shared", "from root");
+        write_skill(&root.join(".hya/skills"), "only-in-root", "root only");
+
+        let dirs = skill_dirs_for(&workdir, std::slice::from_ref(&root));
+        let skills = discover_skills_from_dirs(&dirs);
+
+        let shared = skills
+            .iter()
+            .find(|s| s.name == "shared")
+            .expect("shared skill present");
+        assert_eq!(
+            shared.description, "from workdir",
+            "workdir entry wins over root entry with the same name"
+        );
+        assert!(
+            skills.iter().any(|s| s.name == "only-in-root"),
+            "root-only skill is still discovered"
+        );
     }
 }
