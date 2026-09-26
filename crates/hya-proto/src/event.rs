@@ -830,7 +830,9 @@ pub enum Event {
         session: SessionId,
         /// Session it was forked from.
         source: SessionId,
-        /// Cut point: messages strictly before this id were copied. `None` copied all.
+        /// Cut point: the source message (id in the source log) before which
+        /// the copy stopped; messages strictly before it were copied. `None`
+        /// copied every visible message.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_message: Option<MessageId>,
     },
@@ -921,6 +923,57 @@ pub enum Event {
         session: SessionId,
         /// Full replacement list, in order.
         todos: Vec<crate::TodoItem>,
+    },
+
+    // -------- file snapshots and revert --------
+    /// Files one tool call changed, each with its content before the change.
+    ///
+    /// Appended by the engine right after the call's `ToolResult` /
+    /// `ToolError` when the call changed at least one file (write, edit,
+    /// apply_patch, and bash inside a git work tree). Contents live in the
+    /// store's per-session blob table; the event carries only paths and blob
+    /// keys. Folds onto `MessageProjection.file_changes` of `message` and is
+    /// what a revert restores from. An older binary folds it as `Unknown`.
+    FilesChanged {
+        /// Session whose tool changed the files.
+        session: SessionId,
+        /// Assistant message of the tool call.
+        message: MessageId,
+        /// Tool call that changed the files.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call: Option<ToolCallId>,
+        /// Changed files, each with its state before the call.
+        files: Vec<crate::revert::FileChange>,
+    },
+
+    /// The transcript was reverted to just before user message `message`.
+    ///
+    /// Folds: `message` and every later message move from
+    /// `SessionProjection.messages` to `SessionProjection.revert.hidden`.
+    /// Recorded after the engine restored the files the hidden turns changed
+    /// (`files`). A revert while one is pending extends it further back. The
+    /// next `MessageStarted` commits the pending revert (the hidden messages
+    /// are dropped for good). An older binary folds it as `Unknown`.
+    SessionReverted {
+        /// Reverted session.
+        session: SessionId,
+        /// First hidden message: the reverted user message.
+        message: MessageId,
+        /// Files restored to their state before `message`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<crate::revert::FileRestore>,
+    },
+
+    /// The pending revert was undone: hidden messages return to the
+    /// transcript and the files it restored were written back (`files`).
+    /// A no-op fold when no revert is pending. An older binary folds it as
+    /// `Unknown`.
+    SessionUnreverted {
+        /// Session whose revert was undone.
+        session: SessionId,
+        /// Files written back to their state before the revert.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<crate::revert::FileRestore>,
     },
 
     // -------- errors --------
@@ -1125,7 +1178,10 @@ impl Event {
             | Event::ContextEvicted { session, .. }
             | Event::ContextStatus { session, .. }
             | Event::UsageRecorded { session, .. }
-            | Event::TodosUpdated { session, .. } => Some(*session),
+            | Event::TodosUpdated { session, .. }
+            | Event::FilesChanged { session, .. }
+            | Event::SessionReverted { session, .. }
+            | Event::SessionUnreverted { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }

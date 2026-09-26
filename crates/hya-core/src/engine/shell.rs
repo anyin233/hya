@@ -397,6 +397,8 @@ impl SessionEngine {
         let projection = self.store.read_projection(session).await?;
         let input_for_after = active_hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
+        // Prior content of the files the command may change (revert).
+        let mut file_capture = super::file_snapshot::FileCapture::None;
         let result = match resources.resolve_tool(&tool) {
             Some(resolved) => {
                 let mut permission = self
@@ -451,6 +453,12 @@ impl SessionEngine {
                             workdir: binding.workdir().to_path_buf(),
                             cancel,
                         };
+                        file_capture = Box::pin(super::file_snapshot::capture_before(
+                            resolved.tool.name(),
+                            &input,
+                            binding.workdir(),
+                        ))
+                        .await;
                         resolved.tool.execute(&ctx, input).await
                     }
                     Err(error) => Err(error),
@@ -501,6 +509,14 @@ impl SessionEngine {
                     },
                 )
                 .await?;
+                Box::pin(self.record_file_changes(
+                    None,
+                    session,
+                    shell_part.message,
+                    shell_part.call,
+                    file_capture,
+                ))
+                .await?;
                 if retains_artifact {
                     artifact_guard.disarm();
                 } else {
@@ -522,6 +538,14 @@ impl SessionEngine {
                         message_text: error.to_string(),
                     },
                 )
+                .await?;
+                Box::pin(self.record_file_changes(
+                    None,
+                    session,
+                    shell_part.message,
+                    shell_part.call,
+                    file_capture,
+                ))
                 .await?;
                 Ok(finish)
             }

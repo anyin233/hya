@@ -12,6 +12,7 @@ mod agent_model_preference;
 mod bundle_registry;
 /// Typed store errors shared by session and bundle registry APIs.
 pub mod error;
+mod file_blob;
 mod mailbox;
 mod materialize;
 mod permission;
@@ -369,6 +370,10 @@ impl SessionStore {
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM projection_snapshot WHERE session_id = ?")
+            .bind(key.clone())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM file_blob WHERE session_id = ?")
             .bind(key.clone())
             .execute(&mut *tx)
             .await?;

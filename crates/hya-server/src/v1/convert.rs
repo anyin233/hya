@@ -179,6 +179,50 @@ pub(crate) fn session_info(
         permission_mode: String::new(),
         members: session.members.iter().map(member_info).collect(),
         usage: (!session.usage.is_empty()).then(|| usage_totals(&session.usage.total())),
+        forked_from: session.forked_from.map(|source| pb::ForkSource {
+            session: source.to_string(),
+            message_id: session
+                .forked_before
+                .map(|message| message.to_string())
+                .unwrap_or_default(),
+        }),
+        revert: session.revert.as_ref().map(|revert| pb::SessionRevert {
+            message_id: revert.message.to_string(),
+            text: revert
+                .hidden
+                .first()
+                .map(|message| message_text(&message.parts))
+                .unwrap_or_default(),
+            hidden_messages: u32::try_from(revert.hidden.len()).unwrap_or(u32::MAX),
+            files: revert.files.iter().map(reverted_file).collect(),
+        }),
+    }
+}
+
+/// Concatenated text parts of a message (a user prompt's text).
+pub(crate) fn message_text(parts: &[hya_proto::PartProjection]) -> String {
+    parts
+        .iter()
+        .filter_map(|part| match part {
+            hya_proto::PartProjection::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One file a revert or unrevert wrote, as the wire reports it.
+pub(crate) fn reverted_file(file: &hya_proto::FileRestore) -> pb::RevertedFile {
+    let (action, reason) = match (&file.error, &file.restored) {
+        (Some(error), _) => ("failed", error.clone()),
+        (None, hya_proto::FileState::Omitted { reason, .. }) => ("skipped", reason.clone()),
+        (None, restored) if *restored == file.saved => ("unchanged", String::new()),
+        (None, hya_proto::FileState::Absent) => ("deleted", String::new()),
+        (None, hya_proto::FileState::Stored { .. }) => ("restored", String::new()),
+    };
+    pb::RevertedFile {
+        path: file.path.clone(),
+        action: action.to_owned(),
+        reason,
     }
 }
 
@@ -659,6 +703,16 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
         }),
         Event::TodosUpdated { todos, .. } => P::TodoUpdated(pb::TodoUpdated {
             items: super::message::todo_list(todos).items,
+        }),
+        Event::SessionReverted { message, files, .. } => P::SessionReverted(pb::SessionReverted {
+            message_id: message.to_string(),
+            undone: false,
+            files: files.iter().map(reverted_file).collect(),
+        }),
+        Event::SessionUnreverted { files, .. } => P::SessionReverted(pb::SessionReverted {
+            message_id: String::new(),
+            undone: true,
+            files: files.iter().map(reverted_file).collect(),
         }),
         Event::WorkflowSelected { .. }
         | Event::WorkflowRunStarted { .. }

@@ -1,9 +1,69 @@
 use hya_proto::{
-    Event, MessageId, MessageProjection, PartId, PartProjection, Projection, SessionId,
+    Envelope, Event, MessageId, MessageProjection, PartId, PartProjection, Projection, Role,
+    SessionId,
 };
 
 use super::SessionEngine;
 use crate::error::CoreError;
+
+/// Where a fork cuts the source transcript.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForkAt {
+    /// Copy every visible message (the head).
+    Head,
+    /// Copy the messages strictly before this visible user message.
+    Message(MessageId),
+    /// Copy the messages whose `MessageStarted` has `seq <= until_seq`.
+    UntilSeq(u64),
+}
+
+/// Why a fork cut was refused.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ForkError {
+    /// The cut message is not in the source's visible transcript.
+    #[error("message not found: {0}")]
+    MessageNotFound(MessageId),
+    /// The cut message is not a user message.
+    #[error("message {0} is not a user message")]
+    NotUserMessage(MessageId),
+}
+
+/// Resolve a fork cut over the source's visible transcript (`projection`
+/// folded from `envs`): the source message the copy stops before, or `None`
+/// to copy every visible message. Messages hidden by a pending revert are
+/// never copied.
+///
+/// # Errors
+/// [`ForkError`] when `ForkAt::Message` names no visible user message.
+pub fn fork_cut(
+    envs: &[Envelope],
+    projection: &Projection,
+    at: ForkAt,
+) -> Result<Option<MessageId>, ForkError> {
+    let messages = &projection.session.messages;
+    match at {
+        ForkAt::Head => Ok(None),
+        ForkAt::Message(id) => match messages.iter().find(|message| message.id == id) {
+            Some(message) if message.role == Role::User => Ok(Some(id)),
+            Some(_) => Err(ForkError::NotUserMessage(id)),
+            None => Err(ForkError::MessageNotFound(id)),
+        },
+        ForkAt::UntilSeq(until_seq) => {
+            let started_after: std::collections::BTreeSet<MessageId> = envs
+                .iter()
+                .filter(|env| env.seq.0 > until_seq)
+                .filter_map(|env| match &env.event {
+                    Event::MessageStarted { message, .. } => Some(*message),
+                    _ => None,
+                })
+                .collect();
+            Ok(messages
+                .iter()
+                .find(|message| started_after.contains(&message.id))
+                .map(|message| message.id))
+        }
+    }
+}
 
 impl SessionEngine {
     /// Record that `target` was forked from `source` at the `before` cut point.
@@ -31,7 +91,11 @@ impl SessionEngine {
         .await
     }
 
-    /// Copy selected messages into a forked session log.
+    /// Copy the source's visible messages strictly before `before` (all of
+    /// them when `None`) into a forked session log.
+    ///
+    /// # Errors
+    /// Propagates store append failures.
     pub async fn copy_messages_to_session(
         &self,
         target: SessionId,

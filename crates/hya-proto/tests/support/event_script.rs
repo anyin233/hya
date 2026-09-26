@@ -2,7 +2,8 @@
 //!
 //! `script(seed, ...)` produces a plausible single-session event log mixing
 //! transcript streaming, usage records (per-round and legacy), message/part
-//! deletion (revert, compaction), compaction markers, todo lists, forks, Workflow runs
+//! deletion (revert, compaction), file changes, transcript revert/unrevert/
+//! commit, compaction markers, todo lists, forks, Workflow runs
 //! (including a re-emitted `WorkflowRunStarted` for an already-seen run, which
 //! only replay-only reducer state can deduplicate), and team roster/mail
 //! traffic. The same seed always yields the same events, so a failing seed is
@@ -11,10 +12,11 @@
 #![allow(dead_code)]
 
 use hya_proto::{
-    AgentName, CompactionStrategy, Event, FinishReason, MailEndpoint, MailKind, MemberId,
-    MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId, Role, RosterStatus, SessionId,
-    SubagentMode, TodoItem, TodoStatus, TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity,
-    WorkflowRevision, WorkflowRunId, WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
+    AgentName, CompactionStrategy, Event, FileChange, FileRestore, FileState, FinishReason,
+    MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId,
+    Role, RosterStatus, SessionId, SubagentMode, TodoItem, TodoStatus, TokenUsage, ToolCallId,
+    UsagePurpose, WorkflowIdentity, WorkflowRevision, WorkflowRunId, WorkflowRunStatus,
+    WorkflowSourceId, WorkflowStagePlan,
 };
 use uuid::Uuid;
 
@@ -101,7 +103,7 @@ impl Script {
 
     fn step(&mut self) -> Event {
         let session = self.session;
-        match self.rng.below(25) {
+        match self.rng.below(28) {
             0 | 1 => {
                 let message = MessageId::from_uuid(self.uuid());
                 self.messages.push((message, Vec::new()));
@@ -377,7 +379,53 @@ impl Script {
                     .collect();
                 Event::TodosUpdated { session, todos }
             }
+            25 => match self.message() {
+                Some((message, _)) => Event::FilesChanged {
+                    session,
+                    message,
+                    call: self
+                        .rng
+                        .chance(80)
+                        .then(|| ToolCallId::from_uuid(self.uuid())),
+                    files: vec![FileChange {
+                        path: format!("/tmp/scripted/f{}", self.rng.below(4)),
+                        before: self.file_state(),
+                    }],
+                },
+                None => self.title(),
+            },
+            26 => match self.message() {
+                Some((message, _)) => Event::SessionReverted {
+                    session,
+                    message,
+                    files: vec![FileRestore {
+                        path: format!("/tmp/scripted/f{}", self.rng.below(4)),
+                        restored: self.file_state(),
+                        saved: self.file_state(),
+                        error: self.rng.chance(10).then(|| "denied".to_string()),
+                    }],
+                },
+                None => self.title(),
+            },
+            27 => Event::SessionUnreverted {
+                session,
+                files: Vec::new(),
+            },
             _ => self.title(),
+        }
+    }
+
+    fn file_state(&mut self) -> FileState {
+        match self.rng.below(3) {
+            0 => FileState::Absent,
+            1 => FileState::Stored {
+                hash: format!("{:064x}", self.rng.next()),
+                size: self.rng.next() % 4_096,
+            },
+            _ => FileState::Omitted {
+                size: self.rng.next() % 9_000_000,
+                reason: "too_large".to_string(),
+            },
         }
     }
 

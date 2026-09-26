@@ -352,3 +352,18 @@ message MemberInfo {
   // Depth in the subagent tree (children of a root session are 1).
   uint32 depth = 8;
 }
+
+// One file a session revert or unrevert wrote (or could not restore).
+message RevertedFile {
+  // Absolute path of the file.
+  string path = 1;
+  // What happened: `restored` (content written back), `deleted` (the file
+  // did not exist at that point, so it was removed), `unchanged` (already
+  // in that state), `skipped` (its content was not kept — see `reason`),
+  // or `failed` (writing it failed — see `reason`).
+  string action = 2;
+  // Why a file was `skipped` (`too_large`, `session_cap`,
+  // `snapshot_budget`, `unreadable`) or the error of a `failed` write;
+  // empty otherwise.
+  string reason = 3;
+}

@@ -152,6 +152,29 @@ always safe (the next read of each session folds its full log once and writes
 a fresh row). Upgrading a database therefore costs one full fold per session,
 paid lazily by the first read of that session.
 
+### `0012_file_blob.sql`
+
+Adds `file_blob`, the content store behind session revert
+([Runtime — File snapshots and revert](runtime.md#file-snapshots-and-revert)):
+
+| Column | Constraint |
+| --- | --- |
+| `session_id` | `BLOB NOT NULL` (session storage key) |
+| `hash` | `TEXT NOT NULL` — lowercase hex sha256 of `content` |
+| `size` | `INTEGER NOT NULL` — `content` length in bytes |
+| `content` | `BLOB NOT NULL` — the file bytes |
+
+Primary key `(session_id, hash)`, `WITHOUT ROWID`. Events (`files_changed`,
+`session_reverted`, `session_unreverted`) carry only the hash; the content
+lives here, stored once per session and hash. It is auxiliary data, not a
+projection: the rows are written before the event that names them, and a
+missing row only makes that one file unrestorable (the revert reports it as
+`failed`).
+
+Store API: `put_file_blob(session, hash, content)` (`INSERT OR IGNORE`),
+`file_blob(session, hash) -> Option<Vec<u8>>`, and
+`file_blob_bytes(session) -> u64` (the engine's per-session cap check).
+
 ### `0005_resident_actor_claim.sql` (claim table)
 
 Adds coordination table `resident_actor_claim`:
@@ -258,7 +281,8 @@ One transaction:
 1. `DELETE FROM token_ledger WHERE session_id = ?`
 2. `DELETE FROM open_assistant_message WHERE session_id = ?`
 3. `DELETE FROM projection_snapshot WHERE session_id = ?`
-4. `DELETE FROM event_log WHERE session_id = ?`
+4. `DELETE FROM file_blob WHERE session_id = ?`
+5. `DELETE FROM event_log WHERE session_id = ?`
 
 After the commit the session's in-process cached projection is dropped.
 Returns whether any **event_log** rows were removed.

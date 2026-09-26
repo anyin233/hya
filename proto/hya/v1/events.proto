@@ -178,7 +178,22 @@ message StreamEvent {
     // (and `summary`/`child` on finish) and leave the rest empty, so fold
     // by `member`.
     MemberInfo member_updated = 22;
+    // The session was reverted (durable), or its pending revert was undone
+    // (`undone`). Re-read the session (`SessionInfo.revert`) and its
+    // messages: a revert hides `messageId` and every later message; an undo
+    // brings them back. A later `messageStarted` commits a pending revert.
+    SessionReverted session_reverted = 23;
   }
+}
+
+// A session revert or its undo.
+message SessionReverted {
+  // The reverted user message; empty for an undo.
+  string message_id = 1;
+  // True for an undo (`RevertSession.undo`).
+  bool undone = 2;
+  // Files the operation wrote (or could not restore).
+  repeated RevertedFile files = 3;
 }
 
 // A session was created.

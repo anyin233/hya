@@ -4786,6 +4786,24 @@ pub struct MemberInfo {
     #[prost(uint32, tag = "8")]
     pub depth: u32,
 }
+/// One file a session revert or unrevert wrote (or could not restore).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RevertedFile {
+    /// Absolute path of the file.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// What happened: `restored` (content written back), `deleted` (the file
+    /// did not exist at that point, so it was removed), `unchanged` (already
+    /// in that state), `skipped` (its content was not kept — see `reason`),
+    /// or `failed` (writing it failed — see `reason`).
+    #[prost(string, tag = "2")]
+    pub action: ::prost::alloc::string::String,
+    /// Why a file was `skipped` (`too_large`, `session_cap`,
+    /// `snapshot_budget`, `unreadable`) or the error of a `failed` write;
+    /// empty otherwise.
+    #[prost(string, tag = "3")]
+    pub reason: ::prost::alloc::string::String,
+}
 /// Terminal reason of an assistant message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -6440,7 +6458,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -6512,7 +6530,26 @@ pub mod stream_event {
         /// by `member`.
         #[prost(message, tag = "22")]
         MemberUpdated(super::MemberInfo),
+        /// The session was reverted (durable), or its pending revert was undone
+        /// (`undone`). Re-read the session (`SessionInfo.revert`) and its
+        /// messages: a revert hides `messageId` and every later message; an undo
+        /// brings them back. A later `messageStarted` commits a pending revert.
+        #[prost(message, tag = "23")]
+        SessionReverted(super::SessionReverted),
     }
+}
+/// A session revert or its undo.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionReverted {
+    /// The reverted user message; empty for an undo.
+    #[prost(string, tag = "1")]
+    pub message_id: ::prost::alloc::string::String,
+    /// True for an undo (`RevertSession.undo`).
+    #[prost(bool, tag = "2")]
+    pub undone: bool,
+    /// Files the operation wrote (or could not restore).
+    #[prost(message, repeated, tag = "3")]
+    pub files: ::prost::alloc::vec::Vec<RevertedFile>,
 }
 /// A session was created.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -12323,6 +12360,41 @@ pub struct SessionInfo {
     /// (compaction, revert, and deletion keep billed usage). Unset when none.
     #[prost(message, optional, tag = "14")]
     pub usage: ::core::option::Option<TokenUsage>,
+    /// Source of a forked session; unset for sessions that are not forks.
+    #[prost(message, optional, tag = "15")]
+    pub forked_from: ::core::option::Option<ForkSource>,
+    /// Pending revert (`RevertSession`): its messages are hidden from
+    /// `ListMessages` until an undo restores them or the next prompt or shell
+    /// turn commits the revert. Unset when nothing is pending.
+    #[prost(message, optional, tag = "16")]
+    pub revert: ::core::option::Option<SessionRevert>,
+}
+/// Where a forked session came from.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ForkSource {
+    /// Source session id.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+    /// Source user message the fork was cut before (the fork holds the
+    /// messages strictly before it); empty for a head fork.
+    #[prost(string, tag = "2")]
+    pub message_id: ::prost::alloc::string::String,
+}
+/// A pending revert of a session.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionRevert {
+    /// The reverted user message (the first hidden message).
+    #[prost(string, tag = "1")]
+    pub message_id: ::prost::alloc::string::String,
+    /// Text of that user message, e.g. to put it back in the composer.
+    #[prost(string, tag = "2")]
+    pub text: ::prost::alloc::string::String,
+    /// Number of hidden messages (the reverted message and every later one).
+    #[prost(uint32, tag = "3")]
+    pub hidden_messages: u32,
+    /// Files the revert restored, each as the revert left it.
+    #[prost(message, repeated, tag = "4")]
+    pub files: ::prost::alloc::vec::Vec<RevertedFile>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {
@@ -12416,15 +12488,26 @@ pub struct ForkSessionRequest {
     /// Session identifier to fork from.
     #[prost(string, tag = "1")]
     pub session: ::prost::alloc::string::String,
-    /// Copy events up to this sequence number; 0 forks at the current head.
+    /// Copy the messages whose start was recorded at or before this sequence
+    /// number; 0 forks at the current head. Ignored when `message_id` is set.
     #[prost(uint64, tag = "2")]
     pub until_seq: u64,
+    /// Fork before this user message of the source: the new session holds
+    /// every message strictly before it. Empty forks at `until_seq` (or the
+    /// head). A message that is not a visible user message of the source is
+    /// `invalid_argument` (not a user message) or `not_found`.
+    #[prost(string, tag = "3")]
+    pub message_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ForkSessionResponse {
     /// Projection summary of the forked session.
     #[prost(message, optional, tag = "1")]
     pub session: ::core::option::Option<SessionInfo>,
+    /// Text of the user message the fork was cut before (`message_id`), e.g.
+    /// to prefill the composer; empty for a head or `until_seq` fork.
+    #[prost(string, tag = "2")]
+    pub prompt_text: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompactSessionRequest {
@@ -12462,18 +12545,33 @@ pub struct RevertSessionRequest {
     /// Session identifier to revert.
     #[prost(string, tag = "1")]
     pub session: ::prost::alloc::string::String,
-    /// Revert target sequence number; 0 uses the last revert point.
+    /// Deprecated: sequence targets are not supported; a nonzero value is
+    /// `invalid_argument`. Use `message_id`.
     #[prost(uint64, tag = "2")]
     pub until_seq: u64,
-    /// When true, undo the previous revert instead of reverting.
+    /// When true, undo the pending revert (`/redo`): the hidden messages come
+    /// back and the files are written back to their state before the revert.
+    /// `invalid_argument` when no revert is pending (none, or committed by a
+    /// later prompt).
     #[prost(bool, tag = "3")]
     pub undo: bool,
+    /// User message to revert to (it and every later message are hidden).
+    /// Empty reverts the last visible user message (`/undo`); repeating it
+    /// reverts further back. `not_found` when the message is not in the
+    /// session, `invalid_argument` when it is not a user message or already
+    /// reverted.
+    #[prost(string, tag = "4")]
+    pub message_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RevertSessionResponse {
-    /// Projection summary after the revert.
+    /// Projection summary after the revert (`revert` set after a revert,
+    /// unset after an undo).
     #[prost(message, optional, tag = "1")]
     pub session: ::core::option::Option<SessionInfo>,
+    /// Files this call wrote (or could not restore).
+    #[prost(message, repeated, tag = "2")]
+    pub files: ::prost::alloc::vec::Vec<RevertedFile>,
 }
 /// Generated client implementations.
 pub mod session_client {
@@ -12697,7 +12795,11 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "DeleteSession"));
             self.inner.unary(req, path, codec).await
         }
-        /// Fork a session into a new session id, copying events up to a watermark.
+        /// Fork a session into a new session id. The fork copies the source's
+        /// visible messages (never those hidden by a pending revert): all of them
+        /// (the head), or those before `message_id`, or those started at or before
+        /// `until_seq`. The new session records its source (`SessionInfo
+        /// .forked_from`).
         ///
         /// hya.http: POST /v1/sessions/{session}/fork
         pub async fn fork_session(
@@ -12778,7 +12880,11 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "SummarizeSession"));
             self.inner.unary(req, path, codec).await
         }
-        /// Revert a session to an earlier watermark, or undo the last revert.
+        /// Revert a session to just before a user message (default: the last
+        /// one), or undo the pending revert (`undo`). A revert hides that user
+        /// message and every later message and restores the files their tool
+        /// calls changed; the next prompt or shell turn commits it. Fails with
+        /// `session_busy` while a turn runs.
         ///
         /// hya.http: POST /v1/sessions/{session}/revert
         pub async fn revert_session(
@@ -12865,7 +12971,11 @@ pub mod session_server {
             tonic::Response<super::DeleteSessionResponse>,
             tonic::Status,
         >;
-        /// Fork a session into a new session id, copying events up to a watermark.
+        /// Fork a session into a new session id. The fork copies the source's
+        /// visible messages (never those hidden by a pending revert): all of them
+        /// (the head), or those before `message_id`, or those started at or before
+        /// `until_seq`. The new session records its source (`SessionInfo
+        /// .forked_from`).
         ///
         /// hya.http: POST /v1/sessions/{session}/fork
         async fn fork_session(
@@ -12895,7 +13005,11 @@ pub mod session_server {
             tonic::Response<super::SummarizeSessionResponse>,
             tonic::Status,
         >;
-        /// Revert a session to an earlier watermark, or undo the last revert.
+        /// Revert a session to just before a user message (default: the last
+        /// one), or undo the pending revert (`undo`). A revert hides that user
+        /// message and every later message and restores the files their tool
+        /// calls changed; the next prompt or shell turn commits it. Fails with
+        /// `session_busy` while a turn runs.
         ///
         /// hya.http: POST /v1/sessions/{session}/revert
         async fn revert_session(

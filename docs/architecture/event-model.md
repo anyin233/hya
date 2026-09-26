@@ -97,7 +97,7 @@ their original typed values therefore remain visible in replay. Live-only
 fresh replay uses the persisted final state rather than reconstructing live
 stream deltas.
 
-### Full `Event` catalog (56 variants)
+### Full `Event` catalog (70 variants)
 
 Reducer effects:
 
@@ -312,7 +312,7 @@ the root.
 | --- | --- | --- |
 | `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold` | **no-op** for projection; durable checkpoint marker. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
 | `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the engine right after a todo tool's `tool_result` whose `metadata.todos` differs from the folded list (reads and no-op writes append nothing). Sessions without it (logs before reducer version 5) read the latest todo tool result instead. |
-| `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`. Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. |
+| `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`, `forked_before = before_message` (the source-log user message the copy stopped before; `None` for a head fork, which copies every visible message). Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. v1: `SessionInfo.forkedFrom`. `forked_before` folds from projection reducer version 6 (0.41.0). |
 | `context_evicted` | `session`, `evicted_parts`, `tokens_before`, `tokens_after`, `threshold` | **no-op**; request-local tool-output reduction. The event log retains full outputs. |
 
 `ContextCompacted` is durable replay evidence and a baseline/checkpoint marker,
@@ -320,6 +320,33 @@ not a deletion of the source transcript. A projection reader uses the summary
 message and the pointer range; an offline reader can reconstruct the exact
 folded input from the event log. `ContextEvicted` records only what was omitted
 from one request.
+
+#### File snapshots and revert
+
+See [Runtime — File snapshots and revert](runtime.md#file-snapshots-and-revert)
+for what is captured, the limits, and the restore rules. File contents never
+ride on events: `FileState` names a per-session blob (`file_blob` table).
+
+| Wire `type` | Payload fields | Reducer |
+| --- | --- | --- |
+| `files_changed` | `session`, `message` (assistant message of the call), optional `call: ToolCallId`, `files: [FileChange { path, before: FileState }]` | Fold: appends `FileChangeRecord { call, path, before }` to that message's `file_changes`. Appended right after the call's `tool_result` / `tool_error` when it changed at least one file. |
+| `session_reverted` | `session`, `message` (the reverted user message), `files: [FileRestore { path, restored, saved, error? }]` (omitted when empty) | Fold: `message` and every later message move from `messages` to `revert.hidden` (`SessionProjection.revert = { message, hidden, files }`). While a revert is pending, a new one extends it: the new hidden messages come first, and a file already listed keeps its first `saved`. A `message` not in `messages` is a no-op. v1: `sessionReverted { messageId, files }`. |
+| `session_unreverted` | `session`, `files: [FileRestore]` (omitted when empty) | Fold: the hidden messages return to the end of `messages`; `revert = None`. No-op when nothing is pending. v1: `sessionReverted { undone: true, files }`. |
+
+`FileState` is tagged on `kind`: `absent` (no regular file), `stored { hash,
+size }` (lowercase hex sha256 of the content, the blob key), or `omitted {
+size, reason }` (content not kept: `too_large`, `session_cap`,
+`snapshot_budget`, `unreadable`; never restored). In a `FileRestore`,
+`restored` is the state the operation wrote, `saved` the state it replaced
+(what an unrevert writes back), and `error` why the write failed.
+
+**Commit.** There is no commit event: the fold of the next `message_started`
+for a new message (any role) drops a pending revert first
+(`revert = None`), so the hidden messages are gone for good and an unrevert
+after it is a no-op. Logs written before 0.41.0 contain none of these events
+and fold exactly as before (`revert` and `file_changes` stay empty and are
+omitted from the serialized projection); an older binary folds them as
+`unknown`. Projection reducer version 6.
 
 #### Errors and forward compatibility
 
@@ -577,6 +604,8 @@ Projection {
 | `workflow` | workflow lifecycle events |
 | `context_status` | latest `context_status` |
 | `forked_from` | `session_forked` (omitted when `None`) |
+| `forked_before` | `session_forked.before_message` (omitted when `None`) |
+| `revert` | pending `session_reverted` (`{ message, hidden: [MessageProjection], files: [FileRestore] }`): the hidden messages live here, not in `messages`, until `session_unreverted` or the next `message_started` (omitted when `None`) |
 | `usage` | `usage_recorded` + legacy `message_finished.tokens` fallback (omitted when empty) |
 | `todos` | latest `todos_updated` (omitted when `None`) |
 
@@ -592,6 +621,7 @@ Projection {
 | `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds, last_round /* latest round alone */ }` (omitted when `None`) |
 | `files`, `agents` | `user_prompt_context_recorded` |
 | `parts` | text / reasoning / tool events |
+| `file_changes` | `files_changed` for this message: `[{ call?, path, before: FileState }]` in call order (omitted when empty) |
 | `error` | `error` with `failed_message` = this message: `MessageError { code, message }` (omitted when `None`) |
 
 ### `PartProjection` — no media arm
@@ -635,10 +665,14 @@ another store of attachments).
   links, bounded route outcomes, and terminal statuses into the Workflow
   projection. `WorkflowStageRouteOutcome` is one observation per provider
   stream group and never carries transcript content.
-- `context_compacted`, `session_forked`, and `context_evicted` remain durable
-  observability records rather than projection state transitions; the
-  `context_compacted` system message and pointer range provide the replay
-  checkpoint.
+- `files_changed` appends file-change records to its message.
+- `session_reverted` moves the reverted user message and everything after it
+  into `revert.hidden`; `session_unreverted` moves them back; a new
+  `message_started` commits (drops) a pending revert.
+- `session_forked` records the fork source and cut; `context_compacted` and
+  `context_evicted` remain durable observability records rather than
+  projection state transitions; the `context_compacted` system message and
+  pointer range provide the replay checkpoint.
 
 ### `Projection::apply`
 

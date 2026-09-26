@@ -338,7 +338,10 @@ For each `ToolCallRequested` collected in the round, in order:
 9. Re-check activation-hook health after the after-hook batch.
 10. `cap_tool_output` on success so one oversized result cannot blow the next
     model context window.
-11. Emit `ToolResult` or `ToolError`.
+11. Emit `ToolResult` or `ToolError`, then `FilesChanged` when the call
+    changed files ([File snapshots and revert](#file-snapshots-and-revert);
+    the prior state is captured after the before-hooks, ahead of the
+    permission check).
 
 Formatter/LSP post-edit work for file mutations runs through the tool planes
 when configured (inside tool execution, not as a separate round step).
@@ -880,23 +883,125 @@ full synthetic assistant message around one `shell` tool call:
 4. `ToolCallRequested` (after optional `tool.execute.before`; a veto emits
    `ToolError` and finishes with `Error`)
 5. `ToolResult` or `ToolError`
-6. `MessageFinished`
+6. `FilesChanged` when the command changed files in a git work tree
+   ([File snapshots and revert](#file-snapshots-and-revert))
+7. `MessageFinished`
 
 There is **no** provider call, so no `StepStarted` / `StepFinished` and no
 stream permit is taken.
 
 ## Forking a session
 
-`copy_messages_to_session` replays a source `Projection` into the target
-session as **fresh** events with newly minted `MessageId` / `PartId` per copy
-(ids are never reused), stopping before an optional `before` message id.
+A fork is a new root session that starts with a copy of another session's
+transcript. `POST /v1/sessions/{session}/fork` (`ForkSession`) resolves the
+cut with `hya_core::fork_cut` over the source's **visible** messages
+(messages hidden by a pending revert are never copied):
+
+| Request | Cut | The fork holds |
+| --- | --- | --- |
+| `{}` (head) | none | every visible message, the last one included |
+| `{"messageId": "<user message>"}` | that message | the messages strictly before it; `promptText` returns its text (the TUI puts it back in the composer) |
+| `{"untilSeq": "<seq>"}` | first message started after `seq` | the messages whose `message_started` has `seq <= untilSeq` (in their final state) |
+
+`messageId` must name a visible user message of the source (`invalid_argument`
+for another role, `not_found` when absent). The server then creates the
+session (source agent, model, workdir), records
+`session_forked { source, before_message }` (the cut, `None` for a head
+fork), titles it `forked from <source>`, copies the metadata, and calls
+`copy_messages_to_session`, which replays the kept messages as **fresh**
+events with newly minted `MessageId` / `PartId` per copy (ids are never
+reused). `SessionInfo.forkedFrom` reports `{session, messageId}` from
+`session_forked`.
 
 Tool parts cannot be replayed as their original streaming events, so they are
 recreated as `ToolInputStart` followed by `ToolPartUpdated` carrying the final
-`ToolPartState`.
+`ToolPartState`. File snapshots (`files_changed`) are not copied: reverting a
+copied message in the fork restores no files.
 
 Consequence: a forked session's event log is not byte-identical to the
 source's, and its sequence numbering is independent.
+
+Before 0.41.0 a head fork passed the last message as the cut and so dropped
+it, and `untilSeq` was ignored.
+
+## File snapshots and revert
+
+`/undo` in a frontend is `RevertSession`: it hides the last user turn (and
+every later message) from the transcript and puts the files that turn's tools
+changed back the way they were. `/redo` (`undo: true`) brings both back,
+until the next prompt commits the revert. This follows opencode's semantics,
+with hya's event log in place of opencode's git snapshot directory.
+
+### Snapshots (`files_changed`)
+
+Before a tool call runs, the engine captures the prior state of the files it
+may change ([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
+after the call it keeps the prior content of each file that actually changed
+as a per-session blob (`file_blob` table, keyed by sha256) and appends one
+`files_changed { message, call, files: [{path, before}] }` after the call's
+`tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
+`omitted {size, reason}`.
+
+| Tool | What is captured |
+| --- | --- |
+| `write`, `edit` | the `path` (or `file_path`) argument, resolved against the workdir like the tools do; `local://` handles are skipped |
+| `apply_patch` | every `*** Add File:`, `*** Delete File:`, `*** Update File:`, and `*** Move to:` path of the patch |
+| `bash` (model calls and the user's `!` commands) | only when the session workdir is inside a git work tree: `git status --porcelain -z --untracked-files=all` before and after the command (plus the `HEAD` tree diff if the command moved `HEAD`) names the touched files; a file that was clean before is read back from the old `HEAD` tree, a dirty or untracked one from a copy read before the command. Ignored files and the workdir's `.hya/` are not covered. Outside a git work tree bash changes are not captured. |
+
+Why event + blobs and not a git shadow repository: the restore data lives in
+the same database as the transcript, so it is replayed, deleted, and capped
+with the session, and `write`/`edit`/`apply_patch` are covered in any
+directory. Git is used only as a change detector for bash, where the touched
+files cannot be known in advance.
+
+Limits, so snapshots never grow without bound:
+
+| Limit | Value | Beyond it |
+| --- | --- | --- |
+| One file's content | 2 MiB (`MAX_FILE_BYTES`) | `omitted` / `too_large` |
+| All blobs of one session | 256 MiB (`MAX_SESSION_BLOB_BYTES`) | `omitted` / `session_cap` |
+| bash pre-capture: dirty files read | 2,000 files (`MAX_DIRTY_FILES`) | `omitted` / `snapshot_budget` |
+| bash pre-capture: bytes read | 16 MiB (`MAX_DIRTY_BYTES`) | `omitted` / `snapshot_budget` |
+| each git call | 10 s | the bash call is not captured |
+
+Blobs are deduplicated by hash within a session and deleted with it. A
+capture problem never fails the tool call; an `omitted` file is simply not
+restored. The bash capture compares the tree before and after the command,
+so a file some other process changed while the command ran is recorded too.
+
+### Revert, unrevert, commit
+
+`SessionEngine::revert_session(session, target)` takes the session's turn
+lease (so no turn runs meanwhile; the server also holds the admission slot and
+answers `session_busy` while a turn runs), then:
+
+1. Picks the target: the last visible user message (`/undo`) or a given
+   visible user message. Assistant/system messages and already hidden
+   messages are refused.
+2. For each path in the `file_changes` of the messages it will hide (then of
+   the already hidden ones), takes the **earliest** recorded `before` state:
+   the state before the first hidden change.
+3. Keeps each file's current content as a blob (`saved`), then writes the
+   `before` state: `stored` content is written back (parent directories
+   created), `absent` removes the file, `omitted` leaves it alone.
+4. Appends `session_reverted { message, files: [{path, restored, saved,
+   error?}] }`. The reducer moves the message and every later one from
+   `SessionProjection.messages` to `SessionProjection.revert.hidden`.
+
+A revert while one is pending extends it further back; each file keeps the
+`saved` state of the first revert. `unrevert_session` writes every `saved`
+state back, appends `session_unreverted { files }`, and the reducer returns
+the hidden messages to the transcript. The next `message_started` on the
+session (a prompt, a shell turn, a compaction summary) **commits** the
+revert: the reducer drops the hidden messages for good and `/redo` is no
+longer possible. Because the hidden messages are no longer in
+`SessionProjection.messages`, the model context of the next turn, titles,
+handoffs, and `ListMessages` never see them.
+
+Not restored: changes made by subagent sessions (their `files_changed` live
+on the child logs), bash changes outside a git work tree, ignored files, and
+`omitted` files. A file edited by hand after the reverted turn is still set
+back to its recorded state.
 
 ## Hooks
 
