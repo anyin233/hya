@@ -6,17 +6,19 @@ use std::str::FromStr;
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::HeaderMap;
 use axum::routing::get;
 
 use super::Json;
 use serde_json::Value;
 
-use crate::ServerState;
+use crate::{ApiError, ServerState};
 use hya_api::v1 as pb;
 use hya_api::v1::submit_workflow_command_request::Command;
 use hya_proto::workflow::{WorkflowCommand, WorkflowCommandResult};
 
 use super::V1Error;
+use super::request_scope;
 use super::session::parse_session;
 
 pub(crate) fn router() -> Router<ServerState> {
@@ -28,35 +30,19 @@ pub(crate) fn router() -> Router<ServerState> {
         )
 }
 
-/// The control handle requires a session context; catalog reads use the
-/// first live session and answer empty when the process has none.
-async fn catalog_session(st: &ServerState) -> Result<Option<hya_proto::SessionId>, V1Error> {
-    let rows = st.engine.store().list_sessions().await?;
-    Ok(rows.first().map(|row| row.session))
-}
-
 async fn list_workflows(
     State(st): State<ServerState>,
-    Query(_query): Query<BTreeMap<String, String>>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
 ) -> Result<Json<pb::ListWorkflowsResponse>, V1Error> {
-    let Some(session) = catalog_session(&st).await? else {
-        return Ok(Json(pb::ListWorkflowsResponse {
-            workflows: Vec::new(),
-            page: Some(pb::PageInfo::default()),
-        }));
-    };
-    let result = crate::workflow::execute(
-        &st,
-        session,
-        WorkflowCommand::List,
-        hya_proto::WorkflowDelivery::Started,
-    )
-    .await
-    .map_err(V1Error::from)?;
-    let rows = match result {
-        WorkflowCommandResult::List { workflows } => workflows,
-        _ => Vec::new(),
-    };
+    let request: pb::ListWorkflowsRequest = super::query_request(&[], &query)?;
+    let scope = request_scope(&headers, &request.directory)?;
+    let rows = st
+        .workflow_control
+        .list(scope)
+        .await
+        .map_err(ApiError::workflow)
+        .map_err(V1Error::from)?;
     let workflows = rows
         .iter()
         .map(|row| {

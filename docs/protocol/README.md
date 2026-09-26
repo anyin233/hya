@@ -26,13 +26,10 @@ ignores it:
 | Scope | Rpcs | Without a scope |
 |---|---|---|
 | Required | `ReadFile`, `ListDirectory`, `FindFiles`, `SearchText`, `SearchSymbols`; `GetVcsStatus`, `GetVcsDiff`, `ApplyPatch`; `ListWorktrees`, `CreateWorktree`, `DeleteWorktree`, `ResetWorktree`; `GetCurrentProject`; `CreatePty` (its `cwd`, else the scope) | `invalid_argument` ("this rpc needs a directory scope") |
-| Optional | `ListAgents`, `ListCommands`, `ListSkills`, `GetBootstrap`, `ListAgentModels`, `SetAgentModel` (without `session`) | The global view: builtins, installed bundles, and user skills (`~/.config/hya/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`); no `.hya/commands`, `.hya/skills`, or `.agents/skills` of any project; builtin command templates keep `${path}` unexpanded |
-| From the session | turns (`CreateTurn` prompt, command, and shell), `ForkSession`, `ListAgentModels`/`SetAgentModel` with `session`, workflow commands | Always the session's recorded workdir (and its Project roots for tools); the request scope is not consulted |
+| Optional | `ListAgents`, `ListCommands`, `ListSkills`, `GetBootstrap`, `ListAgentModels`, `SetAgentModel` (without `session`), `ListWorkflows` | The global view: builtins, installed bundles, and user skills (`~/.config/hya/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`); no `.hya/commands`, `.hya/skills`, or `.agents/skills` of any project; builtin command templates keep `${path}` unexpanded. For `ListWorkflows`: the user and bundle Workflow tiers, with no project tier. |
+| From the session | turns (`CreateTurn` prompt, command, and shell), `ForkSession`, `ListAgentModels`/`SetAgentModel` with `session`, workflow commands (`SubmitWorkflowCommand`, `GetWorkflowState`) | Always the session's recorded workdir (and its Project roots for tools); the request scope is not consulted |
 | From the request body | `CreateSession` (`workdir`, `projectId`, or `kind: temporary`; see [Projects and session placement](#projects-and-session-placement)), `ResolveProject`/`EnsureProjectForPath` (`path`) | As documented for each rpc |
 | Ignored | `GetLocation` (echoes the scope in `directory`, empty without one), `GetConfig`, `UpdateConfig`, `ListModels`, `ListProviders`, `GetProvider` and the provider/auth writes, `ListTools`, `ListSavedRules`, MCP rpcs, `ListInteractions`, `StreamGlobalEvents` | Works the same with or without a scope |
-
-`ListWorkflows` does not read its `directory` yet: it lists the workflow
-catalog of the most recently listed session.
 
 ## Allowed Host names
 

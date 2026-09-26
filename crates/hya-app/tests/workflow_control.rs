@@ -947,3 +947,63 @@ async fn workflow_catalog_precedence_revision_and_binding_contract() {
     let _ = std::fs::remove_dir_all(user_workflows);
     let _ = std::fs::remove_dir_all(control_root);
 }
+
+/// `list` answers each named directory's own catalog, and answers only the
+/// user/bundle tiers (no project rows) when the caller names no directory —
+/// a wrong scope must never silently substitute another directory's catalog.
+#[tokio::test]
+async fn list_answers_each_directorys_own_catalog_and_falls_back_to_global() {
+    let root_a = project_root();
+    let root_b = project_root();
+    write_workflow(&root_a, "alpha", "ALPHA");
+    write_workflow(&root_b, "gamma", "GAMMA");
+    let (router, model) = offline_router(None);
+    let agent = agent_with_model(&model, None);
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.expect("store"),
+        router,
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (WebSearchConfig::default(), InvocationPolicy::default()),
+    )
+    .await
+    .expect("build engine");
+    let control = built.workflow_control();
+
+    // Zero sessions exist; `list` must still answer from the filesystem and
+    // bundle catalog directly, never from a session's catalog.
+    let a = control
+        .list(Some(root_a.as_path()))
+        .await
+        .expect("list directory A");
+    assert_eq!(
+        a.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+        ["alpha", "plan-impl-review"],
+        "directory A's own project row, not directory B's"
+    );
+
+    let b = control
+        .list(Some(root_b.as_path()))
+        .await
+        .expect("list directory B");
+    assert_eq!(
+        b.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(),
+        ["gamma", "plan-impl-review"],
+        "directory B's own project row, not directory A's"
+    );
+
+    let global = control.list(None).await.expect("list global");
+    assert_eq!(
+        global
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["plan-impl-review"],
+        "no directory named: only user/bundle rows, never a project tier"
+    );
+
+    built.shutdown().await.expect("shutdown control engine");
+    let _ = std::fs::remove_dir_all(root_a);
+    let _ = std::fs::remove_dir_all(root_b);
+}

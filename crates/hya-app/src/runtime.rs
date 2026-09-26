@@ -1902,6 +1902,22 @@ impl hya_server::WorkflowControl for crate::WorkflowControl {
         })
     }
 
+    fn list(
+        &self,
+        scope: Option<std::path::PathBuf>,
+    ) -> futures::future::BoxFuture<
+        '_,
+        Result<Vec<hya_proto::WorkflowSummary>, hya_server::WorkflowControlError>,
+    > {
+        Box::pin(async move {
+            crate::WorkflowControl::list(self, scope.as_deref())
+                .await
+                .map_err(|error| {
+                    hya_server::WorkflowControlError::new(error.code(), error.to_string())
+                })
+        })
+    }
+
     fn active_run(&self, session: SessionId) -> Option<hya_proto::WorkflowRunId> {
         crate::WorkflowControl::active_run(self, session)
             .ok()
