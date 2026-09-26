@@ -237,7 +237,7 @@ machinery is more developed than the end-user team UI.
 
 Evidence: [Runtime](architecture/runtime.md),
 [Admission and Governor](architecture/admission-and-governor.md),
-[`crates/hya-tool/src/task.rs`](../crates/hya-tool/src/task.rs),
+[`bundles/presets/extended-tools/native/src/task.rs`](../bundles/presets/extended-tools/native/src/task.rs),
 [`crates/hya-core/src/subagent.rs`](../crates/hya-core/src/subagent.rs),
 [`crates/hya-core/src/resident.rs`](../crates/hya-core/src/resident.rs),
 [`crates/hya-core/src/orchestrator.rs`](../crates/hya-core/src/orchestrator.rs),

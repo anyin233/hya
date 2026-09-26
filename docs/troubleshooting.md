@@ -402,6 +402,33 @@ send it (`curl -H "x-hya-bridge-token: $TOKEN" …`; for the TUI,
 know the token gets this error from a newer `hya bridge`: use the TUI of the
 same release. See [docs/relay.md](relay.md#connecting-from-a-client).
 
+## `503 unavailable: remote backend is offline, or the relay link was rotated or is wrong`
+
+The bridge (`hya bridge`, bare `hya --connect`, or the TUI's
+`/connect-remote` child) reached the relay, but no backend answered for the
+link's room. The TUI shows it as `Connected to the relay, but the remote
+backend did not answer …`, as `Remote connection failed: …`, or on the
+Project view's notice line (`Temporary session failed: unavailable: …`).
+Causes, in order:
+
+1. **The backend is not on the relay.** On the backend machine, run
+   `hya serve relay status`; `hya serve relay connect <url>` (or
+   `hya serve start --relay <url>`) joins it.
+2. **The link was rotated or is wrong.** A rotated or mistyped key looks
+   exactly like an offline backend (the proxy refuses the open before the
+   backend sees it). Get the current link with `hya serve relay link` on the
+   backend machine.
+3. **The path to the relay drops streams.** Run `hya relay doctor <link>`
+   (see below).
+
+`Remote bridge exited (…)` means the bridge process itself ended; its last
+line is in the parentheses. `/connect-remote` starts a new one and
+`/disconnect-remote` returns to the local backend. `No project is open ·
+choose a project or start a temporary session` is not an error: a remote
+start creates no session until you pick a Project or press `t` in the
+Project view. See [docs/relay.md](relay.md#connecting-from-a-client) and
+[docs/tui.md](tui.md#remote-backends-connect-remote).
+
 ## Relay: `hya proxy`/`hya relay doctor` Cannot Reach Each Other
 
 The secure relay (`hya proxy`, `hya relay doctor`) works through nginx,

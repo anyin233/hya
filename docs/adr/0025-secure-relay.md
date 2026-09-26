@@ -106,8 +106,9 @@ hya://<public-host>[:port][/<prefix>]/<room_id>?t=<auto|grpc|ws>#<b64url(x25519_
 ### D5 — Relay origin
 
 Requests that arrive through the host connector carry an axum extension
-`Origin::Relay`. Relay-control rpcs (connect, disconnect, rotate, link) and
-`process` stop are refused from relay origin; they stay loopback-only.
+`Origin::Relay`. Every `RelayControl` rpc (connect, disconnect, status,
+link, rotate) and the process stop/upgrade rpcs are refused from relay
+origin; they stay loopback-only.
 Everything else is allowed, because holding the link means owner trust.
 
 These refusals are a **UX guard, not a security boundary**: they keep a

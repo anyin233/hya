@@ -38,7 +38,7 @@ git) lives under `hya_server::support`.
 
 ## The v1 surface
 
-Seventeen services, 89 rpcs: AgentModels (durable per-agent model
+Eighteen services, 99 rpcs: AgentModels (durable per-agent model
 preferences), Process (health/location/config/dispose/
 upgrade/bootstrap), Catalog (agents/models/providers/commands/skills/
 tools/permission modes, plus provider upsert/refresh/model overrides/model
@@ -49,7 +49,9 @@ global `ANY` passthroughs), Turn
 (event-driven admit + get/wait/cancel), Messages + Todo, Events (replay
 with `includeRaw` + session/global streams), Interactions (unified
 permission/question plane + saved rules), Workflow, Files, Project + VCS,
-Worktrees, MCP, Pty (incl. the `StreamPty` bidi bridge), Logs.
+Worktrees, MCP, Pty (incl. the `StreamPty` bidi bridge), Logs, RelayControl
+(loopback-only relay connect/disconnect/status/link/rotate; see
+[Secure relay](../relay.md)).
 
 Semantics highlights:
 

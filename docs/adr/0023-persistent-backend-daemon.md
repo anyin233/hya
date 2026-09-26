@@ -207,7 +207,7 @@ only the daemon knows that.
   asked for one (the TUI on connect, and `/new`) creates it with
   `CreateSessionRequest.ephemeral`. The server records
   `SessionEphemeralSet {ephemeral: true}`; the projection folds
-  `SessionProjection.ephemeral` (reducer version 9). The session's first
+  `SessionProjection.ephemeral` (reducer version 8). The session's first
   message (a prompt, command, or shell turn from any client), a title, an
   archive, or a fork taken from it (`SessionEphemeralSet {ephemeral:
   false}` on the source) clear the mark for good, so replay decides it and

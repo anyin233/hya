@@ -54,7 +54,7 @@ plus a human-readable `output` line where an unanswered question renders
 as `Unanswered`. Cancellation is reported per question, not as an error.
 Plane failures (no host attached) surface as a tool error instead of a
 silent empty answer.
-([crates/hya-tool/src/ask_user.rs](../../crates/hya-tool/src/ask_user.rs))
+([bundles/presets/base-tools/native/src/ask_user.rs](../../bundles/presets/base-tools/native/src/ask_user.rs))
 
 ### The `todo__` namespace
 
@@ -133,7 +133,7 @@ child or session side effect. This hidden compatibility does not change
 authorization, model/category precedence, resident behavior, or run-tree
 projection.
 
-([crates/hya-tool/src/task.rs](../../crates/hya-tool/src/task.rs))
+([bundles/presets/extended-tools/native/src/task.rs](../../bundles/presets/extended-tools/native/src/task.rs))
 
 ### Skill
 
@@ -504,7 +504,7 @@ or any client surface.
 The old `shell` name remains only as a hidden runtime alias for stale callers;
 it is not an advertised schema and uses the same implementation. This is
 intentional compatibility, not a second command surface.
-([crates/hya-tool/src/shell.rs](../../crates/hya-tool/src/shell.rs),
+([bundles/presets/base-tools/native/src/shell.rs](../../bundles/presets/base-tools/native/src/shell.rs),
 [crates/hya-tool/src/tool.rs](../../crates/hya-tool/src/tool.rs))
 
 ### Webfetch
@@ -516,7 +516,7 @@ jpeg/png/gif/webp are returned as base64 data-URI attachments instead of text.
 The tool asserts `Action::WebFetch` on `Resource::Url(url)` and carries
 `ToolPermission::Tool`, so under `permission.model: default` it asks before every
 fetch.
-([crates/hya-tool/src/webfetch/mod.rs:18-27](../../crates/hya-tool/src/webfetch/mod.rs#L18-L27))
+([bundles/presets/network-tools/native/src/webfetch/mod.rs:18-27](../../bundles/presets/network-tools/native/src/webfetch/mod.rs#L18-L27))
 
 ### Websearch
 
@@ -677,8 +677,8 @@ bounded display metadata (`type`, `path`, `text`, `lineStart`, `lineEnd`,
 `totalLines`, and `truncated`) for client rendering. Invalid UTF-8 is replaced
 with U+FFFD and reported as a warning rather than silently omitted.
 
-([crates/hya-tool/src/read.rs](../../crates/hya-tool/src/read.rs),
-[crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs))
+([bundles/presets/base-tools/native/src/read.rs](../../bundles/presets/base-tools/native/src/read.rs),
+[bundles/presets/base-tools/native/src/hashline/mod.rs](../../bundles/presets/base-tools/native/src/hashline/mod.rs))
 
 ## WRITE
 
@@ -698,8 +698,8 @@ Formatter and LSP processing run before the final result is built. The returned
 the final post-formatter bytes, not the pre-format input. Write also updates the
 shared hashline snapshot state so a later Edit can use the same recovery chain.
 
-([crates/hya-tool/src/write.rs](../../crates/hya-tool/src/write.rs),
-[crates/hya-tool/src/hashline/fs.rs](../../crates/hya-tool/src/hashline/fs.rs))
+([bundles/presets/base-tools/native/src/write.rs](../../bundles/presets/base-tools/native/src/write.rs),
+[bundles/presets/base-tools/native/src/hashline/fs.rs](../../bundles/presets/base-tools/native/src/hashline/fs.rs))
 
 ## EDIT
 
@@ -766,10 +766,10 @@ the lock or during execution returns typed `cancelled` without exposing file
 contents. After a commit, cancellation first reconciles the actual bytes,
 snapshot, and duplicate guard, then returns the typed cancellation.
 
-([crates/hya-tool/src/edit.rs](../../crates/hya-tool/src/edit.rs),
-[crates/hya-tool/src/hashline/apply.rs](../../crates/hya-tool/src/hashline/apply.rs),
-[crates/hya-tool/src/hashline/merge.rs](../../crates/hya-tool/src/hashline/merge.rs),
-[crates/hya-tool/src/hashline/state.rs](../../crates/hya-tool/src/hashline/state.rs))
+([bundles/presets/base-tools/native/src/edit.rs](../../bundles/presets/base-tools/native/src/edit.rs),
+[bundles/presets/base-tools/native/src/hashline/apply.rs](../../bundles/presets/base-tools/native/src/hashline/apply.rs),
+[bundles/presets/base-tools/native/src/hashline/merge.rs](../../bundles/presets/base-tools/native/src/hashline/merge.rs),
+[bundles/presets/base-tools/native/src/hashline/state.rs](../../bundles/presets/base-tools/native/src/hashline/state.rs))
 
 ## GREP
 
@@ -820,17 +820,17 @@ metadata for syntax-aware client rendering without changing the durable Event
 model. Grep snapshots enable the same exact stale-anchor recovery path as Read
 and Edit.
 
-([crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs),
-[crates/hya-tool/src/grep.rs](../../crates/hya-tool/src/grep.rs))
+([bundles/presets/base-tools/native/src/hashline/mod.rs](../../bundles/presets/base-tools/native/src/hashline/mod.rs),
+[bundles/presets/base-tools/native/src/grep.rs](../../bundles/presets/base-tools/native/src/grep.rs))
 
 ## APPLY_PATCH
 
 The parameter is `patchText` (serde alias `patch`) carrying a Codex/Compat-style
 patch envelope. Supported hunk kinds are **add**, **update**, **delete**, and
 **move** (move is an update header plus an optional move line).
-([crates/hya-tool/src/apply_patch/mod.rs:16-55](../../crates/hya-tool/src/apply_patch/mod.rs#L16-L55),
-[crates/hya-tool/src/apply_patch/parse.rs](../../crates/hya-tool/src/apply_patch/parse.rs),
-[crates/hya-tool/src/apply_patch/apply.rs:59-121](../../crates/hya-tool/src/apply_patch/apply.rs#L59-L121))
+([bundles/presets/base-tools/native/src/apply_patch/mod.rs:16-55](../../bundles/presets/base-tools/native/src/apply_patch/mod.rs#L16-L55),
+[bundles/presets/base-tools/native/src/apply_patch/parse.rs](../../bundles/presets/base-tools/native/src/apply_patch/parse.rs),
+[bundles/presets/base-tools/native/src/apply_patch/apply.rs:59-121](../../bundles/presets/base-tools/native/src/apply_patch/apply.rs#L59-L121))
 
 ### Patch envelope grammar
 
@@ -876,7 +876,7 @@ accepted. A `..` component, or a path outside every workspace root once
 symlinks are resolved (ADR-0026), is an **input error**. Every
 touched path (and move destination) is permission-checked as `Action::Edit`
 **before** any file is written, so a denial leaves the whole patch unapplied.
-([crates/hya-tool/src/apply_patch/mod.rs](../../crates/hya-tool/src/apply_patch/mod.rs))
+([bundles/presets/base-tools/native/src/apply_patch/mod.rs](../../bundles/presets/base-tools/native/src/apply_patch/mod.rs))
 
 The result is a Compat-style title plus an aggregate diff and per-file metadata.
 After application, the same post-edit formatter + BOM re-sync + LSP-diagnostics
@@ -900,7 +900,7 @@ The call takes a file path (`filePath`) plus 1-based `line` and `character`
 `Action::Lsp` on the resolved path. When no language server is registered for the
 file type, the tool returns a tool error whose message is
 `No LSP server available for this file type.`
-([`LspTool`](../../crates/hya-tool/src/lsp.rs),
+([`LspTool`](../../bundles/presets/extended-tools/native/src/lsp.rs),
 [`LspOperation`](../../crates/hya-tool/src/lsp_plane.rs),
 [`builtin_permission`](../../crates/hya-tool/src/tool.rs))
 
@@ -952,8 +952,8 @@ with `{line, text, isMatch}`. This metadata is a presentation hint, not a new
 event or read-model store. It lets a client render a titled block per file with
 file-derived syntax highlighting while keeping match identity visible.
 
-([crates/hya-tool/src/grep.rs](../../crates/hya-tool/src/grep.rs),
-[crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs))
+([bundles/presets/base-tools/native/src/grep.rs](../../bundles/presets/base-tools/native/src/grep.rs),
+[bundles/presets/base-tools/native/src/hashline/mod.rs](../../bundles/presets/base-tools/native/src/hashline/mod.rs))
 
 ## Result envelope and presentation boundary
 
@@ -1079,7 +1079,7 @@ reports when no server supports a file type.
 ([`SessionEngine::new`](../../crates/hya-core/src/engine.rs),
 [`build_session_engine`](../../crates/hya-app/src/runtime.rs),
 [`MailboxError::Unavailable`](../../crates/hya-tool/src/mailbox.rs),
-[`LspTool`](../../crates/hya-tool/src/lsp.rs))
+[`LspTool`](../../bundles/presets/extended-tools/native/src/lsp.rs))
 
 ### MCP tools
 
@@ -1137,9 +1137,9 @@ license notices are shipped with the source-derived implementation.
 
 The focused contracts are owned by these seams:
 
-- Native schemas and adapters: [`crates/hya-tool/src/read.rs`](../../crates/hya-tool/src/read.rs), [`write.rs`](../../crates/hya-tool/src/write.rs), [`edit.rs`](../../crates/hya-tool/src/edit.rs), [`grep.rs`](../../crates/hya-tool/src/grep.rs), and [`shell.rs`](../../crates/hya-tool/src/shell.rs).
+- Native schemas and adapters: [`bundles/presets/base-tools/native/src/read.rs`](../../bundles/presets/base-tools/native/src/read.rs), [`write.rs`](../../bundles/presets/base-tools/native/src/write.rs), [`edit.rs`](../../bundles/presets/base-tools/native/src/edit.rs), [`grep.rs`](../../bundles/presets/base-tools/native/src/grep.rs), and [`shell.rs`](../../bundles/presets/base-tools/native/src/shell.rs).
 - Shared hashline formatting, strict operations, exact recovery, atomic writes,
-  snapshots, and lock bounds: [`crates/hya-tool/src/hashline/`](../../crates/hya-tool/src/hashline/).
+  snapshots, and lock bounds: [`bundles/presets/base-tools/native/src/hashline/`](../../bundles/presets/base-tools/native/src/hashline/).
 - Invocation/resource permission and typed error mapping:
   [`crates/hya-tool/src/permission.rs`](../../crates/hya-tool/src/permission.rs)
   and [`crates/hya-core/src/engine/tool_error.rs`](../../crates/hya-core/src/engine/tool_error.rs).

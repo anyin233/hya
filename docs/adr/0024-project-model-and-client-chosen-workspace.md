@@ -62,7 +62,9 @@ The client chooses where a session works. The unit it chooses is a
   needs a directory takes it from the session (its workdir and roots) or the
   request; without either it fails with `invalid_argument`. The daemon is
   spawned with `current_dir = $HOME` only so that it does not pin a random
-  directory; nothing reads it.
+  directory. The only readers left are project-tier plugin and bundle
+  discovery (`./.hya/plugins`, `./.hya/bundles`), which therefore resolve to
+  `~/.hya/` for a daemon.
 - **Per-root context.** Bundles, skills, and `AGENTS.md` context under `.hya`
   are loaded from the session's workdir as before. Other roots contribute no
   context yet (follow-up).

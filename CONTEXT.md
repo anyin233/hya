@@ -364,6 +364,13 @@ A Session that belongs to no Project. Its workdir and only root is a fresh scrat
 `$XDG_CACHE_HOME/hya/scratch/<session_id>`, which hya never deletes.
 _Avoid_: scratch project, anonymous session, ephemeral session
 
+**Ephemeral session**:
+A root Session a client created before the user asked for one (the TUI's session on connect and
+`/new`). While it is still unused (no message, title, archive, or fork), the daemon deletes it about
+5 s after no client watches it (ADR-0023 amendment). Unrelated to a Temporary session, whose scratch
+directory is never deleted.
+_Avoid_: temporary session, empty session
+
 **Relay**:
 The `hya proxy` process that forwards end-to-end-encrypted streams between a backend and its remote
 clients. It sees Room ids and ciphertext only and holds no key (ADR-0025).
