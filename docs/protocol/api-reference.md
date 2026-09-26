@@ -636,7 +636,11 @@ Delete a session and its event log.
 
 ### `Session.ForkSession`
 
-Fork a session into a new session id, copying events up to a watermark.
+Fork a session into a new session id. The fork copies the source's
+visible messages (never those hidden by a pending revert): all of them
+(the head), or those before `message_id`, or those started at or before
+`until_seq`. The new session records its source (`SessionInfo
+.forked_from`).
 
 
 ### `Session.CompactSession`
@@ -651,7 +655,11 @@ Produce a summary message for a session (titles, handoffs).
 
 ### `Session.RevertSession`
 
-Revert a session to an earlier watermark, or undo the last revert.
+Revert a session to just before a user message (default: the last
+one), or undo the pending revert (`undo`). A revert hides that user
+message and every later message and restores the files their tool
+calls changed; the next prompt or shell turn commits it. Fails with
+`session_busy` while a turn runs.
 
 
 ## Service `Turn`
@@ -1365,6 +1373,17 @@ One curated projected event from the event log.
 | `part_replaced` (20) | `oneof `payload`: PartReplaced` | A text or reasoning part's whole text was set (the durable record of a streamed text part, or a plugin rewrite of it). |
 | `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
 | `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
+| `session_reverted` (23) | `oneof `payload`: SessionReverted` | The session was reverted (durable), or its pending revert was undone (`undone`). Re-read the session (`SessionInfo.revert`) and its messages: a revert hides `messageId` and every later message; an undo brings them back. A later `messageStarted` commits a pending revert. |
+
+### `SessionReverted`
+
+A session revert or its undo.
+
+| Field | Type | Description |
+|---|---|---|
+| `message_id` (1) | `string` | The reverted user message; empty for an undo. |
+| `undone` (2) | `bool` | True for an undo (`RevertSession.undo`). |
+| `files` (3) | `repeated RevertedFile` | Files the operation wrote (or could not restore). |
 
 ### `SessionStarted`
 
@@ -2063,6 +2082,16 @@ A subagent (member) spawned by a session, as recorded on the parent's log.
 | `call_id` (7) | `string` | Tool call (`ToolCallPart.call_id`) that spawned the member; empty for members started without a tool call. |
 | `depth` (8) | `uint32` | Depth in the subagent tree (children of a root session are 1). |
 
+### `RevertedFile`
+
+One file a session revert or unrevert wrote (or could not restore).
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | Absolute path of the file. |
+| `action` (2) | `string` | What happened: `restored` (content written back), `deleted` (the file did not exist at that point, so it was removed), `unchanged` (already in that state), `skipped` (its content was not kept — see `reason`), or `failed` (writing it failed — see `reason`). |
+| `reason` (3) | `string` | Why a file was `skipped` (`too_large`, `session_cap`, `snapshot_budget`, `unreadable`) or the error of a `failed` write; empty otherwise. |
+
 ### `GetHealthResponse`
 
 
@@ -2396,6 +2425,28 @@ Projection summary of one session.
 | `permission_mode` (12) | `string` | Effective permission mode of the session tree: `manual`, `yolo`, or `<bundle-id>/<mode-id>`. Recorded on the root session (children report the root's mode); the process default (`yolo` under `--yolo` or `permission.model: danger`, else `manual`) when none was set. |
 | `members` (13) | `repeated MemberInfo` | Subagents this session spawned, in spawn order, with their latest status (folded from the session's own log). The live counterpart is the `memberUpdated` stream event. |
 | `usage` (14) | `TokenUsage` | Billed usage of the session: every provider call made for it (turn rounds plus title/summarizer side calls), summed. Never decreases (compaction, revert, and deletion keep billed usage). Unset when none. |
+| `forked_from` (15) | `ForkSource` | Source of a forked session; unset for sessions that are not forks. |
+| `revert` (16) | `SessionRevert` | Pending revert (`RevertSession`): its messages are hidden from `ListMessages` until an undo restores them or the next prompt or shell turn commits the revert. Unset when nothing is pending. |
+
+### `ForkSource`
+
+Where a forked session came from.
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Source session id. |
+| `message_id` (2) | `string` | Source user message the fork was cut before (the fork holds the messages strictly before it); empty for a head fork. |
+
+### `SessionRevert`
+
+A pending revert of a session.
+
+| Field | Type | Description |
+|---|---|---|
+| `message_id` (1) | `string` | The reverted user message (the first hidden message). |
+| `text` (2) | `string` | Text of that user message, e.g. to put it back in the composer. |
+| `hidden_messages` (3) | `uint32` | Number of hidden messages (the reverted message and every later one). |
+| `files` (4) | `repeated RevertedFile` | Files the revert restored, each as the revert left it. |
 
 ### `CreateSessionRequest`
 
@@ -2465,7 +2516,8 @@ Projection summary of one session.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `string` | Session identifier to fork from. |
-| `until_seq` (2) | `uint64` | Copy events up to this sequence number; 0 forks at the current head. |
+| `until_seq` (2) | `uint64` | Copy the messages whose start was recorded at or before this sequence number; 0 forks at the current head. Ignored when `message_id` is set. |
+| `message_id` (3) | `string` | Fork before this user message of the source: the new session holds every message strictly before it. Empty forks at `until_seq` (or the head). A message that is not a visible user message of the source is `invalid_argument` (not a user message) or `not_found`. |
 
 ### `ForkSessionResponse`
 
@@ -2473,6 +2525,7 @@ Projection summary of one session.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `SessionInfo` | Projection summary of the forked session. |
+| `prompt_text` (2) | `string` | Text of the user message the fork was cut before (`message_id`), e.g. to prefill the composer; empty for a head or `until_seq` fork. |
 
 ### `CompactSessionRequest`
 
@@ -2510,15 +2563,17 @@ Projection summary of one session.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `string` | Session identifier to revert. |
-| `until_seq` (2) | `uint64` | Revert target sequence number; 0 uses the last revert point. |
-| `undo` (3) | `bool` | When true, undo the previous revert instead of reverting. |
+| `until_seq` (2) | `uint64` | Deprecated: sequence targets are not supported; a nonzero value is `invalid_argument`. Use `message_id`. |
+| `undo` (3) | `bool` | When true, undo the pending revert (`/redo`): the hidden messages come back and the files are written back to their state before the revert. `invalid_argument` when no revert is pending (none, or committed by a later prompt). |
+| `message_id` (4) | `string` | User message to revert to (it and every later message are hidden). Empty reverts the last visible user message (`/undo`); repeating it reverts further back. `not_found` when the message is not in the session, `invalid_argument` when it is not a user message or already reverted. |
 
 ### `RevertSessionResponse`
 
 
 | Field | Type | Description |
 |---|---|---|
-| `session` (1) | `SessionInfo` | Projection summary after the revert. |
+| `session` (1) | `SessionInfo` | Projection summary after the revert (`revert` set after a revert, unset after an undo). |
+| `files` (2) | `repeated RevertedFile` | Files this call wrote (or could not restore). |
 
 ### `PromptTurn`
 

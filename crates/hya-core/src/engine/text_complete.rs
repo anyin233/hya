@@ -86,6 +86,9 @@ impl TextPartAccumulator {
             | Event::ContextStatus { .. }
             | Event::UsageRecorded { .. }
             | Event::TodosUpdated { .. }
+            | Event::FilesChanged { .. }
+            | Event::SessionReverted { .. }
+            | Event::SessionUnreverted { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

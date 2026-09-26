@@ -211,6 +211,74 @@ in `ListEvents` too, so a transcript read can place the divider.
 { "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "LocalSummarizer", "message": "msg_...", "foldedCount": 12, "manual": true } } }
 ```
 
+## Revert and redo
+
+`POST /v1/sessions/{id}/revert` (`RevertSession`) is `/undo`: it hides a
+user message and every later message, and restores the files their tool
+calls changed (see [Runtime — File snapshots and
+revert](../architecture/runtime.md#file-snapshots-and-revert) for what is
+captured and the size limits). `{"undo": true}` is `/redo`: the hidden
+messages come back and the files are written back to their state before the
+revert. The next prompt or shell turn **commits** a pending revert: the
+hidden messages are dropped for good, the model never sees them, and undo is
+refused from then on.
+
+| Request | Effect |
+| --- | --- |
+| `{}` | revert the last visible user message; repeat to go further back |
+| `{"messageId": "msg_..."}` | revert to that user message (it and every later message are hidden) |
+| `{"undo": true}` | undo the pending revert (`messageId` ignored) |
+
+The response is `{ session: SessionInfo, files: [RevertedFile] }`.
+`SessionInfo.revert` is set while a revert is pending: `{ messageId, text
+(the reverted prompt, e.g. to refill the composer), hiddenMessages, files }`.
+`ListMessages`/`GetMessage` leave the hidden messages out (they are not
+flagged, they are absent). Each `RevertedFile` is `{ path, action, reason }`
+with `action` `restored`, `deleted` (the file did not exist then, so it was
+removed), `unchanged`, `skipped` (content not kept: `reason` `too_large`,
+`session_cap`, `snapshot_budget`, `unreadable`), or `failed` (`reason` is
+the write error).
+
+| Error | When |
+| --- | --- |
+| `session_busy` (409) | a turn is running or being admitted on the session |
+| `invalid_argument` (400) | no user message to revert; `messageId` is not a user message or is already reverted; `undo` with nothing pending; a nonzero `untilSeq` (deprecated, unsupported) |
+| `not_found` (404) | `messageId` is not in the session |
+| `session_not_found` (404) | unknown session |
+
+The session stream carries each revert and undo as durable
+`sessionReverted { messageId, undone, files }` (`messageId` empty and
+`undone: true` for an undo). Re-read the session and its messages on it; a
+later `messageStarted` means the revert was committed.
+
+```json
+{ "event": { "seq": "57", "session": "hysec_...", "sessionReverted": { "messageId": "msg_...", "files": [ { "path": "/repo/a.txt", "action": "restored" } ] } } }
+```
+
+```sh
+curl -X POST localhost:3250/v1/sessions/hysec_.../revert -d '{}'
+curl -X POST localhost:3250/v1/sessions/hysec_.../revert -d '{"undo": true}'
+```
+
+## Fork
+
+`POST /v1/sessions/{id}/fork` (`ForkSession`) creates a new root session
+with a copy of the source's visible transcript (never messages hidden by a
+pending revert):
+
+| Request | The fork holds |
+| --- | --- |
+| `{}` | every message (the head, last message included) |
+| `{"messageId": "msg_..."}` | the messages strictly before that user message; the response's `promptText` is that message's text, to prefill the composer |
+| `{"untilSeq": "<seq>"}` | the messages whose `messageStarted` has `seq <= untilSeq` |
+
+The response is `{ session: SessionInfo, promptText }`; the new session's
+`SessionInfo.forkedFrom` is `{ session, messageId }` (`messageId` empty for a
+head or `untilSeq` fork). A `messageId` that is not a user message is
+`invalid_argument`; one not in the source is `not_found`. Copied messages get
+new ids; the source's file snapshots are not copied, so reverting a copied
+turn in the fork restores no files.
+
 ## Live and durable frames
 
 Stream events come in two kinds:

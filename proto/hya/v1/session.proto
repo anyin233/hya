@@ -38,7 +38,11 @@ service Session {
   // hya.http: DELETE /v1/sessions/{session}
   rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
 
-  // Fork a session into a new session id, copying events up to a watermark.
+  // Fork a session into a new session id. The fork copies the source's
+  // visible messages (never those hidden by a pending revert): all of them
+  // (the head), or those before `message_id`, or those started at or before
+  // `until_seq`. The new session records its source (`SessionInfo
+  // .forked_from`).
   //
   // hya.http: POST /v1/sessions/{session}/fork
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
@@ -53,7 +57,11 @@ service Session {
   // hya.http: POST /v1/sessions/{session}/summarize
   rpc SummarizeSession(SummarizeSessionRequest) returns (SummarizeSessionResponse);
 
-  // Revert a session to an earlier watermark, or undo the last revert.
+  // Revert a session to just before a user message (default: the last
+  // one), or undo the pending revert (`undo`). A revert hides that user
+  // message and every later message and restores the files their tool
+  // calls changed; the next prompt or shell turn commits it. Fails with
+  // `session_busy` while a turn runs.
   //
   // hya.http: POST /v1/sessions/{session}/revert
   rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
@@ -104,6 +112,33 @@ message SessionInfo {
   // rounds plus title/summarizer side calls), summed. Never decreases
   // (compaction, revert, and deletion keep billed usage). Unset when none.
   TokenUsage usage = 14;
+  // Source of a forked session; unset for sessions that are not forks.
+  ForkSource forked_from = 15;
+  // Pending revert (`RevertSession`): its messages are hidden from
+  // `ListMessages` until an undo restores them or the next prompt or shell
+  // turn commits the revert. Unset when nothing is pending.
+  SessionRevert revert = 16;
+}
+
+// Where a forked session came from.
+message ForkSource {
+  // Source session id.
+  string session = 1;
+  // Source user message the fork was cut before (the fork holds the
+  // messages strictly before it); empty for a head fork.
+  string message_id = 2;
+}
+
+// A pending revert of a session.
+message SessionRevert {
+  // The reverted user message (the first hidden message).
+  string message_id = 1;
+  // Text of that user message, e.g. to put it back in the composer.
+  string text = 2;
+  // Number of hidden messages (the reverted message and every later one).
+  uint32 hidden_messages = 3;
+  // Files the revert restored, each as the revert left it.
+  repeated RevertedFile files = 4;
 }
 
 message CreateSessionRequest {
@@ -176,13 +211,22 @@ message DeleteSessionResponse {}
 message ForkSessionRequest {
   // Session identifier to fork from.
   string session = 1;
-  // Copy events up to this sequence number; 0 forks at the current head.
+  // Copy the messages whose start was recorded at or before this sequence
+  // number; 0 forks at the current head. Ignored when `message_id` is set.
   uint64 until_seq = 2;
+  // Fork before this user message of the source: the new session holds
+  // every message strictly before it. Empty forks at `until_seq` (or the
+  // head). A message that is not a visible user message of the source is
+  // `invalid_argument` (not a user message) or `not_found`.
+  string message_id = 3;
 }
 
 message ForkSessionResponse {
   // Projection summary of the forked session.
   SessionInfo session = 1;
+  // Text of the user message the fork was cut before (`message_id`), e.g.
+  // to prefill the composer; empty for a head or `until_seq` fork.
+  string prompt_text = 2;
 }
 
 message CompactSessionRequest {
@@ -213,13 +257,26 @@ message SummarizeSessionResponse {
 message RevertSessionRequest {
   // Session identifier to revert.
   string session = 1;
-  // Revert target sequence number; 0 uses the last revert point.
+  // Deprecated: sequence targets are not supported; a nonzero value is
+  // `invalid_argument`. Use `message_id`.
   uint64 until_seq = 2;
-  // When true, undo the previous revert instead of reverting.
+  // When true, undo the pending revert (`/redo`): the hidden messages come
+  // back and the files are written back to their state before the revert.
+  // `invalid_argument` when no revert is pending (none, or committed by a
+  // later prompt).
   bool undo = 3;
+  // User message to revert to (it and every later message are hidden).
+  // Empty reverts the last visible user message (`/undo`); repeating it
+  // reverts further back. `not_found` when the message is not in the
+  // session, `invalid_argument` when it is not a user message or already
+  // reverted.
+  string message_id = 4;
 }
 
 message RevertSessionResponse {
-  // Projection summary after the revert.
+  // Projection summary after the revert (`revert` set after a revert,
+  // unset after an undo).
   SessionInfo session = 1;
+  // Files this call wrote (or could not restore).
+  repeated RevertedFile files = 2;
 }

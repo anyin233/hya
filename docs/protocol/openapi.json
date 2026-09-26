@@ -795,7 +795,7 @@
     "/v1/sessions/{session}/fork": {
       "post": {
         "operationId": "Session.ForkSession",
-        "summary": "Fork a session into a new session id, copying events up to a watermark.",
+        "summary": "Fork a session into a new session id. The fork copies the source's",
         "tags": [
           "Session"
         ],
@@ -839,7 +839,7 @@
     "/v1/sessions/{session}/revert": {
       "post": {
         "operationId": "Session.RevertSession",
-        "summary": "Revert a session to an earlier watermark, or undo the last revert.",
+        "summary": "Revert a session to just before a user message (default: the last",
         "tags": [
           "Session"
         ],
@@ -2139,6 +2139,27 @@
           },
           "member_updated": {
             "$ref": "#/components/schemas/MemberInfo"
+          },
+          "session_reverted": {
+            "$ref": "#/components/schemas/SessionReverted"
+          }
+        }
+      },
+      "SessionReverted": {
+        "type": "object",
+        "description": "A session revert or its undo.",
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "undone": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevertedFile"
+            }
           }
         }
       },
@@ -3306,6 +3327,21 @@
           }
         }
       },
+      "RevertedFile": {
+        "type": "object",
+        "description": "One file a session revert or unrevert wrote (or could not restore).",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "GetHealthResponse": {
         "type": "object",
         "description": "",
@@ -3882,6 +3918,46 @@
           },
           "usage": {
             "$ref": "#/components/schemas/TokenUsage"
+          },
+          "forked_from": {
+            "$ref": "#/components/schemas/ForkSource"
+          },
+          "revert": {
+            "$ref": "#/components/schemas/SessionRevert"
+          }
+        }
+      },
+      "ForkSource": {
+        "type": "object",
+        "description": "Where a forked session came from.",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionRevert": {
+        "type": "object",
+        "description": "A pending revert of a session.",
+        "properties": {
+          "message_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "hidden_messages": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevertedFile"
+            }
           }
         }
       },
@@ -4000,6 +4076,9 @@
           "until_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "message_id": {
+            "type": "string"
           }
         }
       },
@@ -4009,6 +4088,9 @@
         "properties": {
           "session": {
             "$ref": "#/components/schemas/SessionInfo"
+          },
+          "prompt_text": {
+            "type": "string"
           }
         }
       },
@@ -4069,6 +4151,9 @@
           },
           "undo": {
             "type": "boolean"
+          },
+          "message_id": {
+            "type": "string"
           }
         }
       },
@@ -4078,6 +4163,12 @@
         "properties": {
           "session": {
             "$ref": "#/components/schemas/SessionInfo"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevertedFile"
+            }
           }
         }
       },

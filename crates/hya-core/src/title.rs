@@ -162,6 +162,7 @@ mod tests {
             files: Vec::new(),
             agents: Vec::new(),
             parts: Vec::new(),
+            file_changes: Vec::new(),
             cause: None,
             error: None,
         });

@@ -222,7 +222,29 @@ async fn fork_session(
         return Err(V1Error::session_not_found(&id));
     }
     let projection = hya_proto::Projection::from_events(&envs);
-    let before = watermark_message(&projection, request.until_seq);
+    let at = if !request.message_id.is_empty() {
+        hya_core::ForkAt::Message(parse_message(&request.message_id)?)
+    } else if request.until_seq > 0 {
+        hya_core::ForkAt::UntilSeq(request.until_seq)
+    } else {
+        hya_core::ForkAt::Head
+    };
+    let before = hya_core::fork_cut(&envs, &projection, at).map_err(|error| match error {
+        hya_core::ForkError::MessageNotFound(_) => {
+            V1Error::new(hya_api::error::Code::NotFound, error.to_string())
+        }
+        hya_core::ForkError::NotUserMessage(_) => V1Error::invalid_argument(error.to_string()),
+    })?;
+    let prompt_text = match at {
+        hya_core::ForkAt::Message(cut) => projection
+            .session
+            .messages
+            .iter()
+            .find(|message| message.id == cut)
+            .map(|message| super::convert::message_text(&message.parts))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     let target = st
         .engine
         .create(CreateSession {
@@ -258,21 +280,13 @@ async fn fork_session(
         .await?;
     Ok(Json(pb::ForkSessionResponse {
         session: Some(projection_info(&st, target).await?),
+        prompt_text,
     }))
 }
 
-/// Resolve the last message id at or before a sequence watermark.
-fn watermark_message(
-    projection: &hya_proto::Projection,
-    until_seq: u64,
-) -> Option<hya_proto::MessageId> {
-    if until_seq == 0 {
-        return projection.session.messages.last().map(|m| m.id);
-    }
-    // Message projections do not carry their creating sequence; approximate
-    // the watermark with the transcript tail (head fork semantics).
-    let _ = until_seq;
-    projection.session.messages.last().map(|m| m.id)
+fn parse_message(id: &str) -> Result<hya_proto::MessageId, V1Error> {
+    id.parse::<hya_proto::MessageId>()
+        .map_err(|_| V1Error::invalid_argument(format!("invalid message id: {id}")))
 }
 
 async fn compact_session(
@@ -327,26 +341,49 @@ async fn revert_session(
 ) -> Result<Json<pb::RevertSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
     session_exists(&st, session).await?;
-    if request.undo {
-        // Undo = clear any revert marker from session metadata.
-        let projection = st.engine.read_projection(session).await?;
-        let mut metadata = projection
-            .session
-            .metadata
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        metadata.remove("hya.revert");
-        st.engine
-            .set_metadata(session, serde_json::Value::Object(metadata))
-            .await?;
-        return Ok(Json(pb::RevertSessionResponse {
-            session: Some(projection_info(&st, session).await?),
-        }));
+    if !request.undo && request.until_seq != 0 {
+        return Err(V1Error::invalid_argument(
+            "untilSeq is not supported by RevertSession; pass messageId",
+        ));
     }
-    // Sequence-targeted revert relies on the legacy diff machinery; the
-    // curated v1 surface exposes undo plus the metadata projection until
-    // that machinery is ported (tracked in the consolidation plan).
-    Err(V1Error::unavailable(
-        "sequence-targeted revert is not ported to v1 yet; use undo=true or the legacy surface",
-    ))
+    let target = if request.message_id.is_empty() {
+        hya_core::RevertTarget::LastUserMessage
+    } else {
+        hya_core::RevertTarget::Message(parse_message(&request.message_id)?)
+    };
+    if st.is_busy(session) {
+        return Err(V1Error::session_busy());
+    }
+    // Hold the admission slot so no prompt is admitted while files and the
+    // transcript change; the engine also holds the turn lease.
+    let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
+    let files = if request.undo {
+        st.engine.unrevert_session(session).await
+    } else {
+        st.engine
+            .revert_session(session, target)
+            .await
+            .map(|outcome| outcome.files)
+    }
+    .map_err(revert_error)?;
+    drop(run);
+    Ok(Json(pb::RevertSessionResponse {
+        session: Some(projection_info(&st, session).await?),
+        files: files.iter().map(super::convert::reverted_file).collect(),
+    }))
+}
+
+fn revert_error(error: hya_core::RevertError) -> V1Error {
+    use hya_core::RevertError as E;
+    match error {
+        E::SessionNotFound => {
+            V1Error::new(hya_api::error::Code::SessionNotFound, error.to_string())
+        }
+        E::Busy => V1Error::session_busy(),
+        E::MessageNotFound(_) => V1Error::new(hya_api::error::Code::NotFound, error.to_string()),
+        E::NothingToRevert | E::NotUserMessage(_) | E::AlreadyReverted(_) | E::NoRevertPending => {
+            V1Error::invalid_argument(error.to_string())
+        }
+        E::Core(error) => V1Error::from(error),
+    }
 }

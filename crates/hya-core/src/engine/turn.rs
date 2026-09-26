@@ -1846,6 +1846,20 @@ impl SessionEngine {
                     self.restore_todo_plane(session).await;
                 }
                 let started = std::time::Instant::now();
+                // Prior content of the files this call may change (revert),
+                // captured before the permission check (a denied call changes
+                // nothing, so it records nothing).
+                let file_capture = match resources.resolve_tool(&tc.name) {
+                    Some(resolved) => {
+                        Box::pin(super::file_snapshot::capture_before(
+                            resolved.tool.name(),
+                            &tc.input,
+                            binding.workdir(),
+                        ))
+                        .await
+                    }
+                    None => super::file_snapshot::FileCapture::None,
+                };
                 let (result, result_policy) = match resources.resolve_tool(&tc.name) {
                     Some(resolved) => {
                         let result_policy = resolved.tool.result_policy();
@@ -2052,6 +2066,14 @@ impl SessionEngine {
                     _ => None,
                 };
                 self.emit_for_actor(actor_claim, session, event).await?;
+                Box::pin(self.record_file_changes(
+                    actor_claim,
+                    session,
+                    message,
+                    tc.call,
+                    file_capture,
+                ))
+                .await?;
                 // A todo tool's result carries the whole list; record the
                 // change so the projection (and `todoUpdated`) follow it.
                 if let Some(output) = todo_output

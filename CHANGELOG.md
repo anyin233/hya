@@ -1,5 +1,21 @@
 # 0.41.0
 
+## Revert and redo sessions with file restore; fork at a message
+
+- `POST /v1/sessions/{session}/revert` now works:
+  - `{}` hides the last user message and everything after it, and puts back the files those turns changed. Call it again to go further back.
+  - `{"messageId": …}` reverts to that user message.
+  - `{"undo": true}` brings the messages and the file changes back.
+  - The next prompt or shell turn makes the revert permanent. Hidden messages are left out of `ListMessages`, the model context, and titles.
+  - The response lists each file as `restored`, `deleted`, `unchanged`, `skipped`, or `failed`. A revert while a turn runs returns `session_busy`.
+  - `SessionInfo.revert` describes a pending revert, and the stream carries `sessionReverted`.
+- File changes are recorded per tool call as `FilesChanged` events, with the earlier file contents stored per session in the event store and deleted with the session:
+  - `write`, `edit`, and `apply_patch` are recorded in any directory.
+  - `bash` (including your own `!` commands) is recorded only inside a git work tree.
+  - Limits: 2 MiB per file and 256 MiB per session.
+- Fork: `POST /v1/sessions/{session}/fork` with `{"messageId": …}` forks before that user message and returns its text as `promptText`. `untilSeq` is now honored. A fork of the latest state now keeps the last message; before, it was dropped. `SessionInfo.forkedFrom` names the source session. See [Protocol guide](docs/protocol/README.md).
+- The projection reducer version is now 6. Existing logs replay unchanged.
+
 ## Provider View in the TUI
 
 - `/key` (no arguments) opens a full-screen Provider View. The list shows each provider's protocol, key source, status, and model count. Open a provider to see its models with their display name, source (`remote`, `config`, `override`), limits, and reasoning. Changes apply at once, with no restart.

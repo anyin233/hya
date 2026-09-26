@@ -19,6 +19,7 @@ use crate::message::{
     ToolPartState,
 };
 use crate::model::{AgentName, ModelRef, ToolName};
+use crate::revert::{FileChangeRecord, FileRestore, RevertProjection};
 use crate::scope;
 use crate::tokens::{TokenAccountingMode, TokenSource};
 use crate::usage::{MessageUsage, SessionUsage};
@@ -85,6 +86,15 @@ pub struct SessionProjection {
     /// fold never counts those for a fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<SessionId>,
+    /// Source-log message the fork was cut before (`SessionForked
+    /// .before_message`); `None` for a head fork or a non-fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_before: Option<MessageId>,
+    /// Pending revert (`SessionReverted`): the hidden messages live here, not
+    /// in `messages`, until `SessionUnreverted` restores them or the next
+    /// `MessageStarted` commits the revert. `None` when nothing is pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revert: Option<RevertProjection>,
     /// Billed provider usage of this session, by serving model and purpose.
     ///
     /// Folded from `UsageRecorded` (plus legacy `MessageFinished.tokens` of
@@ -185,6 +195,10 @@ pub struct MessageProjection {
     pub agents: Vec<serde_json::Value>,
     /// Ordered content parts (text / reasoning / tool only — no media).
     pub parts: Vec<PartProjection>,
+    /// Files this message's tool calls changed, with their prior state
+    /// (`FilesChanged`), in call order. What a revert restores from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_changes: Vec<FileChangeRecord>,
     /// Why the turn driving this message failed, folded from an `Error`
     /// event naming it in `failed_message`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -697,7 +711,7 @@ pub struct HandoffProjection {
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 5;
+pub const PROJECTION_REDUCER_VERSION: u32 = 6;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -751,7 +765,8 @@ fn changed_message(event: &Event) -> Option<MessageId> {
         | Event::ToolCallRequested { message, .. }
         | Event::ToolResult { message, .. }
         | Event::ToolError { message, .. }
-        | Event::ToolPartUpdated { message, .. } => Some(*message),
+        | Event::ToolPartUpdated { message, .. }
+        | Event::FilesChanged { message, .. } => Some(*message),
         Event::UsageRecorded { message, .. } => *message,
         Event::Error { failed_message, .. } => *failed_message,
         _ => None,
@@ -850,6 +865,37 @@ impl Projection {
     /// same as a forward search.
     fn message_mut(&mut self, id: MessageId) -> Option<&mut MessageProjection> {
         self.session.messages.iter_mut().rev().find(|m| m.id == id)
+    }
+
+    /// Hide `message` and every later message behind a pending revert. A
+    /// revert while one is pending extends it: the older hidden messages
+    /// follow the newly hidden ones, and a file keeps the `saved` state of the
+    /// first revert (the state an unrevert must return to).
+    fn apply_revert(&mut self, message: MessageId, files: &[FileRestore]) {
+        let Some(index) = self
+            .session
+            .messages
+            .iter()
+            .position(|item| item.id == message)
+        else {
+            return;
+        };
+        let mut hidden = self.session.messages.split_off(index);
+        let mut merged: Vec<FileRestore> = files.to_vec();
+        if let Some(previous) = self.session.revert.take() {
+            hidden.extend(previous.hidden);
+            for old in previous.files {
+                match merged.iter_mut().find(|file| file.path == old.path) {
+                    Some(file) => file.saved = old.saved,
+                    None => merged.push(old),
+                }
+            }
+        }
+        self.session.revert = Some(RevertProjection {
+            message,
+            hidden,
+            files: merged,
+        });
     }
 
     /// Return the newest run only when `id` still owns the Session view.
@@ -1090,6 +1136,9 @@ impl Projection {
                 ..
             } => {
                 if self.message_mut(*message).is_none() {
+                    // A new message commits a pending revert: the hidden
+                    // messages are gone for good and cannot be restored.
+                    self.session.revert = None;
                     self.session.messages.push(MessageProjection {
                         id: *message,
                         role: *role,
@@ -1105,6 +1154,7 @@ impl Projection {
                         files: Vec::new(),
                         agents: Vec::new(),
                         parts: Vec::new(),
+                        file_changes: Vec::new(),
                         error: None,
                     });
                 }
@@ -1160,6 +1210,33 @@ impl Projection {
             }
             Event::MessageDeleted { message, .. } => {
                 self.session.messages.retain(|item| item.id != *message);
+                if let Some(revert) = self.session.revert.as_mut() {
+                    revert.hidden.retain(|item| item.id != *message);
+                }
+            }
+            Event::FilesChanged {
+                message,
+                call,
+                files,
+                ..
+            } => {
+                if let Some(message) = self.message_mut(*message) {
+                    message
+                        .file_changes
+                        .extend(files.iter().map(|file| FileChangeRecord {
+                            call: *call,
+                            path: file.path.clone(),
+                            before: file.before.clone(),
+                        }));
+                }
+            }
+            Event::SessionReverted { message, files, .. } => {
+                self.apply_revert(*message, files);
+            }
+            Event::SessionUnreverted { .. } => {
+                if let Some(revert) = self.session.revert.take() {
+                    self.session.messages.extend(revert.hidden);
+                }
             }
             Event::PartDeleted { message, part, .. } => {
                 if let Some(message) = self.message_mut(*message) {
@@ -1635,8 +1712,13 @@ impl Projection {
             | Event::ContextCompacted { .. }
             | Event::ContextEvicted { .. }
             | Event::Unknown => {}
-            Event::SessionForked { source, .. } => {
+            Event::SessionForked {
+                source,
+                before_message,
+                ..
+            } => {
                 self.session.forked_from = Some(*source);
+                self.session.forked_before = *before_message;
             }
             Event::Error {
                 failed_message: Some(message),

@@ -59,6 +59,7 @@ impl FixedSystemAgent {
 }
 
 mod admission;
+mod file_snapshot;
 mod fork;
 mod handoff;
 mod mailbox;
@@ -66,6 +67,7 @@ pub(crate) use mailbox::dm_channel_between;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
+mod revert;
 pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
 mod session_cleanup;
 mod session_state;
@@ -99,6 +101,9 @@ async fn authorize_tool_call(
 }
 
 pub use admission::SpawnAdmissionOutcome;
+pub use file_snapshot::{MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES};
+pub use fork::{ForkAt, ForkError, fork_cut};
+pub use revert::{RevertError, RevertOutcome, RevertTarget};
 pub use turn::advertise_tool;
 pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};

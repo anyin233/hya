@@ -314,6 +314,93 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
         "both transports must replay the same curated event count"
     );
 
+    // Fork parity: a head fork records its source on both transports.
+    let grpc_fork: Value = serde_json::to_value(
+        session
+            .fork_session(tonic::Request::new(pb::ForkSessionRequest {
+                session: session_id.clone(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner(),
+    )
+    .unwrap();
+    let (status, http_fork) = http_json(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{session_id}/fork"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{http_fork}");
+    assert_eq!(
+        grpc_fork["session"]["forkedFrom"],
+        http_fork["session"]["forkedFrom"]
+    );
+    assert_eq!(
+        grpc_fork["session"]["forkedFrom"]["session"],
+        json!(session_id)
+    );
+
+    // Revert parity: revert through gRPC, undo through HTTP, then both
+    // refuse a second undo with the same code.
+    // The turn's admission slot is released just after it finished.
+    for _ in 0..200 {
+        let (_, info) = http_json(
+            &app,
+            Method::GET,
+            &format!("/v1/sessions/{session_id}"),
+            Value::Null,
+        )
+        .await;
+        if info["busy"] != json!(true) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let grpc_revert: Value = serde_json::to_value(
+        session
+            .revert_session(tonic::Request::new(pb::RevertSessionRequest {
+                session: session_id.clone(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner(),
+    )
+    .unwrap();
+    assert!(
+        grpc_revert["session"]["revert"]["messageId"].is_string(),
+        "{grpc_revert}"
+    );
+    let (status, http_undo) = http_json(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{session_id}/revert"),
+        json!({"undo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{http_undo}");
+    assert!(http_undo["session"].get("revert").is_none());
+    let grpc_undo = session
+        .revert_session(tonic::Request::new(pb::RevertSessionRequest {
+            session: session_id.clone(),
+            undo: true,
+            ..Default::default()
+        }))
+        .await;
+    assert_eq!(grpc_undo.unwrap_err().code(), tonic::Code::InvalidArgument);
+    let (status, body) = http_json(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{session_id}/revert"),
+        json!({"undo": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_argument"));
+
     // Agent-models parity: both transports report the missing control.
     let mut agent_models = pb::agent_models_client::AgentModelsClient::new(channel.clone());
     let grpc_models = agent_models

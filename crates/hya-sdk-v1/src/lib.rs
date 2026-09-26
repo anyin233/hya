@@ -368,6 +368,8 @@ impl V1Sdk {
 ///   part is durable (seeded from a read, or a durable `partStarted` /
 ///   `partReplaced` was applied); after that they are stale and ignored.
 /// - `partReplaced` sets the part's whole text, superseding live deltas.
+/// - `sessionReverted` (a revert or its undo) hides or restores whole
+///   messages: [`apply`](Self::apply) returns `true` (re-seed).
 /// - Durable frames at or below [`last_seq`](Self::last_seq) are ignored.
 ///   A seed does not know its watermark: set `last_seq` to the seq the seed
 ///   read reflects, or durable deltas it already contains apply again.
@@ -416,6 +418,14 @@ impl V1SessionMirror {
                         return false;
                     }
                     self.last_seq = event.seq;
+                }
+                // A revert (or its undo) hides or restores whole messages
+                // the stream does not carry: re-read the transcript.
+                if matches!(
+                    event.payload,
+                    Some(hya_api::v1::stream_event::Payload::SessionReverted(_))
+                ) {
+                    return true;
                 }
                 self.apply_event(event);
                 false
@@ -656,6 +666,25 @@ mod tests {
                 (part.id.clone(), text)
             })
             .collect()
+    }
+
+    /// A revert or its undo changes which messages exist: the mirror asks
+    /// for a resync (re-read `ListMessages`) instead of guessing.
+    #[test]
+    fn a_session_revert_requires_a_resync() {
+        let mut mirror = V1SessionMirror::default();
+        let reverted = |undone| {
+            P::SessionReverted(pb::SessionReverted {
+                message_id: if undone { String::new() } else { "m".into() },
+                undone,
+                files: Vec::new(),
+            })
+        };
+        assert!(mirror.apply(&frame(4, reverted(false))));
+        assert_eq!(mirror.last_seq, 4);
+        assert!(mirror.apply(&frame(5, reverted(true))));
+        // Replayed durable frames stay no-ops.
+        assert!(!mirror.apply(&frame(5, reverted(true))));
     }
 
     /// Live deltas build the part; the durable start for the same id does

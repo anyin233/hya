@@ -75,6 +75,12 @@
   the cache back; a new session-row removal path must also delete the
   session's `projection_snapshot` row and drop the in-process entry, as
   `delete_session` does. See `docs/architecture/storage.md#projection-cache`.
+- `file_blob` (0012) holds the per-session, content-addressed file contents
+  behind session revert (`files_changed` / `session_reverted` events carry
+  only the sha256 hash). It is auxiliary content, not a projection: write the
+  blob before appending the event that names it, keep it scoped to the
+  session (`delete_session` removes the rows), and cap growth in the engine
+  (per-file and per-session limits in `hya-core` `file_snapshot`).
 
 ---
 

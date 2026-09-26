@@ -20,6 +20,8 @@ pub mod model;
 pub mod projection;
 /// Pure run-tree assembler over reduced session projections (no I/O).
 pub mod projection_tree;
+/// File snapshot and revert value types (`FilesChanged`, `SessionReverted`).
+pub mod revert;
 /// Canonical agent paths, the parent/sibling/report scope rule, and
 /// unit-qualified channel keys (task 08-07).
 pub mod scope;
@@ -58,6 +60,7 @@ pub use projection::{
     ScopedRoster, SessionProjection, TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
+pub use revert::{FileChange, FileChangeRecord, FileRestore, FileState, RevertProjection};
 pub use scope::{ANNOUNCE_CHANNEL, HARNESS_HANDLE, ROOT_HANDLE, Relation, in_scope, relation};
 pub use todo::{TodoItem, TodoStatus};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
