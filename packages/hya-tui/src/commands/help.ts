@@ -40,6 +40,7 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   cycleMode: "Modes",
   refresh: "Views",
   toggleSidebar: "Views",
+  toggleProjectsSidebar: "Views",
   toggleThinking: "Views",
   toggleTools: "Views",
   pageUp: "Transcript",

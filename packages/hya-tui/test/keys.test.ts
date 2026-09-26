@@ -45,6 +45,7 @@ test("every binding is documented and reachable without a browser-reserved short
     key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
     key("?", { shift: true, sequence: "?" }), key("x", { ctrl: true }),
+    key("p", { ctrl: true }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
     .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" })))
@@ -52,7 +53,7 @@ test("every binding is documented and reachable without a browser-reserved short
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "fork", "help", "interrupt", "pageDown", "pageUp", "quit", "redo", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
+    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "fork", "help", "interrupt", "pageDown", "pageUp", "quit", "redo", "refresh", "scrollBottom", "scrollTop", "toggleProjectsSidebar", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

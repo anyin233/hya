@@ -4,7 +4,7 @@ import { parseApiCommand } from "../client"
 import { agentRows, modelRows, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { modelReference, sessionTree, strategyText } from "../state/format"
-import { parseSwitch, sidebarVisible } from "../state/layout"
+import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -13,10 +13,11 @@ import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
-/** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh). */
+/** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh), F3 toggles showing every Project's sessions. */
 export const sessionPickerActions: readonly PickerAction[] = [
   { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
+  { id: "allProjects", key: "f3", label: "F3 all projects", prompt: "toggle" },
 ]
 
 /** `/status`'s Backend row: started by this TUI, attached to another process's server, bare hya's in-process server, or `--server`. */
@@ -26,19 +27,30 @@ function backendText(backend: BackendInfo | undefined, bareHya: boolean): string
   return bareHya ? "in the hya process (bare hya)" : "external (--server)"
 }
 
-/** Open the `/sessions` picker (C13): a `New session` row first, then the tree; Enter opens, F2 renames, Ctrl+D deletes with confirmation. */
+/**
+ * Open the `/sessions` picker (C13): a `New session` row first, then the
+ * tree, scoped to the active Project unless F3's "all projects" toggle is on
+ * (state/store.ts `sessionsPickerAllProjects`); Enter opens, F2 renames,
+ * Ctrl+D deletes with confirmation.
+ */
 function openSessionsPicker(context: CommandContext): void {
   const { store, client, actions } = context
+  const allProjects = store.state.sessionsPickerAllProjects
   actions.openPicker({
-    title: "Sessions",
-    rows: sessionRows(store.state.sessions, store.state.selected?.id),
-    hint: "Enter opens · F2 renames · Ctrl+D deletes · Esc closes · type to filter",
+    title: allProjects ? "Sessions · all projects" : "Sessions",
+    rows: sessionRows(store.state.sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects }),
+    hint: "Enter opens · F2 renames · Ctrl+D deletes · F3 all projects · Esc closes · type to filter",
     actions: sessionPickerActions,
     onSelect: async (row) => {
       if (row.id === "__new__") { await actions.newSession(); return }
       await actions.openSession(row.id)
     },
     onAction: async (id, row, value) => {
+      if (id === "allProjects") {
+        store.setSessionsPickerAllProjects(!allProjects)
+        openSessionsPicker(context)
+        return
+      }
       if (id === "rename") {
         const title = (value ?? "").trim()
         if (!title) { store.setStatus("Rename cancelled: title cannot be empty"); return }
@@ -168,14 +180,17 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/new",
-    description: "Create a session",
-    argumentHint: "[agent] [model]",
+    description: "Create a session; --temp creates a temporary one (no Project)",
+    argumentHint: "[agent] [model] | --temp",
     complete: ({ words, current, head }, context) => {
-      if (words.length === 1) return matchValues(head, current, context.agents)
+      if (words.length === 1) return matchValues(head, current, ["--temp", ...context.agents])
       if (words.length === 2) return matchValues(head, current, context.models)
       return []
     },
-    run: ({ actions }, { args }) => actions.newSession(args[0], args[1]),
+    run: ({ actions }, { args }) => {
+      if (args[0] === "--temp") return actions.newTemporarySession(args[1], args[2])
+      return actions.newSession(args[0], args[1])
+    },
   },
   {
     name: "/open",
@@ -375,6 +390,26 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/agent-models",
     description: "Open the Agent Models view: per-agent default model, pick or clear",
     run: ({ actions }) => { actions.openAgentModels() },
+  },
+  {
+    name: "/project",
+    description: "Open the Project view: list, open/switch, create, edit roots, rename, delete, or start a temporary session",
+    run: ({ actions }) => { actions.openProjectView() },
+  },
+  {
+    name: "/projects",
+    description: "Alias for /project",
+    run: ({ actions }) => { actions.openProjectView() },
+  },
+  {
+    name: "/projects-sidebar",
+    description: "Show or hide the left Projects sidebar. Without an argument it toggles what is visible now",
+    argumentHint: "[on|off]",
+    run: ({ store }, { args }) => {
+      const visible = projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)
+      store.setProjectsSidebar(parseSwitch(args[0], visible, "Usage: /projects-sidebar [on|off]") ? "open" : "closed")
+      store.setStatus(`Projects sidebar ${projectsSidebarVisible(store.state.projectsSidebar, store.state.columns) ? "shown" : "hidden"} · Ctrl+P toggles`)
+    },
   },
   {
     name: "/workflows",

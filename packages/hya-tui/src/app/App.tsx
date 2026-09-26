@@ -15,12 +15,14 @@ import { ProviderView } from "../components/ProviderView"
 import { RulesView } from "../components/RulesView"
 import { paintSelection } from "../components/selection"
 import { copyNotice } from "../composer/clipboard"
+import { ProjectView } from "../components/ProjectView"
+import { ProjectsSidebar } from "../components/ProjectsSidebar"
 import { PromptDock } from "../components/PromptDock"
 import { Sidebar } from "../components/Sidebar"
 import { StatusBar } from "../components/StatusBar"
 import { StatusLine } from "../components/StatusLine"
 import { WorkingIndicator } from "../components/WorkingIndicator"
-import { sidebarVisible, sidebarWidth } from "../state/layout"
+import { projectsSidebarVisible, projectsSidebarWidth, sidebarVisible, sidebarWidth } from "../state/layout"
 import { colors } from "../theme"
 import { useApp } from "./context"
 
@@ -57,14 +59,19 @@ export function App() {
   createEffect(() => store.setColumns(size().width))
   const shown = () => sidebarVisible(store.state.sidebar, size().width)
   const side = () => sidebarWidth(size().width)
+  const leftShown = () => projectsSidebarVisible(store.state.projectsSidebar, size().width)
+  const leftSide = () => projectsSidebarWidth(size().width)
   return (
     <box width="100%" height="100%" flexDirection="row" backgroundColor={colors.bg} onMouseDown={paint}>
+      <Show when={leftShown()}>
+        <ProjectsSidebar width={leftSide()} />
+      </Show>
       <box height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
         <Header />
         <StatusBar />
         <MainPanel />
         <WorkingIndicator />
-        <PendingBlock width={size().width - (shown() ? side() : 0)} />
+        <PendingBlock width={size().width - (shown() ? side() : 0) - (leftShown() ? leftSide() : 0)} />
         <PromptDock />
         <ModeConfirm />
         <StatusLine />
@@ -79,6 +86,7 @@ export function App() {
       <McpView />
       <RulesView />
       <AgentModelsView />
+      <ProjectView />
       <Picker />
     </box>
   )

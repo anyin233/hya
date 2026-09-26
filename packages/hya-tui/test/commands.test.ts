@@ -23,6 +23,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openMcp: () => { calls.push("mcp") },
     openRules: () => { calls.push("rules") },
     openAgentModels: () => { calls.push("agentModels") },
+    openProjectView: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
     quit: () => { calls.push("quit") },
@@ -323,7 +324,7 @@ test("/sessions opens a picker with a New session row first, then the tree, the 
   expect(picker.title).toBe("Sessions")
   expect(picker.rows.map((row) => row.id)).toEqual(["__new__", "hysec_1", "hysec_2"])
   expect(picker.rows[1]?.current).toBe(true)
-  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete"])
+  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete", "allProjects"])
   // Enter on a row opens it; on the New session row it creates one.
   await picker.onSelect(picker.rows[2]!)
   expect(calls).toContain("open hysec_2")
