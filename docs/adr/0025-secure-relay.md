@@ -77,8 +77,13 @@ The backend's relay identity is an Ed25519 keypair; `room_id =
 base32(sha256(ed25519_pub))[..26]`. A host registers a room by signing a
 fresh proxy-issued nonce, so nobody without the private key can take over or
 squat a room id. The Noise static key (X25519) is a separate key stored beside
-it. Both persist in `$XDG_STATE_HOME/hya/relay/identity.json` (mode 0600) so a
-link survives restarts; `--relay-ephemeral` uses a throwaway identity.
+it. Both, with the link's PSK, persist per database in
+`<db>.relay-identity.json` next to `<db>.lock` (mode 0600, versioned JSON), so
+a backend's link survives restarts and two databases never share a room; an
+in-memory database, or `--relay-ephemeral`, uses a throwaway identity. (First
+drafted as one `$XDG_STATE_HOME/hya/relay/identity.json` per user; changed when
+the host connector landed, because the room belongs to the backend of one
+database, whose lock holder alone writes the file.)
 
 ### D4 — Link grammar
 

@@ -44,6 +44,35 @@ pub(crate) struct Discovery {
     pub(crate) version: String,
     /// Unix time in milliseconds when the server started listening.
     pub(crate) started_at: u64,
+    /// The relay the server is joined to (`hya serve --relay`, `hya serve
+    /// relay connect`), so `hya serve restart` can rejoin it. Never the
+    /// link or any key; absent while not joined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) relay: Option<DiscoveredRelay>,
+}
+
+/// The relay settings recorded in the discovery file (public values only).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiscoveredRelay {
+    /// The relay's public URL as given (`https://…`, `http://…`).
+    pub(crate) proxy_url: String,
+    /// `auto`, `grpc`, or `ws`.
+    #[serde(default = "auto_transport")]
+    pub(crate) transport: String,
+    /// Extra trusted CA certificates (absolute path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ca: Option<PathBuf>,
+    /// A throwaway identity (no identity file).
+    #[serde(default)]
+    pub(crate) ephemeral: bool,
+    /// `--relay-heartbeat` in seconds, when given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) heartbeat_secs: Option<u64>,
+}
+
+fn auto_transport() -> String {
+    "auto".to_owned()
 }
 
 /// `<db>.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, and
@@ -58,6 +87,9 @@ pub(crate) struct DbPaths {
     /// Why `hya serve stop|restart` asked the holder to stop
     /// ([`request_stop`]); read by the server when its SIGTERM arrives.
     pub(crate) stop: PathBuf,
+    /// The server's relay identity `<db>.relay-identity.json` (0600; the
+    /// relay link's keys, ADR-0025 D3).
+    pub(crate) relay_identity: PathBuf,
 }
 
 /// The lock and discovery paths of `db`, or `None` for stores that are not
@@ -83,6 +115,7 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
         discovery: with(".server.json"),
         log: with(".server.log"),
         stop: with(".server.stop"),
+        relay_identity: with(".relay-identity.json"),
     })
 }
 
@@ -323,19 +356,44 @@ impl DbLock {
                 .map_or(0, |since| {
                     u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
                 }),
+            relay: None,
         };
-        let mut temp = self.paths.discovery.clone().into_os_string();
-        temp.push(format!(".{}.tmp", std::process::id()));
-        let temp = PathBuf::from(temp);
-        let body = serde_json::to_vec(&discovery).map_err(std::io::Error::other)?;
-        std::fs::write(&temp, body).map_err(|error| with_path(error, &temp))?;
-        if let Err(error) = std::fs::rename(&temp, &self.paths.discovery) {
-            let _ = std::fs::remove_file(&temp);
-            return Err(with_path(error, &self.paths.discovery));
-        }
+        write_discovery(&self.paths.discovery, &discovery)?;
         self.published = true;
         Ok(discovery)
     }
+
+    /// The discovery file (for [`set_discovery_relay`]).
+    pub(crate) fn discovery_path(&self) -> PathBuf {
+        self.paths.discovery.clone()
+    }
+}
+
+/// Rewrite the discovery file at `path` with `relay` (the lock holder only).
+/// Does nothing when there is no discovery file yet.
+pub(crate) fn set_discovery_relay(
+    path: &Path,
+    relay: Option<DiscoveredRelay>,
+) -> std::io::Result<()> {
+    let Some(mut discovery) = read_discovery(path) else {
+        return Ok(());
+    };
+    discovery.relay = relay;
+    write_discovery(path, &discovery)
+}
+
+/// Write `discovery` to `path` atomically (temporary file, then rename).
+fn write_discovery(path: &Path, discovery: &Discovery) -> std::io::Result<()> {
+    let mut temp = path.to_path_buf().into_os_string();
+    temp.push(format!(".{}.tmp", std::process::id()));
+    let temp = PathBuf::from(temp);
+    let body = serde_json::to_vec(discovery).map_err(std::io::Error::other)?;
+    std::fs::write(&temp, body).map_err(|error| with_path(error, &temp))?;
+    if let Err(error) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(with_path(error, path));
+    }
+    Ok(())
 }
 
 /// [`DbLock::take_stop_request`] for a process `pid` holding the lock whose
@@ -463,6 +521,10 @@ mod tests {
         assert_eq!(found.discovery, scratch.0.join("sessions.db.server.json"));
         assert_eq!(found.log, scratch.0.join("sessions.db.server.log"));
         assert_eq!(found.stop, scratch.0.join("sessions.db.server.stop"));
+        assert_eq!(
+            found.relay_identity,
+            scratch.0.join("sessions.db.relay-identity.json")
+        );
     }
 
     #[test]
@@ -535,6 +597,37 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn the_relay_is_recorded_in_the_discovery_file_and_cleared_again() {
+        let scratch = Scratch::new("relay");
+        let mut lock = owned(try_claim(&scratch.db()).unwrap());
+        let path = lock.discovery_path();
+        // Before publishing there is nothing to update.
+        set_discovery_relay(&path, Some(DiscoveredRelay::default())).unwrap();
+        assert!(!path.exists());
+        let published = lock.publish("http://127.0.0.1:9").unwrap();
+        let relay = DiscoveredRelay {
+            proxy_url: "https://relay.example.com/hya".into(),
+            transport: "ws".into(),
+            ca: None,
+            ephemeral: false,
+            heartbeat_secs: None,
+        };
+        set_discovery_relay(&path, Some(relay.clone())).unwrap();
+        let found = read_discovery(&path).unwrap();
+        assert_eq!(found.relay.as_ref(), Some(&relay));
+        assert_eq!(found.url, published.url);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["relay"],
+            serde_json::json!({"proxyUrl": "https://relay.example.com/hya", "transport": "ws", "ephemeral": false})
+        );
+        set_discovery_relay(&path, None).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("relay"), "{text}");
     }
 
     #[test]

@@ -28,6 +28,7 @@ mod relay_doctor;
 mod routed;
 mod rpc;
 mod serve;
+mod serve_relay;
 mod sessions_cmd;
 mod workflow_cmd;
 
@@ -995,6 +996,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Serve {
             action: Some(action),
             db: command_db,
+            relay,
             ..
         }) => {
             let path = command_db.unwrap_or_else(|| db.clone());
@@ -1004,6 +1006,7 @@ async fn main() -> anyhow::Result<()> {
                 model,
                 yolo,
                 pure,
+                relay,
             )
             .await
         }
@@ -1014,6 +1017,7 @@ async fn main() -> anyhow::Result<()> {
             mdns,
             db: command_db,
             action: None,
+            relay,
             ..
         }) => {
             serve::cmd_serve(
@@ -1022,6 +1026,7 @@ async fn main() -> anyhow::Result<()> {
                 model,
                 yolo,
                 pure,
+                relay,
             )
             .await
         }

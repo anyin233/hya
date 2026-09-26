@@ -26,6 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
 
+use crate::cli_args::RelayFlags;
 use crate::db_lock::{self, Discovery};
 
 /// Longest wait for a started daemon to publish a healthy server (a first
@@ -91,6 +92,17 @@ pub(crate) async fn running(db: &str) -> Option<Discovery> {
 /// Attach to the running server of `spec.db`, else start a daemon and wait
 /// (up to `wait`) until it answers.
 pub(crate) async fn start(spec: &DaemonSpec, wait: Duration) -> anyhow::Result<Ready> {
+    start_with_relay(spec, &RelayFlags::default(), wait).await
+}
+
+/// [`start`], and a daemon it starts joins the relay of `relay` (absolute
+/// paths; `hya serve start|restart --relay`). An already running server is
+/// left as it is.
+pub(crate) async fn start_with_relay(
+    spec: &DaemonSpec,
+    relay: &RelayFlags,
+    wait: Duration,
+) -> anyhow::Result<Ready> {
     let Some(paths) = db_lock::paths(&spec.db) else {
         anyhow::bail!(
             "the backend daemon needs a database file; {:?} is in memory (pass --db <path>)",
@@ -132,7 +144,7 @@ pub(crate) async fn start(spec: &DaemonSpec, wait: Duration) -> anyhow::Result<R
                 .context("check the database lock")?
                 .is_none()
         {
-            child = Some(spawn(spec, &paths.log)?);
+            child = Some(spawn(spec, relay, &paths.log)?);
         }
         if tokio::time::Instant::now() >= deadline {
             let holder = db_lock::holder(&spec.db).ok().flatten();
@@ -182,8 +194,9 @@ fn daemon_dir(home: Option<std::ffi::OsString>) -> PathBuf {
 }
 
 /// `hya serve --bind 127.0.0.1:0 --db <db>` (plus the spec's `--model`,
-/// `--yolo`, `--pure`) run in `dir`; stdio and the session are the caller's.
-fn serve_command(spec: &DaemonSpec, dir: &std::path::Path) -> Command {
+/// `--yolo`, `--pure`, and relay flags) run in `dir`; stdio and the session
+/// are the caller's.
+fn serve_command(spec: &DaemonSpec, relay: &RelayFlags, dir: &std::path::Path) -> Command {
     let mut command = Command::new(&spec.exe);
     command
         .args(["serve", "--bind", "127.0.0.1:0", "--db", &spec.db])
@@ -197,12 +210,29 @@ fn serve_command(spec: &DaemonSpec, dir: &std::path::Path) -> Command {
     if spec.pure {
         command.arg("--pure");
     }
+    if let Some(url) = &relay.relay {
+        command.args(["--relay", url]);
+        if let Some(transport) = &relay.relay_transport {
+            command.args(["--relay-transport", transport]);
+        }
+        if let Some(ca) = &relay.relay_ca {
+            command.arg("--relay-ca").arg(ca);
+        }
+        if relay.relay_ephemeral {
+            command.arg("--relay-ephemeral");
+        }
+        // The daemon's output is its log file: the link must not land there.
+        command.arg("--relay-quiet-link");
+    }
+    if let Some(seconds) = relay.relay_heartbeat {
+        command.args(["--relay-heartbeat", &seconds.to_string()]);
+    }
     command
 }
 
 /// [`serve_command`] in [`daemon_dir`], in its own session, output appended
 /// to `log`.
-fn spawn(spec: &DaemonSpec, log: &std::path::Path) -> anyhow::Result<Child> {
+fn spawn(spec: &DaemonSpec, relay: &RelayFlags, log: &std::path::Path) -> anyhow::Result<Child> {
     if std::fs::metadata(log).is_ok_and(|meta| meta.len() > LOG_ROTATE_BYTES) {
         let mut rotated = log.as_os_str().to_owned();
         rotated.push(".1");
@@ -221,7 +251,7 @@ fn spawn(spec: &DaemonSpec, log: &std::path::Path) -> anyhow::Result<Child> {
         unix_ms(),
         spec.db
     );
-    let mut command = serve_command(spec, &daemon_dir(std::env::var_os("HOME")));
+    let mut command = serve_command(spec, relay, &daemon_dir(std::env::var_os("HOME")));
     command
         .stdin(Stdio::null())
         .stdout(file.try_clone().context("share the daemon log")?)
@@ -430,6 +460,7 @@ mod tests {
             pid: 1,
             version: env!("CARGO_PKG_VERSION").into(),
             started_at: 0,
+            relay: None,
         };
         assert_eq!(version_note(&found), None);
         found.version = "0.0.1".into();
@@ -456,7 +487,11 @@ mod tests {
             pure: true,
             exe: PathBuf::from("/bin/hya"),
         };
-        let command = serve_command(&spec, std::path::Path::new("/home/me"));
+        let command = serve_command(
+            &spec,
+            &RelayFlags::default(),
+            std::path::Path::new("/home/me"),
+        );
         assert_eq!(command.get_program(), "/bin/hya");
         assert_eq!(
             command.get_current_dir(),
@@ -483,7 +518,7 @@ mod tests {
             pure: false,
             ..spec
         };
-        let command = serve_command(&plain, std::path::Path::new("/"));
+        let command = serve_command(&plain, &RelayFlags::default(), std::path::Path::new("/"));
         let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
         assert_eq!(
             args,
@@ -493,6 +528,47 @@ mod tests {
                 "127.0.0.1:0",
                 "--db",
                 "/state/hya/sessions.db"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_relay_daemon_gets_the_relay_flags_and_never_prints_its_link() {
+        let spec = DaemonSpec {
+            db: "/state/hya/sessions.db".into(),
+            model: None,
+            yolo: false,
+            pure: false,
+            exe: PathBuf::from("/bin/hya"),
+        };
+        let relay = RelayFlags {
+            relay: Some("https://relay.example.com/hya".into()),
+            relay_transport: Some("ws".into()),
+            relay_ca: Some(PathBuf::from("/etc/relay-ca.pem")),
+            relay_ephemeral: true,
+            relay_heartbeat: Some(20),
+            relay_quiet_link: false,
+        };
+        let command = serve_command(&spec, &relay, std::path::Path::new("/"));
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "serve",
+                "--bind",
+                "127.0.0.1:0",
+                "--db",
+                "/state/hya/sessions.db",
+                "--relay",
+                "https://relay.example.com/hya",
+                "--relay-transport",
+                "ws",
+                "--relay-ca",
+                "/etc/relay-ca.pem",
+                "--relay-ephemeral",
+                "--relay-quiet-link",
+                "--relay-heartbeat",
+                "20"
             ]
         );
     }

@@ -19,10 +19,10 @@ The proxy server library (`hya_relay::server`, see [Bindings](#bindings)),
 the client library (`hya_relay::client`, see
 [Client transport](#client-transport)), the `hya proxy` command, and
 `hya relay doctor` exist, and so do the client side, `hya bridge` and
-`hya --connect <link>` ([Connecting from a client](#connecting-from-a-client)).
-*Coming in a later step:* `hya serve --relay`, `hya serve relay …`, and
-`/connect-remote` (Phase 6 — the host connector that puts a backend on the
-other end of a link, and the TUI command).
+`hya --connect <link>` ([Connecting from a client](#connecting-from-a-client)),
+and the backend side, `hya serve --relay` and `hya serve relay …`
+([Hosting a backend on a relay](#hosting-a-backend-on-a-relay)).
+*Coming in a later step:* the TUI's `/connect-remote`.
 
 ### `hya proxy`
 
@@ -110,6 +110,137 @@ Exit status: **0** when at least one binding works, **1** when neither does.
 See each [deployment recipe](#deployment-recipes) for the matching `hya
 relay doctor` command and expected recommendation, and the
 [troubleshooting table](#troubleshooting) keyed by doctor output.
+
+### Hosting a backend on a relay
+
+The **host connector** in `hya serve` puts a backend on the relay: it keeps
+a control stream to `hya proxy` open and registers the backend's **room**,
+and for every client stream it answers the Noise handshake and serves the
+ordinary `/v1` router over the decrypted bytes — REST, SSE, and the PTY
+WebSocket work unchanged. Nothing listens on a new port: the connection to
+the relay is outbound.
+
+```sh
+# Foreground: join at start. stdout keeps the readiness line; the link goes
+# to stderr once, clearly marked.
+hya serve --relay https://relay.example.com/hya
+#   hya server listening on http://127.0.0.1:8080
+#   hya relay link: hya://relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4#AAEC….____…
+#   hya: the relay link is a secret: anyone holding it controls this backend (…)
+
+# The backend daemon of a database (ADR-0023): `start` prints the link.
+hya serve start --relay https://relay.example.com/hya
+hya serve restart          # the new daemon rejoins the same relay, same link
+
+# A running backend: join, inspect, leave, re-key.
+hya serve relay connect http://100.64.0.7:8766 --transport ws
+hya serve relay status     # state, proxy, room, binding, streams, last error
+hya serve relay link       # the full link, on stdout
+hya serve relay rotate     # new key: every earlier link stops working
+hya serve relay disconnect # the room is released, relay clients are cut off
+```
+
+`--relay` takes the relay's **public** URL — the one clients reach, never
+the proxy's own listen address: `https://host[:port][/prefix]` (TLS to the
+first hop) or `http://…` for plaintext on a LAN or tailnet; the link forms
+`hya://…` and `hya+insecure://…` are accepted too. The link is built from it
+(see [Relay link grammar](#relay-link-grammar)). Flags of `hya serve`,
+`hya serve start`, and `hya serve restart`:
+
+| Flag | Meaning |
+| --- | --- |
+| `--relay <URL>` | Join this relay at start and print the link. |
+| `--relay-transport auto\|grpc\|ws` | The binding (default `auto`: gRPC, falling back to WebSocket); also the link's `t=`. |
+| `--relay-ca <PEM>` | Extra trusted CA certificates for the relay's TLS. |
+| `--relay-ephemeral` | A throwaway identity instead of the identity file: the link dies with the process. |
+| `--relay-heartbeat <SECONDS>` | Heartbeat interval of the relay streams (default 15; three silent intervals mean a dead peer). |
+
+**The link is a secret.** Whoever holds it controls the backend — it can run
+tools, edit files, and open a shell on the backend's machine. The backend
+prints it only on the start output (`hya serve --relay` on stderr,
+`hya serve start|restart --relay` on stderr, `hya serve relay connect`,
+`hya serve relay rotate`) and through `hya serve relay link`; it never writes
+it to the discovery file or the daemon log (a daemon started with `--relay`
+does not print it; `hya serve start` reads it over the loopback rpc and
+prints it). Share it the way you would share an SSH private key. A leaked
+link is revoked with `hya serve relay rotate`, which also closes every open
+relay connection — including legitimate ones, which need the new link.
+
+**Identity.** A backend on a file database keeps its relay identity in
+`<db>.relay-identity.json`, next to `<db>.lock` (mode 0600; created on first
+use; refused when readable by other users):
+
+```json
+{"version": 1, "ed25519": "<b64url>", "x25519": "<b64url>", "psk": "<b64url>"}
+```
+
+`ed25519` is the room key (`room_id = base32(sha256(pub))[..26]`), `x25519`
+the Noise static key, and `psk` the link's pre-shared key; each is a 32-byte
+secret, unpadded base64url. The same database therefore keeps the same room
+and link across restarts; `rotate` replaces only `psk`. An in-memory database
+(`--db ""`) uses a throwaway identity for the process lifetime, and
+`--relay-ephemeral` (or `connect --ephemeral`) a throwaway identity for that
+connection.
+
+**Restart.** The relay connection is not persisted across independent
+starts: a plain `hya serve start` joins no relay. While joined, the discovery
+file `<db>.server.json` records the relay's public settings (never the link
+or a key), and `hya serve restart` re-passes them to the new daemon unless
+it is given its own `--relay`:
+
+```json
+{"url": "http://127.0.0.1:53124", "pid": 4242, "version": "…", "startedAt": 1790433521484,
+ "relay": {"proxyUrl": "https://relay.example.com/hya", "transport": "auto", "ephemeral": false}}
+```
+
+(`ca` and `heartbeatSecs` appear when set.) `hya serve relay disconnect`
+removes the record, so a later restart stays off the relay.
+
+**Behavior.**
+
+- The control stream reconnects with jittered backoff (1 s doubling to
+  60 s; after `ALREADY_EXISTS` — another process holds the room identity —
+  30 s doubling to 10 min) and re-registers the room; `status` shows
+  `backoff` and the last error meanwhile. Clients' open connections drop
+  with a cut stream and are retried by the client.
+- Each relay stream gets a 10 s Noise handshake deadline; failed handshakes
+  (a wrong or rotated link) are logged without key material. At most 64
+  relay streams are handshaking or being served at once.
+- Relay streams are served with HTTP/1.1 (with upgrades, for the PTY
+  WebSocket) or HTTP/2, whichever the client speaks.
+- At shutdown the live event streams of relay clients get the same last
+  `serverStopping {reason}` frame as local ones; after the drain the
+  connector closes its control stream (the proxy releases the room) and gives
+  the remaining relay streams 5 s before closing them.
+
+**Relay origin (ADR-0025 D5).** Requests that arrive through the relay carry
+the server-side request extension `hya_server::Origin::Relay`. They may use
+the whole `/v1` API — holding the link means owner trust — except:
+
+| Refused with `permission_denied` (HTTP 403) | Why |
+| --- | --- |
+| Every `RelayControl` rpc (`/v1/relay/*`) | A link holder must not change the relay, read the link, or rotate it away from the local owner. |
+| `Process.DisposeProcess`, `Process.UpgradeProcess` | A link holder must not stop or replace the backend. |
+
+`RelayControl` is also refused for a TCP peer that is not a loopback address
+(a server bound to `0.0.0.0`) and for browser requests (an `Origin` or
+`Sec-Fetch-Site` header), because the server's CORS policy mirrors any
+origin; the gRPC binding refuses non-loopback peers the same way.
+
+**`hya serve relay` commands** find the running backend of `--db` through
+its discovery file (like `hya serve status`) and call its `RelayControl`
+rpcs on loopback:
+
+| Command | Prints | Exit |
+| --- | --- | --- |
+| `connect <URL> [--transport auto\|grpc\|ws] [--relay-ca <PEM>] [--ephemeral] [--json]` | the status lines and `hya relay link: <link>` (`--json`: `{status, link}`) | 0; 1 on an invalid URL or CA file |
+| `disconnect [--json]` | `relay disconnected` (`--json`: the status) | 0 (also when not joined) |
+| `status [--json]` | `relay <state>` and `proxy`, `room`, `link` (redacted), `transport`, `since`, `streams`, `identity`, `error` lines (`--json`: the `RelayStatus` message) | 0 in every state |
+| `link` | the full link alone on stdout | 0; 1 when not joined |
+| `rotate [--json]` | `hya relay link: <new link>` (`--json`: `{link, status}`) | 0; 1 without an identity |
+
+Every command exits **1** with `no hya server is running on <db>` when no
+backend runs, and with `hya serve relay: <message>` when the rpc fails.
 
 ### Connecting from a client
 
@@ -766,6 +897,43 @@ yields the binding endpoints:
 | `ws_url(WsRoute::Host)` | `wss://relay.example.com/hya/hya.relay.v1/ws/host` |
 
 `hya+insecure://` links map to `http://` and `ws://` the same way.
+
+### The `RelayControl` service
+
+`hya.v1.RelayControl` (`proto/hya/v1/relay_control.proto`; not to be
+confused with the proxy's `hya.relay.v1.Relay`) controls the host connector
+of the backend it is called on. Loopback only, see
+[Relay origin](#hosting-a-backend-on-a-relay).
+
+| Rpc | HTTP | Request | Response | Errors |
+| --- | --- | --- | --- | --- |
+| `ConnectRelay` | `POST /v1/relay/connect` | `{proxyUrl, transport?, extraCaPath?, ephemeral?}` | `{status: RelayStatus, link}` | `invalid_argument` (URL, transport, relative or missing CA path) |
+| `DisconnectRelay` | `POST /v1/relay/disconnect` | `{}` | `RelayStatus` | |
+| `GetRelayStatus` | `GET /v1/relay/status` | | `RelayStatus` | |
+| `GetRelayLink` | `GET /v1/relay/link` | | `{link, status}` | `failed_precondition` when not joined |
+| `RotateRelayKey` | `POST /v1/relay/rotate` | `{}` | `{link, status}` (`link` empty when not joined) | `failed_precondition` without an identity |
+
+All of them answer `permission_denied` from relay origin, a non-loopback
+peer, or a browser. `RelayStatus` (protojson):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `state` | `RELAY_STATE_DISCONNECTED` \| `_CONNECTING` \| `_CONNECTED` \| `_BACKOFF` | Connector state. |
+| `proxy` | string | The relay's public base URL. |
+| `roomId` | string | This backend's room. |
+| `redactedLink` | string | The link without its secret fragment. |
+| `transport` | string | Configured binding: `auto`, `grpc`, `ws`. |
+| `binding`, `bindingReason` | string | Binding in use and why (pinned, gRPC works, or why gRPC failed). |
+| `lastError` | string | Last connection or registration failure (cleared on success). |
+| `connectedSince` | Timestamp | When the room was registered. |
+| `activeStreams` | uint32 | Relay connections being served (including upgraded PTY WebSockets). |
+| `ephemeral` | bool | Whether the identity is throwaway. |
+
+In Rust, `hya_server::RelayHost` is the connector (`connect`,
+`disconnect`, `status`, `link`, `rotate`, `shutdown`, `set_service`,
+`set_settings_hook`), configured by `RelayHostConfig` and
+`hya_server::AppState::with_relay_host`; `hya_server::Origin` is the request
+extension.
 
 ## Deployment recipes
 
