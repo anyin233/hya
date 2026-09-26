@@ -1694,7 +1694,8 @@ fn validate_unsupported_inline_agent_fields(member: &SpawnMember) -> Result<(), 
 struct SpawnSupervisorLifecycle {
     stop: tokio_util::sync::CancellationToken,
     join: Option<tokio::task::JoinHandle<()>>,
-    /// Adjacent worker loops sharing the same stop token (workflow runs).
+    /// Adjacent worker loops sharing the same stop token (workflow runs,
+    /// catalog scope sweeps).
     extra_joins: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -1721,12 +1722,12 @@ impl SpawnSupervisorLifecycle {
                 Ok(()) => {}
                 Err(error) if error.is_cancelled() => {
                     return Err(CoreError::Invalid(
-                        "workflow supervisor cancelled during shutdown".to_string(),
+                        "background worker cancelled during shutdown".to_string(),
                     ));
                 }
                 Err(error) => {
                     return Err(CoreError::Invalid(format!(
-                        "workflow supervisor failed during shutdown: {error}"
+                        "background worker failed during shutdown: {error}"
                     )));
                 }
             }
@@ -2560,6 +2561,7 @@ async fn build_session_engine_with_mcp_defer(
     let context_settings = crate::config::load_context_settings();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_catalog_refresh(catalog_refresh)
+        .with_catalog_scope_cache(crate::config::load_catalog_scope_cache())
         .with_sidecar_environment(sidecar_environment.clone())
         .with_model_categories(categories.clone())
         // Route `categories:` failover chains into the engine's cross-model
@@ -2785,6 +2787,13 @@ async fn build_session_engine_with_mcp_defer(
     ));
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
+    // Release idle Project scopes (and their plugin/bundle processes) even
+    // when nothing binds.
+    lifecycle.extra_joins.push(spawn_catalog_scope_sweeper(
+        Arc::downgrade(&engine),
+        lifecycle.stop.clone(),
+        CATALOG_SCOPE_SWEEP_PERIOD,
+    ));
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
     tokio::spawn(run_lifecycle_service(
         engine.clone(),
@@ -2817,6 +2826,35 @@ fn resolve_recovered_resident_agent(
 ) -> Result<(TurnBinding, AgentSpec), CoreError> {
     let agent = engine.agent_spec_for_binding(&binding, base, recorded_agent.as_str())?;
     Ok((binding, agent))
+}
+
+/// How often idle catalog scopes are swept.
+const CATALOG_SCOPE_SWEEP_PERIOD: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Periodically evict idle and over-capacity catalog scopes until `stop`
+/// fires or the engine is gone.
+fn spawn_catalog_scope_sweeper(
+    engine: std::sync::Weak<SessionEngine>,
+    stop: tokio_util::sync::CancellationToken,
+    period: std::time::Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticks = tokio::time::interval(period);
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick completes immediately; start sweeping one period in.
+        ticks.tick().await;
+        loop {
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => break,
+                _ = ticks.tick() => {}
+            }
+            let Some(engine) = engine.upgrade() else {
+                break;
+            };
+            engine.sweep_catalog_scopes();
+        }
+    })
 }
 
 fn prepared_plugin_results(
@@ -9041,5 +9079,65 @@ export default {
             category_model_fallbacks(&CategoryRegistry::default()).len(),
             0
         );
+    }
+
+    /// The periodic sweep drops idle Project scopes without any bind, and
+    /// stops with the lifecycle token.
+    #[tokio::test]
+    async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
+        let (router, _model) = offline_router(None);
+        let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+        let runtime = Arc::new(RuntimeRegistry::new(
+            ToolRegistry::builtins(),
+            builtin_agent_catalog().unwrap(),
+        ));
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                Arc::new(router),
+                Arc::clone(&runtime),
+                permission,
+                EventBus::default(),
+            )
+            .with_catalog_scope_cache(hya_core::CatalogScopeCacheConfig {
+                max_scopes: 32,
+                idle_ttl: std::time::Duration::ZERO,
+            }),
+        );
+        let root = std::env::temp_dir();
+        let scope = hya_core::CatalogScope::Project {
+            id: hya_proto::ProjectId::new(),
+            roots: vec![root.clone()],
+        };
+        let binding = engine.bind_scope_runtime(&scope, &root).await.unwrap();
+        runtime
+            .publish_scope(
+                scope.key(),
+                hya_core::ScopeOverlay::new(builtin_agent_catalog().unwrap()),
+            )
+            .unwrap();
+        drop(binding);
+        assert!(runtime.scope_overlay(&scope.key()).is_some());
+
+        let stop = tokio_util::sync::CancellationToken::new();
+        let sweeper = spawn_catalog_scope_sweeper(
+            Arc::downgrade(&engine),
+            stop.clone(),
+            std::time::Duration::from_millis(10),
+        );
+        let mut evicted = false;
+        for _ in 0..200 {
+            if runtime.scope_overlay(&scope.key()).is_none() {
+                evicted = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(evicted, "the sweeper must evict the idle scope");
+        stop.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), sweeper)
+            .await
+            .expect("the sweeper stops with its token")
+            .unwrap();
     }
 }
