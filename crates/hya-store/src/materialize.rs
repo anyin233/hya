@@ -2,7 +2,8 @@
 //!
 //! `event_log` stays the single source of truth; these tables are queryable
 //! projections maintained inside the same transaction as the event append:
-//! `session_created` → `session`, `agent_registered` → `team_run` +
+//! `session_created` → `session` (including `project_id` / `kind`,
+//! ADR-0024), `agent_registered` → `team_run` +
 //! `team_member`, `mail_sent` → `mail`, `member_spawned`/`subagent_reported`
 //! → `task_board`, assistant `message_started` / `message_finished` /
 //! `message_deleted` → `open_assistant_message` (the crash-recovery index).
@@ -30,12 +31,15 @@ pub(crate) async fn materialize_event_side_tables(
             agent,
             model,
             workdir,
-            ..
+            project,
+            kind,
         } => {
+            let project = project.as_ref().map(ToString::to_string);
             sqlx::query(
                 "INSERT OR IGNORE INTO session \
-                 (id, parent_id, agent, model, workdir, title, permission, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, ?, NULL, '{}', ?, ?)",
+                 (id, parent_id, agent, model, workdir, title, permission, created_at, updated_at, \
+                  project_id, kind) \
+                 VALUES (?, ?, ?, ?, ?, NULL, '{}', ?, ?, ?, ?)",
             )
             .bind(session.storage_key())
             .bind(parent.as_ref().map(SessionId::storage_key))
@@ -44,8 +48,19 @@ pub(crate) async fn materialize_event_side_tables(
             .bind(workdir)
             .bind(ts_millis)
             .bind(ts_millis)
+            .bind(&project)
+            .bind(kind.as_str())
             .execute(&mut **tx)
             .await?;
+            // A stub anchored by an earlier team event (`ensure_session_stub`)
+            // survives the `INSERT OR IGNORE`; the authoritative event still
+            // records the session's Project and kind on it.
+            sqlx::query("UPDATE session SET project_id = ?, kind = ? WHERE id = ?")
+                .bind(&project)
+                .bind(kind.as_str())
+                .bind(session.storage_key())
+                .execute(&mut **tx)
+                .await?;
         }
         Event::AgentRegistered {
             session,
@@ -235,6 +250,83 @@ mod tests {
         AgentName, Event, MailEndpoint, MailKind, MemberId, ModelRef, ReportOutcome, SubagentMode,
     };
     use sqlx::{Executor as _, Row};
+
+    /// ADR-0024: `session_created` records the Project and kind, also on a
+    /// placeholder row a team event anchored before the session's creation.
+    #[tokio::test]
+    async fn session_created_materializes_project_and_kind() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let root = SessionId::new();
+        let child = SessionId::new();
+        let project = hya_proto::ProjectId::new();
+        store
+            .append_event(
+                root,
+                &Event::AgentRegistered {
+                    session: root,
+                    agent_session: child,
+                    handle: "general-1".into(),
+                    parent: Some("main".into()),
+                    agent_type: AgentName::new("general"),
+                    mode: SubagentMode::Resident,
+                },
+            )
+            .await
+            .unwrap();
+        for (session, parent, kind) in [
+            (root, None, hya_proto::SessionKind::Project),
+            (child, Some(root), hya_proto::SessionKind::Project),
+        ] {
+            store
+                .append_event(
+                    session,
+                    &Event::SessionCreated {
+                        session,
+                        parent,
+                        agent: AgentName::new("build"),
+                        model: ModelRef::new("fake"),
+                        workdir: "/repo".into(),
+                        project: Some(project),
+                        kind,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let temp = SessionId::new();
+        store
+            .append_event(
+                temp,
+                &Event::SessionCreated {
+                    session: temp,
+                    parent: None,
+                    agent: AgentName::new("build"),
+                    model: ModelRef::new("fake"),
+                    workdir: "/scratch".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Temporary,
+                },
+            )
+            .await
+            .unwrap();
+
+        for (session, expected_project, expected_kind) in [
+            (root, Some(project.to_string()), "project"),
+            (child, Some(project.to_string()), "project"),
+            (temp, None, "temporary"),
+        ] {
+            let row = sqlx::query("SELECT project_id, kind FROM session WHERE id = ?")
+                .bind(session.storage_key())
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                row.try_get::<Option<String>, _>("project_id").unwrap(),
+                expected_project
+            );
+            assert_eq!(row.try_get::<String, _>("kind").unwrap(), expected_kind);
+        }
+    }
 
     #[tokio::test]
     async fn team_mail_and_session_events_materialize_side_tables() {
