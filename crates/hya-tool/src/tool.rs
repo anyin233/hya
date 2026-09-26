@@ -136,8 +136,8 @@ pub struct ToolCtx {
     /// Workspace roots of the session (ADR-0024), resolved fresh at each
     /// turn start: a Project session's roots in order (the workdir prepended
     /// when it lies inside none of them), otherwise just `[workdir]`. Ordered
-    /// and deduplicated; never empty for an engine-built context. Carried
-    /// only for now: path permission checks still resolve against `workdir`.
+    /// and deduplicated; never empty for an engine-built context. The file
+    /// tools' path boundary ([`crate::ProjectScope`], ADR-0026).
     pub roots: Vec<PathBuf>,
     /// Cancellation token for cooperative abort.
     pub cancel: CancellationToken,

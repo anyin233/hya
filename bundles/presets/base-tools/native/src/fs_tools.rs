@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::grep;
-use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
+use crate::lsp_path::{display_path, resolve_file};
 use hya_tool::tool::obj_schema;
-use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError, glob_match};
+use hya_tool::{Action, ProjectScope, Resource, Tool, ToolCtx, ToolError, glob_match};
 
 const SEARCH_LIMIT: usize = 100;
 const MAX_GLOB_BYTES: usize = 4096;
@@ -50,48 +50,39 @@ fn relative_title(path: &Path, workdir: &Path) -> String {
     }
 }
 
+/// Require `ExternalDirectory` permission when `target` lies outside every
+/// Project root (ADR-0026).
+///
+/// Containment is judged by [`ProjectScope`] after symlink resolution. The
+/// asked resource names the target directory itself when `is_directory`,
+/// otherwise the target's lexical parent directory, followed by `/*`.
+///
+/// # Errors
+/// Returns the permission plane's denial or unavailability.
 pub(crate) async fn assert_external_directory(
     ctx: &ToolCtx,
     target: &Path,
     is_directory: bool,
 ) -> Result<(), ToolError> {
-    let target = normalize(&absolutize(target));
-    let workdir = normalize(&absolutize(&ctx.workdir));
-    if target.starts_with(&workdir) {
-        return Ok(());
-    }
-    let parent = if is_directory {
-        target
-    } else {
-        target
-            .parent()
-            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
-    };
-    let pattern = display_path(&parent.join("*"));
-    ctx.permission
-        .assert(Action::ExternalDirectory, Resource::Path(pattern))
+    ProjectScope::for_ctx(ctx)
+        .authorize(&ctx.permission, target, |scope| {
+            if is_directory {
+                scope.outside_directory_pattern(target)
+            } else {
+                scope.outside_dir_pattern(target)
+            }
+        })
         .await?;
     Ok(())
 }
 
-/// Authorize an external Grep or Glob target with one lexical, kind-blind resource.
-pub(crate) async fn assert_external_directory_lexical(
+/// Authorize an external Grep or Glob target with one kind-blind resource:
+/// the target's lexical parent directory followed by `/*`.
+pub(crate) async fn assert_external_search_target(
     ctx: &ToolCtx,
     target: &Path,
 ) -> Result<(), ToolError> {
-    let target = normalize(&absolutize(target));
-    let workdir = normalize(&absolutize(&ctx.workdir));
-    if target.starts_with(&workdir) {
-        return Ok(());
-    }
-    let parent = target
-        .parent()
-        .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
-    let pattern = display_path(&parent.join("*"));
-    ctx.permission
-        .assert(Action::ExternalDirectory, Resource::Path(pattern))
-        .await?;
-    Ok(())
+    assert_external_directory(ctx, target, false).await
 }
 
 /// Reject a caller-provided Glob pattern that exceeds the native matcher bound.
@@ -208,7 +199,7 @@ impl Tool for GlobTool {
             || ctx.workdir.clone(),
             |path| resolve_file(&ctx.workdir, path),
         );
-        assert_external_directory_lexical(ctx, &search).await?;
+        assert_external_search_target(ctx, &search).await?;
         if ctx.cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
@@ -312,6 +303,7 @@ impl Tool for LsTool {
         let input: LsInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         let dir = resolve_ls_dir(&ctx.workdir, input.path);
+        assert_external_directory(ctx, &dir, true).await?;
         ctx.permission
             .assert(
                 Action::Read,

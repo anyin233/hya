@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::fs_tools::assert_external_directory_lexical;
+use crate::fs_tools::assert_external_search_target;
 use crate::hashline::{
     HashlineRuntime, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_TARGETS, ReadRuntimeError,
 };
@@ -182,7 +182,7 @@ impl Tool for GrepTool {
             .assert(Action::Grep, Resource::Glob(input.pattern.clone()))
             .await?;
         check_cancel(ctx)?;
-        assert_external_directory_lexical(ctx, &root).await?;
+        assert_external_search_target(ctx, &root).await?;
         check_cancel(ctx)?;
 
         let metadata = tokio::fs::metadata(&root).await.map_err(ToolError::Io)?;

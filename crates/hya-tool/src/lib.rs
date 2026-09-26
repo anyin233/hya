@@ -44,6 +44,8 @@ pub mod native_bundle;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
+/// Project-root path boundary shared by the builtin file tools (ADR-0026).
+pub mod project_scope;
 mod skill;
 mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
@@ -94,6 +96,7 @@ pub use permission::{
     InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,
     PermissionRules, PermissionTarget, RememberScope, Resource, Rule, glob_match,
 };
+pub use project_scope::ProjectScope;
 pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{
     ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, core_skills_preset_bytes,

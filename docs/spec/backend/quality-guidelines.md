@@ -1029,11 +1029,12 @@ pump(response, decoder, tx, stream_idle_deadline);
 ### 3. Contracts
 
 - Relative paths resolve under the Session workdir.
-- Absolute in-workdir paths and the omitted workdir default proceed without an
-  external-directory grant.
-- Absolute paths and `..` traversal outside the workdir use the same permission
-  plane as every other file tool. A tool must not normalize away the escape and
-  then operate directly.
+- Paths inside any workspace root and the omitted workdir default proceed
+  without an external-directory grant.
+- Absolute paths and `..` traversal outside every workspace root use the same
+  permission plane as every other file tool; containment is decided once, by
+  `hya_tool::ProjectScope`, after symlink resolution (ADR-0026). A tool must
+  not normalize away the escape and then operate directly.
 - Containment is an authorization rule, not a search-result filter: reject the
   root before metadata/existence probing or any partial result. A denied file
   and denied directory sibling use the same lexical permission resource.

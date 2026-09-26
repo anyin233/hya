@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -130,7 +130,7 @@ against the current file — re-read the file if an anchor is rejected as stale.
         let workdir = normalize(&absolutize(&ctx.workdir));
         let requested_path = resolve_file(&workdir, request.path());
 
-        assert_external_file(ctx, &workdir, &requested_path).await?;
+        crate::fs_tools::assert_external_directory(ctx, &requested_path, false).await?;
         ctx.permission
             .assert(Action::Edit, Resource::Path(display_path(&requested_path)))
             .await?;
@@ -582,31 +582,6 @@ fn dedup_warnings(warnings: Vec<String>) -> Vec<String> {
         }
     }
     result
-}
-
-/// Require external-directory permission before mutating an outside path.
-///
-/// # Parameters
-/// - `ctx`: Tool context carrying the permission plane.
-/// - `workdir`: Normalized session working directory.
-/// - `path`: Lexically resolved requested path.
-///
-/// # Returns
-/// Success when the path is inside the workdir or external access is allowed.
-async fn assert_external_file(ctx: &ToolCtx, workdir: &Path, path: &Path) -> Result<(), ToolError> {
-    if path.starts_with(workdir) {
-        return Ok(());
-    }
-    let parent = path
-        .parent()
-        .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
-    ctx.permission
-        .assert(
-            Action::ExternalDirectory,
-            Resource::Path(display_path(&parent.join("*"))),
-        )
-        .await?;
-    Ok(())
 }
 
 /// Compute a relative Edit title, falling back to an absolute display path.

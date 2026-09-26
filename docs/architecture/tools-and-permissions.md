@@ -20,8 +20,9 @@ remain in `hya-tool` so host authority stays with the session runtime.
   formatter/`WorkflowPlane` planes, session ids, workdir, workspace `roots`,
   cancellation token. `roots` are the session's ordered, deduplicated
   workspace roots resolved at turn start (ADR-0024; see
-  [Workspace roots](runtime.md#workspace-roots)). They are carried only:
-  path permission checks still resolve against `workdir`.
+  [Workspace roots](runtime.md#workspace-roots)). The file tools judge
+  their path boundary against these roots through `ProjectScope`
+  ([External directory boundary](#external-directory-boundary)).
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
 `ToolRegistry::builtins()` installs **27** canonical schema names before model
@@ -227,8 +228,8 @@ no-op payloads are soft successes; the third returns `[E_NOOP_LOOP]`; a non-raw
 Read clears the no-op/duplicate marker.
 
 All coding tools honor `ToolCtx` cancellation. Read and Grep authorize one
-kind-blind lexical external parent resource before metadata, existence, or
-target-kind probing. Cancellation while waiting for a lock or during I/O
+kind-blind external parent resource (the target's lexical parent) before
+metadata, existence, or target-kind probing. Cancellation while waiting for a lock or during I/O
 returns the typed `cancelled` error. Bash cancellation/timeout terminates and
 reaps the complete process group, including a PTY descendant that retains the
 slave after leader exit. File contents never enter logs or error payloads.
@@ -282,7 +283,7 @@ persistence writes that serde string into the DB `action` column
 | `todowrite` | `TodoWrite` | `todowrite`. |
 | `skill` | `Skill` | `skill`. |
 | `lsp` | `Lsp` | `lsp`. |
-| `externaldirectory` | `ExternalDirectory` | Any tool whose resolved path (or Bash `cwd`) lies outside the session workdir. |
+| `externaldirectory` | `ExternalDirectory` | A file tool whose resolved path lies outside every workspace root of the session, or a Bash `cwd` outside the session workdir. |
 
 ### Resource (nine shapes)
 
@@ -417,31 +418,51 @@ Headless `exec`, RPC, and goal flows answer residual asks with `Reject`.
 
 ## External directory boundary
 
-Paths use lexical workdir resolution: the workdir is absolutized and normalized
-by removing `.` and textually popping `..`. Symlinks are **not** canonicalized,
-so a symlink inside the workdir is not classified as external based on its
-target.
+The boundary is the session's workspace roots (`ToolCtx::roots`; ADR-0024,
+ADR-0026), not the workdir alone. One helper,
+[`ProjectScope`](../../crates/hya-tool/src/project_scope.rs), decides
+containment for every file tool:
 
-For tools that **do** enforce the boundary, a resolved path **outside** the
-session workdir triggers an `Action::ExternalDirectory` assert on the
-containing directory's `<dir>/*` pattern **before** the normal Read/Edit/Lsp/…
-check. Call-level invocation grants never satisfy `ExternalDirectory`, so it
-prompts separately even inside an already-approved tool call.
+- **Roots** are canonicalized once per call (symlinks resolved). A root that
+  cannot be resolved keeps its lexical absolute form. A hand-built context
+  with no roots falls back to `[workdir]`.
+- **Candidate paths** resolve against the workdir when relative, then are
+  canonicalized. A path that does not exist yet (a `write` target) is judged
+  by canonicalizing its nearest existing ancestor and re-appending the
+  missing remainder; a `..` in that remainder makes it outside. A dangling
+  symlink is judged by where it would land.
+- **Containment** is component-wise (`/a/b` does not contain `/a/bc`) and
+  holds if **any** root contains the path, so nested and overlapping roots
+  are fine.
+- **Outside** means: outside every root after resolution. A symlink inside a
+  root that points elsewhere is outside; a symlink elsewhere that points into
+  a root is inside. A path whose resolution fails for any other reason
+  (permission denied, symlink loop) is treated as outside, so it asks.
+
+For a path outside, the tool asserts `Action::ExternalDirectory` on a
+concrete `<dir>/*` pattern **before** the normal Read/Edit/Lsp/… check. The
+pattern is built from the lexical path the tool was given (not the resolved
+target). The assert goes through the normal `PermissionPlane` order, so
+`danger` (yolo) and `allow` models auto-approve it, and a bundle mode's
+`permission.approve` interceptor receives it like any other ask. Call-level
+invocation grants never satisfy `ExternalDirectory`, so it prompts separately
+even inside an already-approved tool call. Canonicalization costs a few
+`stat`/`realpath` calls per tool call.
 
 ### Enforcement points
 
 | Tool | What is gated |
 | --- | --- |
-| `read` | Resolved file or directory path. |
+| `read` | Resolved file or directory path (`<parent>/*` when outside). |
 | `write` | Resolved file path (`<parent>/*` when outside). |
 | `edit` | Resolved file path (`<parent>/*` when outside). |
-| `apply_patch` | Paths must be relative and must not escape the workdir (absolute or `..` components are **input errors**); each surviving path is then checked as `Action::Edit`. ExternalDirectory is not raised because escape is rejected first. |
+| `apply_patch` | Relative paths resolve against the workdir; absolute paths are accepted. A `..` component is an **input error**, and so is a path outside every root (including through a symlink). ExternalDirectory is never raised; each surviving path is then checked as `Action::Edit`. |
 | `lsp` | Resolved file path (`<parent>/*` when outside). |
-| `glob` | Search root directory when outside the workdir. |
-| `grep` | Search root (file or directory) when outside the workdir. |
-| `bash` (including hidden `shell`) | Optional `cwd` when it resolves outside the session workdir (`<cwd>/*`). |
-| `find` | Resolved search root directory when outside the workdir (`<root>/*`). Path is workdir-resolved via `resolve_file`; asserts `Action::Glob` on the pattern, then `Action::ExternalDirectory`. |
-| `ls` | **Does not** perform the external-directory check either. Asserts only `Action::Read` on the raw path string; builds the directory with `PathBuf::from(path)` (not workdir-resolved). So `ls /etc` outside the workdir never raises `ExternalDirectory`. |
+| `glob` | Search root when outside (kind-blind `<parent>/*`). |
+| `grep` | Search root, file or directory, when outside (kind-blind `<parent>/*`). |
+| `find` | Resolved search root directory when outside (`<root>/*`); asserts `Action::Glob` on the pattern first. |
+| `ls` | Resolved directory when outside (`<dir>/*`), then `Action::Read` on the directory. |
+| `bash` (including hidden `shell`) | Optional `cwd` when it resolves outside the session workdir (`<cwd>/*`, lexical). |
 
 ### Per-turn external directories
 
