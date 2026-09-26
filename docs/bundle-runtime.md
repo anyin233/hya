@@ -154,6 +154,31 @@ its explicitly declared tool/hook entrypoints and bundle namespace as plugin
 id. It needs no synthetic Agent or explicit `extensions.process` command.
 Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
 
+## Project bundles
+
+Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
+--project`) belong to a registered Project, not to the backend process:
+
+- A Project loads `<root>/.hya/bundles` of every Project root, in root order.
+  The first root wins: a later bundle whose id or namespace an earlier one
+  already claims is skipped with a warning. Project bundles shadow installed
+  and first-party bundles with the same id or namespace, as before.
+- Only sessions and catalog reads bound to that Project see its bundles. The
+  global scope, directories outside every Project, and temporary sessions bind
+  installed and first-party bundles only; they never start project bundle code.
+- Each bind of a Project compares a digest of its roots' bundle files and
+  their `config.yml` files with the published Project overlay. A change
+  republishes that one Project; other Projects keep their generation. A
+  project bundle's `config.yml` models (`agents.<id>.model`) apply only in its
+  Project, and saving a model for one of its Agents writes that file.
+- Runtime sources are shared by content: an installed bundle's process is one
+  process for the global scope and every Project. A project bundle's process
+  belongs to the Project that loads it. It stops once that Project no longer
+  publishes it (the bundle changed or was removed, the roots changed, the
+  Project was deleted, or the idle Project was evicted), a later bind has run,
+  and no retained binding still holds it. An evicted Project is rebuilt at its
+  next bind.
+
 ## Interfaces and lifecycle
 
 - `extensions.process: { kind: rust | bun | claude, command: string[] }` declares

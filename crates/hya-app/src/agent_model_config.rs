@@ -5,7 +5,10 @@
 //! configuration file (see [`crate::bundle_config`]): user-scope bundles use
 //! `bundles/<percent-encoded-bundle-id>/config.yml` beside the Hya file, and
 //! project bundles use `config.yml` in their `.hya/bundles/<dir>/` source
-//! directory. Updates lock a stable sidecar, reread the current document, and
+//! directory. Project bundles belong to one registered Project, so their
+//! files are resolved through a binding's
+//! [`hya_core::TurnBinding::project_bundle_dirs`] and their models are loaded
+//! per Project ([`AgentModelConfigFiles::load_project`]). Updates lock a stable sidecar, reread the current document, and
 //! atomically replace the target after changing only the selected model leaf.
 
 use std::collections::BTreeMap;
@@ -33,25 +36,13 @@ static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentModelConfigFiles {
     global_file: PathBuf,
-    project_dir: Option<PathBuf>,
 }
 
 impl AgentModelConfigFiles {
     /// Construct model configuration storage rooted at `global_file`.
     #[must_use]
     pub fn new(global_file: PathBuf) -> Self {
-        Self {
-            global_file,
-            project_dir: None,
-        }
-    }
-
-    /// Resolve project bundles under `dir` (usually `.hya/bundles`) to their
-    /// source directory's `config.yml` instead of the user scope.
-    #[must_use]
-    pub fn with_project_dir(mut self, dir: Option<PathBuf>) -> Self {
-        self.project_dir = dir;
-        self
+        Self { global_file }
     }
 
     /// Return the explicit global Hya configuration path.
@@ -60,27 +51,46 @@ impl AgentModelConfigFiles {
         &self.global_file
     }
 
-    /// Snapshot which bundle ids are project-scoped (scans the project dir).
+    /// Resolver without project bundles: every bundle id resolves to the
+    /// user scope.
     #[must_use]
     pub fn resolver(&self) -> BundleConfigResolver {
-        BundleConfigResolver::discover(self.global_file.clone(), self.project_dir.as_deref())
+        self.resolver_for(&BTreeMap::new())
     }
 
-    /// Resolve the owning model configuration file for an Agent origin.
-    ///
-    /// Bundle Agents use their bundle's `config.yml`; see
-    /// [`crate::bundle_config`] for the scope rules. Scans the project bundle
-    /// directory for bundle origins; use [`Self::path_in`] to reuse a snapshot.
+    /// Resolver where the bundle ids of `project_dirs` (bundle id -> source
+    /// directory, typically [`hya_core::TurnBinding::project_bundle_dirs`])
+    /// resolve to their project source directory.
+    #[must_use]
+    pub fn resolver_for(&self, project_dirs: &BTreeMap<String, PathBuf>) -> BundleConfigResolver {
+        BundleConfigResolver::new(self.global_file.clone(), project_dirs.clone())
+    }
+
+    /// Resolve the owning model configuration file for an Agent origin in
+    /// the user scope (project bundles resolve through [`Self::path_in`]
+    /// with [`Self::resolver_for`]).
     ///
     /// # Errors
     ///
     /// Returns an error when a bundle identity is empty or a path cannot be
     /// made absolute.
     pub fn path_for(&self, origin: AgentOrigin<'_>) -> anyhow::Result<PathBuf> {
-        match origin {
-            AgentOrigin::Builtin => Ok(self.global_file.clone()),
-            AgentOrigin::Bundle { .. } => self.path_in(&self.resolver(), origin),
-        }
+        self.path_in(&self.resolver(), origin)
+    }
+
+    /// Resolve the owning configuration file for an Agent origin as seen by
+    /// `binding`: a bundle of the binding's Project resolves to its project
+    /// source directory, every other bundle to the user scope.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::path_for`].
+    pub fn path_for_binding(
+        &self,
+        binding: &hya_core::TurnBinding,
+        origin: AgentOrigin<'_>,
+    ) -> anyhow::Result<PathBuf> {
+        self.path_in(&self.resolver_for(binding.project_bundle_dirs()), origin)
     }
 
     /// [`Self::path_for`] against an existing [`Self::resolver`] snapshot.
@@ -101,40 +111,57 @@ impl AgentModelConfigFiles {
         }
     }
 
-    /// Load all model leaves from the global file and existing bundle files.
+    /// Load all model leaves from the global file and the existing user-scope
+    /// bundle files.
     ///
     /// Missing files and missing bundle directories are equivalent to an empty
     /// configuration. Only `agents.<id>.model` values affect the returned
     /// snapshot; all other YAML is retained by subsequent [`Self::set_model`]
-    /// updates. A project bundle's `config.yml` replaces any user-scope file
-    /// for the same bundle id, because the project bundle shadows that install.
+    /// updates. Project bundle files are per Project: see
+    /// [`Self::load_project`].
     ///
     /// # Errors
     ///
     /// Returns an error for malformed YAML, malformed relevant `agents` fields,
     /// invalid bundle configuration directory leaves, or filesystem failures.
     pub fn load(&self) -> anyhow::Result<AgentModelConfiguration> {
-        let builtin = self.read_models(&self.global_file)?.unwrap_or_default();
-        let resolver = self.resolver();
-        let mut bundles = self.load_user_bundles(resolver.project_dirs())?;
-        for bundle_id in resolver.project_dirs().keys() {
-            let path = resolver.location(bundle_id)?.file().to_path_buf();
-            match self.read_models(&path)? {
-                Some(models) if !models.is_empty() => {
-                    bundles.insert(bundle_id.clone(), models);
-                }
-                _ => {}
-            }
-        }
+        let builtin = read_models(&self.global_file)?.unwrap_or_default();
+        let bundles = self.load_user_bundles()?;
         Ok(AgentModelConfiguration { builtin, bundles })
     }
 
-    /// Model leaves from every user-scope `bundles/<leaf>/config.yml`, except
-    /// bundle ids that a project bundle shadows.
-    fn load_user_bundles(
-        &self,
-        shadowed: &BTreeMap<String, PathBuf>,
+    /// Model leaves of one Project's bundles: `project_dirs` maps each project
+    /// bundle id to its source directory, whose `config.yml` holds the leaves.
+    /// Bundles without a file or without model leaves are omitted.
+    ///
+    /// # Errors
+    ///
+    /// The first malformed file (see [`Self::project_models`]).
+    pub fn load_project(
+        project_dirs: &BTreeMap<String, PathBuf>,
     ) -> anyhow::Result<BTreeMap<String, BTreeMap<String, ModelRef>>> {
+        let mut bundles = BTreeMap::new();
+        for (bundle_id, dir) in project_dirs {
+            let models = Self::project_models(dir)?;
+            if !models.is_empty() {
+                bundles.insert(bundle_id.clone(), models);
+            }
+        }
+        Ok(bundles)
+    }
+
+    /// Model leaves (`agents.<id>.model`) of the project bundle whose source
+    /// directory is `dir`; empty when it has no `config.yml`.
+    ///
+    /// # Errors
+    ///
+    /// Malformed YAML, a malformed `agents` field, or a read failure.
+    pub fn project_models(dir: &Path) -> anyhow::Result<BTreeMap<String, ModelRef>> {
+        Ok(read_models(&dir.join(BUNDLE_CONFIG_FILE_NAME))?.unwrap_or_default())
+    }
+
+    /// Model leaves from every user-scope `bundles/<leaf>/config.yml`.
+    fn load_user_bundles(&self) -> anyhow::Result<BTreeMap<String, BTreeMap<String, ModelRef>>> {
         let mut bundles = BTreeMap::new();
         let bundle_root = user_bundle_config_root(&self.global_file);
         let entries = match fs::read_dir(&bundle_root) {
@@ -169,11 +196,8 @@ impl AgentModelConfigFiles {
             })?;
             let bundle_id = decode_bundle_leaf(leaf)
                 .with_context(|| format!("validate bundle config directory leaf `{leaf}`"))?;
-            if shadowed.contains_key(&bundle_id) {
-                continue;
-            }
             let config_path = entry.path().join(BUNDLE_CONFIG_FILE_NAME);
-            let Some(models) = self.read_models(&config_path)? else {
+            let Some(models) = read_models(&config_path)? else {
                 continue;
             };
             if models.is_empty() {
@@ -205,7 +229,23 @@ impl AgentModelConfigFiles {
         agent_id: &str,
         model: Option<&ModelRef>,
     ) -> anyhow::Result<PathBuf> {
-        let path = self.path_for(origin)?;
+        self.set_model_in(&self.resolver(), origin, agent_id, model)
+    }
+
+    /// [`Self::set_model`] with bundle files resolved by `resolver` (use
+    /// [`Self::resolver_for`] to write a project bundle's own `config.yml`).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::set_model`].
+    pub fn set_model_in(
+        &self,
+        resolver: &BundleConfigResolver,
+        origin: AgentOrigin<'_>,
+        agent_id: &str,
+        model: Option<&ModelRef>,
+    ) -> anyhow::Result<PathBuf> {
+        let path = self.path_in(resolver, origin)?;
         let _parent = ensure_parent(&path)?;
         let _lock = lock_for(&path)?;
 
@@ -241,16 +281,16 @@ impl AgentModelConfigFiles {
         atomic_replace(&path, &rendered, Some(permissions))?;
         Ok(path)
     }
+}
 
-    fn read_models(&self, path: &Path) -> anyhow::Result<Option<BTreeMap<String, ModelRef>>> {
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
-        };
-        let root = parse_document(&raw, path)?;
-        extract_models(&root, path).map(Some)
-    }
+fn read_models(path: &Path) -> anyhow::Result<Option<BTreeMap<String, ModelRef>>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let root = parse_document(&raw, path)?;
+    extract_models(&root, path).map(Some)
 }
 
 fn key(name: &str) -> Value {
@@ -649,13 +689,19 @@ mod tests {
             "agents:\n  tools-lead:\n    model: user/shadowed\n",
         )
         .unwrap();
-        let files = files.with_project_dir(Some(project));
+        let project_dirs = BTreeMap::from([("acme/tools".to_string(), bundle_dir.clone())]);
+        let resolver = files.resolver_for(&project_dirs);
         let origin = AgentOrigin::Bundle {
             bundle_id: "acme/tools",
         };
 
         let path = files
-            .set_model(origin, "tools-lead", Some(&ModelRef::new("p/project")))
+            .set_model_in(
+                &resolver,
+                origin,
+                "tools-lead",
+                Some(&ModelRef::new("p/project")),
+            )
             .unwrap();
         assert_eq!(
             path,
@@ -664,14 +710,21 @@ mod tests {
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("bundle_key: kept"), "{raw}");
         assert!(raw.contains("p/project"), "{raw}");
-        let loaded = files.load().unwrap();
+        let project = AgentModelConfigFiles::load_project(&project_dirs).unwrap();
         assert_eq!(
-            loaded
-                .bundles
+            project
                 .get("acme/tools")
                 .and_then(|models| models.get("tools-lead")),
             Some(&ModelRef::new("p/project")),
-            "the project file shadows the user-scope file for the same id"
+            "the project file holds the project bundle's leaves"
+        );
+        let user = files.load().unwrap();
+        assert_eq!(
+            user.bundles
+                .get("acme/tools")
+                .and_then(|models| models.get("tools-lead")),
+            Some(&ModelRef::new("user/shadowed")),
+            "the user scope never reads project files"
         );
     }
 

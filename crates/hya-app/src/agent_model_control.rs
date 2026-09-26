@@ -192,18 +192,13 @@ impl PersistentAgentModelControl {
         Ok(self)
     }
 
-    /// Snapshot bundle configuration scopes once per request (scans the
-    /// project bundle directory off the async executor).
-    async fn configuration_resolver(
-        &self,
-    ) -> Result<Option<BundleConfigResolver>, AgentModelControlError> {
-        let Some(files) = self.configuration_files.clone() else {
-            return Ok(None);
-        };
-        tokio::task::spawn_blocking(move || files.resolver())
-            .await
-            .map(Some)
-            .map_err(|error| AgentModelControlError::Configuration(error.into()))
+    /// Bundle configuration scopes as `binding` sees them: the bundles of the
+    /// binding's Project resolve to their project source directory, every
+    /// other bundle to the user scope.
+    fn configuration_resolver(&self, binding: &TurnBinding) -> Option<BundleConfigResolver> {
+        self.configuration_files
+            .as_ref()
+            .map(|files| files.resolver_for(binding.project_bundle_dirs()))
     }
 
     fn configuration_path(
@@ -369,10 +364,7 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
         Box::pin(async move {
             let mut rows =
                 project_agent_models(&binding, &self.categories, &self.router, &base_model);
-            let resolver = self
-                .configuration_resolver()
-                .await
-                .map_err(server_control_error)?;
+            let resolver = self.configuration_resolver(&binding);
             for row in &mut rows {
                 row.configuration_path = self
                     .configuration_path(resolver.as_ref(), &binding, &row.agent_id)
@@ -416,10 +408,7 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 preference.as_ref(),
                 definition,
             );
-            let resolver = self
-                .configuration_resolver()
-                .await
-                .map_err(server_control_error)?;
+            let resolver = self.configuration_resolver(&binding);
             row.configuration_path = self
                 .configuration_path(resolver.as_ref(), &binding, &agent_id)
                 .map_err(server_control_error)?;
@@ -463,38 +452,55 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 AgentModelIdentity::new(identity.provider_id, identity.model_id).model_ref()
             });
             let bundle_id = definition.origin.bundle_id().map(str::to_string);
+            // A bundle of the binding's Project owns its file in the project
+            // source directory; its leaves reach only that Project's bindings
+            // (the Project scope republishes at its next bind), never the
+            // process-wide configuration.
+            let project_dirs = binding.project_bundle_dirs().clone();
+            let project_bundle = bundle_id
+                .as_ref()
+                .is_some_and(|bundle_id| project_dirs.contains_key(bundle_id));
             let writer_bundle = bundle_id.clone();
             let writer_agent = agent_id.clone();
             let writer_model = model.clone();
             let _mutation = self.preferences.lock().await;
             let mut configuration = self.configuration.lock().await;
-            let path = tokio::task::spawn_blocking(move || {
+            let (path, project_models) = tokio::task::spawn_blocking(move || {
                 let origin = writer_bundle
                     .as_deref()
                     .map_or(AgentOrigin::Builtin, |bundle_id| AgentOrigin::Bundle {
                         bundle_id,
                     });
-                files.set_model(origin, &writer_agent, writer_model.as_ref())
+                let resolver = files.resolver_for(&project_dirs);
+                let path =
+                    files.set_model_in(&resolver, origin, &writer_agent, writer_model.as_ref())?;
+                let project_models = AgentModelConfigFiles::load_project(&project_dirs)?;
+                Ok::<_, anyhow::Error>((path, (project_dirs, project_models)))
             })
             .await
             .map_err(|error| {
                 server_control_error(AgentModelControlError::Configuration(error.into()))
             })?
             .map_err(|error| server_control_error(AgentModelControlError::Configuration(error)))?;
-            let configured_models = match bundle_id {
-                Some(bundle_id) => configuration.bundles.entry(bundle_id).or_default(),
-                None => &mut configuration.builtin,
-            };
-            if let Some(model) = model {
-                configured_models.insert(agent_id.clone(), model);
-            } else {
-                configured_models.remove(&agent_id);
+            if !project_bundle {
+                let configured_models = match bundle_id {
+                    Some(bundle_id) => configuration.bundles.entry(bundle_id).or_default(),
+                    None => &mut configuration.builtin,
+                };
+                if let Some(model) = model {
+                    configured_models.insert(agent_id.clone(), model);
+                } else {
+                    configured_models.remove(&agent_id);
+                }
+                self.runtime
+                    .publish_agent_model_configuration(configuration.clone());
             }
-            self.runtime
-                .publish_agent_model_configuration(configuration.clone());
             let fresh = binding
                 .clone()
-                .with_agent_model_configuration(configuration.clone());
+                .with_agent_model_configuration(scope_configuration(
+                    &configuration,
+                    project_models,
+                ));
             let mut row = project_agent_model(
                 &fresh,
                 &self.categories,
@@ -508,6 +514,24 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
             Ok(row)
         })
     }
+}
+
+/// The process-wide model configuration as one Project scope sees it: the
+/// Project's bundle ids drop their user-scope leaves (the project bundle
+/// shadows that install) and take the leaves of their own `config.yml`.
+fn scope_configuration(
+    base: &AgentModelConfiguration,
+    (project_dirs, project_models): (
+        BTreeMap<String, std::path::PathBuf>,
+        BTreeMap<String, BTreeMap<String, ModelRef>>,
+    ),
+) -> AgentModelConfiguration {
+    let mut configuration = base.clone();
+    for bundle_id in project_dirs.keys() {
+        configuration.bundles.remove(bundle_id);
+    }
+    configuration.bundles.extend(project_models);
+    configuration
 }
 
 /// Convert app control failures to stable server codes and bounded messages.

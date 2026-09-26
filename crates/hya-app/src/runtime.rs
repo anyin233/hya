@@ -464,10 +464,9 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             })?;
         let files = crate::agent_model_config::AgentModelConfigFiles::new(
             crate::config::active_config_path(),
-        )
-        .with_project_dir(crate::project_bundles::project_bundles_dir());
+        );
         let config_file = files
-            .path_for(definition.origin)
+            .path_for_binding(&self.binding, definition.origin)
             .and_then(|path| std::path::absolute(path).map_err(Into::into))
             .map_err(|error| {
                 CoreError::Invalid(format!("resolve bundle configuration path: {error}"))
@@ -2502,17 +2501,15 @@ async fn build_session_engine_with_mcp_defer(
     .await
     .context("load Agent model preferences before engine readiness")?
     .with_categories(categories.clone())
-    .with_configuration(
-        crate::agent_model_config::AgentModelConfigFiles::new(crate::config::active_config_path())
-            .with_project_dir(crate::project_bundles::project_bundles_dir()),
-    )
+    .with_configuration(crate::agent_model_config::AgentModelConfigFiles::new(
+        crate::config::active_config_path(),
+    ))
     .await
     .context("load Agent model configuration before engine readiness")?;
-    let catalog_refresh = Arc::new(
+    let catalog_refresh = Arc::new(crate::ProjectScopeRefresh::new(Arc::new(
         InstalledBundleRefresh::new(bundle_registry_path())
-            .with_project_dir(crate::project_bundles::project_bundles_dir())
             .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
-    );
+    )));
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),
