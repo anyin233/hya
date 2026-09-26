@@ -126,9 +126,12 @@ pub fn user_bundle_config_root(config_file: &Path) -> PathBuf {
 
 /// Snapshot resolver: which bundle ids are project-scoped, and where.
 ///
-/// A project bundle shadows a user install of the same id, so an id present
-/// in the project map resolves to its project source directory and every
-/// other id resolves to the user scope.
+/// Project bundles belong to one registered Project, so a resolver describes
+/// one catalog scope: build it from that scope's project bundle map
+/// (`hya_core::TurnBinding::project_bundle_dirs`, or the map a Project scope
+/// refresh publishes). A project bundle shadows a user install of the same
+/// id, so an id present in the project map resolves to its project source
+/// directory and every other id resolves to the user scope.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BundleConfigResolver {
     config_file: PathBuf,
@@ -143,20 +146,6 @@ impl BundleConfigResolver {
             config_file,
             project,
         }
-    }
-
-    /// Resolver that scans the valid project bundles under `project_dir`.
-    #[must_use]
-    pub fn discover(config_file: PathBuf, project_dir: Option<&Path>) -> Self {
-        let mut project = BTreeMap::new();
-        if let Some(dir) = project_dir {
-            for bundle in crate::project_bundles::project_bundles(dir) {
-                project
-                    .entry(bundle.bundle_id().to_string())
-                    .or_insert_with(|| bundle.dir().to_path_buf());
-            }
-        }
-        Self::new(config_file, project)
     }
 
     /// Active Hya `config.yaml` path this resolver is rooted at.

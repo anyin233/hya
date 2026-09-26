@@ -280,3 +280,55 @@ fn bundle_config_file_survives_upgrade_and_is_not_bundle_content() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[tokio::test]
+async fn an_installed_project_bundle_reaches_only_its_project_scope() {
+    use std::sync::Arc;
+
+    let root = temp_project();
+    let other = temp_project();
+    let dir = root.join(".hya/bundles");
+    install_project_bundle(
+        &dir,
+        bundle_files("acme/tools", "tools", "1.0.0", "Lead."),
+        &[],
+        DENY,
+    )
+    .expect("install");
+
+    let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+        hya_tool::ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().unwrap(),
+    ));
+    let refresh = hya_app::ProjectScopeRefresh::new(Arc::new(
+        hya_app::InstalledBundleRefresh::new(root.join("registry.db"))
+            .with_config_file(root.join("config/config.yaml")),
+    ));
+    let scope = hya_core::CatalogScope::Project {
+        id: hya_proto::ProjectId::new(),
+        roots: vec![other.clone(), root.clone()],
+    };
+    let bind = |scope: &hya_core::CatalogScope| {
+        runtime
+            .bind_scoped(scope, &root)
+            .expect("bind the Project scope")
+    };
+    use hya_core::RuntimeCatalogRefresh as _;
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    assert!(refresh.refresh_scope(&runtime, &scope).await.unwrap());
+    assert!(bind(&scope).resolve_agent("acme-tools-lead").is_some());
+    assert!(
+        runtime
+            .bind_turn(&root)
+            .unwrap()
+            .resolve_agent("acme-tools-lead")
+            .is_none(),
+        "the base catalog never loads project bundles"
+    );
+
+    remove_project_bundle(&dir, "acme/tools").expect("remove");
+    assert!(refresh.refresh_scope(&runtime, &scope).await.unwrap());
+    assert!(bind(&scope).resolve_agent("acme-tools-lead").is_none());
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&other).unwrap();
+}

@@ -34,6 +34,7 @@ pub mod permission;
 pub mod plugins;
 mod preset_inventory;
 pub mod project_bundles;
+mod project_scope;
 /// Live provider management behind the v1 provider routes.
 pub mod provider_control;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
@@ -56,6 +57,7 @@ pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs,
 };
 pub use preset_inventory::{TrustedPresetDescriptor, trusted_preset_inventory};
+pub use project_scope::ProjectScopeRefresh;
 pub use provider_control::ProviderManager;
 pub use runtime::{
     BUILTIN_DEFAULT_AGENT_ID, BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice,

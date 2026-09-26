@@ -1,9 +1,11 @@
 //! Project bundle sources: `.hya/bundles/<name>/` source directories.
 //!
-//! Project bundles are the highest-precedence catalog tier: a project bundle
-//! shadows an installed bundle with the same identity id **or** the same
-//! namespace, and content changes are republished at root bind boundaries via
-//! a content fingerprint (the registry generation does not move for files).
+//! Project bundles are the highest-precedence catalog tier of a registered
+//! Project: they load from `<root>/.hya/bundles` of every Project root in
+//! order (first root wins on id or namespace), a project bundle shadows an
+//! installed bundle with the same identity id **or** the same namespace, and
+//! content changes are republished at that Project's next bind via a content
+//! fingerprint (see [`crate::ProjectScopeRefresh`]).
 //!
 //! [`install_project_bundle`] and [`remove_project_bundle`] manage this tier
 //! for `hya bundle install|remove --project`. They follow the user registry's
@@ -22,8 +24,10 @@ use hya_bundle::{
 };
 use hya_store::{BundleInstallAction, NamespaceInstallPolicy, StoreError};
 
-/// Default project bundle directory: `$CWD/.hya/bundles` (the backend process
-/// working directory at startup, mirroring [`crate::plugins::plugins_dir`]).
+/// Project bundle directory of the current working directory:
+/// `$CWD/.hya/bundles`. Only the local `hya bundle install|remove --project`
+/// commands use it; the runtime loads project bundles per registered Project
+/// from every Project root (see [`crate::ProjectScopeRefresh`]).
 #[must_use]
 pub fn project_bundles_dir() -> Option<std::path::PathBuf> {
     let cwd = std::env::current_dir().ok()?;
@@ -113,6 +117,109 @@ pub(crate) fn load_project_bundle_dirs(dir: &Path) -> (Vec<(PreparedCatalog, Pat
         fingerprint = 1;
     }
     (catalogs, fingerprint)
+}
+
+/// The project bundle directory of one Project root: `<root>/.hya/bundles`.
+#[must_use]
+pub fn root_bundles_dir(root: &Path) -> PathBuf {
+    root.join(".hya/bundles")
+}
+
+/// Load the project bundles of every Project root, in root order.
+///
+/// Each root contributes `<root>/.hya/bundles` (see [`load_project_bundles`]).
+/// The first root wins: a later bundle whose identity id **or** namespace an
+/// earlier kept bundle already claims is skipped with a `tracing::warn!`, so
+/// the result never carries two bundles with one id or one namespace. The
+/// fingerprint changes whenever any root's bundle content or the root list
+/// changes.
+#[must_use]
+pub fn load_project_bundles_for_roots(roots: &[PathBuf]) -> (Vec<PreparedCatalog>, u64) {
+    let (loaded, fingerprint) = load_project_bundle_dirs_for_roots(roots);
+    (
+        loaded.into_iter().map(|(prepared, _)| prepared).collect(),
+        fingerprint,
+    )
+}
+
+/// [`load_project_bundles_for_roots`] that also returns each bundle's source
+/// directory.
+pub(crate) fn load_project_bundle_dirs_for_roots(
+    roots: &[PathBuf],
+) -> (Vec<(PreparedCatalog, PathBuf)>, u64) {
+    let mut kept: Vec<(PreparedCatalog, PathBuf)> = Vec::new();
+    let mut ids = std::collections::BTreeSet::new();
+    let mut namespaces = std::collections::BTreeSet::new();
+    let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+    for root in roots {
+        let (loaded, root_fingerprint) = load_project_bundle_dirs(&root_bundles_dir(root));
+        root.hash(&mut fingerprint);
+        root_fingerprint.hash(&mut fingerprint);
+        for (prepared, dir) in loaded {
+            let [bundle] = prepared.bundles() else {
+                continue;
+            };
+            let id = bundle.identity().id.clone();
+            let namespace = bundle.namespace().to_string();
+            if ids.contains(&id) || namespaces.contains(&namespace) {
+                tracing::warn!(
+                    bundle_id = %id,
+                    namespace = %namespace,
+                    dir = %dir.display(),
+                    "an earlier Project root already provides this project bundle id or namespace; skipped"
+                );
+                continue;
+            }
+            ids.insert(id);
+            namespaces.insert(namespace);
+            kept.push((prepared, dir));
+        }
+    }
+    let mut fingerprint = fingerprint.finish();
+    if fingerprint == 0 {
+        fingerprint = 1;
+    }
+    (kept, fingerprint)
+}
+
+/// Cheap change detector for the project bundles of `roots`: the root list,
+/// every bundle directory's content digest, and every bundle `config.yml`
+/// digest (configuration changes models and restarts spawning bundles).
+/// Nothing is prepared; equal digests mean [`load_project_bundle_dirs_for_roots`]
+/// and the bundles' configuration would load the same.
+///
+/// Folds everything into `hasher`; returns whether any root has a bundle
+/// directory.
+pub(crate) fn project_roots_digest(roots: &[PathBuf], hasher: &mut sha2::Sha256) -> bool {
+    use sha2::Digest as _;
+    let mut any = false;
+    for root in roots {
+        hasher.update(b"root\0");
+        hasher.update(root.as_os_str().as_encoded_bytes());
+        let Ok(entries) = std::fs::read_dir(root_bundles_dir(root)) else {
+            continue;
+        };
+        let mut dirs = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        dirs.sort();
+        for dir in dirs {
+            any = true;
+            hasher.update(b"bundle\0");
+            hasher.update(dir.as_os_str().as_encoded_bytes());
+            hasher.update(directory_digest(&dir).to_le_bytes());
+            match std::fs::read(dir.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME)) {
+                Ok(bytes) => {
+                    hasher.update(b"config\0");
+                    hasher.update(sha2::Sha256::digest(bytes));
+                }
+                Err(_) => hasher.update(b"no-config\0"),
+            }
+        }
+    }
+    any
 }
 
 /// Build a [`BundleSource`] from a directory: every regular file below it,
