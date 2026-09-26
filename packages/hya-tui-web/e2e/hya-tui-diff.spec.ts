@@ -137,4 +137,38 @@ test.describe("hya TUI Diff view", () => {
     await term.press("Escape")
     await term.waitForText("Enter a prompt · /new creates a session")
   })
+
+  test("~60 changed files: the file list windows around the open file with a N more indicator (T1c)", async ({ tui, backend }) => {
+    await initGitRepo(backend.dir)
+    const fileCount = 60
+    for (let index = 0; index < fileCount; index++) {
+      await writeFile(join(backend.dir, `file${String(index).padStart(2, "0")}.txt`), `one ${index}\n`)
+    }
+
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await term.type("/diff")
+    await term.press("Enter")
+    await term.waitForText(`${fileCount} files changed`)
+    // The list opens on the first file: nothing hidden above, a marker below.
+    await term.waitForText("file00.txt")
+    await term.waitForText(/↓ \d+ more/)
+    await expect((await term.text())).not.toContain("file59.txt")
+    // The hint below the file list stays visible (T1b's flexShrink lesson).
+    await term.waitForText("n/p file")
+
+    // Walk to the last file: the window follows the selection all the way
+    // down, and the last file becomes visible with a "more above" marker.
+    for (let index = 0; index < fileCount - 1; index++) await term.press("n")
+    await term.waitForText("Diff › file59.txt")
+    await term.waitForText("file59.txt")
+    await term.waitForText(/↑ \d+ more/)
+    await term.waitForText("n/p file")
+
+    await term.press("p")
+    await term.waitForText("Diff › file58.txt")
+
+    await term.press("Escape")
+    await term.waitForText("Enter a prompt · /new creates a session")
+  })
 })

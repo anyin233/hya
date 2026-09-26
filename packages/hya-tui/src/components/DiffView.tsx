@@ -10,7 +10,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { pageStep } from "../state/scroll"
-import { currentDiffFile, diffViewHint, fileLine, type DiffBusy, type DiffNotice, type DiffViewState } from "../state/diff"
+import { currentDiffFile, diffFileWindow, diffViewHint, fileLine, type DiffBusy, type DiffNotice, type DiffViewState } from "../state/diff"
 import { colors, diffColors } from "../theme"
 import type { Tone } from "../state/tools"
 import { useSpinner } from "./Spinner"
@@ -62,6 +62,11 @@ export function DiffView() {
         const fileListWidth = () => Math.min(36, Math.max(16, Math.floor(size().width * 0.28)))
         const file = () => currentDiffFile(open())
         const empty = () => (store.state.gitBranch ? "No changes" : "Not a git repository")
+        const fileWindow = () => diffFileWindow(open().files, open().current, Math.max(1, size().height - 12))
+        const shownFiles = () => {
+          const window = fileWindow()
+          return open().files.slice(window.start, window.end)
+        }
         return (
           <box
             position="absolute"
@@ -77,15 +82,21 @@ export function DiffView() {
             flexDirection="row"
           >
             <box width={fileListWidth()} flexShrink={0} flexDirection="column" paddingX={1} border borderColor={colors.border}>
-              <text height={1} wrapMode="none" fg={colors.fg}>{`${open().files.length} file${open().files.length === 1 ? "" : "s"} changed`}</text>
+              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${open().files.length} file${open().files.length === 1 ? "" : "s"} changed`}</text>
               <box flexGrow={1} flexDirection="column">
-                <For each={open().files}>
+                <Show when={fileWindow().moreAbove > 0}>
+                  <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`↑ ${fileWindow().moreAbove} more`}</text>
+                </Show>
+                <For each={shownFiles()}>
                   {(row) => (
                     <text height={1} wrapMode="none" fg={row.path === open().current ? colors.accent : colors.fg}>
                       {fileLine(row, row.path === open().current, fileListWidth() - 4)}
                     </text>
                   )}
                 </For>
+                <Show when={fileWindow().moreBelow > 0}>
+                  <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`↓ ${fileWindow().moreBelow} more`}</text>
+                </Show>
                 <Show when={open().files.length === 0}>
                   <text height={1} wrapMode="none" fg={colors.muted}>{empty()}</text>
                 </Show>

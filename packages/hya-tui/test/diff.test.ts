@@ -2,12 +2,14 @@ import { expect, test } from "bun:test"
 import type { KeyLike } from "../src/keys/bindings"
 import {
   currentDiffFile,
+  diffFileWindow,
   diffViewHint,
   diffViewKey,
   fileLine,
   initialDiffView,
   parseDiff,
   settleDiffView,
+  type DiffFile,
   type DiffViewState,
 } from "../src/state/diff"
 
@@ -131,6 +133,19 @@ test("fileLine shows the marker and +/- counts and fits the width", () => {
   expect(line.startsWith("▸ src/a.ts")).toBe(true)
   expect(line).toContain("+3 -1")
   expect(Bun.stringWidth(fileLine(file, false, 40))).toBeLessThanOrEqual(40)
+})
+
+test("diffFileWindow keeps the open file in view and reports the more-above/below counts", () => {
+  const files: DiffFile[] = Array.from({ length: 20 }, (_, i) => ({ path: `f${i}.ts`, additions: 0, deletions: 0, lines: [] }))
+  expect(diffFileWindow(files, "f0.ts", 5)).toEqual({ start: 0, end: 5, moreAbove: 0, moreBelow: 15 })
+  expect(diffFileWindow(files, "f19.ts", 5)).toEqual({ start: 15, end: 20, moreAbove: 15, moreBelow: 0 })
+  expect(diffFileWindow(files, "f10.ts", 5)).toEqual({ start: 6, end: 11, moreAbove: 6, moreBelow: 9 })
+  expect(diffFileWindow(files, undefined, 5)).toEqual({ start: 0, end: 5, moreAbove: 0, moreBelow: 15 })
+})
+
+test("diffFileWindow shows every file (no more indicator) when they all fit", () => {
+  const files: DiffFile[] = Array.from({ length: 3 }, (_, i) => ({ path: `f${i}.ts`, additions: 0, deletions: 0, lines: [] }))
+  expect(diffFileWindow(files, "f1.ts", 5)).toEqual({ start: 0, end: 3, moreAbove: 0, moreBelow: 0 })
 })
 
 test("diffViewHint reflects busy, notice, and the default hint", () => {

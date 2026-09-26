@@ -11,6 +11,21 @@
 // machine are unit-tested in test/mcp.test.ts (`shownServers`,
 // `serverLine`, `serverStateText`, `mcpViewKey`'s auth branch) — noted in
 // docs/tui.md "MCP servers".
+//
+// T1c (detail screen's tool-list windowing, `mcpToolWindow`/`toolIndex` in
+// state/mcp.ts): tried driving a real stdio MCP fixture (a tiny script
+// speaking the `initialize`/`tools/list` subset, config wired through a
+// `POST /v1/mcp`-free `mcp:` config.yaml entry) to get more than a
+// screen's worth of tools through the real backend. The server connects
+// (`MCP_SERVER_STATE_CONNECTED`) but `GET /v1/mcp`
+// (crates/hya-server/src/v1/mcp.rs `server_status`) always answers
+// `tools: Vec::new()` — `hya_mcp::McpStatus::Connected` carries no tool
+// data at all, so the detail screen's populated tool list is unreachable
+// through the live backend today regardless of this change (a second,
+// separate backend gap from the AddMcpServer one above; out of scope here,
+// `crates/*` is off-limits for this step). So the windowing itself
+// (`mcpToolWindow`, the highlight-driving keys, the `N more` indicator) is
+// unit-tested only, in test/mcp.test.ts.
 
 import { hyaTui, test } from "./hya"
 

@@ -2046,15 +2046,19 @@ A failed call shows the server's `code: message` (for example
 `/diff` opens a full-screen view of the working tree diff: `git diff HEAD`
 plus every untracked file, split back into one entry per file. The file list
 sits on the left (path and `+N -M`), the highlighted file's colored diff on
-the right — same line colors as a tool card's diff (add/remove/hunk).
+the right — same line colors as a tool card's diff (add/remove/hunk). The
+file list windows around the open file (a `N more` marker above/below it
+when the change touches more files than fit), so a large change never draws
+past the list.
 
 ### Keys
 
 Up/Down, PgUp/PgDn, Home/End, and the mouse wheel scroll the open file's
-body. `n` / `p` (or `]` / `[`) move to the next / previous file. `r` reloads
-the diff (after editing files outside the TUI, for example). Esc closes the
-view; Ctrl+C closes it too and keeps its quit meaning. The help overlay
-(`?`, group `diff`) lists the same keys.
+body. `n` / `p` (or `]` / `[`) move to the next / previous file, scrolling
+the file list to keep it in view. `r` reloads the diff (after editing files
+outside the TUI, for example). Esc closes the view; Ctrl+C closes it too and
+keeps its quit meaning. The help overlay (`?`, group `diff`) lists the same
+keys.
 
 With no changes the body says `No changes`; outside a git repository (or
 when the backend directory is not one) it says `Not a git repository` — the
@@ -2074,15 +2078,20 @@ connection state, tool count, and (when failed) its error.
 
 ### Keys
 
-Up/Down move the highlight; Enter opens the highlighted server's tool list
-(`MCP › <name>`); `c` connects it now, `x` disconnects it; `r` refreshes;
-`/` filters by name or state. `a` starts a login for a server that needs one
-(`authRequired`): the authorization URL is copied to the clipboard (OSC 52,
-the same action `/copy` uses) and shown, then a one-line pop-up takes the
-callback code — Enter completes the login, Esc cancels the pop-up only (the
-server keeps needing a login). Esc on the list closes the view; Ctrl+C
-closes it too and keeps its quit meaning. The help overlay (`?`, group
-`mcp`) lists the same keys.
+Up/Down move the highlight over the server list; Enter opens the
+highlighted server's tool list (`MCP › <name>`). On that detail screen,
+Up/Down/PgUp/PgDn/Home/End move a highlight over the server's tools instead
+— the tool list windows around it (a `N more` marker above/below when a
+server has more tools than fit), so a server with many tools never draws
+past the view. `c` connects the server now, `x` disconnects it; `r`
+refreshes; `/` filters the server list by name or state. `a` starts a login
+for a server that needs one (`authRequired`): the authorization URL is
+copied to the clipboard (OSC 52, the same action `/copy` uses) and shown,
+then a one-line pop-up takes the callback code — Enter completes the login,
+Esc cancels the pop-up only (the server keeps needing a login). Esc/Left on
+the detail screen backs out to the list; Esc on the list closes the view;
+Ctrl+C closes it too and keeps its quit meaning. The help overlay (`?`,
+group `mcp`) lists the same keys.
 
 ### MCP view interfaces
 
