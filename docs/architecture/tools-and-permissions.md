@@ -410,8 +410,10 @@ one is not saved.
   touched. Deleting a Project deletes its rows in the same transaction
   (`SessionStore::delete_project`).
 - **Listing.** `GET /v1/permissions/rules` reports each row as a
-  `SavedRule` with `permission: RULE_PERMISSION_ALLOW` and its
-  `timeCreated`; see the [protocol guide](../protocol/README.md#saved-permission-rules).
+  `SavedRule` with `permission: RULE_PERMISSION_ALLOW`, its `timeCreated`,
+  and its `projectId` (the row's own `project_id` — `"global"` for every row
+  except an `ExternalDirectory` grant); see the
+  [protocol guide](../protocol/README.md#saved-permission-rules).
 
 Grants answered by an interceptor (plugin bridge, bundle approver) stay
 in-memory only.

@@ -884,9 +884,11 @@ directory outside the session's Project roots saves `pattern` `<dir>/*` for
 that Project only; sessions of other Projects still ask, and deleting the
 Project deletes its rules. A temporary session's (or a Project-less
 session's) outside-directory grant is not saved and is not listed. The list
-includes every Project's rules; `SavedRule` does not yet report which Project
-a rule belongs to. An older `externaldirectory` rule with pattern `*` still
-applies to every session.
+includes every Project's rules; `SavedRule.projectId` reports which Project a
+rule belongs to, or the literal `"global"` for a rule that applies to every
+session and Project (every rule except an `externaldirectory` grant). An
+older `externaldirectory` rule with pattern `*` still applies to every
+session and also reports `"global"`.
 
 | Call | HTTP | Answer |
 | --- | --- | --- |
@@ -901,8 +903,10 @@ applies to every session.
                                            // for a command, else the action name
   "pattern": "cargo test",                 // the exact command for `bash`, `*` for an
                                            // action-wide grant, empty for a tool grant
-  "timeCreated": "2026-09-26T10:00:00Z" }  // absent for rules saved before creation
+  "timeCreated": "2026-09-26T10:00:00Z",   // absent for rules saved before creation
                                            // times were recorded
+  "projectId": "global" }                  // the Project the rule is scoped to, or
+                                           // "global" for a rule that applies everywhere
 ```
 
 ## Working-tree diff

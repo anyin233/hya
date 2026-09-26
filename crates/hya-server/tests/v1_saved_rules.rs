@@ -121,10 +121,20 @@ async fn saved_rules_report_allow_time_reload_and_revoke() {
         })
         .await
         .unwrap();
+    store
+        .save_permission(&SavedPermission {
+            id: "psv_outside".to_string(),
+            project_id: "prj_scoped".to_string(),
+            action: "externaldirectory".to_string(),
+            resource: "/outside/*".to_string(),
+            time_created_ms: Some(1_700_000_000_000),
+        })
+        .await
+        .unwrap();
     let (state, plane, mut asks) = state_with_plane(store).await;
 
     let restored = state.restore_saved_permissions().await.unwrap();
-    assert_eq!(restored, 1);
+    assert_eq!(restored, 2);
     assert!(
         authorized_without_ask(&plane, &mut asks).await,
         "a saved grant must be live after startup restore"
@@ -133,11 +143,28 @@ async fn saved_rules_report_allow_time_reload_and_revoke() {
     let app = router(state);
     let (status, body) = call(&app, Method::GET, "/v1/permissions/rules").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let rule = &body["rules"][0];
-    assert_eq!(rule["id"], "psv_write");
+    let rules = body["rules"].as_array().cloned().unwrap_or_default();
+    let find = |id: &str| {
+        rules
+            .iter()
+            .find(|rule| rule["id"] == id)
+            .unwrap_or_else(|| panic!("rule {id} missing from {rules:?}"))
+    };
+    let rule = find("psv_write");
     assert_eq!(rule["permission"], "RULE_PERMISSION_ALLOW");
     assert_eq!(rule["tool"], "write");
     assert_eq!(rule["timeCreated"], "2023-11-14T22:13:20+00:00");
+    assert_eq!(
+        rule["projectId"], "global",
+        "a pre-ADR-0026 / non-directory-scoped grant reports the global project id"
+    );
+    let scoped = find("psv_outside");
+    assert_eq!(scoped["tool"], "externaldirectory");
+    assert_eq!(scoped["pattern"], "/outside/*");
+    assert_eq!(
+        scoped["projectId"], "prj_scoped",
+        "an ExternalDirectory grant (ADR-0026) reports the Project it is scoped to"
+    );
 
     let (status, body) = call(&app, Method::DELETE, "/v1/permissions/rules/psv_write").await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -146,5 +173,5 @@ async fn saved_rules_report_allow_time_reload_and_revoke() {
         "deleting a rule must revoke the in-memory grant"
     );
     let (_status, body) = call(&app, Method::GET, "/v1/permissions/rules").await;
-    assert_eq!(body["rules"].as_array().map(Vec::len).unwrap_or(0), 0);
+    assert_eq!(body["rules"].as_array().map(Vec::len).unwrap_or(0), 1);
 }

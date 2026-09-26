@@ -2007,15 +2007,20 @@ closes it too and keeps its quit meaning. The help overlay (`?`, group
 
 `/rules` opens a full-screen list of saved permission decisions (the rules a
 persisted "always allow" answer writes). Each row shows the effect, the
-tool it matches, the pattern, and how long ago it was saved, e.g.
-`allow  bash  git status  · 2m ago`. The pattern column tells apart the
-three grant shapes the server reports (`docs/protocol/README.md` "Saved
-permission rules"): the exact command for a `bash` grant, `*` for an
-action-wide grant (every command of that tool, or every action for a
-non-`bash` tool), and empty for a tool-wide grant — shown blank, not folded
-into `*`, so it stays distinct from an action-wide grant. `tool` itself
-falls back to `*` only when the server leaves it empty (not expected in
-practice). The saved time is relative (`state/catalog.ts` `relativeTime()`,
+tool it matches, the pattern, the Project it is scoped to, and how long ago
+it was saved, e.g. `allow  bash  git status  global  · 2m ago`. The pattern
+column tells apart the three grant shapes the server reports
+(`docs/protocol/README.md` "Saved permission rules"): the exact command for
+a `bash` grant, `*` for an action-wide grant (every command of that tool, or
+every action for a non-`bash` tool), and empty for a tool-wide grant — shown
+blank, not folded into `*`, so it stays distinct from an action-wide grant.
+`tool` itself falls back to `*` only when the server leaves it empty (not
+expected in practice). The project column (`state/rules.ts`
+`ruleProjectLabel()`) shows the Project's name when `store.projects` has it,
+else the raw `projectId`, and `global` for a rule that applies to every
+session and Project (ADR-0026: every rule except an `ExternalDirectory`
+grant, which is scoped to the Project it was saved under). The saved time is
+relative (`state/catalog.ts` `relativeTime()`,
 `state/rules.ts` `ruleTimeText()`: `Ns`/`Nm`/`Nh`/`Nd ago`), `—` for a rule
 saved before creation times were recorded.
 
@@ -2029,15 +2034,17 @@ meaning. The help overlay (`?`, group `rules`) lists the same keys.
 
 Every saved rule is an "always allow" grant, so the backend reports it as
 `allow` with the time it was saved (no time for rules saved before times
-were recorded). Saved rules are process-wide: the same list shows in every
-directory. Deleting one takes effect at once — the next matching call asks
-again.
+were recorded). The same list shows in every directory (`directory` is
+accepted and ignored): most rows are global and apply to every session and
+Project, but an `ExternalDirectory` grant (ADR-0026) is scoped to one
+Project, shown by its `projectId`. Deleting one takes effect at once — the
+next matching call asks again.
 
 ### Saved Rules interfaces
 
 | Action | Call | Reads |
 | --- | --- | --- |
-| Open, `r` refresh | `GET /v1/permissions/rules?directory=<dir>` (paginated) | `SavedRule[]` (`id`, `permission`, `tool`, `pattern`, `timeCreated`) |
+| Open, `r` refresh | `GET /v1/permissions/rules?directory=<dir>` (paginated) | `SavedRule[]` (`id`, `permission`, `tool`, `pattern`, `timeCreated`, `projectId`) |
 | `d` then Enter | `DELETE /v1/permissions/rules/{id}?directory=<dir>` | — |
 
 ## Agent Models
