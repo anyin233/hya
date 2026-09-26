@@ -32,6 +32,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     undo: async () => { calls.push("undo") },
     redo: async () => { calls.push("redo") },
     fork: () => { calls.push("fork") },
+    reconnect: async () => { calls.push("reconnect") },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -461,4 +462,11 @@ test("/status names the session a fork came from", async () => {
   store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", forkedFrom: { session: "hysec_src" } })
   await run("/status")
   expect(store.state.statusText).toContain("Forked      from Parser")
+})
+
+test("/reconnect finds or starts the backend now", async () => {
+  const { calls, run, registry } = harness()
+  expect(registry.get("/reconnect")?.description).toContain("hya serve stop")
+  await run("/reconnect")
+  expect(calls).toEqual(["reconnect"])
 })

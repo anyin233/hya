@@ -1,5 +1,17 @@
 # 0.41.0
 
+## `hya serve stop` really stops the backend
+
+- Before ending its streams, the server sends a last live frame, `serverStopping {reason}`, where `reason` is `stop`, `restart`, or `signal`. `hya serve stop` and `restart` set the reason: they write `<db>.server.stop`, then send SIGTERM.
+- After `stop` (or a plain signal), TUIs don't start a new backend. They show `Backend stopped (hya serve stop) · /reconnect starts it again`, and prompts are refused until you reconnect. After `restart`, they wait up to 60 s for the new backend and attach (`Server moved · now pid N`). After a crash, they still find or start a backend as before.
+- New `/reconnect` finds or starts a backend at once.
+
+## Headless commands respect the database lock
+
+- `hya exec`, `hya run`, and `hya workflow use|state|run` with a durable `--db` now run through the backend that holds the database. The session shows up there, and the output and exit codes match a local run. Options that can't be sent to the backend (`--pure`, `workflow run --revision`/`--yolo`) exit 75 with a message naming the backend.
+- With no backend running, these commands hold `<db>.lock` while they run, so no server becomes a second writer. Listing sessions and `tail-session` only read. `-p`, `loop`, and `rpc` use a private database and are unaffected.
+- `CreateSession` with an empty agent or model now uses the server's default agent and that agent's model, instead of returning `invalid_argument`. See [CLI](docs/cli.md).
+
 ## The backend runs as a daemon that outlives its clients
 
 - Quitting the TUI or the WebUI no longer stops the backend. On start, a client looks for the backend of its database. If none runs, it starts `hya serve` as a detached daemon (its own session, output in `<db>.server.log`), and every later client attaches to it. Bare `hya` no longer runs a server inside its own process.

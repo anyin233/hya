@@ -401,6 +401,14 @@ export interface StreamEvent {
    * "Live and durable frames").
    */
   catalogUpdated?: Record<string, never>
+  /**
+   * Live-only, empty `session`: the server is shutting down; the last frame
+   * of every stream. `reason` is `stop` (`hya serve stop`: do not start
+   * another), `restart` (wait for the next one), or `signal` (treat like
+   * stop). A stream that ends without it lost its server unexpectedly
+   * (`docs/protocol/README.md` "Server shutdown").
+   */
+  serverStopping?: { reason?: string }
 }
 
 export interface StreamFrame {

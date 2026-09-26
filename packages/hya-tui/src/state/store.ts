@@ -171,6 +171,8 @@ export interface AppState {
   readonly gitBranch: string
   /** The session event stream is connected (status bar "connection state"). */
   readonly connected: boolean
+  /** The backend was stopped on purpose (`hya serve stop`, app/reconnect.ts): no server is started until `/reconnect`, and prompts are refused. */
+  readonly backendStopped: boolean
   /** Live `CompactionApplied` events and permission mode switches rendered as transcript notices, oldest first (compactions from before the session was opened are derived from their summary messages at render: state/messages.ts `withDividers`). */
   readonly dividers: readonly Divider[]
   /** Selectable permission modes (`GET /v1/permission-modes`); empty until read or on an older backend. */
@@ -299,6 +301,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     draft: false,
     gitBranch: "",
     connected: true,
+    backendStopped: false,
     dividers: [],
     permissionModes: [],
     pendingMode: undefined,
@@ -710,6 +713,10 @@ export function createAppStore() {
     /** The session event stream's connection state (status bar). */
     setConnected(value: boolean): void {
       if (value !== state.connected) set("connected", value)
+    },
+    /** Entered or left the stopped state (app/reconnect.ts `onStopped`). */
+    setBackendStopped(value: boolean): void {
+      if (value !== state.backendStopped) set("backendStopped", value)
     },
 
     /** Ask the transcript to jump to its newest line. */

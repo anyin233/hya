@@ -6496,7 +6496,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -6586,11 +6586,30 @@ pub mod stream_event {
         /// `ListProviders`.
         #[prost(message, tag = "25")]
         CatalogUpdated(super::CatalogUpdated),
+        /// The server is shutting down (ADR-0023): the last frame of every live
+        /// stream (global and session, SSE and gRPC) before it ends, and the only
+        /// frame of a stream opened while shutting down. Live-only and
+        /// process-wide (`seq` 0, empty `session`). `reason` says whether a
+        /// client should start the next server itself; see `ServerStopping`.
+        #[prost(message, tag = "26")]
+        ServerStopping(super::ServerStopping),
     }
 }
 /// The provider/model catalog changed; carries no fields.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CatalogUpdated {}
+/// Why the server is going away.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ServerStopping {
+    /// `stop`: stopped on purpose (`hya serve stop`); do not start another.
+    /// `restart`: `hya serve restart`; a new server of the same database
+    /// follows, attach to it. `signal`: SIGTERM/SIGINT/SIGHUP from anything
+    /// else (a foreground `hya serve` interrupted, a supervisor); treat like
+    /// `stop`. A stream that ends without this frame lost its server
+    /// unexpectedly (crash, kill, network).
+    #[prost(string, tag = "1")]
+    pub reason: ::prost::alloc::string::String,
+}
 /// Complete parts added to a message in one step.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartsAdded {

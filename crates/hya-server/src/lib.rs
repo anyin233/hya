@@ -44,7 +44,7 @@ pub use provider_control::{
 };
 pub use state::AppState;
 pub(crate) use state::ServerState;
-pub use streams::StreamShutdown;
+pub use streams::{ShutdownReason, StreamShutdown};
 pub use v1::V1Grpc;
 
 /// Largest `CreateTurn` HTTP JSON body the server reads: room for the 20 MiB

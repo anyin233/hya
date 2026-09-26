@@ -6,7 +6,10 @@
 //! `hya serve --bind 127.0.0.1:0 --db <db>` **detached**: its own session
 //! (`setsid`), stdin `/dev/null`, stdout and stderr appended to
 //! `<db>.server.log`. Nothing stops the daemon when the client exits; `hya
-//! serve stop` (SIGTERM, wait until the database lock is released) does.
+//! serve stop` (SIGTERM, wait until the database lock is released) does. It
+//! first leaves the reason (`stop`/`restart`) in `<db>.server.stop`, which
+//! the daemon sends to its clients as the last stream frame: they start the
+//! next server only after an unexpected loss.
 //!
 //! Starting is race-safe: the database lock arbitrates. A starter whose
 //! daemon lost the race (it exits 75) waits for the winner's discovery file;
@@ -256,9 +259,16 @@ pub(crate) enum Stopped {
     Stopped { pid: u32, killed: bool },
 }
 
-/// Stop the server that holds `db`: SIGTERM, then wait until the lock is
-/// free. After `timeout`, `force` sends SIGKILL; otherwise it is an error.
-pub(crate) async fn stop(db: &str, timeout: Duration, force: bool) -> anyhow::Result<Stopped> {
+/// Stop the server that holds `db`: leave `reason` for it
+/// ([`db_lock::request_stop`]: its clients learn whether to start the next
+/// server), SIGTERM, then wait until the lock is free. After `timeout`,
+/// `force` sends SIGKILL; otherwise it is an error.
+pub(crate) async fn stop(
+    db: &str,
+    timeout: Duration,
+    force: bool,
+    reason: hya_server::ShutdownReason,
+) -> anyhow::Result<Stopped> {
     let Some(busy) = db_lock::holder(db).context("check the database lock")? else {
         return Ok(Stopped::NotRunning);
     };
@@ -272,6 +282,11 @@ pub(crate) async fn stop(db: &str, timeout: Duration, force: bool) -> anyhow::Re
         );
     };
     let raw = i32::try_from(pid).context("pid out of range")?;
+    if let Err(error) = db_lock::request_stop(&busy.paths, pid, reason) {
+        // Still stop it: its clients then see a plain `signal`, which they
+        // treat like `stop` (they do not start the next server).
+        eprintln!("hya: could not record the stop reason ({error}); stopping anyway");
+    }
     // SAFETY: `kill` has no memory-safety preconditions.
     unsafe {
         libc::kill(raw, libc::SIGTERM);

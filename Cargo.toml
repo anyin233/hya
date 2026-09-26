@@ -31,6 +31,7 @@ hya-mcp = { path = "crates/hya-mcp" }
 hya-plugin = { path = "crates/hya-plugin" }
 hya-plugin-claude = { path = "crates/hya-plugin-claude" }
 hya-app = { path = "crates/hya-app" }
+hya-sdk-v1 = { path = "crates/hya-sdk-v1" }
 hya-updater = { path = "crates/hya-updater" }
 # --- external (pinned intent; each crate opts in per phase via `{ workspace = true }`) ---
 tokio = { version = "1", features = ["full", "test-util"] }

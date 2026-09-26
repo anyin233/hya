@@ -21803,6 +21803,97 @@ impl<'de> serde::Deserialize<'de> for SearchTextResponse {
         deserializer.deserialize_struct("hya.v1.SearchTextResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ServerStopping {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.reason.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ServerStopping", len)?;
+        if !self.reason.is_empty() {
+            struct_ser.serialize_field("reason", &self.reason)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ServerStopping {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "reason",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Reason,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "reason" => Ok(GeneratedField::Reason),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ServerStopping;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ServerStopping")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ServerStopping, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut reason__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Reason => {
+                            if reason__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reason"));
+                            }
+                            reason__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ServerStopping {
+                    reason: reason__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ServerStopping", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for SessionDeleted {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -24364,6 +24455,9 @@ impl serde::Serialize for StreamEvent {
                 stream_event::Payload::CatalogUpdated(v) => {
                     struct_ser.serialize_field("catalogUpdated", v)?;
                 }
+                stream_event::Payload::ServerStopping(v) => {
+                    struct_ser.serialize_field("serverStopping", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -24424,6 +24518,8 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             "partsAdded",
             "catalog_updated",
             "catalogUpdated",
+            "server_stopping",
+            "serverStopping",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24453,6 +24549,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             SessionReverted,
             PartsAdded,
             CatalogUpdated,
+            ServerStopping,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24499,6 +24596,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             "sessionReverted" | "session_reverted" => Ok(GeneratedField::SessionReverted),
                             "partsAdded" | "parts_added" => Ok(GeneratedField::PartsAdded),
                             "catalogUpdated" | "catalog_updated" => Ok(GeneratedField::CatalogUpdated),
+                            "serverStopping" | "server_stopping" => Ok(GeneratedField::ServerStopping),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24696,6 +24794,13 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                                 return Err(serde::de::Error::duplicate_field("catalogUpdated"));
                             }
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::CatalogUpdated)
+;
+                        }
+                        GeneratedField::ServerStopping => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("serverStopping"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::ServerStopping)
 ;
                         }
                     }

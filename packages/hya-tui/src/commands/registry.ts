@@ -51,6 +51,8 @@ export interface AppActions {
   redo(): Promise<void>
   /** `/fork`: open the fork picker. */
   fork(): void
+  /** `/reconnect`: find or start the database's backend now (app/reconnect.ts). */
+  reconnect(): Promise<void>
 }
 
 export interface CommandContext {

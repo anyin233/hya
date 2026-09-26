@@ -194,7 +194,7 @@ test.describe("bare hya", () => {
     })
   }
 
-  test("when the daemon stops, the terminal TUI and the WebUI tab find the next one (one starts it)", async ({ tui, workspace, page }, testInfo) => {
+  test("after `hya serve stop` the terminal TUI and the WebUI tab stay stopped; /reconnect in one starts the next, the other attaches", async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
@@ -205,13 +205,19 @@ test.describe("bare hya", () => {
     await web.waitForText("Connected to hya", 30_000)
 
     expect((await daemon(workspace, ["stop"])).code).toBe(0)
-    const notice = /Started a new server · pid \d+|Server moved · now pid \d+/
-    await term.waitForText(notice, 30_000)
-    await web.waitForText(notice, 30_000)
-    const texts = [await term.text(), await web.text()]
-    expect(texts.filter((text) => /Started a new server/.test(text))).toHaveLength(1)
+    const stoppedNotice = "Backend stopped (hya serve stop) · /reconnect starts it again"
+    await term.waitForText(stoppedNotice, 30_000)
+    await web.waitForText(stoppedNotice, 30_000)
+    expect(await daemonStatus(workspace)).toBeUndefined()
+    await web.attach(testInfo, "web-stopped")
+
+    // /reconnect in the terminal starts the next daemon; the stopped WebUI tab finds it and attaches.
+    await prompt(term, "/reconnect")
+    await term.waitForText(/Started a new server · pid \d+/, 30_000)
+    await web.waitForText(/Server moved · now pid \d+/, 30_000)
     const after = (await daemonStatus(workspace))!.pid
     expect(after).not.toBe(before)
+    expect(await web.text()).toContain(`Server moved · now pid ${after}`)
     await prompt(term, "still works after the move")
     await term.waitForText(/^Ready/m, 20_000)
     await term.attach(testInfo, "terminal-after")

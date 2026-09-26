@@ -74,17 +74,26 @@ pub(crate) async fn cmd_serve_action(
         }
     };
     // `quiet`: report on stderr (restart --json keeps stdout for the JSON).
-    let stop = |timeout: u64, force: bool, quiet: bool| {
+    let stop = |timeout: u64, force: bool, quiet: bool, reason: hya_server::ShutdownReason| {
         let db = db.clone();
         async move {
-            let line =
-                match daemon::stop(&db, std::time::Duration::from_secs(timeout), force).await? {
-                    daemon::Stopped::NotRunning => format!("no hya server is running on {db}"),
-                    daemon::Stopped::Stopped { pid, killed } => {
-                        let how = if killed { "killed" } else { "stopped" };
-                        format!("{how} hya server pid {pid} (db {db})")
+            let stopped =
+                daemon::stop(&db, std::time::Duration::from_secs(timeout), force, reason).await?;
+            let line = match stopped {
+                daemon::Stopped::NotRunning => format!("no hya server is running on {db}"),
+                daemon::Stopped::Stopped { pid, killed } => {
+                    let how = if killed { "killed" } else { "stopped" };
+                    let mut line = format!("{how} hya server pid {pid} (db {db})");
+                    if reason == hya_server::ShutdownReason::Stop {
+                        // ADR-0023: after a manual stop, clients do not
+                        // start the next server themselves.
+                        line.push_str(
+                            "\nconnected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server",
+                        );
                     }
-                };
+                    line
+                }
+            };
             if quiet {
                 eprintln!("{line}");
             } else {
@@ -103,11 +112,13 @@ pub(crate) async fn cmd_serve_action(
             force,
             timeout,
         } => {
-            stop(timeout, force, json).await?;
+            stop(timeout, force, json, hya_server::ShutdownReason::Restart).await?;
             let ready = daemon::start(&spec()?, daemon::START_WAIT).await?;
             print_ready(&ready, json);
         }
-        ServeAction::Stop { force, timeout } => stop(timeout, force, false).await?,
+        ServeAction::Stop { force, timeout } => {
+            stop(timeout, force, false, hya_server::ShutdownReason::Stop).await?;
+        }
         ServeAction::Status { json } => {
             let Some(found) = daemon::running(&db).await else {
                 match db_lock::holder(&db).ok().flatten() {
@@ -186,14 +197,20 @@ pub(crate) async fn serve_until(
         ..
     } = prepared;
     let supervisor = built.resident_supervisor();
+    let stop_request = lock.as_ref().map(db_lock::DbLock::stop_request_path);
     let serve_result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             stop.await;
-            // End every client's live event stream first: they never finish
-            // on their own, and connected clients (the daemon outlives them,
-            // ADR-0023) must not hold the shutdown open. Health answers
-            // `unavailable` from here on, so they reconnect elsewhere.
-            streams.close();
+            // Why: `hya serve stop|restart` leave a request addressed to this
+            // pid before their SIGTERM; anything else is a plain signal.
+            let reason = stop_request
+                .and_then(|path| db_lock::take_stop_request(&path, std::process::id()))
+                .unwrap_or(hya_server::ShutdownReason::Signal);
+            // End every client's live event stream first, with that reason as
+            // the last frame: they never finish on their own, and connected
+            // clients (the daemon outlives them, ADR-0023) must not hold the
+            // shutdown open. Health answers `unavailable` from here on.
+            streams.close(reason);
             supervisor
                 .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
                 .await;
