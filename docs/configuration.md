@@ -429,6 +429,12 @@ its `models:` entries:
   follows).
   Fetched rows are written to the model cache, never into `config.yaml`.
   Authentication headers are sent only when Hya has a credential.
+- One provider may serve models on more than one protocol: a `models:` entry
+  may [override `kind`](#model-entry-fields) per model (for example one
+  gateway fronting both Responses-style and Anthropic Messages models). Such
+  a provider becomes one route per effective protocol under the same id,
+  base URL, credential, and retry policy; discovery and provider status stay
+  provider-level.
 
 ### Model cache and config overrides
 
@@ -468,6 +474,7 @@ the v1 `ModelSummary.source` field (`remote`, `config`, `override`, or
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | string (required) | Provider-local model id; may contain `/` and `:`. |
+| `kind` | one of the provider [`kind` labels](#providers) | Protocol override for this model: one channel can serve different models on different wire protocols (for example an OpenAI-compatible gateway that also fronts Claude models). The entry's protocol is used for requests, the reasoning-variant fallback menu, and routing; the provider's own `kind` still drives remote model-list discovery, provider status, and OAuth/session auth. A provider with overrides is split into one route per effective protocol, all sharing the provider id, base URL, credential, and retry policy, and a model ref resolves to the route that claims it. String-form entries cannot override `kind` (use the mapping form); an unknown label fails config load. |
 | `name` | string | Display name shown by pickers and the Provider View. |
 | `limit.context` | positive `u32` | Context window (see [Model limits](#model-limits)). |
 | `limit.output` | positive `u32` | Max output tokens (see [Model limits](#model-limits)). |
@@ -484,6 +491,11 @@ providers:
         name: Model A (free)
         limit:
           output: 8192               # context still comes from the remote list
+      - id: claude-opus-5             # same channel, Anthropic protocol
+        kind: anthropic
+        limit:
+          context: 1000000
+          output: 131072
       - id: my-finetune              # config-only row
         reasoning: false
         modalities:
