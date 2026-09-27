@@ -14,7 +14,8 @@
 //! Invariants that make "cached base + tail" equal a full replay:
 //!
 //! - `event_log` is append-only per session (the only removal is
-//!   `delete_session`, which drops every row of the session) and `seq` is a
+//!   `delete_session`, which drops every row of the session and its
+//!   descendants) and `seq` is a
 //!   global AUTOINCREMENT assigned under SQLite's single writer, so commit
 //!   order equals `seq` order and every event with `seq <= last_seq` of a
 //!   session is visible once the event at `last_seq` is.
@@ -156,6 +157,15 @@ impl ProjectionCache {
 
     pub(crate) fn remove(&self, session: SessionId) {
         self.entries().remove(&session);
+    }
+
+    /// Drop every entry for `sessions` (e.g. a deleted session and its
+    /// descendants); unknown sessions are ignored.
+    pub(crate) fn remove_all(&self, sessions: impl IntoIterator<Item = SessionId>) {
+        let mut entries = self.entries();
+        for session in sessions {
+            entries.remove(&session);
+        }
     }
 }
 

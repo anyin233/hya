@@ -416,8 +416,11 @@ server) made it. Child (subagent) sessions never produce these frames.
   within about a second.
 - **Deleted.** `sessionDeleted` is live-only because deletion removes the
   session's log: there is nothing to replay. Its `session` names the deleted
-  session; drop the row. It follows a `DeleteSession` and the server's own
-  drop of an unused [ephemeral session](#ephemeral-sessions).
+  root session; drop the row. A `DeleteSession` also removes every descendant
+  subagent session and its session-scoped persisted state. Child sessions never
+  produce these frames, so the live list notice names only the requested root
+  session. It also follows the server's own drop of an unused
+  [ephemeral session](#ephemeral-sessions).
 - **Recovering.** None of these frames is replayed (`sinceSeq` only skips
   durable ones), so list sessions (`GET /v1/sessions`, with
   `includeArchived=true` if the client shows archived ones) once the stream
