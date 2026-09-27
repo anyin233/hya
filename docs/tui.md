@@ -2104,7 +2104,8 @@ filter never sees (never Ctrl+R, which means refresh):
   with nothing changed. Deleting the open session opens the next top-level
   session (or shows no session, if none is left); the confirmation applies
   the same way whether or not the row is the open session, so the open
-  session is never deleted without it.
+  session is never deleted without it. Deleting a session also removes every
+  descendant subagent session and its session-scoped persisted state.
 - **Ctrl+A** shows archived sessions too (it re-reads the list with
   `GET /v1/sessions?includeArchived=true`; the title becomes `Sessions ·
   archived included` and archived rows are tagged `[archived]`), and hides
@@ -2456,7 +2457,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions?includeArchived=true` | No body | Archived root sessions too (`SessionInfo.archived`, `archivedAt`): the `/resume` picker and the `/sessions` picker after Ctrl+A. |
 | `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); `--resume`, `/resume`, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
-| `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
+| `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; deletes the requested session and every descendant subagent session, while unrelated sessions remain. The TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
 | `GET /v1/permission-modes?directory=<dir>` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |

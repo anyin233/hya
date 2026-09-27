@@ -752,7 +752,10 @@ permission mode, and the archived flag of a root session.
 
 ### `Session.DeleteSession`
 
-Delete a session and its event log.
+Delete a session and its event log. If the session has spawned subagents, this
+also deletes every descendant session in the session tree, including each
+descendant's event log and session-scoped persisted state. Unrelated sessions
+are unchanged.
 
 
 ### `Session.ForkSession`

@@ -302,3 +302,106 @@ async fn delete_session_at_keeps_a_log_that_grew_since_the_check() {
     assert!(!store.delete_session_at(session, grown).await.unwrap());
     assert_eq!(store.replay(other).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn deleting_session_deletes_all_descendants_but_not_unrelated_sessions() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let root = SessionId::new();
+    let child = SessionId::new();
+    let grandchild = SessionId::new();
+    let unrelated = SessionId::new();
+
+    for (session, parent) in [
+        (root, None),
+        (child, Some(root)),
+        (grandchild, Some(child)),
+        (unrelated, None),
+    ] {
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent,
+                    agent: "build".into(),
+                    model: "fake".into(),
+                    workdir: "/tmp".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        store.read_projection(child).await.unwrap().session.id,
+        Some(child)
+    );
+    assert_eq!(
+        store.read_projection(grandchild).await.unwrap().session.id,
+        Some(grandchild)
+    );
+
+    assert!(store.delete_session(root).await.unwrap());
+
+    for deleted in [root, child, grandchild] {
+        assert!(!store.session_exists(deleted).await.unwrap());
+        assert!(store.replay(deleted).await.unwrap().is_empty());
+        assert_eq!(
+            store.read_projection(deleted).await.unwrap(),
+            Projection::default()
+        );
+    }
+    assert!(store.session_exists(unrelated).await.unwrap());
+    assert_eq!(store.replay(unrelated).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn delete_session_at_cascades_only_after_root_check() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let root = SessionId::new();
+    let child = SessionId::new();
+    let root_created = Event::SessionCreated {
+        session: root,
+        parent: None,
+        agent: "build".into(),
+        model: "fake".into(),
+        workdir: "/tmp".into(),
+        project: None,
+        kind: hya_proto::SessionKind::Project,
+    };
+    let (checked, _) = store.append_event(root, &root_created).await.unwrap();
+    store
+        .append_event(
+            child,
+            &Event::SessionCreated {
+                session: child,
+                parent: Some(root),
+                agent: "worker".into(),
+                model: "fake".into(),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            },
+        )
+        .await
+        .unwrap();
+    let (grown, _) = store
+        .append_event(
+            root,
+            &Event::SessionTitled {
+                session: root,
+                title: "grown".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(!store.delete_session_at(root, checked).await.unwrap());
+    assert!(store.session_exists(root).await.unwrap());
+    assert!(store.session_exists(child).await.unwrap());
+
+    assert!(store.delete_session_at(root, grown).await.unwrap());
+    assert!(!store.session_exists(root).await.unwrap());
+    assert!(!store.session_exists(child).await.unwrap());
+}

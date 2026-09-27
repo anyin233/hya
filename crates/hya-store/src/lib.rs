@@ -361,16 +361,19 @@ impl SessionStore {
         Ok(exists != 0)
     }
 
-    /// Delete ledger and event rows for a session; returns whether any event rows were removed.
+    /// Delete ledger and event rows for a session *and every descendant*
+    /// (`session.parent_id` tree); returns whether the root itself had event
+    /// rows. Materialized `session` rows are kept.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
         self.delete_session_where(session, None).await
     }
 
-    /// Delete the session like [`SessionStore::delete_session`], but only
-    /// when its log still ends at `last_seq` (the newest sequence the caller
-    /// checked). Returns `false`, deleting nothing, when the log grew since
-    /// (or the session is gone). The check and the delete are one write
-    /// statement, so no append can land between them.
+    /// Delete the session like [`SessionStore::delete_session`] (root and
+    /// descendants), but only when its log still ends at `last_seq` (the
+    /// newest sequence the caller checked). Returns `false`, deleting
+    /// nothing, when the log grew since (or the session is gone). The check
+    /// and the delete are one write statement, so no append can land between
+    /// them.
     pub async fn delete_session_at(
         &self,
         session: SessionId,
@@ -387,7 +390,7 @@ impl SessionStore {
         let key = session.storage_key();
         let mut tx = self.pool.begin().await?;
         // The event log goes first: its conditional delete is the check (and
-        // takes the write lock), so the side tables below only go with it.
+        // takes the write lock), so the cascade below only goes with it.
         let result = match last_seq {
             None => {
                 sqlx::query("DELETE FROM event_log WHERE session_id = ?")
@@ -412,24 +415,39 @@ impl SessionStore {
             tx.rollback().await?;
             return Ok(false);
         }
-        sqlx::query("DELETE FROM token_ledger WHERE session_id = ?")
-            .bind(key.clone())
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM open_assistant_message WHERE session_id = ?")
-            .bind(key.clone())
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM projection_snapshot WHERE session_id = ?")
-            .bind(key.clone())
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM file_blob WHERE session_id = ?")
-            .bind(key)
-            .execute(&mut *tx)
-            .await?;
+        // The root and every descendant, from the materialized `session` tree
+        // (`SessionCreated.parent` -> `session.parent_id`). The seed is the
+        // bound key itself, so the tree resolves even when a `session` row is
+        // missing, and the join on `parent_id` keeps unrelated sessions out;
+        // `UNION` dedupes so a corrupt parent cycle cannot loop forever.
+        let tree_keys = sqlx::query_scalar::<_, Vec<u8>>(
+            "WITH RECURSIVE tree(id) AS ( \
+                 SELECT ? \
+                 UNION \
+                 SELECT s.id FROM session s JOIN tree t ON s.parent_id = t.id \
+             ) \
+             SELECT id FROM tree",
+        )
+        .bind(key)
+        .fetch_all(&mut *tx)
+        .await?;
+        for tree_key in &tree_keys {
+            for table in [
+                "event_log",
+                "token_ledger",
+                "open_assistant_message",
+                "projection_snapshot",
+                "file_blob",
+            ] {
+                sqlx::query(&format!("DELETE FROM {table} WHERE session_id = ?"))
+                    .bind(tree_key.as_slice())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         tx.commit().await?;
-        self.projections.remove(session);
+        self.projections
+            .remove_all(tree_keys.iter().filter_map(|k| decode_session_key(k)));
         Ok(deleted)
     }
 
