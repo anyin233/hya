@@ -8,6 +8,7 @@
 - The client picks gRPC or WebSocket by itself (`t=auto`, falling back to WebSocket through hops that cannot carry gRPC) and keeps streams alive with heartbeats below common idle cuts (`--relay-heartbeat`, default 15 s). The backend reconnects to the relay with backoff.
 - Recipes for Cloudflare Tunnel, nginx, Caddy, Tailscale (tailnet, `tailscale serve`/`funnel`), and direct TLS, with the timeouts and buffering each needs.
 - The Caddy deployment recipe routes WebSocket upgrades over HTTP/1.1 and gRPC over `h2c`; a single `h2c` upstream cannot carry both bindings on current Caddy releases.
+- The relay conformance harness now simulates an account-less Cloudflare Tunnel (HTTP/1.1 origin, Host rewrite, and idle-cut edge) and verifies `t=auto` selects WebSocket while heartbeats preserve the connection; no Cloudflare account or public quick tunnel is needed for the release gate.
 - New `hya relay doctor <proxy-url|link>` checks a path: TLS, the gRPC and WebSocket bindings (and why one fails), the path prefix, optionally the idle cut (`--measure-idle`), and the `t=` value to use. See [Secure relay](docs/relay.md) and [ADR-0025](docs/adr/0025-secure-relay.md).
 
 ## Hosting a backend on a relay

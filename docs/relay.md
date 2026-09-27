@@ -937,12 +937,18 @@ proxies".
 | (g) | proxy that routes only `/relay/…` to a relay with `--path-prefix /relay` | both bindings under the prefix; without the prefix both probes report `HopRejected` |
 | (h) | proxy that rewrites Host / `:authority` | both bindings round-trip |
 | (i) | none: a parsed `hya+insecure://` link straight to the relay | `t=auto`, `t=grpc`, `t=ws` |
+| (j) | account-less Cloudflare shape: HTTP/1.1 origin, Host rewrite, and an idle-cut edge | `auto` selects WebSocket and heartbeats keep the control/data streams alive |
+
+Case (j) is the deterministic test-harness simulation of an account-less
+Cloudflare Tunnel. It composes the HTTP/1.1 origin behavior, Host rewrite, and
+edge idle cut in-process, so the release gate does not require Cloudflare
+credentials or a public quick-tunnel endpoint.
 
 Which cases stand for each first-class deployment:
 
 | Deployment | Cases |
 | --- | --- |
-| Cloudflare Tunnel | (c) + (e) + (h) |
+| Cloudflare Tunnel | (j) (composes (c) + (e) + (h)) |
 | nginx | (a) or (c), + (e) |
 | Caddy | (a) + (h) |
 | Tailscale, plain tailnet | (i) |
@@ -1151,6 +1157,11 @@ streams, and may rewrite Host/paths" is expected to work the same way.
 `cloudflared` proxies to `hya proxy` over plain HTTP; no inbound port is
 needed on the proxy host at all.
 
+For an account-less quick tunnel, no Cloudflare credential is needed in the
+test harness: conformance case (j) simulates the HTTP/1.1 origin, Host rewrite,
+and edge idle cut in-process. It is the reproducible release-gate check; a
+real named tunnel remains an optional deployment smoke test.
+
 ```yaml
 # cloudflared config.yml
 tunnel: <tunnel-id>
@@ -1162,10 +1173,10 @@ ingress:
 ```
 
 By default `cloudflared`'s origin connection is **HTTP/1.1**, so the
-WebSocket binding carries the traffic (case (c) in the conformance suite);
-`auto` picks it up automatically (`ProbeFailureKind::NoHttp2`). To let gRPC
-through instead, add `http2Origin: true` under the ingress rule's
-`originRequest`:
+WebSocket binding carries the traffic (the HTTP/1.1 component of case (j) in
+the conformance suite); `auto` picks it up automatically
+(`ProbeFailureKind::NoHttp2`). To let gRPC through instead, add
+`http2Origin: true` under the ingress rule's `originRequest`:
 
 ```yaml
   - hostname: relay.example.com
@@ -1176,8 +1187,8 @@ through instead, add `http2Origin: true` under the ingress rule's
 
 The Cloudflare edge cuts idle connections at roughly 100s; the relay's
 default heartbeat (15s, dead after 45s) stays well under that, so open
-streams survive (case (e)). Targets this Cloudflare Tunnel targeting
-`cloudflared` 2024+.
+streams survive (the idle-cut component of case (j)). Targets this Cloudflare
+Tunnel targeting `cloudflared` 2024+.
 
 Every client reaches the proxy from `cloudflared` on localhost, so the
 per-client limits need the client address from Cloudflare: it sets
@@ -1189,8 +1200,8 @@ could send its own `CF-Connecting-IP`.
 ```sh
 hya proxy --host 127.0.0.1 --port 8766 --trust-forwarded cf-connecting-ip
 hya relay doctor https://relay.example.com
-# expect: WebSocket ok, recommended t=auto (or t=ws if pinning); with
-# http2Origin: true, gRPC ok too.
+# expect: WebSocket ok, recommended t=ws; with http2Origin: true, gRPC ok and
+# t=auto can select gRPC.
 ```
 
 ### 2. nginx

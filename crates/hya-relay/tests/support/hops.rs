@@ -47,6 +47,18 @@ pub struct HttpHopOptions {
     pub rewrite_host: Option<String>,
 }
 
+impl HttpHopOptions {
+    /// Model an account-less Cloudflare Tunnel origin: HTTP/1.1 only with a
+    /// rewritten upstream Host header.
+    pub fn cloudflare_accountless() -> Self {
+        Self {
+            http1_only: true,
+            rewrite_host: Some("relay.internal:443".to_owned()),
+            ..Self::default()
+        }
+    }
+}
+
 /// A running HTTP hop.
 pub struct HttpHop {
     pub addr: SocketAddr,

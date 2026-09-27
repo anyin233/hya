@@ -349,6 +349,43 @@ async fn h_host_rewriting_hop_carries_both_bindings() {
     relay.stop().await;
 }
 
+// (j) An account-less Cloudflare Tunnel: the edge is HTTP/1.1-only, rewrites
+// Host at the origin, and cuts idle TCP connections. Heartbeats keep the
+// control and data streams alive, so auto selects WebSocket and survives.
+#[tokio::test]
+async fn j_cloudflare_accountless_tunnel_uses_websocket_and_heartbeats() {
+    let relay = Relay::start(support::relay_config()).await;
+    let origin = HttpHop::start(relay.addr, HttpHopOptions::cloudflare_accountless()).await;
+    let edge = TcpHop::start(
+        origin.addr,
+        TcpHopOptions {
+            idle_cut: Some(IDLE_CUT),
+            ..TcpHopOptions::default()
+        },
+    )
+    .await;
+    let address = plain(edge.addr, "");
+    let chosen = splice_through(&address, &[Transport::Auto, Transport::Ws]).await;
+    assert_eq!(chosen, [Binding::Ws, Binding::Ws]);
+
+    let identity = Identity::new(7);
+    let link = identity.link(address.clone(), Transport::Auto);
+    let backend = Backend::start(client(&address, Transport::Auto), identity, quick_policy()).await;
+    let opener = client(&address, Transport::Auto);
+    let mut tunnel = support::connect(&opener, &link).await.unwrap();
+    ping(&mut tunnel, b"before the edge idle period")
+        .await
+        .unwrap();
+    sleep(IDLE_CUT * 4).await;
+    timeout(WAIT, ping(&mut tunnel, b"after the edge idle period"))
+        .await
+        .expect("in time")
+        .unwrap();
+    assert_eq!(backend.registrations.load(Ordering::SeqCst), 1);
+    assert_eq!(edge.cuts.load(Ordering::SeqCst), 0);
+    relay.stop().await;
+}
+
 // (i) Plaintext `hya+insecure://` straight to the relay (the tailnet shape),
 // from a parsed link.
 #[tokio::test]
