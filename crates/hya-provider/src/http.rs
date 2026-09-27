@@ -769,6 +769,16 @@ impl HttpProvider {
         })
     }
 
+    /// The protocol this route speaks.
+    ///
+    /// A provider whose model entries override `kind` is partitioned into one
+    /// route per effective protocol, all sharing the provider id; this getter
+    /// tells the protocols apart for diagnostics and tests.
+    #[must_use]
+    pub fn kind(&self) -> ProviderKind {
+        self.kind
+    }
+
     /// Merge route defaults with any per-model limit overrides.
     fn caps_for_model(&self, model_id: &str) -> Capabilities {
         let mut caps = self.caps.clone();

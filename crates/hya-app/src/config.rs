@@ -318,6 +318,11 @@ struct DetailedModelConfig {
     /// remote list's name.
     #[serde(default)]
     name: Option<String>,
+    /// Protocol override for this model: one of the provider `kind` labels.
+    /// Kept as the raw label so validation can name the provider, model, and
+    /// label in errors instead of failing the untagged `ModelConfig` match.
+    #[serde(default)]
+    kind: Option<String>,
     /// `true`/`false` switch or a `{ default?, variants? }` mapping.
     #[serde(default)]
     reasoning: Option<ReasoningField>,
@@ -384,9 +389,31 @@ impl From<ProviderKindConfig> for ProviderKind {
     }
 }
 
+/// Validate one model entry's `kind` override label and map it to a protocol.
+///
+/// The accepted labels are exactly the provider `kind` labels (including the
+/// `openai-compatible` / `openai-completion` aliases): parsing goes through
+/// [`ProviderKindConfig`], so the label set has a single source.
+fn parse_model_kind(
+    provider_id: &str,
+    model_id: &str,
+    label: &str,
+) -> anyhow::Result<ProviderKind> {
+    let parsed: ProviderKindConfig =
+        serde_norway::from_value(Value::String(label.to_string())).map_err(|_| {
+            anyhow::anyhow!(
+                "provider {provider_id} model {model_id} has unknown kind {label} (expected one of {})",
+                PROVIDER_KIND_LABELS.join(", ")
+            )
+        })?;
+    Ok(parsed.into())
+}
+
 #[derive(Clone, Debug)]
 struct ParsedModel {
     id: String,
+    /// Effective protocol: the entry's `kind` override, else the provider's.
+    kind: ProviderKind,
     /// Configured display name (`name`).
     display_name: Option<String>,
     /// Effort menu from config (`reasoning.variants`, `reasoning: false` →
@@ -1729,14 +1756,15 @@ fn resolve_providers_filtered(
         let mut seen = BTreeSet::new();
         let mut models = Vec::new();
         for model in &provider.models {
-            let (raw_id, name, reasoning_field, limit, modalities) = match model {
-                ModelConfig::Id(id) => (id.as_str(), None, None, None, None),
+            let (raw_id, name, reasoning_field, limit, modalities, entry_kind) = match model {
+                ModelConfig::Id(id) => (id.as_str(), None, None, None, None, None),
                 ModelConfig::Detailed(model) => (
                     model.id.as_str(),
                     model.name.as_deref(),
                     model.reasoning.as_ref(),
                     model.limit.as_ref(),
                     model.modalities.as_ref(),
+                    model.kind.as_deref(),
                 ),
             };
             let reasoning_off = matches!(reasoning_field, Some(ReasoningField::Flag(false)));
@@ -1759,10 +1787,14 @@ fn resolve_providers_filtered(
             if !seen.insert(model_id.to_string()) {
                 continue;
             }
+            let effective_kind = match entry_kind {
+                Some(label) => parse_model_kind(id, model_id, label)?,
+                None => kind,
+            };
             let fallback_variants = if reasoning_off {
                 Vec::new()
             } else {
-                kind.reasoning_variants()
+                effective_kind.reasoning_variants()
             };
             let variants_configured =
                 reasoning_off || reasoning.is_some_and(|config| config.variants.is_some());
@@ -1815,6 +1847,7 @@ fn resolve_providers_filtered(
                 .map(str::to_string);
             models.push(ParsedModel {
                 id: model_id.to_string(),
+                kind: effective_kind,
                 display_name,
                 reasoning_default: resolve_default_reasoning(explicit_default, None, &variants),
                 reasoning_variants: variants,
@@ -2281,6 +2314,8 @@ fn failed_result(error: &CatalogFailure) -> ProviderCatalogResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EffectiveModel {
     id: String,
+    /// Effective protocol: the entry's `kind` override, else the provider's.
+    kind: ProviderKind,
     display_name: Option<String>,
     reasoning_variants: Vec<String>,
     reasoning_default: Option<ReasoningEffort>,
@@ -2317,7 +2352,7 @@ fn merge_provider_models(
             continue;
         }
         out.push(match configured.get(id) {
-            Some(config) => override_model(provider.kind, config, row),
+            Some(config) => override_model(config, row),
             None => remote_model(provider.kind, row),
         });
     }
@@ -2325,6 +2360,7 @@ fn merge_provider_models(
         if seen.insert(model.id.as_str()) {
             out.push(EffectiveModel {
                 id: model.id.clone(),
+                kind: model.kind,
                 display_name: model.display_name.clone(),
                 reasoning_variants: model.reasoning_variants.clone(),
                 reasoning_default: model.reasoning_default,
@@ -2366,6 +2402,7 @@ fn cached_reasoning_declared(row: &crate::model_cache::CachedModel) -> Option<bo
 fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> EffectiveModel {
     EffectiveModel {
         id: row.id.trim().to_string(),
+        kind,
         display_name: row.display_name.clone(),
         reasoning_variants: cached_variants(kind, row),
         reasoning_default: row
@@ -2382,15 +2419,11 @@ fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> Ef
     }
 }
 
-fn override_model(
-    kind: ProviderKind,
-    config: &ParsedModel,
-    row: &crate::model_cache::CachedModel,
-) -> EffectiveModel {
+fn override_model(config: &ParsedModel, row: &crate::model_cache::CachedModel) -> EffectiveModel {
     let (reasoning_variants, reasoning_default) = if config.variants_configured {
         (config.reasoning_variants.clone(), config.reasoning_default)
     } else {
-        let variants = cached_variants(kind, row);
+        let variants = cached_variants(config.kind, row);
         let default = config.explicit_default.or_else(|| {
             row.reasoning_default
                 .as_deref()
@@ -2426,6 +2459,7 @@ fn override_model(
     }
     EffectiveModel {
         id: config.id.clone(),
+        kind: config.kind,
         display_name: config
             .display_name
             .clone()
@@ -2445,11 +2479,12 @@ fn override_model(
 fn route_for_models(
     provider: &ParsedProvider,
     credential: &ProviderCredential,
+    kind: ProviderKind,
     models: &[EffectiveModel],
 ) -> anyhow::Result<HttpProvider> {
     let mut route = HttpProvider::new(
         provider.id.clone(),
-        provider.kind,
+        kind,
         &provider.base_url,
         credential.token.clone(),
         models.iter().map(|model| model.id.clone()),
@@ -2513,7 +2548,10 @@ fn route_for_models(
 }
 
 struct ProviderPlanResult {
-    route: Option<HttpProvider>,
+    /// One route per effective protocol in the provider's model list (a single
+    /// route unless entries override `kind`), all sharing the provider id,
+    /// base URL, credential, and retry policy.
+    routes: Vec<HttpProvider>,
     models: Vec<ProviderModel>,
     state: ProviderCatalogState,
 }
@@ -2709,15 +2747,34 @@ fn plan_for_provider(
     };
     if merged.is_empty() {
         return Ok(ProviderPlanResult {
-            route: None,
+            routes: Vec::new(),
             models: Vec::new(),
             state,
         });
     }
-    let route = route_for_models(provider, credential, &merged)?;
-    let models = hya_provider::Provider::catalog(&route);
+    // Partition by effective protocol: the provider's own kind first, then
+    // each override kind in first-appearance order. Every partition becomes
+    // one route under the same provider id, base URL, credential, and retry
+    // policy; `ProviderRouter::resolve` picks the route whose models claim
+    // the requested ref, so the partitions' disjoint model sets route
+    // themselves.
+    let mut partitions: Vec<(ProviderKind, Vec<EffectiveModel>)> = Vec::new();
+    for model in &merged {
+        match partitions.iter_mut().find(|(kind, _)| *kind == model.kind) {
+            Some((_, models)) => models.push(model.clone()),
+            None => partitions.push((model.kind, vec![model.clone()])),
+        }
+    }
+    partitions.sort_by_key(|(kind, _)| usize::from(*kind != provider.kind));
+    let mut routes = Vec::with_capacity(partitions.len());
+    let mut models = Vec::new();
+    for (kind, partition) in partitions {
+        let route = route_for_models(provider, credential, kind, &partition)?;
+        models.extend(hya_provider::Provider::catalog(&route));
+        routes.push(route);
+    }
     Ok(ProviderPlanResult {
-        route: Some(route),
+        routes,
         models,
         state,
     })
@@ -2805,7 +2862,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     }
     while let Some(result) = tasks.join_next().await {
         let plan = result.map_err(|error| anyhow::anyhow!("catalog discovery task: {error}"))??;
-        if plan.route.is_some() && !plan.models.is_empty() {
+        if !plan.routes.is_empty() && !plan.models.is_empty() {
             pending_discovery.retain(|entry| entry.provider_id != plan.state.provider_id);
         }
         plans.push(plan);
@@ -2815,7 +2872,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut live_models = Vec::new();
     let mut states = Vec::new();
     for plan in plans {
-        if let Some(route) = plan.route {
+        for route in plan.routes {
             router = router.with(Arc::new(route));
         }
         live_models.extend(plan.models);
@@ -2904,7 +2961,7 @@ fn splice_catalog(
         router = router.with(Arc::clone(provider));
     }
     for plan in plans {
-        if let Some(route) = plan.route {
+        for route in plan.routes {
             router = router.with(Arc::new(route));
         }
     }
@@ -4276,6 +4333,149 @@ plugins:
         assert!(error.contains("modalities"), "{error}");
     }
 
+    #[test]
+    fn model_entry_kind_overrides_the_effective_protocol_menu() {
+        let yaml = "providers:\n  12th:\n    kind: openai\n    base_url: https://api.12th.day/v1\n    models:\n      - gpt-6-astra\n      - id: claude-opus-5\n        kind: anthropic\n      - id: glm-exp\n        kind: anthropic\n        reasoning:\n          variants: [low, high]\n";
+        let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
+        let models = &provider.models;
+        assert_eq!(models.len(), 3);
+        // Inherits the provider kind: the openai fallback menu and its highest effort.
+        assert_eq!(
+            models[0].reasoning_variants,
+            vec!["minimal", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(models[0].reasoning_default, Some(ReasoningEffort::XHigh));
+        // Entry-level kind override: the anthropic fallback menu and its highest effort.
+        assert_eq!(
+            models[1].reasoning_variants,
+            vec!["low", "medium", "high", "max"]
+        );
+        assert_eq!(models[1].reasoning_default, Some(ReasoningEffort::Max));
+        // Explicit reasoning.variants still replaces the overridden kind's menu.
+        assert_eq!(models[2].reasoning_variants, vec!["low", "high"]);
+        assert_eq!(models[2].reasoning_default, Some(ReasoningEffort::High));
+    }
+
+    #[test]
+    fn model_entry_kind_rejects_unknown_labels() {
+        let bad = "providers:\n  12th:\n    kind: openai\n    base_url: https://api.12th.day/v1\n    models:\n      - id: m\n        kind: anthropic-msgs\n";
+        let error = parse_providers(bad).err().unwrap();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("provider 12th model m has unknown kind anthropic-msgs"),
+            "got {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "(expected one of {})",
+                PROVIDER_KIND_LABELS.join(", ")
+            )),
+            "got {message}"
+        );
+        for label in PROVIDER_KIND_LABELS {
+            let yaml = format!(
+                "providers:\n  12th:\n    kind: openai\n    base_url: https://api.12th.day/v1\n    models:\n      - id: m\n        kind: {label}\n"
+            );
+            parse_providers(&yaml).unwrap_or_else(|error| panic!("{label}: {error:#}"));
+        }
+    }
+
+    #[test]
+    fn model_kind_override_partitions_one_route_per_protocol() {
+        let yaml = "providers:\n  12th:\n    kind: openai-response\n    base_url: https://api.12th.day/v1\n    models:\n      - gpt-6-astra\n      - id: claude-opus-5\n        kind: anthropic\n      - id: glm-exp\n        kind: anthropic\n";
+        let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
+        let plan = plan_for_provider(&provider, &no_key(), &[], None).unwrap();
+        assert_eq!(plan.routes.len(), 2, "one route per effective protocol");
+        // The provider-kind partition comes first, override partitions after in
+        // first-appearance order; both routes share the provider id.
+        assert_eq!(plan.routes[0].kind(), ProviderKind::OpenAiResponse);
+        assert_eq!(plan.routes[1].kind(), ProviderKind::Anthropic);
+        assert_eq!(hya_provider::Provider::id(&plan.routes[0]), "12th");
+        assert_eq!(hya_provider::Provider::id(&plan.routes[1]), "12th");
+        // Each route claims exactly its partition's models.
+        let claims = |route: &hya_provider::HttpProvider, model: &str| {
+            hya_provider::Provider::capabilities(route, &hya_proto::ModelRef::new(model)).is_some()
+        };
+        assert!(claims(&plan.routes[0], "gpt-6-astra"));
+        assert!(!claims(&plan.routes[0], "claude-opus-5"));
+        assert!(claims(&plan.routes[1], "claude-opus-5"));
+        assert!(claims(&plan.routes[1], "glm-exp"));
+        assert!(!claims(&plan.routes[1], "gpt-6-astra"));
+        // The catalog rows keep the provider-wide partition order (provider
+        // kind first); intra-partition order is not a contract because a
+        // route's model set is a HashSet and the snapshot re-sorts rows.
+        let mut ids: Vec<&str> = plan
+            .models
+            .iter()
+            .map(|row| row.model_id.as_str())
+            .collect();
+        assert_eq!(
+            ids[0], "gpt-6-astra",
+            "the provider-kind partition comes first"
+        );
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["claude-opus-5", "glm-exp", "gpt-6-astra"]);
+        // Router-level resolution picks the route that claims the model ref.
+        let mut router = ProviderRouter::new();
+        for route in plan.routes {
+            router = router.with(std::sync::Arc::new(route));
+        }
+        let resolved = |model: &str| {
+            router
+                .resolve(&hya_proto::ModelRef::new(model))
+                .map(|route| hya_provider::Provider::id(route.as_ref()).to_string())
+        };
+        assert_eq!(resolved("12th/gpt-6-astra").as_deref(), Some("12th"));
+        assert_eq!(resolved("12th/claude-opus-5").as_deref(), Some("12th"));
+        assert_eq!(resolved("claude-opus-5").as_deref(), Some("12th"));
+        assert_eq!(resolved("missing-model").as_deref(), None);
+    }
+
+    #[test]
+    fn model_kind_override_applies_effective_kind_to_cached_rows() {
+        let yaml = "providers:\n  12th:\n    kind: anthropic\n    base_url: https://api.12th.day/v1\n    models:\n      - id: gpt-6-astra\n        kind: openai\n";
+        let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
+        // A cached row without effort metadata: the merged row's fallback menu
+        // must come from the entry's effective kind, not the provider's.
+        let row = cached("gpt-6-astra");
+        let plan = plan_for_provider(&provider, &no_key(), &[row], None).unwrap();
+        assert_eq!(plan.routes.len(), 1);
+        assert_eq!(plan.routes[0].kind(), ProviderKind::OpenAiCompatible);
+        let merged = plan
+            .models
+            .iter()
+            .find(|row| row.model_id == "gpt-6-astra")
+            .expect("merged row");
+        assert_eq!(
+            merged.reasoning_variants,
+            vec!["minimal", "low", "medium", "high", "xhigh"],
+            "the fallback menu follows the entry's effective kind, not the provider's"
+        );
+    }
+
+    #[test]
+    fn set_model_entry_preserves_an_entry_kind_override() {
+        let path = temp_config(
+            "model-kind-keep",
+            "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        kind: anthropic\n        name: Mine\n",
+        );
+        set_model_entry(
+            &path,
+            "gw",
+            "m",
+            &ModelEntryOverride {
+                output_limit: Some(4_096),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("kind: anthropic"), "{raw}");
+        assert!(raw.contains("output: 4096"), "{raw}");
+        let provider = parse_providers(&raw).unwrap().into_iter().next().unwrap();
+        assert_eq!(provider.models[0].kind, ProviderKind::Anthropic);
+    }
+
     #[tokio::test]
     async fn configured_model_limits_reach_route_capabilities() {
         let provider = parse_providers(GLM_LIMIT_YAML)
@@ -4308,10 +4508,10 @@ plugins:
         );
         assert_eq!(caps("glm-5.3-ctx").max_context, 262_144);
         assert_eq!(caps("glm-5.3-ctx").max_output, 0);
-        let route = plan.route.unwrap();
+        let route = plan.routes.first().unwrap();
         assert_eq!(
             hya_provider::Provider::capabilities(
-                &route,
+                route,
                 &hya_proto::ModelRef::new("12th/glm-5.3-flash")
             )
             .map(|caps| caps.max_output),
@@ -4458,9 +4658,9 @@ providers:
         assert_eq!(row("thinks").reasoning, Some(true));
         assert_eq!(row("never").reasoning, Some(false));
         assert_eq!(row("remote-reasoning").reasoning, Some(true));
-        let route = plan.route.unwrap();
+        let route = plan.routes.first().unwrap();
         assert_eq!(
-            hya_provider::Provider::capabilities(&route, &hya_proto::ModelRef::new("gw/plain"))
+            hya_provider::Provider::capabilities(route, &hya_proto::ModelRef::new("gw/plain"))
                 .map(|caps| caps.max_context),
             Some(200_000),
             "the runtime keeps its context fallback"
