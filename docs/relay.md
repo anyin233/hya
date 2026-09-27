@@ -1268,14 +1268,23 @@ hya relay doctor https://relay.example.com
 # expect: gRPC ok, WebSocket ok, recommended t=auto.
 ```
 
-### 3. Caddy
-
-Caddy's `reverse_proxy` with an `h2c://` upstream carries both gRPC and
-WebSocket over one directive, and Caddy manages TLS automatically. Targets
-Caddy 2.7+.
+Caddy must route WebSocket upgrades to an HTTP/1.1 upstream and gRPC to an
+`h2c://` upstream. A single `h2c://` reverse proxy cannot carry the
+WebSocket upgrade on current Caddy releases. Caddy manages TLS automatically
+when the site address is a hostname:
 
 ```caddyfile
 relay.example.com {
+    @websocket {
+        header Connection *Upgrade*
+    }
+
+    # WebSocket binding: keep the upstream on HTTP/1.1.
+    reverse_proxy @websocket 127.0.0.1:8766 {
+        flush_interval -1
+    }
+
+    # gRPC binding: use cleartext HTTP/2 to hya proxy.
     reverse_proxy h2c://127.0.0.1:8766 {
         flush_interval -1
     }
@@ -1284,8 +1293,8 @@ relay.example.com {
 
 `flush_interval -1` disables Caddy's response buffering so streaming frames
 are forwarded immediately (needed for both bindings). This is the suite's
-"canary" shape: case (a) (h2c carries both bindings) plus, if you rewrite the
-Host header, case (h).
+"canary" shape: case (a) (h2c carries gRPC) plus, if you rewrite the Host
+header, case (h) — while the explicit WebSocket route exercises case (c).
 
 Caddy appends the address it saw to `X-Forwarded-For` (and, unless you
 configure `trusted_proxies`, drops any value the client sent), so the
