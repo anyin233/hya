@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use hya_proto::{
     Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{Decoder, ProviderError};
 
@@ -31,6 +31,7 @@ impl ToolAsm {
 pub struct OpenAiChatDecoder {
     session: SessionId,
     message: MessageId,
+    reasoning_part: Option<PartId>,
     text_part: Option<PartId>,
     tools: BTreeMap<usize, ToolAsm>,
     finish_reason: Option<String>,
@@ -45,6 +46,7 @@ impl OpenAiChatDecoder {
         Self {
             session,
             message,
+            reasoning_part: None,
             text_part: None,
             tools: BTreeMap::new(),
             finish_reason: None,
@@ -60,6 +62,14 @@ impl OpenAiChatDecoder {
         self.finished = true;
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
+        if let Some(part) = self.reasoning_part.take() {
+            out.push(Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data: Some(json!({"openai_chat_reasoning_content": true})),
+            });
+        }
         if let Some(part) = self.text_part.take() {
             out.push(Event::TextEnd {
                 session,
@@ -122,6 +132,33 @@ impl Decoder for OpenAiChatDecoder {
         else {
             return Ok(out);
         };
+
+        if let Some(content) = choice
+            .pointer("/delta/reasoning_content")
+            .and_then(Value::as_str)
+            && !content.is_empty()
+        {
+            let part = match self.reasoning_part {
+                Some(part) => part,
+                None => {
+                    let part = PartId::new();
+                    self.reasoning_part = Some(part);
+                    out.push(Event::ReasoningStart {
+                        session,
+                        message,
+                        part,
+                        reason: None,
+                    });
+                    part
+                }
+            };
+            out.push(Event::ReasoningDelta {
+                session,
+                message,
+                part,
+                delta: content.to_string(),
+            });
+        }
 
         if let Some(content) = choice.pointer("/delta/content").and_then(Value::as_str)
             && !content.is_empty()

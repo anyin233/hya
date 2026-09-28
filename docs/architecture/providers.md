@@ -51,6 +51,29 @@ trait Decoder {
 `encode` builds the HTTP JSON body. `decoder` returns a fresh stateful decoder.
 Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 
+### DeepSeek thinking with tools over OpenAI Chat
+
+DeepSeek's thinking mode requires each earlier assistant message's
+`reasoning_content` when a later request includes tools. Hya preserves that
+field so a tool result can be sent back without an upstream HTTP 400. The
+OpenAI Chat SSE decoder maps nonempty `choices[0].delta.reasoning_content`
+strings to `ReasoningStart`, `ReasoningDelta`, and `ReasoningEnd` events. The
+ending event carries `provider_data: {"openai_chat_reasoning_content": true}`.
+When replaying those assistant parts, the OpenAI Chat encoder includes their
+text in the assistant message's `reasoning_content` field, alongside `content`
+and any `tool_calls`. It does this for earlier assistant messages with or
+without tool calls. For `deepseek-*` model ids, it also sends an empty string
+when an earlier assistant message has no reasoning delta; DeepSeek still
+requires the field after a tool call. Reasoning parts from other protocols lack
+this marker and are not sent as OpenAI Chat reasoning content.
+
+To use this path, configure the official DeepSeek route with `/connect deepseek`
+in the TUI, select its model, and send a prompt that calls a tool. For example,
+after `/connect deepseek` and a backend restart, send `What files are in this
+directory?`; approve the pending read-only shell call in `/interactions`. The
+assistant continues from the tool result. The upstream requirement is described
+in [DeepSeek's thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode/).
+
 ### Capabilities
 
 `Capabilities` has eight fields:

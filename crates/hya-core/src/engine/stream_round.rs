@@ -30,6 +30,7 @@ impl SessionEngine {
     ) -> Result<StreamRound, CoreError> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut durable_text_parts: Vec<(PartId, String)> = Vec::new();
+        let mut durable_tool_events: Vec<Event> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
         let mut finish = FinishReason::Stop;
         let mut tokens = None;
@@ -92,6 +93,15 @@ impl SessionEngine {
                 }
                 continue;
             }
+            if matches!(
+                &event,
+                Event::ToolInputStart { .. }
+                    | Event::ToolInputDelta { .. }
+                    | Event::ToolCallRequested { .. }
+            ) {
+                durable_tool_events.push(event);
+                continue;
+            }
             self.emit_for_actor(actor_claim, session, event).await?;
         }
         for (part, text) in durable_text_parts {
@@ -126,6 +136,9 @@ impl SessionEngine {
                 },
             )
             .await?;
+        }
+        for event in durable_tool_events {
+            self.emit_for_actor(actor_claim, session, event).await?;
         }
         Ok(StreamRound {
             tool_calls,
