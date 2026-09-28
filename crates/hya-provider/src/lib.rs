@@ -172,6 +172,8 @@ pub struct Capabilities {
     /// when known (config `modalities.input`), `None` when unknown. Prompt
     /// admission rejects image attachments only on `Some(false)`.
     pub image_input: Option<bool>,
+    /// Whether the route supports Anthropic-style prompt cache breakpoints.
+    pub prompt_caching: bool,
 }
 
 pub(crate) fn append_identity_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
@@ -211,6 +213,7 @@ pub(crate) fn append_capabilities_identity(
         u8::from(caps.usage_reporting),
         u8::from(caps.json_output),
         u8::from(caps.reasoning_stream),
+        u8::from(caps.prompt_caching),
         u8::from(caps.reasoning_request),
     ]);
     output.extend_from_slice(&caps.max_context.to_be_bytes());

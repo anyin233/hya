@@ -63,7 +63,7 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 
 ### Capabilities
 
-`Capabilities` has eight fields:
+`Capabilities` has nine fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -75,7 +75,7 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 | `reasoning_request` | Route accepts a reasoning-effort parameter on the request. |
 | `max_context` | Advertised context window (tokens). |
 | `max_output` | Advertised max output tokens (`0` means unspecified / unknown). Participates in identity hashing with the other caps. |
-
+| `prompt_caching` | Anthropic route may emit ephemeral prompt-cache breakpoints. |
 **HTTP default** (`HttpProvider::new`, every kind and model):
 
 - `streaming_tool_calls` = true

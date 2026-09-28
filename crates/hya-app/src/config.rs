@@ -237,6 +237,9 @@ struct ProviderConfig {
     /// Unset fields inherit the global value.
     #[serde(default)]
     retry: Option<ProviderRetryFile>,
+    /// Optional per-route override; Anthropic defaults on, other kinds off.
+    #[serde(default)]
+    prompt_cache: Option<bool>,
 }
 
 /// File shape of a retry policy block (`provider_retry:` global default or a
@@ -523,8 +526,8 @@ pub(crate) struct ParsedProvider {
     api_key: Option<String>,
     models: Vec<ParsedModel>,
     retry: hya_provider::RetryConfig,
+    prompt_cache: Option<bool>,
 }
-
 /// Resolved optional authentication material for one configured provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderCredential {
@@ -1870,6 +1873,7 @@ fn resolve_providers_filtered(
             api_key,
             models,
             retry: resolve_provider_retry(file.provider_retry.as_ref(), provider.retry.as_ref()),
+            prompt_cache: provider.prompt_cache,
         });
     }
     Ok(out)
@@ -2467,6 +2471,7 @@ fn route_for_models(
     kind: ProviderKind,
     models: &[EffectiveModel],
 ) -> anyhow::Result<HttpProvider> {
+    let prompt_cache = provider.prompt_cache;
     let mut route = HttpProvider::new(
         provider.id.clone(),
         kind,
@@ -2474,6 +2479,7 @@ fn route_for_models(
         credential.token.clone(),
         models.iter().map(|model| model.id.clone()),
     )?
+    .with_prompt_cache(prompt_cache.unwrap_or(kind == ProviderKind::Anthropic))
     .with_catalog_source(ModelCatalogSource::Configured)
     .with_retry(provider.retry)
     .with_model_sources(models.iter().map(|model| (model.id.clone(), model.source)))

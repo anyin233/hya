@@ -21,7 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 mod output_limit_tests;
 mod stream;
 
-use crate::anthropic::AnthropicMessagesProtocol;
+use crate::anthropic::{AnthropicMessagesProtocol, add_prompt_cache_breakpoints};
 use crate::google::GoogleProtocol;
 use crate::openai::{
     GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items,
@@ -199,6 +199,8 @@ enum AuthStyle {
 /// Owns SSE framing; the protocol decoder only sees data payloads. Redirects are
 /// disabled so auth headers are never followed cross-origin.
 pub struct HttpProvider {
+    /// Whether Anthropic prompt-cache breakpoints are enabled on this route.
+    prompt_caching: bool,
     id: String,
     protocol: Arc<dyn Protocol>,
     core: RouteCore,
@@ -335,17 +337,27 @@ impl HttpProvider {
             model_sources: BTreeMap::new(),
             kind,
             catalog_source: ModelCatalogSource::Configured,
+            prompt_caching: kind == ProviderKind::Anthropic,
             caps: Capabilities {
                 streaming_tool_calls: true,
                 parallel_tool_calls: true,
                 usage_reporting: true,
                 reasoning_request: true,
+                prompt_caching: kind == ProviderKind::Anthropic,
                 max_context: 200_000,
                 max_output: 0,
                 ..Capabilities::default()
             },
             stream_idle_timeout: STREAM_IDLE_TIMEOUT,
         })
+    }
+
+    /// Enable or disable Anthropic prompt-cache breakpoints for this route.
+    #[must_use]
+    pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
+        self.prompt_caching = enabled && self.kind == ProviderKind::Anthropic;
+        self.caps.prompt_caching = self.prompt_caching;
+        self
     }
 
     /// Switch a ChatGPT Codex provider to OAuth session auth (account id header).
@@ -831,7 +843,10 @@ impl HttpProvider {
         if let Some(limit) = output_limit {
             req.max_output_tokens = Some(req.max_output_tokens.map_or(limit, |max| max.min(limit)));
         }
-        let body = self.protocol.encode_with_output_limit(&req, output_limit)?;
+        let mut body = self.protocol.encode_with_output_limit(&req, output_limit)?;
+        if self.prompt_caching {
+            add_prompt_cache_breakpoints(&mut body);
+        }
         Ok((req, body))
     }
 

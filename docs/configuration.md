@@ -413,6 +413,15 @@ Supported `kind` values:
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
 
+Provider fields:
+
+| Field | Type | Default | Example |
+| --- | --- | --- | --- |
+| `prompt_cache` | optional boolean | `true` for `anthropic`, `false` for other kinds | `prompt_cache: false` |
+
+`prompt_cache` controls Anthropic ephemeral prompt-cache breakpoints for this
+route. It is ignored for non-Anthropic kinds; omit it to use the kind default.
+
 A provider's **effective model list** is its remote model list (from the
 [model cache](#model-cache-and-config-overrides)) merged per model id with
 its `models:` entries:
