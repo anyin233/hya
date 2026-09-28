@@ -19,7 +19,8 @@ test("every global key binding appears in help, in its group, with its descripti
   }
 })
 
-test("every composer editing binding appears in help; Shift+Enter is marked terminal only", () => {
+
+test("every composer editing binding appears in help; Shift+Enter is cross-surface", () => {
   const rows = helpRows(entries)
   for (const binding of composerKeyBindings) {
     const label = composerKeyLabel(binding)
@@ -29,7 +30,7 @@ test("every composer editing binding appears in help; Shift+Enter is marked term
   expect(composerKeyLabel({ name: "j", ctrl: true, action: "newline" })).toBe("Ctrl+J")
   expect(composerKeyLabel({ name: "return", meta: true, action: "newline" })).toBe("Alt+Enter")
   const shiftEnter = rows.find((row) => row.keys.split(" / ").includes("Shift+Enter"))!
-  expect(shiftEnter.description).toContain("terminal only")
+  expect(shiftEnter.description).toContain("otherwise use Ctrl+J or Alt+Enter")
 })
 
 test("prompt keys, picker keys and row actions, and every command (local, server, skill) are in help", () => {

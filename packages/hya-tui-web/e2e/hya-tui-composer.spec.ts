@@ -66,15 +66,33 @@ test.describe("multi-line input", () => {
     expect((await composer(term)).rows).toHaveLength(1)
   })
 
-  test("Shift+Enter sends in the browser: xterm.js reports it as a plain Enter (CR)", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+  test("Shift+Enter inserts a newline in the browser without sending", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend), { hostArgs: ["--shift-enter-lf"] })
     await connected(term)
-    await term.type("shift enter")
+    await term.type("line one")
     await term.press("Shift+Enter")
-    // Terminals with the kitty keyboard protocol report Shift+Enter and get a newline;
-    // xterm.js 6 does not, so Ctrl+J / Alt+Enter are the newline keys in the WebUI.
+    await term.type("line two")
+    await expect.poll(() => composerText(term)).toBe("line one\nline two")
+    expect(await term.find("● build · hya/offline")).toBeNull()
+    expect((await composer(term)).rows).toEqual(["line one", "line two"])
+    await term.attach(testInfo, "multiline-default")
+    await term.resize(700, 640)
+    await expect.poll(() => composerText(term)).toBe("line one\nline two")
+    await term.press("Shift+Enter")
+    await term.type("line three")
+    await expect.poll(() => composerText(term)).toBe("line one\nline two\nline three")
+    expect(await term.find("No messages yet")).not.toBeNull()
+    await term.attach(testInfo, "multiline-narrow")
+    await term.press("Enter")
     await term.waitForText("● build · hya/offline", 20_000)
     expect(await composerText(term)).toBe("")
+    const first = (await term.find("┃ line one"))!
+    const lines = await term.lines()
+    expect(lines[first.row + 1]).toContain("┃ line two")
+    expect(lines[first.row + 2]).toContain("┃ line three")
+    await term.type("/exit")
+    await term.press("Enter")
+    expect(await term.waitForExit()).toBe(0)
   })
 
   test("the box stops growing at 8 rows and scrolls", async ({ tui, backend }) => {

@@ -19,7 +19,7 @@ test.describe("key help", () => {
     await term.waitForText("Connected to hya")
     await term.type("?")
     await term.waitForText(title)
-    // Composer keys first, with the terminal-only note on Shift+Enter.
+    // Composer keys include the browser-safe Shift+Enter newline binding.
     await term.waitForText(/Enter \/ Keypad Enter\s+\[composer\]/)
     await term.attach(testInfo, "help-open")
     // Filter by a group name: the views keys.
@@ -35,13 +35,13 @@ test.describe("key help", () => {
     await term.waitForText("hi")
   })
 
-  test("/help opens the same overlay with commands by source; Shift+Enter is marked terminal only", async ({ tui, backend }) => {
+  test("/help opens the same overlay with commands by source", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
     await prompt(term, "/help")
     await term.waitForText(title)
     await term.type("shift+enter")
-    await term.waitForText(/Shift\+Enter\s+\[composer\]\s+Insert a newline \(terminal only/)
+    await term.waitForText(/Shift\+Enter\s+\[composer\]\s+Insert a newline/)
     for (let i = 0; i < "shift+enter".length; i++) await term.press("Backspace")
     await term.type("/compact")
     await term.waitForText(/\/compact\s+\[local\]\s+Compact the session's context now/)

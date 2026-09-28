@@ -265,6 +265,7 @@ pub(crate) fn web_host_argv(
         port.to_string().into(),
         "--cwd".into(),
         cwd.into(),
+        "--shift-enter-lf".into(),
         "--".into(),
     ];
     argv.extend(tui_base_argv(bun, tui_dir, backend, cwd));
@@ -1009,6 +1010,7 @@ mod tests {
                 "3250",
                 "--cwd",
                 "/work",
+                "--shift-enter-lf",
                 "--",
                 "/b/bun",
                 "/lib/tui/src/main.ts",
@@ -1147,6 +1149,7 @@ mod tests {
             "3250",
             "--cwd",
             "/work",
+            "--shift-enter-lf",
             "--",
         ]);
         expected.extend(os(&tui));

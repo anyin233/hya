@@ -64,6 +64,22 @@ function send(text: string) {
   if (socket.readyState === WebSocket.OPEN) socket.send(text)
 }
 
+// xterm.js does not expose Shift+Enter as a distinct terminal sequence. The
+// generic host enables this mapping only for programs that opt in with
+// `--shift-enter-lf`; otherwise it preserves xterm.js's ordinary CR behavior.
+let shiftEnterLf = false
+void fetch("/input-config")
+  .then(async (response) => response.ok ? await response.json() as { shiftEnterLf?: unknown } : undefined)
+  .then((config) => { shiftEnterLf = config?.shiftEnterLf === true })
+  .catch(() => undefined)
+const terminalElement = document.getElementById("terminal")!
+terminalElement.addEventListener("keydown", (event) => {
+  if (!shiftEnterLf || event.isComposing || event.key !== "Enter" || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  send(encodeClientFrame({ input: encoder.encode("\n") }))
+}, true)
+
 term.onData((data) => send(encodeClientFrame({ input: encoder.encode(data) })))
 term.onBinary((data) => send(encodeClientFrame({ input: Uint8Array.from(data, (char) => char.charCodeAt(0)) })))
 term.onResize(({ cols, rows }) => send(encodeClientFrame({ resize: { cols, rows } })))
@@ -92,7 +108,6 @@ function requestNotificationPermissionOnce(): void {
   if (typeof Notification === "undefined" || Notification.permission !== "default") return
   void Notification.requestPermission().catch(() => undefined)
 }
-const terminalElement = document.getElementById("terminal")!
 terminalElement.addEventListener("pointerdown", requestNotificationPermissionOnce, { once: true })
 terminalElement.addEventListener("keydown", requestNotificationPermissionOnce, { once: true })
 

@@ -75,18 +75,17 @@ const editingText: Partial<Record<TextareaAction, string>> = {
 }
 
 /**
- * xterm.js (the WebUI) and terminals without the kitty keyboard protocol or
- * modifyOtherKeys send a plain CR for Shift+Enter, which then sends.
+ * The WebUI translates Shift+Enter to LF before it reaches the PTY. Native
+ * terminals expose the same binding when they report the modifier separately.
  */
-const terminalOnly = (binding: ComposerKeyBinding): boolean => binding.name === "return" && binding.shift === true
-
 function composerRows(): HelpRow[] {
   const groups = new Map<string, { labels: string[]; description: string }>()
   for (const binding of composerKeyBindings) {
-    const special = terminalOnly(binding)
-    const key = `${binding.action}${special ? ":terminal" : ""}`
+    const key = binding.action
     const base = editingText[binding.action] ?? binding.action
-    const description = special ? `${base} (terminal only: xterm.js and the WebUI send a plain Enter for it)` : base
+    const description = binding.action === "newline"
+      ? `${base} (WebUI and terminals that report Shift+Enter; otherwise use Ctrl+J or Alt+Enter)`
+      : base
     const entry = groups.get(key) ?? { labels: [], description }
     const label = composerKeyLabel(binding)
     if (!entry.labels.includes(label)) entry.labels.push(label)

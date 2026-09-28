@@ -19,6 +19,8 @@ export type HostOptions = {
   port?: number
   /** `stop()`: wait after SIGHUP before SIGKILL for PTY processes still running (default 3000 ms). */
   stopGraceMs?: number
+  /** Translate browser Shift+Enter to LF for programs that use LF as newline. */
+  shiftEnterLf?: boolean
 }
 
 export type Host = {
@@ -103,6 +105,10 @@ export function startHost(options: HostOptions): Host {
     routes: { "/": page },
     fetch(request, server) {
       const url = new URL(request.url)
+      if (url.pathname === "/input-config") {
+        if (!sameOrigin(request)) return new Response("Forbidden", { status: 403 })
+        return Response.json({ shiftEnterLf: options.shiftEnterLf === true })
+      }
       if (url.pathname !== "/pty") return new Response("Not found", { status: 404 })
       if (!sameOrigin(request)) return new Response("Forbidden", { status: 403 })
       const data = { cols: size(url.searchParams.get("cols"), 80), rows: size(url.searchParams.get("rows"), 24) }

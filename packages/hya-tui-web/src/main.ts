@@ -1,7 +1,7 @@
 import { resolve } from "node:path"
 import { startHost } from "./host"
 
-const usage = "Usage: bun packages/hya-tui-web/src/main.ts [--host 127.0.0.1] [--port 7681] [--cwd DIR] -- <command> [args...]\n"
+const usage = "Usage: bun packages/hya-tui-web/src/main.ts [--host 127.0.0.1] [--port 7681] [--cwd DIR] [--shift-enter-lf] -- <command> [args...]\n"
 
 function parse(argv: string[]) {
   const split = argv.indexOf("--")
@@ -10,10 +10,15 @@ function parse(argv: string[]) {
   let hostname = "127.0.0.1"
   let port = 7681
   let cwd = process.cwd()
+  let shiftEnterLf = false
   for (let index = 0; index < flags.length; index++) {
     const flag = flags[index]
-    const value = flags[index + 1]
     if (flag === "--help" || flag === "-h") return null
+    if (flag === "--shift-enter-lf") {
+      shiftEnterLf = true
+      continue
+    }
+    const value = flags[index + 1]
     if (flag === "--host" && value) hostname = value
     else if (flag === "--port" && value && /^\d+$/.test(value)) port = Number(value)
     else if (flag === "--cwd" && value) cwd = resolve(value)
@@ -21,7 +26,7 @@ function parse(argv: string[]) {
     index++
   }
   if (command.length === 0) throw new Error("Missing command after --")
-  return { hostname, port, cwd, command }
+  return { hostname, port, cwd, shiftEnterLf, command }
 }
 
 try {

@@ -40,12 +40,10 @@ interface CmdMenu {
 
 /**
  * Bordered multi-line prompt editor (OpenTUI `<textarea>`). Enter submits;
- * Ctrl+J / Alt+Enter (and Shift+Enter where the terminal reports it) insert a
- * newline; the box grows with its content up to `composerMaxRows` rows, then
- * scrolls. Up/Down on the first/last line walk the input history. Esc closes
- * the `@file` list, else declines a shown prompt, else cancels the running
- * turn, else clears the input (composer/escape.ts).
- *
+ * Ctrl+J / Shift+Enter / Alt+Enter insert a newline; the box grows with its
+ * content up to `composerMaxRows` rows, then scrolls. Up/Down on the first/last
+ * line walk the input history. Esc closes the `@file` list, else declines a
+ * shown prompt, else cancels the running turn, else clears the input (composer/escape.ts).
  * Key order: the modal picker (every key but Ctrl+C), the one-line yolo
  * confirmation (Enter, Esc, Shift+Tab), then Shift+Tab in an open list
  * (highlight up), the lists, the prompt dock, and the key bindings
