@@ -445,6 +445,94 @@ async fn openai_decodes_streamed_tool_call() {
     );
 }
 
+#[test]
+fn openai_chat_replays_streamed_reasoning_content_with_tool_calls() {
+    let protocol = OpenAiChatProtocol;
+    let events = decode_all(
+        &protocol,
+        &[
+            r#"{"choices":[{"delta":{"reasoning_content":"Check "},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"reasoning_content":"the repo","content":"I'll look."},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            "[DONE]",
+        ],
+    );
+    let reasoning = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ReasoningDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    let provider_data = events.iter().find_map(|event| match event {
+        Event::ReasoningEnd { provider_data, .. } => provider_data.clone(),
+        _ => None,
+    });
+    assert_eq!(reasoning, "Check the repo");
+    assert!(
+        provider_data.is_some(),
+        "reasoning replay marker must survive the stream"
+    );
+    let text_end = events
+        .iter()
+        .position(|event| matches!(event, Event::TextEnd { .. }))
+        .expect("text part closes");
+    let tool_start = events
+        .iter()
+        .position(|event| matches!(event, Event::ToolInputStart { .. }))
+        .expect("tool input starts");
+    assert!(
+        text_end < tool_start,
+        "text must close before live tool input"
+    );
+
+    let mut request = assistant_tool_request(json!({ "path": "a" }));
+    request.tools.push(ToolSchema {
+        name: ToolName::new("read"),
+        description: "Read a file".to_string(),
+        input_schema: json!({"type":"object"}),
+        output_schema: None,
+    });
+    let Message::Assistant { parts, .. } = &mut request.messages[1] else {
+        panic!("assistant fixture");
+    };
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: reasoning,
+            provider_data,
+        },
+    );
+    let body = protocol.encode(&request).expect("encode replay");
+    assert_eq!(body["messages"][1]["reasoning_content"], "Check the repo");
+    assert_eq!(body["messages"][1]["content"], "ok");
+    assert_eq!(
+        body["messages"][1]["tool_calls"][0]["function"]["name"],
+        "read"
+    );
+    assert_eq!(body["messages"][2]["role"], "tool");
+}
+
+#[test]
+fn openai_chat_deepseek_replays_empty_reasoning_content_for_tool_turn() {
+    let protocol = OpenAiChatProtocol;
+    let mut request = assistant_tool_request(json!({"command": "pwd"}));
+    request.model = ModelRef::new("deepseek-flash");
+    request.tools.push(ToolSchema {
+        name: ToolName::new("read"),
+        description: "Read a file".to_string(),
+        input_schema: json!({"type":"object"}),
+        output_schema: None,
+    });
+
+    let body = protocol.encode(&request).expect("encode replay");
+    assert_eq!(body["messages"][1]["reasoning_content"], "");
+    assert_eq!(body["messages"][1]["content"], "ok");
+    assert_eq!(body["messages"][2]["role"], "tool");
+}
+
 #[tokio::test]
 async fn fake_and_openai_agree_on_canonical_shape() {
     let protocol = OpenAiChatProtocol;

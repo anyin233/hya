@@ -79,6 +79,10 @@ pub async fn run_lifecycle_service(
 }
 
 /// Resolve the acting session to its team handle, then submit the report.
+#[expect(
+    clippy::nonminimal_bool,
+    reason = "preserve the upstream policy predicate"
+)]
 async fn submit_report_for_session(
     engine: &SessionEngine,
     supervisor: &ResidentSupervisor,

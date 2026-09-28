@@ -8491,6 +8491,7 @@ agent:
 
     /// Public tool names minus the harness-injected coordination set: the
     /// domain tools a `resource_view` actually narrows.
+    #[expect(clippy::nonminimal_bool, reason = "preserve the upstream filter")]
     fn domain_tool_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
         let mail_only_read = has_mail_only_read(compiled);
         compiled
@@ -8501,6 +8502,7 @@ agent:
     }
 
     /// Model-facing schema names minus the harness-injected coordination set.
+    #[expect(clippy::nonminimal_bool, reason = "preserve the upstream filter")]
     fn domain_schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
         let mail_only_read = has_mail_only_read(compiled);
         compiled
