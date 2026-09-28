@@ -1460,26 +1460,26 @@ mod tests {
     }
 
     #[test]
-    fn literal_directory_glob_matches_descendants_and_file_literal_still_matches() {
+    fn literal_directory_glob_matches_descendants_and_file_literal_still_matches()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = std::env::temp_dir().join(format!(
             "hya-grep-glob-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ));
         let directory = root.join("src");
-        let nested_file = directory.join("nested").join("main.rs");
+        let nested_dir = directory.join("nested");
+        let nested_file = nested_dir.join("main.rs");
         let literal_file = root.join("README.md");
-        fs::create_dir_all(
-            nested_file.parent().expect("nested file has a parent"),
-        )
-        .expect("create test directory");
-        fs::write(&nested_file, "match").expect("create nested file");
-        fs::write(&literal_file, "match").expect("create literal file");
+        fs::create_dir_all(&nested_dir)?;
+        fs::write(&nested_file, "match")?;
+        fs::write(&literal_file, "match")?;
 
         assert!(glob_allows(Some("src"), &nested_file, &root));
         assert!(glob_allows(Some("README.md"), &literal_file, &root));
 
-        fs::remove_dir_all(root).expect("remove test directory");
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]
