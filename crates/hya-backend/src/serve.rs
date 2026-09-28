@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::fd::{FromRawFd, RawFd};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -11,8 +13,10 @@ use super::{
     resolve_runtime,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_serve(
     bind: String,
+    inherited: Option<std::net::TcpListener>,
     db: String,
     model_override: Option<String>,
     yolo: bool,
@@ -34,8 +38,18 @@ pub(crate) async fn cmd_serve(
             std::process::exit(db_lock::EXIT_DB_IN_USE);
         }
     };
-    let prepared =
-        prepare_server(&bind, db, lock, model_override, yolo, pure, &relay, &hosts).await?;
+    let prepared = prepare_server(
+        &bind,
+        inherited,
+        db,
+        lock,
+        model_override,
+        yolo,
+        pure,
+        &relay,
+        &hosts,
+    )
+    .await?;
     // Join the relay before announcing readiness, so an identity-file
     // failure stops the start; the link is printed after the listen line.
     let link = match relay_settings {
@@ -278,6 +292,171 @@ pub(crate) fn restart_allow_hosts(
         .unwrap_or_default()
 }
 
+async fn listener_from_inherited_or_bind(
+    inherited: Option<std::net::TcpListener>,
+    bind: &str,
+) -> anyhow::Result<tokio::net::TcpListener> {
+    match inherited {
+        // Already validated, close-on-exec, and nonblocking (captured before
+        // the runtime existed); Tokio adoption is the single ownership
+        // transfer.
+        Some(listener) => tokio::net::TcpListener::from_std(listener)
+            .context("adopt inherited listener into Tokio"),
+        None => tokio::net::TcpListener::bind(bind)
+            .await
+            .with_context(|| format!("bind {bind}")),
+    }
+}
+
+/// Capture the `--listen-fd` supervisor listener synchronously, before the
+/// Tokio runtime exists (called from [`crate::main`]).
+///
+/// Returns `None` unless this is a foreground `hya serve --listen-fd`; the
+/// daemon-action rejection stays with the CLI dispatch. On success the
+/// descriptor is an owned std listener, already validated, marked
+/// close-on-exec, and nonblocking; [`prepare_server`] converts it to the
+/// async listener exactly once.
+pub(crate) fn capture_cli_listener(
+    cli: &crate::cli_args::Cli,
+) -> anyhow::Result<Option<std::net::TcpListener>> {
+    let listen_fd = match &cli.command {
+        Some(crate::cli_args::Command::Serve {
+            listen_fd: Some(fd),
+            action: None,
+            ..
+        }) => *fd,
+        _ => return Ok(None),
+    };
+    inherited_std_listener(listen_fd).map(Some)
+}
+
+#[cfg(unix)]
+fn inherited_std_listener(fd: u32) -> anyhow::Result<std::net::TcpListener> {
+    let fd = i32::try_from(fd).context("inherited listener FD is too large")?;
+    if fd < 3 {
+        anyhow::bail!("inherited listener FD must be >= 3, got {fd}");
+    }
+    // Validate without owning the descriptor: a rejected FD is never adopted
+    // and never closed by hya, so an invalid or reused number is a normal
+    // error instead of an IO-safety abort when dropping a bad owner.
+    validate_inherited_listener_fd(fd)?;
+    // SAFETY: ownership is taken exactly once, after the descriptor was
+    // confirmed open and an IPv4/IPv6 TCP listener; every error below drops
+    // the std listener, closing the FD owned here.
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(fd as RawFd) };
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("inspect inherited listener close-on-exec flags");
+    }
+    // Close-on-exec is set before composition: processes spawned later
+    // (bundles, tools, restart children) must not inherit the listener.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("set inherited listener close-on-exec flag");
+    }
+    listener
+        .set_nonblocking(true)
+        .context("set inherited listener nonblocking")?;
+    Ok(listener)
+}
+
+#[cfg(not(unix))]
+fn inherited_std_listener(_fd: u32) -> anyhow::Result<std::net::TcpListener> {
+    anyhow::bail!("--listen-fd is only supported on Unix");
+}
+/// Darwin does not implement `SO_ACCEPTCONN` for TCP sockets. Its TCP state
+/// structure exposes the same kernel state without consuming a pending client.
+#[cfg(all(unix, target_vendor = "apple"))]
+fn inherited_listener_is_listening(fd: RawFd) -> anyhow::Result<bool> {
+    let mut info: libc::tcp_connection_info = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of::<libc::tcp_connection_info>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_CONNECTION_INFO,
+            std::ptr::from_mut(&mut info).cast(),
+            &mut length,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("read the inherited listener TCP state");
+    }
+    // Darwin's `TCPS_LISTEN` enum value is 1.
+    Ok(info.tcpi_state == 1)
+}
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+fn inherited_listener_is_listening(fd: RawFd) -> anyhow::Result<bool> {
+    let mut listening: libc::c_int = 0;
+    let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ACCEPTCONN,
+            std::ptr::from_mut(&mut listening).cast(),
+            &mut length,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("read the inherited listener listening state");
+    }
+    Ok(listening != 0)
+}
+
+/// Validate a supervisor-passed descriptor without owning it: it must be
+/// open, an IPv4/IPv6 socket, a stream (`SOCK_STREAM`) socket, and in
+/// listening state. A rejected descriptor is left exactly as the supervisor
+/// handed it over.
+#[cfg(unix)]
+fn validate_inherited_listener_fd(fd: RawFd) -> anyhow::Result<()> {
+    if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+        return Err(std::io::Error::last_os_error()).context("inherited listener FD is not open");
+    }
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    if unsafe { libc::getsockname(fd, std::ptr::from_mut(&mut storage).cast(), &mut length) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("inherited listener FD is not a socket");
+    }
+    // `sa_family_t` differs per platform (unsigned byte on macOS, unsigned
+    // short on Linux); compare through `c_int` like the `AF_*` constants.
+    let family = i32::from(storage.ss_family);
+    if family != libc::AF_INET && family != libc::AF_INET6 {
+        anyhow::bail!("inherited listener FD must be an IPv4 or IPv6 socket");
+    }
+    let mut kind: libc::c_int = 0;
+    let mut kind_length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            std::ptr::from_mut(&mut kind).cast(),
+            &mut kind_length,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("read the inherited listener socket type");
+    }
+    if kind != libc::SOCK_STREAM {
+        anyhow::bail!(
+            "inherited listener FD must be a TCP (stream) socket, got socket type {kind}"
+        );
+    }
+    if !inherited_listener_is_listening(fd)? {
+        anyhow::bail!(
+            "inherited listener FD must be a listening socket, not a connected or unbound one"
+        );
+    }
+    Ok(())
+}
+
 /// A composed `hya serve` whose listener is bound but not yet serving.
 pub(crate) struct PreparedServer {
     /// `http://<addr>` of the bound listener (HTTP and gRPC).
@@ -372,14 +551,19 @@ pub(crate) async fn serve_until(
     shutdown_result
 }
 
-/// Compose the runtime and bind `bind` (shared by `hya serve` and bare `hya`).
+/// Compose the runtime and use either `bind` or a supervisor-owned listener.
+///
+/// An inherited listener is consumed exactly once. It is only intended for a
+/// foreground server that is being launched by a supervisor; daemon control
+/// actions continue to own their existing bind/restart lifecycle.
 ///
 /// `lock` is the caller's claim on `db` ([`db_lock::try_claim`]); once the
-/// listener is bound its discovery file is published.
+/// listener is ready its discovery file is published.
 // The composition inputs of one server; a struct would only rename them.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_server(
     bind: &str,
+    inherited: Option<std::net::TcpListener>,
     db: String,
     mut lock: Option<db_lock::DbLock>,
     model_override: Option<String>,
@@ -474,9 +658,7 @@ pub(crate) async fn prepare_server(
         state.catalog_updates_sender(),
         pending_discovery,
     );
-    let listener = tokio::net::TcpListener::bind(bind)
-        .await
-        .with_context(|| format!("bind {bind}"))?;
+    let listener = listener_from_inherited_or_bind(inherited, bind).await?;
     let addr = listener.local_addr().context("read local addr")?;
     // Optional, legacy: HYA_GRPC_BIND=host:port serves the same server (HTTP
     // and gRPC, the same state) on an extra listener; the main listener
@@ -588,4 +770,131 @@ async fn wait_for_termination(signals: TerminationSignals) {
 /// Emit a structured startup mark when `HYA_STARTUP_TRACE` is truthy.
 fn emit_startup_mark(mark: &str, detail: Option<&str>) {
     hya_app::startup_trace::mark(mark, detail);
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod listener_tests {
+    use super::inherited_std_listener;
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+
+    #[test]
+    fn rejects_standard_stream_fds() {
+        let error = inherited_std_listener(2).expect_err("stderr is not a listener");
+        assert!(error.to_string().contains("must be >= 3"), "{error:#}");
+    }
+
+    /// Regression: a closed FD must be rejected with a normal error before
+    /// ownership is taken. The old path adopted an invalid descriptor with
+    /// `from_raw_fd` and aborted the whole process (`IO Safety violation`)
+    /// when dropping it closed the bad FD.
+    #[test]
+    fn rejects_closed_fd_with_normal_error() {
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").expect("bind scratch socket");
+        let fd = socket.into_raw_fd();
+        drop(unsafe { OwnedFd::from_raw_fd(fd) }); // close it: the number names nothing now
+        let error = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
+            .expect_err("a closed FD must be rejected");
+        assert!(error.to_string().contains("not open"), "{error:#}");
+    }
+
+    #[test]
+    fn rejects_udp_socket() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind test socket");
+        let fd = udp.into_raw_fd();
+        let error = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
+            .expect_err("a UDP socket is not a TCP listener");
+        assert!(error.to_string().contains("stream"), "{error:#}");
+        // Fail closed: a rejected FD stays open for its owner; the test closes it.
+        assert!(
+            unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0,
+            "rejected FD must be left open for its owner"
+        );
+        drop(unsafe { OwnedFd::from_raw_fd(fd) });
+    }
+
+    #[test]
+    fn rejects_connected_tcp_socket() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let stream =
+            std::net::TcpStream::connect(listener.local_addr().expect("read test address"))
+                .expect("connect test stream");
+        let fd = stream.into_raw_fd();
+        let error = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
+            .expect_err("a connected socket is not listening");
+        assert!(error.to_string().contains("listening"), "{error:#}");
+        assert!(
+            unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0,
+            "rejected FD must be left open for its owner"
+        );
+        drop(unsafe { OwnedFd::from_raw_fd(fd) });
+    }
+
+    #[test]
+    fn rejects_non_inet_listener() {
+        let path =
+            std::env::temp_dir().join(format!("hya-listener-test-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let unix = std::os::unix::net::UnixListener::bind(&path).expect("bind test unix listener");
+        let fd = unix.into_raw_fd();
+        let error = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
+            .expect_err("a Unix-domain listener is not TCP");
+        assert!(error.to_string().contains("IPv4 or IPv6"), "{error:#}");
+        assert!(
+            unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0,
+            "rejected FD must be left open for its owner"
+        );
+        drop(unsafe { OwnedFd::from_raw_fd(fd) });
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn adopts_listener_and_marks_it_close_on_exec() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let expected = listener.local_addr().expect("read test listener address");
+        listener
+            .set_nonblocking(true)
+            .expect("set test listener nonblocking");
+        let fd = listener.into_raw_fd();
+        let adopted = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
+            .expect("adopt inherited listener");
+        assert_eq!(
+            adopted.local_addr().expect("read adopted address"),
+            expected
+        );
+        let flags = unsafe { libc::fcntl(adopted.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0, "read close-on-exec flags");
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "listener must not leak to children"
+        );
+    }
+
+    /// The captured std listener converts to Tokio exactly once and still
+    /// accepts real connections.
+    #[tokio::test]
+    async fn adopts_listener_and_accepts_a_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let expected = listener.local_addr().expect("read test listener address");
+        listener
+            .set_nonblocking(true)
+            .expect("set test listener nonblocking");
+        let fd = listener.into_raw_fd();
+        let adopted = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
+            .expect("adopt inherited listener");
+        let listener = tokio::net::TcpListener::from_std(adopted).expect("convert to Tokio");
+        assert_eq!(
+            listener.local_addr().expect("read converted address"),
+            expected
+        );
+        let client = tokio::net::TcpStream::connect(expected)
+            .await
+            .expect("connect");
+        let (accepted, _) = listener.accept().await.expect("accept a connection");
+        assert_eq!(
+            accepted.peer_addr().expect("read accepted peer"),
+            client.local_addr().expect("read client address")
+        );
+    }
 }
