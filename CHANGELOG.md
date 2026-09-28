@@ -1,7 +1,5 @@
-# 0.43.19
+# 0.43.20
 
-## Default agents and remembered `/model` choices
+## Fixes
 
-- New sessions created by the TUI now let the backend apply `default_agent` and each agent's configured `model` instead of selecting the first catalog row in the client.
-- Switching agents remains session-local, so a later startup returns to the configured default agent.
-- `/model provider/model` persists the model for the active agent; `/model provider/model#effort` persists both the model and that agent's default effort.
+- Release: the five `bundles/extra/*` bundles now carry the workspace version again (0.43.19 shipped them at 0.43.18, which failed `cargo test`). `AGENTS.md` now names them in the version rule.
