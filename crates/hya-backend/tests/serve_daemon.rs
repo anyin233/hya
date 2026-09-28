@@ -1074,3 +1074,183 @@ fn start_waits_out_a_server_that_is_shutting_down() -> TestResult {
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }
+
+/// `hya serve check --db` composes the whole runtime against a snapshot of
+/// the database, next to a running daemon, without touching its lock,
+/// discovery, or runtime-owner claim.
+#[test]
+fn check_composes_the_runtime_beside_a_running_daemon() -> TestResult {
+    let root = scratch("hya-daemon-check")?;
+    let db = root.join("s.db");
+    let mut daemons = Daemons(Vec::new());
+    let first = json(&run(&root, &db, &["start", "--json"])?)?;
+    let first_pid = pid_of(&first)?;
+    daemons.0.push(first_pid);
+    let discovery = std::fs::read(root.join("s.db.server.json"))?;
+
+    let checked = run(&root, &db, &["check", "--json"])?;
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let report = json(&checked)?;
+    assert_eq!(report["ok"], serde_json::json!(true), "{report}");
+    assert_eq!(report["version"], env!("CARGO_PKG_VERSION"), "{report}");
+
+    let status = json(&run(&root, &db, &["status", "--json"])?)?;
+    assert_eq!(pid_of(&status)?, first_pid, "the daemon kept serving");
+    assert_eq!(std::fs::read(root.join("s.db.server.json"))?, discovery);
+    let leftovers: Vec<_> = std::fs::read_dir(&root)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("check") || name.contains("snapshot"))
+        .collect();
+    assert!(leftovers.is_empty(), "snapshot left behind: {leftovers:?}");
+
+    // A fresh database is checked in place of nothing: no lock, no file.
+    let fresh = root.join("fresh.db");
+    let checked = run(&root, &fresh, &["check", "--json"])?;
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(!fresh.exists() && !root.join("fresh.db.lock").exists());
+
+    assert!(run(&root, &db, &["stop"])?.status.success());
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// A configuration the runtime cannot compose fails the check (the daemon
+/// would silently fall back to the offline provider).
+#[test]
+fn check_fails_on_a_broken_configuration() -> TestResult {
+    let root = scratch("hya-daemon-check-bad")?;
+    let db = root.join("s.db");
+    let config = root.join("config").join("hya");
+    std::fs::create_dir_all(&config)?;
+    std::fs::write(
+        config.join("config.yaml"),
+        "providers: [this is not a map\n",
+    )?;
+    let checked = run(&root, &db, &["check", "--json"])?;
+    assert!(!checked.status.success());
+    let report = json(&checked)?;
+    assert_eq!(report["ok"], serde_json::json!(false), "{report}");
+    assert!(
+        report["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty()),
+        "{report}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// A failing `--verify` command refuses the restart before the running
+/// daemon is asked for anything: same pid serving, no handoff journal.
+#[test]
+fn restart_refuses_when_a_verify_command_fails() -> TestResult {
+    let root = scratch("hya-daemon-verify")?;
+    let db = root.join("s.db");
+    let mut daemons = Daemons(Vec::new());
+    let first = json(&run(&root, &db, &["start", "--json"])?)?;
+    let first_pid = pid_of(&first)?;
+    daemons.0.push(first_pid);
+
+    let refused = run(
+        &root,
+        &db,
+        &["restart", "--verify", "echo proof-output; exit 3"],
+    )?;
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("proof-output"), "{stderr}");
+    assert!(!root.join("s.db.server.handoff").exists());
+    let status = json(&run(&root, &db, &["status", "--json"])?)?;
+    assert_eq!(pid_of(&status)?, first_pid);
+
+    let passed = run(&root, &db, &["restart", "--json", "--verify", "true"])?;
+    assert!(
+        passed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&passed.stderr)
+    );
+    let queued = json(&passed)?;
+    assert_eq!(queued["check"]["ok"], serde_json::json!(true), "{queued}");
+    let url = first["url"].as_str().ok_or("no url")?.to_string();
+    let second = wait_for_successor(&root, &db, first_pid, &url)?;
+    daemons.0.push(pid_of(&second)?);
+    assert!(run(&root, &db, &["stop"])?.status.success());
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}
+
+/// A successor that passes its self-check but fails to start is replaced by
+/// the previous generation's pinned build over the same listener: clients
+/// keep one URL, `status` reports the rollback, nothing parks.
+#[test]
+fn a_successor_that_fails_to_start_rolls_back_to_the_pinned_build() -> TestResult {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = scratch("hya-daemon-rollback")?;
+    let db = root.join("s.db");
+    let mut daemons = Daemons(Vec::new());
+    let first = json(&run(&root, &db, &["start", "--json"])?)?;
+    let first_pid = pid_of(&first)?;
+    daemons.0.push(first_pid);
+    let url = first["url"].as_str().ok_or("no url")?.to_string();
+    // A "new build" whose self-check delegates to the real hya but whose
+    // server refuses to start.
+    let bad = root.join("bad-hya");
+    std::fs::write(
+        &bad,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" check \"*) exec {} \"$@\";; esac\n\
+             echo 'bad build refuses to serve' >&2\nexit 1\n",
+            quoted(Path::new(env!("CARGO_BIN_EXE_hya")))
+        ),
+    )?;
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755))?;
+
+    let restarted = run(
+        &root,
+        &db,
+        &["restart", "--json", "--exe", bad.to_str().ok_or("path")?],
+    )?;
+    assert!(
+        restarted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    let second = wait_for_successor(&root, &db, first_pid, &url)?;
+    let second_pid = pid_of(&second)?;
+    daemons.0.push(second_pid);
+    let rolled = &second["lastRestart"];
+    assert_eq!(rolled["rolledBack"], serde_json::json!(true), "{second}");
+    assert!(
+        rolled["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("exit 1")),
+        "{second}"
+    );
+    let command = Command::new("ps")
+        .args(["-o", "command=", "-p", &second_pid.to_string()])
+        .output()?;
+    let command = String::from_utf8_lossy(&command.stdout);
+    assert!(
+        command.contains("s.db.server.gen"),
+        "runs the pinned build: {command}"
+    );
+    assert!(http_get(&url, "/v1/health")?.contains("\"ok\":true"));
+    wait_until("the old generation exited", Duration::from_secs(10), || {
+        !alive(first_pid)
+    })?;
+    assert!(run(&root, &db, &["stop"])?.status.success());
+    wait_until("the daemon exited", Duration::from_secs(5), || {
+        !alive(second_pid)
+    })?;
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(())
+}

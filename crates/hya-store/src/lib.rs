@@ -284,6 +284,31 @@ impl SessionStore {
         })
     }
 
+    /// Write a transactionally consistent copy of the database at `source`
+    /// to `dest` (`VACUUM INTO`), opening `source` read-only: no migration,
+    /// no runtime-owner claim, and no write to the live database. `dest`
+    /// must not exist.
+    ///
+    /// # Errors
+    ///
+    /// The source cannot be opened or the copy fails.
+    pub async fn snapshot_database(source: &Path, dest: &Path) -> Result<(), StoreError> {
+        let opts = SqliteConnectOptions::new()
+            .filename(source)
+            .read_only(true)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        sqlx::query("VACUUM INTO ?")
+            .bind(dest.to_string_lossy().into_owned())
+            .execute(&pool)
+            .await?;
+        pool.close().await;
+        Ok(())
+    }
+
     /// Open an in-memory store (single connection) and run migrations.
     pub async fn connect_memory() -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
@@ -334,7 +359,11 @@ impl SessionStore {
     }
 
     async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
-        sqlx::migrate!("./migrations").run(pool).await?;
+        // Unknown migrations belong to newer generations; rollback remains safe while
+        // migrations are additive and known checksums still match.
+        let mut migrator = sqlx::migrate!("./migrations");
+        migrator.ignore_missing = true;
+        migrator.run(pool).await?;
         Ok(())
     }
 

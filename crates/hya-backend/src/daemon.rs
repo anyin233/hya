@@ -694,6 +694,7 @@ pub(crate) async fn restart_by_handoff(
             allow_hosts: spec.allow_hosts.clone(),
             relay: relay_spec(relay),
             exe: Some(spec.exe.clone()),
+            rolled_back_from: None,
         }),
         None,
     )

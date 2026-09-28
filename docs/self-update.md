@@ -20,6 +20,21 @@ first, then verify/stage/activate.
 
 `install.sh` remains break-glass bootstrap and manual recovery.
 
+## Rebuild and restart (source checkout)
+
+`hya update` installs signed releases. Code you (or an agent) change in a
+source checkout reaches the running backend without it: build, then restart
+the daemon from the new build. The restart proves the build first (`hya serve
+check` against a snapshot of the live database, then your `--verify`
+commands), hands running root turns to the new build so the next turn runs
+the new code, and rolls back to the pinned previous build if the new one fails
+to start. Details: [cli.md, Self-proof and rollback](cli.md#self-proof-and-rollback).
+
+```sh
+cargo build -p hya-backend --bin hya
+./target/debug/hya serve restart --verify 'cargo test -p hya-core'
+```
+
 ## Layout under an updater root
 
 ```text

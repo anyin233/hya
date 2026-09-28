@@ -142,6 +142,10 @@ pub(crate) enum ServeAction {
         timeout: u64,
     },
     /// Stop the backend of `--db` (if one runs), then start a new daemon.
+    ///
+    /// Before the running daemon is touched, the new binary must prove
+    /// itself: `hya serve check --db <db>` of the successor executable, then
+    /// every `--verify` command; any failure refuses the restart.
     Restart {
         /// Print the new daemon as JSON (like `start --json`).
         #[arg(long)]
@@ -156,6 +160,24 @@ pub(crate) enum ServeAction {
         /// (by default the new daemon rejoins the old backend's relay).
         #[command(flatten)]
         relay: RelayFlags,
+        /// Self-proof command run with `sh -c` in the current directory
+        /// before the handoff (repeatable, e.g. `--verify 'cargo test -p
+        /// hya-core'`). A non-zero exit refuses the restart.
+        #[arg(long, value_name = "CMD")]
+        verify: Vec<String>,
+        /// The successor executable (default: this `hya`), e.g. a build
+        /// staged elsewhere. It passes the same self-check first.
+        #[arg(long, value_name = "PATH")]
+        exe: Option<std::path::PathBuf>,
+    },
+    /// Compose the complete runtime (configuration, providers, bundles,
+    /// native tools, plugins) exactly as a daemon start would, against a
+    /// private snapshot of `--db`, then exit: 0 when it composes. Binds no
+    /// port and takes no lock of the live database.
+    Check {
+        /// Print `{ok, version, exe}` or `{ok: false, error}` as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Control the secure relay of the running backend of `--db`
     /// (docs/relay.md "Hosting a backend on a relay"). Loopback only.
@@ -253,6 +275,8 @@ pub(crate) enum ServeRelayAction {
     },
 }
 
+// Parsed once per process; boxing a variant would only add indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Compat-compatible alias for headless prompt execution.
@@ -1129,7 +1153,9 @@ mod tests {
                 json: false,
                 force: false,
                 timeout: 30,
-                relay: super::RelayFlags::default()
+                relay: super::RelayFlags::default(),
+                verify: Vec::new(),
+                exe: None,
             })
         );
         // Plain `hya serve` still serves in the foreground.

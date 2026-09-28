@@ -1138,36 +1138,50 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
 }
 
 /// Resolve providers and the immutable catalog before returning runtime state.
+/// A configuration error falls back to the offline provider (with a notice).
 pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
-    match config::load().await {
-        Ok(Some(cfg)) => {
-            let model = model_override
-                .or_else(|| std::env::var("HYA_MODEL").ok())
-                .unwrap_or_else(|| cfg.default_model.clone());
-            let offline_notice = cfg.catalog.notice().map(|_| OfflineNotice {
-                config_path: config::expected_config_path(),
-            });
-            RuntimeConfig {
-                router: cfg.router,
-                catalog: cfg.catalog,
-                model,
-                mcp: cfg.mcp,
-                plugins: plugins::resolve(cfg.plugins),
-                default_agent: cfg.default_agent,
-                categories: cfg.categories,
-                offline_notice,
-                permission: cfg.permission,
-                websearch: cfg.websearch,
-                pending_discovery: cfg.pending_discovery,
-                pure: false,
-            }
-        }
-        Ok(None) => offline_runtime(model_override, false),
+    match resolve_runtime_strict(model_override.clone()).await {
+        Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("hya: config error ({error:#}); using the offline provider");
             offline_runtime(model_override, true)
         }
     }
+}
+
+/// [`resolve_runtime`] without the offline fallback: a configuration error
+/// is returned. `hya serve check` uses it so a broken configuration fails the
+/// self-proof instead of composing the offline provider.
+///
+/// # Errors
+///
+/// The configuration could not be loaded.
+pub async fn resolve_runtime_strict(
+    model_override: Option<String>,
+) -> anyhow::Result<RuntimeConfig> {
+    let Some(cfg) = config::load().await? else {
+        return Ok(offline_runtime(model_override, false));
+    };
+    let model = model_override
+        .or_else(|| std::env::var("HYA_MODEL").ok())
+        .unwrap_or_else(|| cfg.default_model.clone());
+    let offline_notice = cfg.catalog.notice().map(|_| OfflineNotice {
+        config_path: config::expected_config_path(),
+    });
+    Ok(RuntimeConfig {
+        router: cfg.router,
+        catalog: cfg.catalog,
+        model,
+        mcp: cfg.mcp,
+        plugins: plugins::resolve(cfg.plugins),
+        default_agent: cfg.default_agent,
+        categories: cfg.categories,
+        offline_notice,
+        permission: cfg.permission,
+        websearch: cfg.websearch,
+        pending_discovery: cfg.pending_discovery,
+        pure: false,
+    })
 }
 
 /// Open a SQLite session store at `db`, or an in-memory store when `db` is empty.

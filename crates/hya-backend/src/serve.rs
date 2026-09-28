@@ -349,11 +349,16 @@ pub(crate) async fn cmd_serve_action(
             }
             print_daemon_link(&ready, &relay).await;
         }
+        ServeAction::Check { json } => {
+            crate::self_check::cmd_check(&db, model.clone(), pure, json).await;
+        }
         ServeAction::Restart {
             json,
             force,
             timeout,
             relay,
+            verify,
+            exe,
         } => {
             // The new daemon rejoins the old one's relay (recorded in its
             // discovery file) unless told otherwise.
@@ -367,15 +372,44 @@ pub(crate) async fn cmd_serve_action(
             );
             // Likewise its --allow-host names, unless new ones are given.
             let allow_hosts = restart_allow_hosts(allow_hosts, old.as_ref());
-            let daemon_spec = spec(allow_hosts)?;
+            let mut daemon_spec = spec(allow_hosts)?;
+            if let Some(exe) = exe {
+                daemon_spec.exe = std::path::absolute(&exe)
+                    .with_context(|| format!("resolve --exe {}", exe.display()))?;
+                daemon::validate_successor_exe(&daemon_spec.exe)?;
+            }
+            // Self-proof first: the successor build must compose its runtime
+            // against this database and pass every --verify command before
+            // the running daemon is asked for anything.
+            let check = crate::self_check::restart_gate(
+                &daemon_spec.exe,
+                &db,
+                daemon_spec.model.as_deref(),
+                pure,
+                &verify,
+            )
+            .await?;
+            if !json {
+                eprintln!(
+                    "self-check passed: {} serve check{}",
+                    daemon_spec.exe.display(),
+                    if verify.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} verify command(s)", verify.len())
+                    }
+                );
+            }
             match daemon::restart_by_handoff(&db, &daemon_spec, &relay).await? {
                 daemon::HandoffRestart::Queued(queued) => {
                     // The old generation owns the rest of the handoff (it
-                    // parks as the lock and listener owner if the successor
+                    // rolls back to its pinned generation if the successor
                     // fails). The successor keeps this URL, so this return
                     // value stays accurate; its pid is `hya serve status`'s.
                     if json {
-                        println!("{}", daemon::queued_json(&queued, &db));
+                        let mut value = daemon::queued_json(&queued, &db);
+                        value["check"] = check;
+                        println!("{value}");
                     } else {
                         println!("{}", daemon::queued_line(&queued, &db));
                     }
@@ -410,6 +444,12 @@ pub(crate) async fn cmd_serve_action(
             };
             let uptime = daemon::uptime(found.started_at);
             let log = daemon::log_path(&db).map(|path| path.to_string_lossy().into_owned());
+            // A restart that failed and rolled back to the previous build
+            // is reported until the next restart replaces the journal.
+            let rolled_back = db_lock::paths(&db)
+                .and_then(|paths| db_lock::read_handoff(&paths.handoff))
+                .filter(|state| state.stage_pid(db_lock::HandoffStage::Ready) == Some(found.pid))
+                .and_then(|state| state.spec.and_then(|spec| spec.rolled_back_from));
             if json {
                 println!(
                     "{}",
@@ -423,6 +463,10 @@ pub(crate) async fn cmd_serve_action(
                         "log": log,
                         "relay": found.relay,
                         "allowHosts": found.allow_hosts,
+                        "lastRestart": rolled_back.as_ref().map(|error| serde_json::json!({
+                            "rolledBack": true,
+                            "error": error,
+                        })),
                     })
                 );
             } else {
@@ -441,6 +485,9 @@ pub(crate) async fn cmd_serve_action(
                 }
                 if !found.allow_hosts.is_empty() {
                     println!("  hosts    {}", found.allow_hosts.join(", "));
+                }
+                if let Some(error) = &rolled_back {
+                    println!("  restart  failed and rolled back to the previous build: {error}");
                 }
             }
             if let Some(note) = daemon::version_note(&found) {
@@ -781,6 +828,10 @@ pub(crate) struct PreparedServer {
     /// The relay host connector (joined by `--relay` or `hya serve relay
     /// connect`); left after the drain.
     pub(crate) relay: hya_server::RelayHost,
+    /// This generation's pinned executable and native libraries: what a
+    /// failed restart rolls back to. `None` without a daemon database or
+    /// when pinning failed (a failed restart then parks).
+    pin: Option<crate::generation_pin::GenerationPin>,
 }
 
 /// Serve `prepared` until a termination signal, then tear down — or hand the
@@ -822,8 +873,11 @@ pub(crate) async fn serve_until(
         handoff_spec,
         handoff_relay,
         handoff_base,
+        pin,
         ..
     } = prepared;
+    // The rollback successor rejoins this generation's own relay.
+    let rollback_relay = handoff_relay.clone();
     let supervisor = built.resident_supervisor();
     let handoff_engine = built.engine();
     // The engine moves into a cell so the shutdown future (the handoff
@@ -1105,15 +1159,15 @@ pub(crate) async fn serve_until(
     if let (Some(pid), Some(spec), Some(journal)) =
         (successor_pid, handoff_spec.as_ref(), journal_path.as_ref())
     {
+        // A rollback replaces the successor and its journal token.
+        let mut pid = pid;
+        let mut handoff_token = handoff_token;
         // Is the journal still this handoff's? A newer restart can supersede
         // it at any moment; that journal belongs to the newer attempt and is
         // never written to from here.
-        let journal_ours =
-            |journal: &std::path::Path| match (&handoff_token, db_lock::read_handoff(journal)) {
-                (Some(token), Some(state)) => state.token() == token.as_str(),
-                (Some(_), None) => false,
-                (None, _) => true,
-            };
+        let journal_ours = |journal: &std::path::Path, token: &Option<String>| {
+            journal_is_ours(journal, token.as_deref())
+        };
         // A spawned successor owns the listener and the lock from here; the
         // staged duplicates stay open in this generation until it is healthy
         // (or until this generation parks), so a failed handoff never leaves
@@ -1137,7 +1191,7 @@ pub(crate) async fn serve_until(
         }
         drop(built);
         drop(server);
-        if journal_ours(journal) {
+        if journal_ours(journal, &handoff_token) {
             if let Err(error) = db_lock::write_handoff_stage(
                 journal,
                 db_lock::HandoffStage::Released,
@@ -1152,40 +1206,48 @@ pub(crate) async fn serve_until(
                 "hya: the handoff journal was superseded by a newer restart; not recording the release"
             );
         }
-        // The successor records `ready` after publishing discovery and completing
-        // bootstrap. A quick `stop` may remove its discovery before our next
-        // health probe; that is a completed handoff, not a failed bootstrap.
-        // The journal is also the durable readiness evidence in that race.
-        let ready_deadline = tokio::time::Instant::now() + SUCCESSOR_READY_WAIT;
-        let mut failure: Option<String> = None;
-        let ready = loop {
-            if let Some(state) = db_lock::read_handoff(journal)
-                && journal_ours(journal)
+        let mut outcome = await_successor(journal, handoff_token.as_deref(), pid, &spec.db).await;
+        // Rollback: a successor that failed is replaced by this generation's
+        // pinned executable over the same inherited listener and lock —
+        // clients reconnect to the previous build instead of a parked,
+        // silent server. Parking remains the last resort.
+        if let Err(failure) = &outcome
+            && let (Some(pinned), Some(fds)) = (pin.as_ref(), staged_fds.as_ref())
+            && journal_ours(journal, &handoff_token)
+        {
+            let failure = failure.clone().unwrap_or_else(|| {
+                format!(
+                    "the successor (pid {pid}) did not become healthy within {} s",
+                    SUCCESSOR_READY_WAIT.as_secs()
+                )
+            });
+            stop_failed_successor(pid).await;
+            if let Some(lock) = lock.as_mut()
+                && let Err(error) = lock.restore_owner_pid()
             {
-                if matches!(
-                    state.stage(),
-                    db_lock::HandoffStage::Ready | db_lock::HandoffStage::Transferred
-                ) && state.stage_pid(db_lock::HandoffStage::Ready) == Some(pid)
-                {
-                    break true;
+                eprintln!("hya: could not restore the owner pid before the rollback: {error}");
+            }
+            match spawn_rollback(journal, spec, &rollback_relay, fds, pinned.exe(), &failure) {
+                Ok((fallback, token)) => {
+                    eprintln!(
+                        "hya: restart failed ({failure}); rolling back to {} (pid {fallback})",
+                        pinned.exe().display()
+                    );
+                    pid = fallback;
+                    handoff_token = Some(token);
+                    outcome =
+                        await_successor(journal, handoff_token.as_deref(), pid, &spec.db).await;
+                    if outcome.is_ok() {
+                        eprintln!(
+                            "hya: restart failed ({failure}); rolled back to {}",
+                            pinned.exe().display()
+                        );
+                    }
                 }
-                if state.stage() == db_lock::HandoffStage::Failed {
-                    failure = state.error.clone();
-                    break false;
-                }
+                Err(error) => eprintln!("hya: could not roll back the failed restart: {error:#}"),
             }
-            if daemon::running(&spec.db)
-                .await
-                .is_some_and(|found| found.pid == pid)
-            {
-                break true;
-            }
-            if tokio::time::Instant::now() >= ready_deadline {
-                break false;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        };
-        if ready {
+        }
+        if outcome.is_ok() {
             // The successor published its own discovery: this generation's
             // drop must leave it alone.
             lock.as_mut()
@@ -1194,11 +1256,12 @@ pub(crate) async fn serve_until(
             drop(staged_fds);
             return Ok(());
         }
-        // The successor never became healthy. This generation keeps the
-        // database lock and the listener (parked): a recoverable owner — the
-        // staged duplicates hold both — never a silent fallback. The failure
+        let failure = outcome.err().flatten();
+        // Neither the successor nor the rollback became healthy. This
+        // generation keeps the database lock and the listener (parked): a
+        // recoverable owner — the staged duplicates hold both. The failure
         // is recorded only while the journal still belongs to this handoff.
-        if journal_ours(journal) && failure.is_none() {
+        if journal_ours(journal, &handoff_token) && failure.is_none() {
             let _ = db_lock::write_handoff_stage(
                 journal,
                 db_lock::HandoffStage::Failed,
@@ -1264,6 +1327,171 @@ pub(crate) async fn serve_until(
     // Last: remove the discovery file and release the lock.
     drop(lock);
     shutdown_result
+}
+
+/// Whether the handoff journal still belongs to the handoff with `token`
+/// (a newer restart supersedes it and is never written to from here).
+fn journal_is_ours(journal: &std::path::Path, token: Option<&str>) -> bool {
+    match (token, db_lock::read_handoff(journal)) {
+        (Some(token), Some(state)) => state.token() == token,
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+/// Wait until the successor `pid` is ready: `Ok` once the journal records its
+/// `ready` (or it serves the discovery of `db`), `Err(reason)` when it records
+/// `failed`, exits, or the ready wait runs out (`Err(None)`).
+///
+/// The successor records `ready` after publishing discovery and completing
+/// bootstrap. A quick `stop` may remove its discovery before the next health
+/// probe; that is a completed handoff, not a failed bootstrap — the journal
+/// is the durable readiness evidence in that race.
+async fn await_successor(
+    journal: &std::path::Path,
+    token: Option<&str>,
+    pid: u32,
+    db: &str,
+) -> Result<(), Option<String>> {
+    let deadline = tokio::time::Instant::now() + SUCCESSOR_READY_WAIT;
+    loop {
+        if let Some(state) = db_lock::read_handoff(journal)
+            && journal_is_ours(journal, token)
+        {
+            if matches!(
+                state.stage(),
+                db_lock::HandoffStage::Ready | db_lock::HandoffStage::Transferred
+            ) && state.stage_pid(db_lock::HandoffStage::Ready) == Some(pid)
+            {
+                return Ok(());
+            }
+            if state.stage() == db_lock::HandoffStage::Failed {
+                return Err(state.error.clone());
+            }
+        }
+        if daemon::running(db)
+            .await
+            .is_some_and(|found| found.pid == pid)
+        {
+            return Ok(());
+        }
+        if let Some(status) = reap(pid) {
+            // It may have recorded its failure just before exiting.
+            if let Some(state) = db_lock::read_handoff(journal)
+                && journal_is_ours(journal, token)
+                && state.stage() == db_lock::HandoffStage::Failed
+            {
+                return Err(state.error.clone());
+            }
+            return Err(Some(format!(
+                "the successor (pid {pid}) exited ({status}) before it became ready"
+            )));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(None);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Reap the child `pid` if it has exited: its exit status in words.
+fn reap(pid: u32) -> Option<String> {
+    let pid = i32::try_from(pid).ok()?;
+    let mut status = 0;
+    // SAFETY: `waitpid` with WNOHANG only reads the child's status.
+    let reaped = unsafe { libc::waitpid(pid, &raw mut status, libc::WNOHANG) };
+    if reaped != pid {
+        return None;
+    }
+    Some(if libc::WIFEXITED(status) {
+        format!("exit {}", libc::WEXITSTATUS(status))
+    } else {
+        format!("signal {}", libc::WTERMSIG(status))
+    })
+}
+
+/// Kill a failed successor and wait until it is gone, so its runtime-owner
+/// claim and its copies of the inherited descriptors are released before
+/// the rollback successor starts.
+async fn stop_failed_successor(pid: u32) {
+    if reap(pid).is_some() || !daemon::process_alive(pid) {
+        return;
+    }
+    if let Ok(raw) = i32::try_from(pid) {
+        // SAFETY: `kill` has no memory-safety preconditions.
+        unsafe {
+            libc::kill(raw, libc::SIGKILL);
+        }
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        if reap(pid).is_some() || !daemon::process_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    eprintln!("hya: the failed successor (pid {pid}) did not exit after SIGKILL");
+}
+
+/// Start the rollback successor: this generation's pinned executable with
+/// its own composition (`spec`, `relay`) over the staged descriptors, through
+/// a fresh handoff journal (`requested` naming the pinned executable and the
+/// failed attempt, then `queued` and `released` by this generation, whose
+/// runtime is already released). Returns the rollback pid and journal token.
+fn spawn_rollback(
+    journal: &std::path::Path,
+    spec: &daemon::DaemonSpec,
+    relay: &RelayFlags,
+    fds: &HandoffFds,
+    pinned: &std::path::Path,
+    failure: &str,
+) -> anyhow::Result<(u32, String)> {
+    let me = std::process::id();
+    let record = db_lock::HandoffSpec {
+        model: spec.model.clone(),
+        allow_hosts: spec.allow_hosts.clone(),
+        relay: daemon::relay_spec(relay),
+        exe: Some(pinned.to_path_buf()),
+        rolled_back_from: Some(failure.to_owned()),
+    };
+    db_lock::write_handoff_stage(
+        journal,
+        db_lock::HandoffStage::Requested,
+        me,
+        Some(&record),
+        None,
+    )
+    .context("record the rollback request")?;
+    for stage in [
+        db_lock::HandoffStage::Queued,
+        db_lock::HandoffStage::Released,
+    ] {
+        db_lock::write_handoff_stage(journal, stage, me, None, None)
+            .context("record the rollback release")?;
+    }
+    let token = db_lock::read_handoff(journal)
+        .context("read the rollback journal")?
+        .token()
+        .to_owned();
+    let mut fallback = spec.clone();
+    fallback.exe = pinned.to_path_buf();
+    let spawn = daemon::SuccessorSpawn {
+        journal: journal.to_path_buf(),
+        listener_fd: fds.listener_fd(),
+        lock_fd: fds.lock_fd(),
+        extra_fd: fds.extra_fd(),
+        started_at: db_lock::paths(&spec.db).and_then(|paths| {
+            db_lock::read_discovery(&paths.discovery).map(|discovery| discovery.started_at)
+        }),
+    };
+    let child = daemon::spawn_handoff(
+        &fallback,
+        relay,
+        &spawn,
+        &daemon::log_path(&spec.db).unwrap_or_default(),
+    )
+    .context("spawn the rollback successor")?;
+    Ok((child.id(), token))
 }
 
 /// Compose the runtime and use either `bind` or a supervisor-owned listener.
@@ -1422,7 +1650,19 @@ pub(crate) async fn prepare_server(
         lock.publish_with(&db_lock::connect_url(addr), &hosts.extra_hosts())
             .context("publish the server discovery file")?;
     }
+    // Pin the running generation (executable + the native libraries it
+    // loaded while composing) so a failed restart can roll back to it.
+    let pin = handoff_spec
+        .as_ref()
+        .and_then(|spec| match crate::generation_pin::pin(&spec.db) {
+            Ok(pin) => Some(pin),
+            Err(error) => {
+                eprintln!("hya: could not pin this generation; a failed restart will park instead of rolling back ({error:#})");
+                None
+            }
+        });
     Ok(PreparedServer {
+        pin,
         url: format!("http://{addr}"),
         listener,
         extra,
