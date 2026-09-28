@@ -78,9 +78,9 @@ export function sessionsInScope(sessions: readonly SessionInfo[], activeProjectI
 }
 
 /** The Project's most recently updated top-level session (list order breaks ties). */
-export function newestTopLevelSession(sessions: readonly SessionInfo[], projectId: string): SessionInfo | undefined {
+export function newestTopLevelSession(sessions: readonly SessionInfo[], projectId: string, options: { includeArchived?: boolean } = {}): SessionInfo | undefined {
   const time = (session: SessionInfo): number => Date.parse(session.timeUpdated ?? "") || 0
   return sessions
-    .filter((session) => !session.parent && !session.archived && session.projectId === projectId)
+    .filter((session) => !session.parent && (options.includeArchived || !session.archived) && session.projectId === projectId)
     .reduce<SessionInfo | undefined>((best, session) => (!best || time(session) > time(best) ? session : best), undefined)
 }

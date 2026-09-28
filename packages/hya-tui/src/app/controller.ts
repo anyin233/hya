@@ -66,8 +66,9 @@
  * changes that: after `stop` nothing is started and prompts are refused
  * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
- * Sessions (app/sessionKeeper.ts): without `--session`/`--continue`/
- * `--resume` a session is created on connect, `ephemeral` (as is every `/new`
+ * Sessions (app/sessionKeeper.ts): a plain local start resumes the active
+ * Project's latest durable session, preferring one with a waiting request;
+ * with no history a new `ephemeral` session is created (as is every `/new`
  * one): the daemon deletes it while still unused once no client watches it
  * (no session stream open on it), so leaving it (another session opened, any
  * exit, a kill) needs no request. `close("archive")` (a graceful exit:
@@ -98,7 +99,7 @@ import { editText } from "../composer/editor"
 import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
-import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
+import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
 import { defaultModelRef } from "../state/providers"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
@@ -955,6 +956,15 @@ export function createController({ client, store, directory, remote: startedRemo
     refresh: async () => { store.setSessions(await client.listSessions()) },
   })
 
+  /** The oldest waiting request outside the open tree: F4 opens its root session so the normal prompt can answer it. */
+  async function reviewPending(): Promise<void> {
+    const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, childSessionIds(store.state.members, store.state.messages)).has(item.session))
+    if (!pending?.session) { status("No pending request in another session"); return }
+    const first = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(pending.session)}`)
+    const root = await keeper.rootOf(first)
+    await resumer.resume(root)
+  }
+
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
@@ -1198,9 +1208,9 @@ export function createController({ client, store, directory, remote: startedRemo
    * Initial load: bootstrap, the Project of `--dir` (`EnsureProjectForPath`;
    * skipped with `--remote`, which starts without an active Project),
    * catalogs, then the session `startup` names (`--session <id>`, or
-   * `--continue`: the most recent top-level session of that Project);
-   * without either no session is open until the first prompt or `/new`
-   * creates one.
+   * `--continue`: the most recent nonarchived root of that Project). A
+   * plain local start reopens a saved chat, preferring one with a waiting
+   * request; with no history it creates a new ephemeral session.
    */
   async function start(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
@@ -1227,14 +1237,25 @@ export function createController({ client, store, directory, remote: startedRemo
       const resumeId = startup.resume?.id
       if (resumeId) await resumer.resume(resumeId).catch(() => { missing += ` · session ${resumeId} not found` })
       else if (startup.resume) {
-        // The picker waits for a choice; Esc (or nothing to pick) starts a new session as a plain start does.
+        // The picker waits for a choice; Esc (or nothing to pick) starts a new session.
         await resumer.resume(undefined, () => void newSession().catch(() => undefined))
       }
       else if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
       else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
-      // A plain start opens a new session right away (deleted again if it stays empty).
-      // Without a model it is created by the first prompt instead; without a
-      // Project (`--remote`) the first prompt or `/new` asks for one.
+      else if (!remote && store.state.activeProjectId) {
+        const projectId = store.state.activeProjectId
+        const history = await client.listSessions({ includeArchived: true, projectId }).catch((error: unknown) => {
+          missing += ` · could not read earlier sessions: ${String(error)}`
+          return [] as SessionInfo[]
+        })
+        const durable = history.filter((session) => !session.ephemeral)
+        const waiting = durable.filter((session) => store.state.interactions.some((ask) => ask.session && treeSessionIds(session.id, history).has(ask.session)))
+        const prior = newestTopLevelSession(waiting, projectId, { includeArchived: true })
+          ?? newestTopLevelSession(durable, projectId, { includeArchived: true })
+        if (prior) await resumer.resume(prior.id).catch((error: unknown) => { missing += ` · could not resume ${prior.id}: ${String(error)}` })
+        if (!store.state.selected) await newSession().catch(() => undefined)
+      }
+      // With no local Project or model, no session is created until the first prompt.
       else if (!remote || store.state.activeProjectId) await newSession().catch(() => undefined)
       if (remote && !store.state.selected) missing += ` · ${noProjectStatus}`
       // `--remote`: no Project was ensured; open the Project view so choosing or creating one is the first thing shown
@@ -1243,8 +1264,8 @@ export function createController({ client, store, directory, remote: startedRemo
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion} · hya serve restart` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
-      // `--resume <id>` already said `Resumed …`; keep it unless something needs saying.
-      const resumed = resumeId && !missing && !mismatch && store.state.status.startsWith("Resumed ")
+      // Reopening any session already said `Resumed …`; keep it unless something needs saying.
+      const resumed = !missing && !mismatch && store.state.status.startsWith("Resumed ")
       if (!resumed) status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
@@ -1301,7 +1322,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * local backend) and load it like a start: bootstrap, the
    * Project of `--dir` unless remote, catalogs, the global stream. A remote
    * opens the Project view (no session is created); a local backend opens a
-   * new session in the ensured Project, like a plain start.
+   * new session in the ensured Project.
    */
   async function enterServer(url: string, token?: string): Promise<{ ok: boolean; detail: string }> {
     client.setBaseUrl(url, token)
@@ -1586,6 +1607,7 @@ export function createController({ client, store, directory, remote: startedRemo
     registry,
     submit,
     returnToParent: () => void returnToParent().catch((error: unknown) => status(`Open failed: ${String(error)}`)),
+    reviewPending: () => void reviewPending().catch((error: unknown) => status(`Review failed: ${String(error)}`)),
     cancelTurn,
     /** Ctrl+D: quit and leave the session running; in a WebUI tab only a notice (commands/native.ts `toBackground`). */
     toBackground: () => toBackground({ store, client, actions }),

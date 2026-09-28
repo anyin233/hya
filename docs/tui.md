@@ -145,7 +145,7 @@ without `--db`.
 | `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `directory` scope of every scoped request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary that starts the daemon and that `/connect-remote` runs `hya bridge` with (first in the lookup order above). |
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
-| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
+| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). Unlike a plain launch, it never reopens an archived session. |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
 | `--server-label <text>` | Show this text instead of the server URL in the header, the sidebar `Context` box, and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
@@ -157,12 +157,27 @@ without `--db`.
 
 ### Sessions on start and exit
 
-Without `--continue`, `--session`, or `--resume`, the TUI creates a new session as soon as
-it connects, in the active Project (with the default agent and model; without
-any model the first prompt creates it instead), so the header names it before
-you type. A `--remote` start without an active Project creates none: it opens
-the [Project view](#project-view) instead.
-`/sessions` (or the sidebar) reaches the earlier ones. Empty sessions do not
+Without `--continue`, `--session`, or `--resume`, a local TUI opens the
+active Project's most recently updated saved conversation, including one
+archived by `/exit`. A conversation with a pending permission or question
+request takes priority over a newer saved chat, so you see its transcript
+and the numbered answer choices immediately. The TUI unarchives the opened
+conversation. If this Project has no saved conversation, it creates a new
+session with the default agent and model (without any model, the first prompt
+creates it instead). A `--remote` start without an active Project creates
+none: it opens the [Project view](#project-view) instead. Type `/new` for a
+fresh conversation; `/sessions` shows prior chats, including archived ones.
+
+The TUI code can live in a different checkout from the Project whose history
+you want. Set `--dir` to the **Project work directory**, not the directory
+containing the frontend source. For example:
+
+```sh
+bun /path/to/hya/packages/hya-tui/src/main.ts \
+  --server http://127.0.0.1:8080 --dir /path/to/project
+```
+
+Empty sessions do not
 pile up: the TUI creates that session (and every `/new` one) *ephemeral*,
 and the backend daemon deletes it about 5 s after no TUI shows it any more
 while it is still unused — after `/new`, `/open`, `/sessions`, a `/fork`
@@ -186,8 +201,9 @@ For example, type `summarize this repository`, then `/models` to inspect
 available routes, and `/open 1` to return to the first session. Press Ctrl+C
 twice (or type `/exit`) to quit and archive the session, or Ctrl+D on an
 empty input (`/to-background`) to quit and leave it running. Next time,
-`--resume` offers the conversation again (archived or not), and
-`--continue` picks up the newest one that is not archived:
+Plain launch opens the saved conversation again, `--resume` offers a picker
+instead (archived or not), and `--continue` picks up the newest one that is
+not archived:
 
 ```sh
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --resume
@@ -223,7 +239,7 @@ To come back to a session, archived or not: `--resume [id]` at start, or
 which cannot pass flags, resumes). Both unarchive the session and open it,
 and say `Resumed <title>`. The terminal TUI and WebUI tabs of one database
 share its daemon, so each resumes the other's sessions. The `/sessions`
-picker shows archived sessions too after Ctrl+A (see
+picker shows archived sessions by default; Ctrl+A hides them (see
 [Row actions](#row-actions)). Sending a prompt into an archived session
 (for example one another client archived while it was open here) unarchives
 it on the backend as well.
@@ -540,7 +556,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
 | `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
-| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
+| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
@@ -675,7 +691,7 @@ Connected to hya 0.41.0 · /help for commands
 ┌────────────────────────────────────────────────────┐
 │ Message, /command, !shell, or @file                │
 └────────────────────────────────────────────────────┘
-Enter a prompt · /new creates a session · /help …
+Enter a prompt · /new creates a session · /sessions history · F4 requests
 ```
 
 The main column holds, from top to bottom: the header line (session, agent,
@@ -730,9 +746,9 @@ the bordered input, and the instruction line. The permission mode picker
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
   `Pending (N)` box appears above the prompt with up to three of them
-  (`! <title> · <n>. <session> · <id>`: which session asks, by its `/open`
-  number and title) and the commands that answer them; `/open <n>` goes to
-  that session to answer with its prompt. They arrive live — see
+  (`! <title> · <n>. <session>` for a listed chat, or `saved session` when
+  archived). Press **F4** to reopen the oldest request's conversation; its
+  normal prompt then shows numbered answer choices. They arrive live — see
   [Asks of other sessions](#asks-of-other-sessions). `/interactions` lists
   every detail. It disappears when nothing else is pending.
 - **Keys and the browser.** Ctrl+B, Ctrl+O, Ctrl+G, and Ctrl+P are not
@@ -1795,33 +1811,34 @@ its prompt only appears once you open that session.
 
 **Usage.** When such an ask arrives:
 
-- the [pending block](#layout) lists it as `! <title> · <n>. <session> ·
-  <id>` (`?` for a question), where `<n>` is the session's number in the
-  sidebar and `/open`;
-- the status line says `Permission needed in <n>. <session> · /open <n> to
-  answer there` (`Question in …` for a question);
+- the [pending block](#layout) lists it as `! <title> · <n>. <session>`
+  (`?` for a question). For an archived or otherwise unlisted chat it says
+  `saved session`, keeping raw IDs out of the narrow box;
+- the status line says `Permission needed in <n>. <session> · F4 to review`
+  (`Question in …` for a question);
 - while the terminal is unfocused, a [desktop
   notification](#desktop-notifications) says `Permission needed: <title> ·
   in <n>. <session>`.
 
-`/open <n>` (or `/sessions`) opens that session; its prompt appears as
-usual and `1`/`2`/`3` answer it there. `/approve <id>`, `/deny <id>`, and
-`/answer <id> <text>` still answer from anywhere; the pending line shows
-which session the id belongs to first. An ask answered elsewhere (in the
-other tab) disappears at once. A session created since the last listing
-is listed again when its first ask arrives, so the line can name it (a
-session the listing does not return — another directory — is named by its
-id, and `/open <id>` still works).
+**F4** opens and unarchives the oldest waiting request's root session,
+including one archived by `/exit`; the complete transcript and prompt appear
+there. Press `1` to allow a permission once, `2` to save an allow rule, or
+`3` to deny. Esc also denies; with text in the input, clear it before using
+the numbered keys. `/sessions` can open any saved chat, and `/open <n>` or
+`/open <id>` still works. `/approve <id>`, `/deny <id>`, and `/answer <id>
+<text>` remain available for scripts or the `/interactions` view, which
+shows full IDs. An ask answered elsewhere disappears at once. A session
+created since the last listing is listed again when its first ask arrives.
 
 Example: this TUI views session 1 while another tab's session 2 asks to run
 a command:
 
 ```text
 ╭Pending (1)──────────────────────────────────────────────────────────╮
-│ ! bash echo hi · 2. Fix the build · perm_01a0…                      │
-│ /open <n> answers there · /approve <id> · /deny <id> · …            │
+│ ! bash echo hi · 2. Fix the build                                   │
+│ F4 review request · /sessions past chats · /interactions details   │
 ╰─────────────────────────────────────────────────────────────────────╯
-Permission needed in 2. Fix the build · /open 2 to answer there
+Permission needed in 2. Fix the build · F4 to review
 ```
 
 **Interfaces.** From start, the TUI keeps one subscription to
@@ -2097,7 +2114,7 @@ at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
 - **`/sessions`** opens a picker with a `New session` row first, then every
   session as a tree (top-level sessions, subagent sessions nested under
   their parent and `[subagent]` tagged — see [Subagents](#subagents)),
-  showing the agent, model, and a relative update time (`3m`, `2h`) in the
+  including archived chats by default, showing the agent, model, and a relative update time (`3m`, `2h`) in the
   detail column, and `● running` while busy. `●` marks the open session.
   Enter on the `New session` row runs `/new`; Enter on any other row opens
   it.
@@ -2108,7 +2125,7 @@ at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
 │ ▸   New session          [new]       Create a session with the curr… │
 │   ● Fix the flaky test              build · fake/model · 3m           │
 │       ↳ Explore the auth code [subagent]  explore · fake/model · 1m  │
-│ Enter open · F2 rename · Ctrl+D del · Ctrl+A shows archived · Esc clo… │
+│ F2 rename · Ctrl+D del · Ctrl+A hides archived · F3 all · Esc closes  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2131,10 +2148,10 @@ filter never sees (never Ctrl+R, which means refresh):
   the same way whether or not the row is the open session, so the open
   session is never deleted without it. Deleting a session also removes every
   descendant subagent session and its session-scoped persisted state.
-- **Ctrl+A** shows archived sessions too (it re-reads the list with
-  `GET /v1/sessions?includeArchived=true`; the title becomes `Sessions ·
-  archived included` and archived rows are tagged `[archived]`), and hides
-  them again. Enter on an archived row resumes it like `/resume <id>`: it is
+- **Ctrl+A** hides archived sessions, or shows them again (the default list
+  reads `GET /v1/sessions?includeArchived=true`; the title says `Sessions ·
+  archived included` and archived rows are tagged `[archived]`). Enter on an
+  archived row resumes it like `/resume <id>`: it is
   unarchived, then opened. The sidebar never lists archived sessions.
 
 `state/picker.ts`'s `PickerAction` (`{id, key, ctrl?, label, prompt: "value"
@@ -2479,8 +2496,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
-| `GET /v1/sessions?includeArchived=true` | No body | Archived root sessions too (`SessionInfo.archived`, `archivedAt`): the `/resume` picker and the `/sessions` picker after Ctrl+A. |
-| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); `--resume`, `/resume`, and opening an archived `/sessions` row unarchive (`false`). |
+| `GET /v1/sessions?includeArchived=true&projectId=<id>` | No body | `ListSessionsResponse.sessions: SessionInfo[]`, including archived chats (`archived`, `archivedAt`, `ephemeral`, `busy`, `timeUpdated`, `parent`, `projectId`). A plain local launch uses it to choose the latest durable root session of the active Project, preferring a tree with a waiting interaction. The `/sessions` and `/resume` pickers also include archived sessions by default. The `projectId` filter is optional for the pickers. |
+| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); plain relaunch, `--resume`, `/resume`, F4 review, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; deletes the requested session and every descendant subagent session, while unrelated sessions remain. The TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
@@ -2519,7 +2536,7 @@ own key line; see [Provider View](#provider-view)):
 
 | View or state | Bottom instruction |
 | --- | --- |
-| Chat | `Enter a prompt · /new creates a session · /help lists commands · / opens the command menu` |
+| Chat | `Enter a prompt · /new creates a session · /sessions history · F4 requests` |
 | Models | `Next: /model <provider/model> to switch this session · /key opens the Provider View · /help` |
 | Workflows | `Next: /workflow select <name> or /workflow run [name]` |
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
@@ -2830,6 +2847,6 @@ columns); `e2e/hya-tui-prompts.spec.ts`
 checks that a subagent's ask arrives on the `includeDescendants` stream
 with no interactions listing in between, and that an ask of a session run
 headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
-pending block with its session, then `/open <n>` answers it there (default
+pending block with its session, then F4 opens its numbered prompt (default
 and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
 single desktop notification.

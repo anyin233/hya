@@ -8,7 +8,7 @@ test.describe("hya TUI in the browser", () => {
     // the old Chat and Pending panels are gone.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
     await term.waitForText("No messages yet. Type a prompt below.")
-    await term.waitForText("Enter a prompt · /new creates a session · /help lists commands")
+    await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
     const text = await term.text()
     expect(text).not.toContain("Chat")
     expect(text).not.toContain("Pending")

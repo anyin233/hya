@@ -38,6 +38,7 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   eof: "App",
   complete: "Composer",
   cycleMode: "Modes",
+  reviewPending: "Prompts",
   refresh: "Views",
   toggleSidebar: "Views",
   toggleProjectsSidebar: "Views",

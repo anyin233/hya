@@ -580,6 +580,10 @@ export function Composer() {
         consume()
         controller.modes.cycle()
         return
+      case "reviewPending":
+        consume()
+        controller.reviewPending()
+        return
       case "refresh":
         controller.refreshAll()
         return

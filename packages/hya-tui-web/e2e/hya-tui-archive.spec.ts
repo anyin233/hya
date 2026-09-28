@@ -144,7 +144,7 @@ test.describe("background exits keep the session running", () => {
 })
 
 test.describe("/sessions archived toggle", () => {
-  test("Ctrl+A shows archived sessions; opening one unarchives it; another client's archive marks the open row", async ({ tui, workspace }, testInfo) => {
+  test("/sessions shows archived chats by default; Ctrl+A hides them and opening one unarchives it", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
     await term.waitForText("Connected to hya", 30_000)
     const backend = await backendOf(workspace)
@@ -152,12 +152,14 @@ test.describe("/sessions archived toggle", () => {
     await api(backend, "PATCH", `/v1/sessions/${hidden}`, { archived: true })
 
     await prompt(term, "/sessions")
-    await term.waitForText("Ctrl+A shows archived")
-    expect(await term.text()).not.toContain("Shelved work")
-    await term.press("Control+a")
     await term.waitForText("Sessions · archived included")
     await term.waitForText("Shelved work")
     await term.waitForText("Ctrl+A hides archived")
+    await term.press("Control+a")
+    await term.waitForText("Ctrl+A shows archived")
+    expect(await term.text()).not.toContain("Shelved work")
+    await term.press("Control+a")
+    await term.waitForText("Shelved work")
     await term.attach(testInfo, "archived-shown")
     await term.type("Shelved")
     await term.press("Enter")
@@ -234,8 +236,15 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    await web.waitForText("Connected to hya", 30_000)
-    const webId = await headerId(web)
+    // A plain tab now resumes the terminal's last conversation. Start a
+    // separate one explicitly so both directions of /resume remain covered.
+    await web.waitForText("Terminal reply.", 30_000)
+    await prompt(web, "/new")
+    await expect.poll(async () => {
+      const id = /hya · (hysec_\w+)/.exec(await web.text())?.[1]
+      return id && id !== terminalId ? id : undefined
+    }, { timeout: 20_000 }).not.toBeUndefined()
+    const webId = /hya · (hysec_\w+)/.exec(await web.text())![1]!
     await prompt(web, "web work")
     await web.waitForText("Web reply.", 20_000)
     await web.waitForText(/^Ready/m)

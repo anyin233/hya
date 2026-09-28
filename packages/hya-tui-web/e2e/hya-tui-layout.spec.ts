@@ -69,7 +69,7 @@ test.describe("layout", () => {
     await prompt(term, "hello narrow")
     await term.waitForText("layout reply marker l1", 20_000)
     expect(await sidebarShown(term)).toBe(false)
-    await term.waitForText("Enter a prompt · /new creates a session · /help lists commands")
+    await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
     // Every row fits: no line is wider than the terminal.
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-closed")
@@ -108,7 +108,7 @@ test.describe("pending interactions", () => {
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)
-    await term.waitForText("/approve <id>")
+    await term.waitForText("F4 review request")
     expect(await term.find("asked by build")).toBeNull()
   })
 })
