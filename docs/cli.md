@@ -794,9 +794,31 @@ in your home directory, so for it that is `~/.hya/` (run `hya serve --db
 cwd to the TUI as `--dir`, and `hya exec`/`run`/`-p`/`loop` record the
 caller's cwd as their session's workdir.
 
+For a supervisor-owned listener, pass the inherited descriptor directly:
+
+```sh
+hya serve --listen-fd 3 --db hya.db
+```
+
+The listener handoff is also the internal primitive used by `hya serve restart`.
+The daemon duplicates its listening socket and database lock, starts a successor
+with both capabilities, waits for the successor to compose and publish a healthy
+generation, then releases the old generation. The TCP address therefore stays
+stable while the process id and runtime generation change. Existing SSE and
+WebSocket streams receive `serverStopping {reason: "restart"}` and reconnect;
+the successor replays durable sessions, catalogs, todos, and event cursors.
+Because `--listen-fd` does not carry a bind hostname, non-loopback requests
+must be named explicitly with one or more `--allow-host` flags. The existing
+loopback host names remain allowed by default.
+
 | Flag | Meaning |
 | --- | --- |
-| `--bind <ADDR>` | Socket address. Defaults to `127.0.0.1:8080`; use `127.0.0.1:0` for an ephemeral port. |
+| `--bind <ADDR>` | Socket address. Defaults to `127.0.0.1:8080`; use `127.0.0.1:0` for an ephemeral port. Mutually exclusive with `--listen-fd`. |
+| `--listen-fd <FD>` | Foreground Unix-only supervisor handoff. Adopt an already-open TCP listening socket (FD must be **3 or greater**); hya takes ownership, marks it close-on-exec, and never falls back to `--bind` if adoption fails. This option cannot be used with `serve start|status|stop|restart`. |
+| `--lock-fd <FD>` | Internal Unix-only restart handoff capability. Adopt an already-held database lock passed with `--listen-fd`; valid only for a successor process. |
+| `--handoff-journal <PATH>` | Internal successor journal path. The successor waits for the predecessor's `released` stage before opening the store, then records `ready`. |
+| `--inherit-status <MILLIS>` | Internal successor startup timestamp inherited from the predecessor discovery record. |
+| `--grpc-listen-fd <FD>` | Internal Unix-only inherited extra gRPC listener descriptor. |
 | `--hostname <HOST>` | Compat-compatible alias for the host part of `--bind`. |
 | `--port <PORT>` | Compat-compatible alias for the port part of `--bind`. |
 | `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |
@@ -919,15 +941,17 @@ after the action. The path is made absolute.
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`, `--allow-host`, and relay flags) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
 | `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?}` (text: `relay` and `hosts` lines when set). | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
 | `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
-| `restart [--json] [--force] [--timeout <s>]` | `stop` with reason `restart`, then `start`. The new daemon rejoins the relay recorded in the old one's discovery file (same identity, so the same link) unless `restart` is given its own `--relay …`. | As `start`; the stop line goes to stderr with `--json`. | As `stop`, then `start` |
+| `restart [--json] [--force] [--timeout <s>]` | Request a successor generation. The old daemon keeps its listener and database lock capabilities while it quiesces admissions, waits for a safe boundary (up to the drain deadline), checkpoints transferable root turns with `cause: handoff`, and starts a successor with inherited listener, lock, journal, status, and optional gRPC descriptors. The command returns **queued** once the old generation accepts the handoff; the old generation then waits for successor composition, durable resume, and `/v1/health`, parking as the recoverable owner if those fail. `--force` applies only to the stop/start fallback when no handoff-capable daemon is serving. | `restart queued: ...` (or JSON with `queued: true`); the old generation's streams end with `serverStopping {reason: "restart"}`. Query `status` after the queued response for the successor. | **0** when queued or when the fallback starts; **1** when the request is rejected or the fallback cannot start |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
 
 `start` and `restart` accept the relay flags of plain `hya serve`
 (`--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`,
 `--relay-heartbeat`). The daemon joins the relay at start but never prints
-the link to its log; `start`/`restart` read it over loopback and print
-`hya relay link: <link>` on stderr. When a server was already running,
-`start --relay` changes nothing and says so (use `hya serve relay connect`).
+ the link to its log; `start` reads it over loopback and prints
+`hya relay link: <link>` on stderr. A queued handoff does not wait for the
+successor's relay join or print a new link; query `hya serve relay link` after
+`restart`. When a server was already running, `start --relay` changes nothing
+and says so (use `hya serve relay connect`).
 `status` shows a `relay` line (`--json`: `relay`) while joined.
 
 A stop is a stop: connected TUIs start nothing after `hya serve stop` (or a

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hya_proto::SessionId;
+use hya_store::{PendingInteraction, SessionStore};
 use hya_tool::{
     QuestionAnswer, QuestionInfo as ToolQuestionInfo, QuestionKind, QuestionPrompt, QuestionReply,
     QuestionRequest,
@@ -14,6 +15,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 pub(crate) struct QuestionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingQuestion>>>,
     events: broadcast::Sender<Value>,
+    store: SessionStore,
 }
 
 struct PendingQuestion {
@@ -49,18 +51,22 @@ struct QuestionOption {
 
 impl QuestionRequests {
     #[must_use]
-    fn new() -> Self {
+    pub(crate) fn new(store: SessionStore) -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
             inner: Arc::default(),
             events,
+            store,
         }
     }
 
     #[must_use]
     #[allow(dead_code)]
-    pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
-        let requests = Self::new();
+    pub(crate) fn spawn(
+        mut rx: mpsc::UnboundedReceiver<QuestionRequest>,
+        store: SessionStore,
+    ) -> Self {
+        let requests = Self::new(store.clone());
         let inner = requests.inner.clone();
         let events = requests.events.clone();
         std::mem::drop(tokio::spawn(async move {
@@ -72,6 +78,15 @@ impl QuestionRequests {
                 };
                 let request_id = req.id.to_string();
                 let asked = question_asked_event(&request_id, &entry);
+                let payload = serde_json::to_string(&asked).unwrap_or_default();
+                let _ = store
+                    .save_pending_interaction(&PendingInteraction::new(
+                        &request_id,
+                        entry.session,
+                        "question",
+                        payload,
+                    ))
+                    .await;
                 inner.lock().await.insert(request_id, entry);
                 if let Some(asked) = asked {
                     let _published = events.send(asked);
@@ -142,13 +157,43 @@ impl QuestionRequests {
     ) -> bool {
         let entry = self.take(session, id).await;
         let Some(entry) = entry else {
-            return false;
+            let valid = self
+                .store
+                .list_pending_interactions()
+                .await
+                .ok()
+                .is_some_and(|rows| {
+                    rows.into_iter().any(|row| {
+                        row.id == id && row.kind == "question" && row.session == Some(session)
+                    })
+                });
+            if !valid {
+                return false;
+            }
+            let payload = serde_json::json!({
+                "answers": answers,
+                "session": session.to_string(),
+            });
+            let queued = hya_store::PendingInteractionReply {
+                id: id.to_string(),
+                kind: "question".to_string(),
+                payload: payload.to_string(),
+                created_at: hya_proto::now_millis(),
+            };
+            return self
+                .store
+                .queue_pending_interaction_reply(&queued)
+                .await
+                .is_ok();
         };
         let event_answers = answers.clone();
         let ok = entry
             .reply
             .send_many(answers_from_reply(entry.questions, answers))
             .is_ok();
+        if ok {
+            let _ = self.store.resolve_pending_interaction(id).await;
+        }
         if ok {
             self.publish_replied(Some(session), id, event_answers);
         }
@@ -159,9 +204,36 @@ impl QuestionRequests {
     pub(crate) async fn reject(&self, session: SessionId, id: &str) -> bool {
         let entry = self.take(session, id).await;
         let Some(entry) = entry else {
-            return false;
+            let valid = self
+                .store
+                .list_pending_interactions()
+                .await
+                .ok()
+                .is_some_and(|rows| {
+                    rows.into_iter().any(|row| {
+                        row.id == id && row.kind == "question" && row.session == Some(session)
+                    })
+                });
+            if !valid {
+                return false;
+            }
+            let queued = hya_store::PendingInteractionReply {
+                id: id.to_string(),
+                kind: "question".to_string(),
+                payload: serde_json::json!({"reject": true, "session": session.to_string()})
+                    .to_string(),
+                created_at: hya_proto::now_millis(),
+            };
+            return self
+                .store
+                .queue_pending_interaction_reply(&queued)
+                .await
+                .is_ok();
         };
         let ok = reject_entry(entry);
+        if ok {
+            let _ = self.store.resolve_pending_interaction(id).await;
+        }
         if ok {
             self.publish_rejected(Some(session), id);
         }
@@ -185,6 +257,9 @@ impl QuestionRequests {
             .reply
             .send_many(answers_from_reply(entry.questions, answers))
             .is_ok();
+        if ok {
+            let _ = self.store.resolve_pending_interaction(id).await;
+        }
         if ok {
             self.publish_replied(session, id, event_answers);
         }
@@ -239,12 +314,6 @@ impl QuestionRequests {
                 "requestID": id,
             },
         }));
-    }
-}
-
-impl Default for QuestionRequests {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

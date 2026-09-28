@@ -5,6 +5,8 @@
 //! on a spawned task and its progress arrives through the event streams.
 //! `WaitTurn` exists for synchronous clients only.
 
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -14,13 +16,44 @@ use axum::routing::{get, post};
 use super::Json;
 
 use crate::ServerState;
+use crate::runs::RunGuard;
 use hya_api::v1 as pb;
 use hya_api::v1::create_turn_request::Kind;
 use hya_core::attachments::PromptAttachment;
-use hya_proto::SessionId;
+use hya_proto::{ModelRef, SessionId};
 
 use super::V1Error;
 use super::session::parse_session;
+
+/// Spawn `session`'s already-admitted turn on a server run: `run`'s
+/// run-registry entry is held by the spawned task until the turn ends, so
+/// clients see the session busy for exactly the turn's duration. The shared
+/// tail of every `create_turn` kind and of the prompt-less restart-handoff
+/// resume ([`resume_turn`]).
+fn spawn_turn_run(
+    st: &ServerState,
+    session: SessionId,
+    run: RunGuard,
+    agent: hya_core::AgentSpec,
+    guidance: Option<Arc<str>>,
+    external_dirs: Vec<PathBuf>,
+    explicit_model: Option<ModelRef>,
+) {
+    let engine = st.engine.clone();
+    tokio::spawn(async move {
+        let _ = engine
+            .run_turn_with_external_dirs_and_guidance(
+                session,
+                &agent,
+                run.token(),
+                &external_dirs,
+                guidance,
+                explicit_model,
+            )
+            .await;
+        drop(run);
+    });
+}
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
@@ -155,25 +188,18 @@ async fn create_turn(
                 .engine
                 .admit_user_prompt_with_attachments(session, prompt.text, attachments)
                 .await?;
-            let engine = st.engine.clone();
             spawn_auto_title(&st, session, &turn.agent.model);
             let external_dirs =
                 crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
-            let agent = turn.agent.clone();
-            let guidance = turn.guidance.clone();
-            tokio::spawn(async move {
-                let _ = engine
-                    .run_turn_with_external_dirs_and_guidance(
-                        session,
-                        &agent,
-                        run.token(),
-                        &external_dirs,
-                        guidance,
-                        None,
-                    )
-                    .await;
-                drop(run);
-            });
+            spawn_turn_run(
+                &st,
+                session,
+                run,
+                turn.agent,
+                turn.guidance,
+                external_dirs,
+                None,
+            );
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Command(command)) => {
@@ -249,26 +275,19 @@ async fn create_turn(
                     text,
                 )
                 .await?;
-            let engine = st.engine.clone();
             let turn = crate::support::reference::session_agent_with_guidance(&st, session).await?;
             spawn_auto_title(&st, session, &turn.agent.model);
             let external_dirs =
                 crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
-            let agent = turn.agent.clone();
-            let guidance = turn.guidance.clone();
-            tokio::spawn(async move {
-                let _ = engine
-                    .run_turn_with_external_dirs_and_guidance(
-                        session,
-                        &agent,
-                        run.token(),
-                        &external_dirs,
-                        guidance,
-                        explicit_model,
-                    )
-                    .await;
-                drop(run);
-            });
+            spawn_turn_run(
+                &st,
+                session,
+                run,
+                turn.agent,
+                turn.guidance,
+                external_dirs,
+                explicit_model,
+            );
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Shell(shell)) => {

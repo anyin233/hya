@@ -22,6 +22,9 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Seek as _, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::io::AsRawFd as _;
+#[cfg(test)]
+use std::os::unix::io::FromRawFd as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -79,8 +82,9 @@ fn auto_transport() -> String {
     "auto".to_owned()
 }
 
-/// `<db>.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, and
-/// the stop request `<db>.server.stop` of one database.
+/// `<db>.lock`, `<db>.server.json`, the daemon log `<db>.server.log`, the
+/// stop request `<db>.server.stop`, and the restart-handoff journal
+/// `<db>.server.handoff` of one database.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DbPaths {
     pub(crate) lock: PathBuf,
@@ -94,6 +98,8 @@ pub(crate) struct DbPaths {
     /// The server's relay identity `<db>.relay-identity.json` (0600; the
     /// relay link's keys, ADR-0025 D3).
     pub(crate) relay_identity: PathBuf,
+    /// Restart handoff journal (`<db>.server.handoff`).
+    pub(crate) handoff: PathBuf,
 }
 
 /// The lock and discovery paths of `db`, or `None` for stores that are not
@@ -120,6 +126,7 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
         log: with(".server.log"),
         stop: with(".server.stop"),
         relay_identity: with(".relay-identity.json"),
+        handoff: with(".server.handoff"),
     })
 }
 
@@ -129,6 +136,13 @@ pub(crate) fn paths(db: &str) -> Option<DbPaths> {
 pub(crate) struct DbLock {
     paths: DbPaths,
     published: bool,
+    suppress_discovery_removal: bool,
+    /// `startedAt` inherited from the predecessor's discovery file
+    /// (`--inherit-status`): the successor keeps the old status timestamp,
+    /// so uptime and `startedAt` survive a handoff.
+    inherited_started_at: Option<u64>,
+    /// Pid recorded by the predecessor before this process adopted the lock.
+    predecessor_pid: Option<u32>,
     // Held for the flock; closed (unlocked) last, after `Drop` ran.
     _file: File,
 }
@@ -211,9 +225,8 @@ pub(crate) fn try_claim(db: &str) -> std::io::Result<Claim> {
         }
         Err(std::fs::TryLockError::Error(error)) => return Err(with_path(error, &paths.lock)),
     }
-    // We hold the lock: any discovery file is a crashed owner's, and any
-    // stop request was addressed to an earlier owner.
-    for stale in [&paths.discovery, &paths.stop] {
+    // We hold the lock: any discovery or stop request is stale from an earlier owner.
+    for stale in [&paths.discovery, &paths.stop, &paths.handoff] {
         match std::fs::remove_file(stale) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -226,8 +239,75 @@ pub(crate) fn try_claim(db: &str) -> std::io::Result<Claim> {
     Ok(Claim::Owned(DbLock {
         paths,
         published: false,
+        suppress_discovery_removal: false,
+        inherited_started_at: None,
+        predecessor_pid: None,
         _file: file,
     }))
+}
+
+/// Adopt a database lock file descriptor transferred by a predecessor. The
+/// descriptor already holds the flock, so no second `flock` is attempted.
+/// `started_at` (the predecessor's `--inherit-status` discovery timestamp)
+/// is republished by [`DbLock::publish_with`].
+pub(crate) fn adopt(db: &str, mut file: File, started_at: Option<u64>) -> std::io::Result<DbLock> {
+    let Some(paths) = paths(db) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "an inherited database lock requires a file database",
+        ));
+    };
+    let mut text = String::new();
+    file.rewind()?;
+    let predecessor_pid = file
+        .read_to_string(&mut text)
+        .ok()
+        .and_then(|_| text.trim().parse().ok());
+    file.set_len(0)?;
+    file.rewind()?;
+    writeln!(file, "{}", std::process::id())?;
+    Ok(DbLock {
+        paths,
+        published: false,
+        suppress_discovery_removal: false,
+        inherited_started_at: started_at,
+        predecessor_pid,
+        _file: file,
+    })
+}
+
+impl DbLock {
+    /// Keep the successor's discovery record when this predecessor drops its
+    /// duplicate lock descriptor after a successful handoff.
+    pub(crate) fn suppress_discovery_removal(&mut self) {
+        self.suppress_discovery_removal = true;
+    }
+
+    #[cfg(test)]
+    fn duplicate_for_handoff(&self) -> std::io::Result<std::os::unix::io::OwnedFd> {
+        let source = self._file.as_raw_fd();
+        let duplicate = unsafe { libc::dup(source) };
+        if duplicate < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let flags = unsafe { libc::fcntl(duplicate, libc::F_GETFD) };
+        if flags < 0
+            || unsafe { libc::fcntl(duplicate, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
+        {
+            let error = std::io::Error::last_os_error();
+            unsafe { libc::close(duplicate) };
+            return Err(error);
+        }
+        // SAFETY: `duplicate` is a fresh, open, owned descriptor.
+        Ok(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(duplicate) })
+    }
+
+    /// The raw held lock descriptor, for staging a handoff duplicate at
+    /// spawn time ([`crate::daemon::spawn_handoff`]); the duplicate, not
+    /// this descriptor, crosses the exec.
+    pub(crate) fn lock_raw_fd(&self) -> std::os::unix::io::RawFd {
+        self._file.as_raw_fd()
+    }
 }
 
 /// Who holds `db`'s lock, found without keeping it: `None` when the lock is
@@ -283,21 +363,43 @@ struct StopRequest {
     pid: u32,
     /// `stop` or `restart` (`ServerStopping.reason`).
     reason: String,
+    /// `handoff` when the restart asks the holder to spawn a successor that
+    /// inherits the listener and the lock; absent for a plain stop/restart
+    /// (an older binary ignores the field).
+    #[serde(default)]
+    mode: String,
+}
+
+/// Why the lock holder was signalled, and how. `handoff` is set when the
+/// stop request asked for a successor handoff (`mode: "handoff"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StopNotice {
+    pub(crate) reason: ShutdownReason,
+    pub(crate) handoff: bool,
 }
 
 /// Tell the holder `pid` of `paths` why it is about to get SIGTERM (ADR-0023:
 /// clients of a stopped server stay disconnected, clients of a restarted
-/// one wait for the next). Written atomically before the signal; the server
-/// reads it when the signal arrives ([`DbLock::take_stop_request`]). Without
-/// it (or when it names another pid) the server reports a plain `signal`.
+/// one wait for the next). With `handoff`, the restart also asks the holder
+/// to spawn a successor (`mode: "handoff"`; the holder confirms through the
+/// handoff journal's `queued` stage). Written atomically before the signal;
+/// the server reads it when the signal arrives
+/// ([`DbLock::take_stop_request`]). Without it (or when it names another
+/// pid) the server reports a plain `signal`.
 pub(crate) fn request_stop(
     paths: &DbPaths,
     pid: u32,
     reason: ShutdownReason,
+    handoff: bool,
 ) -> std::io::Result<()> {
     let body = serde_json::to_vec(&StopRequest {
         pid,
         reason: reason.as_str().to_owned(),
+        mode: if handoff {
+            "handoff".to_owned()
+        } else {
+            String::new()
+        },
     })
     .map_err(std::io::Error::other)?;
     let mut temp = paths.stop.clone().into_os_string();
@@ -342,7 +444,7 @@ impl DbLock {
     /// `None` when there is none (a plain signal) or it names another pid.
     #[cfg(test)]
     pub(crate) fn take_stop_request(&self) -> Option<ShutdownReason> {
-        take_stop_request(&self.paths.stop, std::process::id())
+        take_stop_request(&self.paths.stop, std::process::id()).map(|notice| notice.reason)
     }
 
     /// Where [`request_stop`] writes (for a shutdown future that cannot
@@ -358,7 +460,8 @@ impl DbLock {
     }
 
     /// Atomically write the discovery file for a server listening on `url`
-    /// that accepts the `--allow-host` names `allow_hosts`.
+    /// that accepts the `--allow-host` names `allow_hosts`. A handoff
+    /// successor republishes its inherited status timestamp.
     pub(crate) fn publish_with(
         &mut self,
         url: &str,
@@ -368,11 +471,13 @@ impl DbLock {
             url: url.to_string(),
             pid: std::process::id(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            started_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |since| {
-                    u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-                }),
+            started_at: self.inherited_started_at.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| {
+                        u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+                    })
+            }),
             relay: None,
             allow_hosts: allow_hosts.to_vec(),
         };
@@ -384,6 +489,21 @@ impl DbLock {
     /// The discovery file (for [`set_discovery_relay`]).
     pub(crate) fn discovery_path(&self) -> PathBuf {
         self.paths.discovery.clone()
+    }
+
+    pub(crate) fn predecessor_pid(&self) -> Option<u32> {
+        self.predecessor_pid
+    }
+
+    /// Restore this parked predecessor as the lock-file owner after a
+    /// successor adopted the inherited descriptor but failed its health gate.
+    /// The flock remains held by this descriptor; the pid file must name the
+    /// process that can actually receive a later stop request.
+    pub(crate) fn restore_owner_pid(&mut self) -> std::io::Result<()> {
+        self._file.set_len(0)?;
+        self._file.rewind()?;
+        writeln!(self._file, "{}", std::process::id())?;
+        self._file.flush()
     }
 }
 
@@ -416,7 +536,7 @@ fn write_discovery(path: &Path, discovery: &Discovery) -> std::io::Result<()> {
 
 /// [`DbLock::take_stop_request`] for a process `pid` holding the lock whose
 /// stop request file is `path`.
-pub(crate) fn take_stop_request(path: &Path, pid: u32) -> Option<ShutdownReason> {
+pub(crate) fn take_stop_request(path: &Path, pid: u32) -> Option<StopNotice> {
     let text = std::fs::read_to_string(path).ok()?;
     let request: StopRequest = serde_json::from_str(&text).ok()?;
     if request.pid != pid {
@@ -424,13 +544,204 @@ pub(crate) fn take_stop_request(path: &Path, pid: u32) -> Option<ShutdownReason>
     }
     // Still under the lock: nobody else takes it.
     let _ = std::fs::remove_file(path);
-    ShutdownReason::parse(&request.reason)
+    let reason = ShutdownReason::parse(&request.reason)?;
+    Some(StopNotice {
+        reason,
+        handoff: request.mode == "handoff",
+    })
+}
+
+/// Stages recorded by the restart handoff journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum HandoffStage {
+    Requested,
+    Queued,
+    Released,
+    Ready,
+    Transferred,
+    Failed,
+}
+
+impl HandoffStage {
+    fn next(self) -> Option<Self> {
+        match self {
+            Self::Requested => Some(Self::Queued),
+            Self::Queued => Some(Self::Released),
+            Self::Released => Some(Self::Ready),
+            Self::Ready => Some(Self::Transferred),
+            Self::Transferred | Self::Failed => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HandoffSpec {
+    pub(crate) model: Option<String>,
+    #[serde(default)]
+    pub(crate) allow_hosts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) relay: Option<DiscoveredRelay>,
+    /// The successor executable: the invoking restart CLI's
+    /// `current_exe()` at restart time, not the old daemon's (a restart
+    /// right after an update must bring up the new binary). The old
+    /// generation re-validates it before spawning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exe: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct HandoffStageRecord {
+    pub(crate) stage: HandoffStage,
+    pub(crate) pid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HandoffJournal {
+    version: u32,
+    mode: String,
+    token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) spec: Option<HandoffSpec>,
+    stages: Vec<HandoffStageRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+}
+
+impl HandoffJournal {
+    const VERSION: u32 = 1;
+
+    pub(crate) fn stage(&self) -> HandoffStage {
+        self.stages
+            .last()
+            .map_or(HandoffStage::Requested, |record| record.stage)
+    }
+
+    pub(crate) fn reached(&self, stage: HandoffStage) -> bool {
+        self.stage() >= stage
+    }
+
+    /// The handoff token recorded at the `requested` stage: the old
+    /// generation verifies it before writing `released`/`failed`, so a
+    /// superseding restart's journal is never corrupted.
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub(crate) fn stage_pid(&self, stage: HandoffStage) -> Option<u32> {
+        self.stages
+            .iter()
+            .find(|record| record.stage == stage)
+            .map(|record| record.pid)
+    }
+    pub(crate) fn released_pid(&self) -> Option<u32> {
+        self.stage_pid(HandoffStage::Released)
+    }
+}
+
+fn handoff_token() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("{}-{millis:x}", std::process::id())
+}
+
+pub(crate) fn write_handoff_stage(
+    path: &Path,
+    stage: HandoffStage,
+    pid: u32,
+    spec: Option<&HandoffSpec>,
+    error: Option<&str>,
+) -> std::io::Result<()> {
+    let mut journal = if stage == HandoffStage::Requested {
+        HandoffJournal {
+            version: HandoffJournal::VERSION,
+            mode: "handoff".to_owned(),
+            token: handoff_token(),
+            spec: spec.cloned(),
+            stages: Vec::new(),
+            error: None,
+        }
+    } else {
+        let mut journal = read_handoff(path).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "handoff journal is missing")
+        })?;
+        let next = journal.stage().next();
+        if journal.version != HandoffJournal::VERSION
+            || journal.mode != "handoff"
+            || (stage != HandoffStage::Failed && next != Some(stage))
+            || (stage == HandoffStage::Failed && journal.stage() == HandoffStage::Transferred)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid handoff stage transition",
+            ));
+        }
+        if stage == HandoffStage::Failed {
+            journal.error = error.map(str::to_owned);
+        }
+        journal
+    };
+    if stage == HandoffStage::Requested && journal.spec.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "requested handoff needs a successor spec",
+        ));
+    }
+    if stage != HandoffStage::Requested
+        && (spec.is_some() || (error.is_some() && stage != HandoffStage::Failed))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "handoff spec is valid only at requested stage",
+        ));
+    }
+    journal.stages.push(HandoffStageRecord { stage, pid });
+    let mut temp = path.as_os_str().to_os_string();
+    temp.push(format!(".{}.tmp", std::process::id()));
+    let temp = PathBuf::from(temp);
+    let body = serde_json::to_vec(&journal).map_err(std::io::Error::other)?;
+    std::fs::write(&temp, body).map_err(|error| with_path(error, &temp))?;
+    if let Err(error) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(with_path(error, path));
+    }
+    Ok(())
+}
+
+pub(crate) fn read_handoff(path: &Path) -> Option<HandoffJournal> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+pub(crate) async fn wait_handoff(
+    path: &Path,
+    stage: HandoffStage,
+    timeout: Duration,
+) -> std::io::Result<HandoffJournal> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Some(journal) = read_handoff(path)
+            && (journal.reached(stage) || journal.stage() == HandoffStage::Failed)
+        {
+            return Ok(journal);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "handoff journal stage timeout",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 impl Drop for DbLock {
     fn drop(&mut self) {
-        // Still under the lock, so the file can only be ours.
-        if self.published {
+        // Still under the lock, so the file can only be ours. A predecessor
+        // suppresses this unlink after transferring the capability.
+        if self.published && !self.suppress_discovery_removal {
             let _ = std::fs::remove_file(&self.paths.discovery);
         }
     }
@@ -543,6 +854,7 @@ mod tests {
             found.relay_identity,
             scratch.0.join("sessions.db.relay-identity.json")
         );
+        assert_eq!(found.handoff, scratch.0.join("sessions.db.server.handoff"));
     }
 
     #[test]
@@ -663,36 +975,153 @@ mod tests {
     }
 
     #[test]
-    fn claiming_removes_a_stale_stop_request() {
+    fn claiming_removes_a_stale_stop_request_and_journal() {
         let scratch = Scratch::new("stale-stop");
         let db = scratch.db();
         let paths = paths(&db).unwrap();
-        request_stop(&paths, std::process::id(), ShutdownReason::Stop).unwrap();
+        request_stop(&paths, std::process::id(), ShutdownReason::Stop, false).unwrap();
+        write_handoff_stage(
+            &paths.handoff,
+            HandoffStage::Requested,
+            1,
+            Some(&HandoffSpec::default()),
+            None,
+        )
+        .unwrap();
         let lock = owned(try_claim(&db).unwrap());
         assert!(!paths.stop.exists());
+        assert!(!paths.handoff.exists(), "a claimed journal is a stale one");
         assert_eq!(lock.take_stop_request(), None);
     }
 
     #[test]
-    fn a_stop_request_names_its_pid_and_is_taken_once() {
+    fn a_stop_request_names_its_pid_and_mode_and_is_taken_once() {
         let scratch = Scratch::new("stop-request");
         let db = scratch.db();
         let lock = owned(try_claim(&db).unwrap());
         let paths = lock.paths().clone();
         // Addressed to another process (a stale file, pid reuse): ignored.
-        request_stop(&paths, std::process::id() + 1, ShutdownReason::Stop).unwrap();
+        request_stop(&paths, std::process::id() + 1, ShutdownReason::Stop, false).unwrap();
         assert_eq!(lock.take_stop_request(), None);
-        request_stop(&paths, std::process::id(), ShutdownReason::Restart).unwrap();
+        request_stop(&paths, std::process::id(), ShutdownReason::Restart, false).unwrap();
         let text = std::fs::read_to_string(&paths.stop).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["reason"], serde_json::json!("restart"));
         assert_eq!(value["pid"], serde_json::json!(std::process::id()));
+        assert_eq!(value["mode"], serde_json::json!(""));
         assert_eq!(lock.take_stop_request(), Some(ShutdownReason::Restart));
         assert!(!paths.stop.exists(), "taken requests are removed");
         assert_eq!(lock.take_stop_request(), None);
+        // A handoff restart asks for the successor mode.
+        request_stop(&paths, std::process::id(), ShutdownReason::Restart, true).unwrap();
+        assert_eq!(lock.take_stop_request(), Some(ShutdownReason::Restart));
         // Garbage is ignored.
         std::fs::write(&paths.stop, "not json").unwrap();
         assert_eq!(lock.take_stop_request(), None);
+    }
+
+    #[test]
+    fn the_handoff_journal_records_strictly_chained_stages() {
+        let scratch = Scratch::new("handoff-journal");
+        let paths = paths(&scratch.db()).unwrap();
+        let path = paths.handoff.clone();
+        // Later stages need the requested one first.
+        assert!(
+            write_handoff_stage(&path, HandoffStage::Queued, 1, None, None).is_err(),
+            "no journal to append to"
+        );
+        let spec = HandoffSpec {
+            model: Some("hya/echo".into()),
+            allow_hosts: vec!["hya.example.lan".into()],
+            relay: None,
+            exe: Some(PathBuf::from("/bin/hya")),
+        };
+        write_handoff_stage(&path, HandoffStage::Requested, 1, Some(&spec), None).unwrap();
+        let journal = read_handoff(&path).unwrap();
+        assert_eq!(journal.stage(), HandoffStage::Requested);
+        assert_eq!(journal.spec.as_ref(), Some(&spec));
+        assert!(
+            journal.token().contains(&std::process::id().to_string()),
+            "{journal:?}"
+        );
+        assert_eq!(journal.stage_pid(HandoffStage::Requested), Some(1));
+
+        // The chain is enforced, each stage once, in order.
+        assert!(write_handoff_stage(&path, HandoffStage::Released, 1, None, None).is_err());
+        assert!(write_handoff_stage(&path, HandoffStage::Ready, 1, None, None).is_err());
+        write_handoff_stage(&path, HandoffStage::Queued, 1, None, None).unwrap();
+        assert!(write_handoff_stage(&path, HandoffStage::Queued, 1, None, None).is_err());
+        write_handoff_stage(&path, HandoffStage::Released, 1, None, None).unwrap();
+        write_handoff_stage(&path, HandoffStage::Ready, 2, None, None).unwrap();
+        let journal = read_handoff(&path).unwrap();
+        assert!(journal.reached(HandoffStage::Ready));
+        assert!(!journal.reached(HandoffStage::Transferred));
+        assert_eq!(journal.stage_pid(HandoffStage::Ready), Some(2));
+        write_handoff_stage(&path, HandoffStage::Transferred, 2, None, None).unwrap();
+        // A finished handoff cannot fail afterwards.
+        assert!(write_handoff_stage(&path, HandoffStage::Failed, 2, None, Some("late")).is_err());
+
+        // A fresh requested stage starts a new handoff with a fresh token.
+        let first = read_handoff(&path).unwrap();
+        write_handoff_stage(&path, HandoffStage::Requested, 3, Some(&spec), None).unwrap();
+        let second = read_handoff(&path).unwrap();
+        assert_eq!(second.stage(), HandoffStage::Requested);
+        assert_ne!(
+            first.token(),
+            second.token(),
+            "each handoff gets its own token"
+        );
+    }
+
+    #[test]
+    fn a_failed_handoff_records_its_error_from_any_earlier_stage() {
+        let scratch = Scratch::new("handoff-failed");
+        let paths = paths(&scratch.db()).unwrap();
+        let path = paths.handoff.clone();
+        write_handoff_stage(
+            &path,
+            HandoffStage::Requested,
+            1,
+            Some(&HandoffSpec::default()),
+            None,
+        )
+        .unwrap();
+        write_handoff_stage(&path, HandoffStage::Queued, 1, None, None).unwrap();
+        write_handoff_stage(&path, HandoffStage::Failed, 1, None, Some("no boundary")).unwrap();
+        let journal = read_handoff(&path).unwrap();
+        assert_eq!(journal.stage(), HandoffStage::Failed);
+        assert_eq!(journal.error.as_deref(), Some("no boundary"));
+        // Nothing follows a failure.
+        assert!(write_handoff_stage(&path, HandoffStage::Released, 1, None, None).is_err());
+    }
+
+    #[test]
+    fn adopting_an_inherited_lock_keeps_the_predecessor_and_status() {
+        let scratch = Scratch::new("adopt");
+        let db = scratch.db();
+        let claim = owned(try_claim(&db).unwrap());
+        // Simulate the successor's side: a staged duplicate of the held
+        // descriptor (close-on-exec set in this process; the successor's
+        // pre_exec clears it across the exec).
+        let duplicate = claim.duplicate_for_handoff().unwrap();
+        let file = File::from(duplicate);
+        let mut adopted = adopt(&db, file, Some(1234)).unwrap();
+        assert_eq!(
+            adopted.predecessor_pid(),
+            Some(std::process::id()),
+            "the lock file named the predecessor"
+        );
+        let published = adopted.publish_with("http://127.0.0.1:9", &[]).unwrap();
+        assert_eq!(published.started_at, 1234, "the inherited status is kept");
+        // The original claim can go away; the adopted duplicate still holds
+        // the flock, so the database stays owned across the handoff.
+        drop(claim);
+        assert!(
+            holder(&db).unwrap().is_some(),
+            "the adopted lock still holds"
+        );
+        drop(adopted);
+        assert!(holder(&db).unwrap().is_none());
     }
 
     #[test]

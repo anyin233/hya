@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -67,6 +67,7 @@ pub(crate) use mailbox::dm_channel_between;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
+mod restart;
 mod revert;
 mod roots;
 mod scope_binding;
@@ -103,9 +104,38 @@ async fn authorize_tool_call(
         .map_err(ToolError::from)
 }
 
+/// RAII marker for a permission decision in flight on `session`. Held across
+/// the `authorize` await only, so an auto-granted call clears in microseconds
+/// while a prompt waiting for the host keeps the session in
+/// [`SessionEngine::handoff_readiness`]. A restart handoff must never strand
+/// that ask, so the cutover blocks while the session is listed.
+pub(crate) struct PendingAskGuard<'a> {
+    engine: &'a SessionEngine,
+    session: SessionId,
+}
+
+impl Drop for PendingAskGuard<'_> {
+    fn drop(&mut self) {
+        let mut asks = self
+            .engine
+            .pending_asks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match asks.get_mut(&self.session) {
+            Some(count) if *count > 1 => {
+                *count -= 1;
+            }
+            _ => {
+                asks.remove(&self.session);
+            }
+        }
+    }
+}
+
 pub use admission::SpawnAdmissionOutcome;
 pub use file_snapshot::{MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES};
 pub use fork::{ForkAt, ForkError, fork_cut};
+pub use restart::HandoffReadiness;
 pub use revert::{RevertError, RevertOutcome, RevertTarget};
 pub use scope_binding::CatalogScopeCacheConfig;
 pub use turn::advertise_tool;
@@ -443,8 +473,21 @@ pub struct SessionEngine {
     mcp_background_after: Option<Duration>,
     /// Monotonic `mcpbg-N` job ids for backgrounded MCP calls.
     background_job_seq: Arc<AtomicU64>,
+    /// Runtime-owner run this process claimed on the store. Every handoff
+    /// checkpoint is written under it (`checkpoint_for_handoff` verifies the
+    /// claim), and the successor's resume skips rows recorded by it.
+    runtime_owner: hya_proto::OwnerRunId,
+    /// Monotonic handoff generation of this process: each handoff checkpoint
+    /// takes the next value, so a successor drains queued resumes oldest
+    /// first. Shared, because engine clones checkpoint turns.
+    handoff_generation: Arc<AtomicU64>,
     /// Single-active-turn registry shared by every clone of this engine.
     turn_gate: Arc<turn_gate::TurnGate>,
+    /// Permission decisions currently in flight, per session (an ask the host
+    /// has not answered yet). A restart handoff must never strand one: the
+    /// cutover blocks while a session sits here. Shared, because engine
+    /// clones run turns.
+    pending_asks: Arc<Mutex<HashMap<SessionId, usize>>>,
     #[cfg(test)]
     direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
 }
@@ -502,7 +545,10 @@ impl Clone for SessionEngine {
             ),
             mcp_background_after: self.mcp_background_after,
             background_job_seq: self.background_job_seq.clone(),
+            runtime_owner: self.runtime_owner,
+            handoff_generation: Arc::clone(&self.handoff_generation),
             turn_gate: Arc::clone(&self.turn_gate),
+            pending_asks: Arc::clone(&self.pending_asks),
             #[cfg(test)]
             direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
         }
@@ -603,7 +649,10 @@ impl SessionEngine {
             reviver: RwLock::new(None),
             mcp_background_after: None,
             background_job_seq: Arc::new(AtomicU64::new(1)),
+            runtime_owner: hya_proto::OwnerRunId::new(),
+            handoff_generation: Arc::new(AtomicU64::new(1)),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
+            pending_asks: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
         };
@@ -620,6 +669,20 @@ impl SessionEngine {
         engine
     }
 
+    /// Mark a permission decision as in flight for `session` (see
+    /// [`PendingAskGuard`]). Hold the guard across the `authorize` await.
+    pub(crate) fn pending_ask_guard(&self, session: SessionId) -> PendingAskGuard<'_> {
+        let mut asks = self
+            .pending_asks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *asks.entry(session).or_insert(0) += 1;
+        PendingAskGuard {
+            engine: self,
+            session,
+        }
+    }
+
     /// Move `mcp__`-namespaced tool calls still running after `budget` to the
     /// background: the turn receives an early "backgrounded" tool result and
     /// the real result is later delivered as a steered user prompt. Disabled
@@ -628,6 +691,23 @@ impl SessionEngine {
     pub fn with_mcp_background_after(mut self, budget: Duration) -> Self {
         self.mcp_background_after = Some(budget);
         self
+    }
+
+    /// Record the runtime-owner run this process claimed on the store. Handoff
+    /// checkpoints are written under it and the successor's resume skips rows
+    /// recorded by it, so wire the same id the store claim used
+    /// (`SessionStore::claim_runtime_owner`). Unset (a fresh id) engines —
+    /// tests and embedded hosts that never claimed the store — refuse their
+    /// own checkpoints: the turn keeps running and a restart handoff aborts.
+    #[must_use]
+    pub fn with_runtime_owner(mut self, owner: hya_proto::OwnerRunId) -> Self {
+        self.runtime_owner = owner;
+        self
+    }
+    /// The owner identity associated with this engine's store claim.
+    #[must_use]
+    pub fn runtime_owner(&self) -> hya_proto::OwnerRunId {
+        self.runtime_owner
     }
 
     #[cfg(test)]

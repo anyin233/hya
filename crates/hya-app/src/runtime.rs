@@ -15,10 +15,10 @@ use hya_core::agent_catalog::{AgentCatalog, AgentDefinition};
 use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
     BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CompactionConfig, CoreError,
-    DRAIN_DEADLINE, EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
-    RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TaskSpawnOrigin,
-    TokenAccounting, TurnBinding, TurnDrainReport, apply_agent_model_preference,
+    DRAIN_DEADLINE, EventBus, HandoffReadiness, ModelSummarizer, PromptEnv, ResidentSupervisor,
+    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
+    TaskSpawnOrigin, TokenAccounting, TurnBinding, TurnDrainReport, apply_agent_model_preference,
     apply_spawn_model_policy, build_system_prompt, resolve_dispatch_model, run_lifecycle_service,
     run_mailbox_service,
 };
@@ -1748,6 +1748,10 @@ pub struct BuiltSessionEngine {
     mcp_control: Arc<dyn hya_server::McpControl>,
     plugin_host: Arc<hya_plugin::PluginHost>,
     lifecycle: SpawnSupervisorLifecycle,
+    /// Process base agent identity, for paths that need it outside a turn
+    /// (the restart handoff's in-process continuation of checkpointed
+    /// sessions).
+    agent: AgentSpec,
 }
 
 impl BuiltSessionEngine {
@@ -1829,6 +1833,39 @@ impl BuiltSessionEngine {
     /// Idempotent; the first cause wins.
     pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport {
         self.resident_supervisor.drain(cause, DRAIN_DEADLINE).await
+    }
+
+    /// Durable restart handoff (old process side, see
+    /// [`SessionEngine::handoff_turns`]): quiesce the gate, then give every
+    /// active turn [`DRAIN_DEADLINE`] to reach its round boundary and
+    /// checkpoint itself. Sessions still live at the deadline are reported in
+    /// `stragglers` and the handoff **aborts** — nothing is cancelled or
+    /// terminalized, the quiesce lifts, checkpointed sessions are re-driven
+    /// in-process, and the restart must be rejected so this process keeps
+    /// serving (treat `stragglers` non-empty as the reject gate). Unlike
+    /// [`drain`](Self::drain) this never closes a live turn. A normal stop
+    /// keeps using [`drain`](Self::drain) / [`shutdown`](Self::shutdown);
+    /// only a restart handoff calls this.
+    pub async fn handoff_turns(&self) -> TurnDrainReport {
+        self.engine.handoff_turns(&self.agent, DRAIN_DEADLINE).await
+    }
+
+    /// First step of a restart handoff (see
+    /// [`SessionEngine::begin_handoff_quiesce`]): refuse new turns
+    /// engine-wide, cancel nothing, and keep serving — the restart queues
+    /// until [`handoff_readiness`](Self::handoff_readiness) reports the gate
+    /// idle. Never force-close a session that
+    /// [`HandoffReadiness.pending_asks`](hya_core::HandoffReadiness) lists;
+    /// its user is mid-permission-prompt.
+    pub fn begin_handoff_quiesce(&self) -> Vec<SessionId> {
+        self.engine.begin_handoff_quiesce()
+    }
+
+    /// The restart-handoff cutover picture (see
+    /// [`SessionEngine::handoff_readiness`]).
+    #[must_use]
+    pub fn handoff_readiness(&self) -> HandoffReadiness {
+        self.engine.handoff_readiness()
     }
 
     /// Drain in-flight turns (cause `shutdown` unless an earlier
@@ -2791,6 +2828,7 @@ async fn build_session_engine_with_mcp_defer(
         plugin_host,
         lifecycle,
         agent_model_control,
+        agent: agent.clone(),
     })
 }
 

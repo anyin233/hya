@@ -60,6 +60,12 @@ pub enum FinishCause {
     /// The member's parent archived it (`archive` tool) while it was
     /// mid-turn.
     Archived,
+    /// The runtime was replaced by a restart handoff: the old process closed
+    /// the turn at a durable boundary with `finish: cancelled, cause: handoff`
+    /// (open tool parts errored, never retried) and the successor process
+    /// resumes the session without a new user prompt. Not written by a normal
+    /// stop or a crash. Older builds fold this as [`FinishCause::Other`].
+    Handoff,
     /// A cause this build does not know.
     #[serde(other)]
     Other,

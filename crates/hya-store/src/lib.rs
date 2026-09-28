@@ -13,6 +13,8 @@ mod bundle_registry;
 /// Typed store errors shared by session and bundle registry APIs.
 pub mod error;
 mod file_blob;
+mod handoff;
+mod interaction;
 mod mailbox;
 mod materialize;
 mod model_effort_preference;
@@ -55,7 +57,9 @@ pub use bundle_registry::{
     NamespaceInstallPolicy, is_downgrade,
 };
 pub use error::StoreError;
+pub use handoff::{HANDOFF_REASON, HandoffCheckpoint, HandoffResumeStart, PendingResume};
 pub use hya_proto::{ActorClaim, OwnerRunId};
+pub use interaction::{PendingInteraction, PendingInteractionReply};
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
@@ -123,6 +127,20 @@ impl RuntimeOwnerState {
         match claim.as_ref() {
             Some(claim) if claim.owner == owner => Ok(()),
             _ => Err(StoreError::RuntimeOwnerClaimRequired),
+        }
+    }
+    fn release(&self, owner: OwnerRunId) -> Result<(), StoreError> {
+        let mut claim = self
+            .claim
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match claim.as_ref() {
+            Some(existing) if existing.owner == owner => {
+                *claim = None;
+                Ok(())
+            }
+            Some(_) => Err(StoreError::RuntimeOwnerBusy),
+            None => Ok(()),
         }
     }
 }
@@ -302,6 +320,11 @@ impl SessionStore {
     pub fn claim_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
         self.runtime_owner.claim(owner)
     }
+    /// Release this store's runtime-owner claim before a successor opens it.
+    /// The caller must have quiesced all writes first.
+    pub fn release_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
+        self.runtime_owner.release(owner)
+    }
 
     /// Require a matching runtime-owner claim before a startup-only mutation.
     pub(crate) fn require_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
@@ -450,6 +473,7 @@ impl SessionStore {
                 "event_log",
                 "token_ledger",
                 "open_assistant_message",
+                "pending_resume",
                 "projection_snapshot",
                 "file_blob",
             ] {

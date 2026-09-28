@@ -3359,6 +3359,7 @@ top of FinishReason; unset when the model ended the message itself.
 | `FINISH_CAUSE_PROVIDER_ERROR` | 5 | The model provider failed the turn. |
 | `FINISH_CAUSE_OTHER` | 6 | A cause this server build does not name. |
 | `FINISH_CAUSE_ARCHIVED` | 7 | The member's parent archived it (`archive` tool) while it was mid-turn. |
+| `FINISH_CAUSE_HANDOFF` | 8 | The open turn was durably checkpointed for successor restart. |
 
 ### `Role`
 
