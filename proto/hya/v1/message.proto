@@ -66,6 +66,8 @@ enum FinishCause {
   FINISH_CAUSE_OTHER = 6;
   // The member's parent archived it (`archive` tool) while it was mid-turn.
   FINISH_CAUSE_ARCHIVED = 7;
+  // The open turn was durably checkpointed for successor restart.
+  FINISH_CAUSE_HANDOFF = 8;
 }
 
 // Author role of a message.
