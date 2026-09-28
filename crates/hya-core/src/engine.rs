@@ -1019,6 +1019,13 @@ impl SessionEngine {
         self.turn_gate.set_observer(observer);
     }
 
+    /// Notify the turn-boundary observer that this turn consumed its mail.
+    pub(crate) fn notify_mail_consumed(&self, session: SessionId) {
+        if let Some(observer) = self.turn_gate.observer() {
+            observer.mail_consumed(session);
+        }
+    }
+
     /// Claim `session`'s turn, queueing behind an active one. `Ok(None)` when
     /// `cancel` fires while waiting.
     pub(crate) async fn begin_turn(
