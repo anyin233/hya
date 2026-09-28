@@ -62,13 +62,14 @@ post-commit state.
 
 ### `AgentModels.SetModelEffortPreference`
 
-Empty effort clears the preference.
+Empty effort clears the preference. Emits a live `catalogUpdated` frame
+(sessions on the model may now resolve another `effective_effort`).
 
 ### `AgentModels.SetAgentEffort`
 
 Set or clear (empty `effort`) one agent's default thinking effort,
 independent of its model. Applies to the agent's next request; a `task`
-spawn's own `effort` still wins.
+spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
 
 
 ## Service `Auth`

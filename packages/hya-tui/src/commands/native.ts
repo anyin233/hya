@@ -1,9 +1,9 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
-import { parseApiCommand } from "../client"
+import { parseApiCommand, type SessionInfo } from "../client"
 import { agentRows, effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { currentModel, currentThinkingEffort, modelBaseReference, modelReference, sessionTree, strategyText, webTabBackgroundNotice } from "../state/format"
+import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
@@ -188,7 +188,16 @@ function effortModelBase(context: CommandContext): string {
   return defaultModelRef({ ...store.state, selected: undefined }).split("#", 1)[0]
 }
 
-/** Apply one `/effort` choice through the server's durable model preference. */
+/**
+ * Apply one `/effort` choice so the open session's next request uses it, and
+ * remember it on the server so the next start brings it back. The choice is
+ * saved on the layer that decides the session's effort: a `#suffix` outranks
+ * everything, so it is dropped first; an Agent-level effort outranks the
+ * per-model preference, so then the Agent's effort (`SetAgentEffort`) is
+ * changed, else the model's (`SetModelEffortPreference`). `default` clears
+ * both remembered layers. Works while a turn runs: the engine resolves the
+ * effort per request round.
+ */
 export async function selectEffort(context: CommandContext, effort: string): Promise<void> {
   const { store, client, actions } = context
   const base = effortModelBase(context)
@@ -198,10 +207,17 @@ export async function selectEffort(context: CommandContext, effort: string): Pro
   if (!providerId || !modelId) throw new Error(`Invalid model reference ${base}`)
   const model = store.state.models.find((row) => row.id === base)
   if (!isKnownEffort(model, effort)) throw new Error(`Unknown thinking effort ${effort} for ${base}`)
-  const session = store.state.selected
-  const result = await client.setModelEffortPreference(providerId, modelId, effort === "default" ? "" : effort)
-  if (session && session.model?.variant) store.setSelected(await client.updateSessionModel(session.id, base))
-  store.setStatus(`Thinking effort → ${result.effort || "default"}`)
+  const value = effort === "default" ? "" : effort
+  let session = store.state.selected
+  if (session?.model?.variant) {
+    session = await client.updateSessionModel(session.id, base)
+    store.setSelected(session)
+  }
+  const agentDecides = session?.effortSource === "EFFORT_SOURCE_AGENT"
+  if (session && agentDecides) await client.setAgentEffort(session.agent, value)
+  if (!agentDecides || !value) await client.setModelEffortPreference(providerId, modelId, value)
+  if (session) store.setSelected(await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(session.id)}`))
+  store.setStatus(`Thinking effort → ${effort}`)
   await actions.refresh()
 }
 
@@ -212,12 +228,10 @@ export function openEffortPicker(context: CommandContext): void {
   if (!base) throw new Error("No model is available; configure a provider on the backend")
   const session = store.state.selected
   const model = session ? currentModel(store.state) : store.state.models.find((row) => row.id === base)
-  const pending = store.state.pendingModel
-  const explicit = session?.model?.variant
   const effective = session?.effectiveEffort || model?.reasoningDefault || "default"
   actions.openPicker({
     title: "Thinking effort",
-    rows: effortRows(model, explicit, effective),
+    rows: effortRows(model, session?.effectiveEffort || undefined, effective),
     onSelect: (row) => selectEffort(context, row.id),
   })
 }
@@ -462,7 +476,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         ...(selected?.forkedFrom ? [`Forked      ${forkSourceText(selected.forkedFrom, store.state.sessions)!.replace(/^forked /, "")}`] : []),
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
-        `Thinking    ${selected ? currentThinkingEffort(store.state) : "default"}`,
+        `Thinking    ${selected ? thinkingEffortLabel(selected) : "default"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
         `Backend     ${backendText(store.state.backend, store.state.serverPid)}`,
       ]

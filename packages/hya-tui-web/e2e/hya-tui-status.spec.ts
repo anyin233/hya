@@ -171,7 +171,7 @@ test.describe("status bar context and tokens", () => {
     await prompt(term, "hi")
     await term.waitForText("usage reply", 20_000)
     await term.waitForText(/^Ready/m)
-    await term.waitForText(/mode manual · thinking default · ctx 42% · 42\.3k tok/)
+    await term.waitForText(/mode manual · model:default · ctx 42% · 42\.3k tok/)
     const ctx = await at(term, "ctx 42%")
     expect((await term.cell(ctx.row, ctx.col))?.fg).toBe(colors.muted)
     // The sidebar's Context box shows the same, with the window size.

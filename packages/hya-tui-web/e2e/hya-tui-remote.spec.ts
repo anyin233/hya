@@ -223,7 +223,7 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText("Remote connection failed: the remote backend rejected the relay link", 30_000)
     expect(await term.find(secretOf(wrong).slice(0, 12))).toBeNull()
-    // At this narrow width the header intentionally keeps `thinking default`
+    // At this narrow width the header intentionally keeps the `model:effort` label
     // visible and clips the server URL; `/status` exposes the full local URL.
     await prompt(term, "/status")
     await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)

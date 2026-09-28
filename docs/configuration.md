@@ -739,7 +739,9 @@ every client of that backend. Interface (`hya.v1.AgentModels`):
 `_GLOBAL_DEFAULT`, `_NONE`) show what the session's next request sends.
 
 The TUI's `/effort` picker shows the advertised choices and saves the choice
-as the model's preference; `/effort default` clears it. See
+on the layer that decides the session's effort (the Agent's runtime effort
+when the Agent has one, else the model's preference); `/effort default`
+clears it. The TUI shows the result as `<model>:<effort>`. See
 [Thinking effort](tui.md#thinking-effort) for selection examples.
 
 **Provider budget / label mapping:**

@@ -20,23 +20,27 @@ export function modelReference(session: SessionInfo): string {
 }
 
 /**
- * The effort the open session's requests use, matching the backend's
- * resolution: the session's explicit `#variant` (an agent's configured
- * variant arrives as part of the session's model ref), else the active
- * model's configured default, else `default` — no explicit effort, the
- * provider's own default applies. `none` appears only as an explicit
- * `#none`.
+ * The session's thinking effort with the layer that chose it, e.g. `low
+ * (pref)`, for the `/status` Thinking row. The effort is the server-resolved
+ * `effectiveEffort`; `default` means no request effort (the provider's own
+ * default applies), while `none` is an explicit off switch.
  */
-export function currentThinkingEffort(state: Pick<AppState, "selected" | "models">): string {
-  const session = state.selected
-  if (!session) return "default"
-  return session.effectiveEffort || "default"
-}
-
 export function thinkingEffortLabel(session: SessionInfo | undefined): string {
   if (!session?.effectiveEffort) return "default"
   const source = session.effortSource?.replace(/^EFFORT_SOURCE_/, "").toLowerCase()
-  return source && source !== "unspecified" ? `${session.effectiveEffort} (${source === "preference" ? "pref" : source})` : session.effectiveEffort
+  return source && source !== "unspecified" && source !== "none" ? `${session.effectiveEffort} (${source === "preference" ? "pref" : source.replace("_", " ")})` : session.effectiveEffort
+}
+
+/**
+ * The session's model followed by its thinking effort, `provider/model:effort`
+ * (`short`: `model:effort`), e.g. `openai/gpt-6-astra:max`; "" with no model.
+ * The header and the status bar show it, so the effort in use is always
+ * visible right after the model name.
+ */
+export function modelEffortLabel(session: SessionInfo, short = false): string {
+  const model = session.model
+  if (!model?.providerId || !model.modelId) return ""
+  return `${short ? model.modelId : `${model.providerId}/${model.modelId}`}:${session.effectiveEffort || "default"}`
 }
 
 /** The open session's model catalog row, matched without its optional effort suffix. */
@@ -66,7 +70,7 @@ export function shownServer(state: AppState, fallback: string): string {
 export function headerText(state: AppState, server: string): string {
   if (!state.ready) return "hya · connecting…"
   const selected = state.selected
-  return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)} · thinking ${thinkingEffortLabel(selected)}` : "· no session"} · ${server}`
+  return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelEffortLabel(selected)}` : "· no session"} · ${server}`
 }
 
 export interface SessionRow {
@@ -356,8 +360,8 @@ export interface StatusBarFields {
   stopped?: boolean
   /** The WebUI bare `hya` serves (`WebUI <url>`), or `WebUI unavailable` in the warning color. */
   web?: WebInfo
-  /** The session's thinking effort (`thinking <label>`, `currentThinkingEffort`); omitted with no open session. */
-  effort?: string
+  /** The open session's `model:effort` (`modelEffortLabel`, short form); omitted with no open session or model. */
+  model?: string
   /** Vim mode is on: the composer's mode and a half-typed command (`2d`), shown first. */
   vim?: { mode: "insert" | "normal"; pending: string }
 }
@@ -376,7 +380,7 @@ export const contextAlarmPercent = 95
 /**
  * The status bar's segments in order: with vim mode on `-- INSERT --` /
  * `-- NORMAL --` (plus a pending command, `-- NORMAL -- 2d`), `mode <mode>`,
- * `thinking <effort>` (kept ahead of the dropping tail so the effort stays
+ * `<model>:<effort>` (kept ahead of the dropping tail so the effort stays
  * visible at 80 columns even when the header line truncates), `ctx N%`,
  * `<n> tok`, the directory, `⎇ <branch>`, `WebUI <url>` (or `WebUI
  * unavailable`), `Todos n/m`, `reconnecting` (or `backend stopped`).
@@ -389,7 +393,7 @@ export function statusBarSegments(fields: StatusBarFields, width: number): Statu
   const segments: (StatusSegment | undefined)[] = [
     vim ? { text: `-- ${vim.mode === "normal" ? "NORMAL" : "INSERT"} --${vim.pending ? ` ${vim.pending}` : ""}`, tone: vim.mode === "normal" ? "accent" : "muted" } : undefined,
     { text: `mode ${fields.mode}`, tone: "mode" },
-    fields.effort ? { text: `thinking ${fields.effort}`, tone: "muted" } : undefined,
+    fields.model ? { text: fields.model, tone: "muted" } : undefined,
     context !== undefined ? { text: `ctx ${context}%`, tone: context >= contextAlarmPercent ? "error" : context >= contextWarnPercent ? "warning" : "muted" } : undefined,
     fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
     fields.directory ? { text: truncateStart(fields.directory, 24), tone: "muted" } : undefined,

@@ -45,9 +45,9 @@ export function isKnownEffort(model: ModelSummary | undefined, effort: string): 
  * `/effort` picker rows for the active model: `default` first (no explicit
  * suffix — the agent's or the model's configured default, else the
  * provider's own default, applies), then the explicit choices. `explicit` is
- * the session's current `#suffix` (a remembered-but-unapplied choice counts
- * too); without one the `default` row is current and `effective` names what
- * that default resolves to.
+ * the effort the session's requests use now (`SessionInfo.effectiveEffort`),
+ * marked current; without one the `default` row is current and `effective`
+ * names what that default resolves to.
  */
 export function effortRows(model: ModelSummary | undefined, explicit: string | undefined, effective: string): PickerRow[] {
   return [

@@ -365,9 +365,16 @@ export function createController({ client, store, directory, remote: startedRemo
     refreshLater.schedule()
   }
 
-  /** Re-read only the provider/model catalog (`GET /v1/models` / `GET /v1/providers`): lighter than `refresh()`, so a `catalogUpdated` frame does not also disturb the session list or interactions. */
+  /**
+   * Re-read the provider/model catalog (`GET /v1/models` / `GET /v1/providers`)
+   * and the open session's row: lighter than `refresh()`, so a
+   * `catalogUpdated` frame does not also disturb the session list or
+   * interactions. The session row carries the server-resolved effort, which a
+   * saved effort choice (`SetModelEffortPreference`, `SetAgentEffort`, from any
+   * client) changes, so its `model:effort` label updates live.
+   */
   async function refreshCatalogOnly(): Promise<void> {
-    const [models, providers] = await Promise.all([client.listModels(), client.listProviders()])
+    const [models, providers] = await Promise.all([client.listModels(), client.listProviders(), refreshSession()])
     store.setProviderCatalog(providers, models)
   }
 

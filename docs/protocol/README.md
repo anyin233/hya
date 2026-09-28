@@ -675,9 +675,12 @@ Stream events come in two kinds:
 
 **`catalogUpdated`.** When the provider/model catalog changes — a provider
 is added, edited, or refreshed, a key is set or removed, or startup model
-discovery finishes — every live stream (global and each session stream)
-receives one live-only `catalogUpdated` frame with an empty `projectId` and
-an empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
+discovery finishes — or a saved thinking effort changes
+(`SetModelEffortPreference`, `SetAgentEffort`), every live stream (global and
+each session stream) receives one live-only `catalogUpdated` frame with an
+empty `projectId` and an empty `session`. Re-read `GET /v1/models` /
+`GET /v1/providers`, and the open sessions (`GET /v1/sessions/{id}`) for their
+`effectiveEffort`.
 
 ```json
 { "event": { "timeRecorded": "2026-09-26T10:00:00Z", "catalogUpdated": {} } }

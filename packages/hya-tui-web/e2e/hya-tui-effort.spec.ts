@@ -1,10 +1,12 @@
-// Server-persisted /effort behavior: the header shows effective effort and
-// source, provider requests carry it, and the preference survives a TUI
-// restart against the same daemon/database. No TUI preferences cache is used.
-// The narrow resize, picker escape, and exit paths remain covered below.
+// Server-persisted /effort behavior: the header and the status bar show the
+// effective effort right after the model name (`gpt-6-astra:low`), provider
+// requests carry it, it can change while a turn runs, another client's change
+// shows live, an Agent-level effort does not swallow it, and the choice
+// survives a TUI restart against the same daemon/database. The narrow resize,
+// picker escape, and exit paths remain covered below.
  
 import type { Tui } from "./harness"
-import { expect, hyaTui, test, textStep, type FakeModel } from "./hya"
+import { expect, hangStep, hyaTui, test, textStep, type FakeModel } from "./hya"
 
 /** The part of a captured `/v1/responses` body the effort assertions read. */
 type ResponsesBody = { model?: string; reasoning?: { effort?: string; summary?: string } }
@@ -36,9 +38,9 @@ test.describe("hya TUI /effort", () => {
     await expect.poll(async () => (await term.lines())[0] ?? "").toContain(needle)
   }
 
-  /** The header line settled on not containing `needle`. */
-  async function headerLacks(term: Tui, needle: string): Promise<void> {
-    await expect.poll(async () => (await term.lines())[0] ?? "").not.toContain(needle)
+  /** The status bar (the row with the `mode` segment) shows `needle`. */
+  async function statusShows(term: Tui, needle: string): Promise<void> {
+    await expect.poll(async () => (await term.lines()).find((line) => line.includes("mode ")) ?? "").toContain(needle)
   }
 
   /** The `index`th main-turn body the fake model captured (title requests are diverted, so prompts index cleanly). */
@@ -50,7 +52,8 @@ test.describe("hya TUI /effort", () => {
   test("a fresh gpt-6-astra session sends no effort and the header says default", async ({ tui, backend, fakeModel }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
-    await headerShows(term, "thinking default")
+    await headerShows(term, "gpt-6-astra:default")
+    await statusShows(term, "gpt-6-astra:default")
 
     await prompt(term, "say hi")
     await term.waitForText("effort reply 1", 20_000)
@@ -77,7 +80,7 @@ test.describe("hya TUI /effort", () => {
     await term.waitForText(/1 of \d+/)
     await term.press("Enter")
     await term.waitForText("Thinking effort → low")
-    await headerShows(term, "thinking low (pref)")
+    await headerShows(term, "gpt-6-astra:low")
     await prompt(term, "lower the effort")
     await term.waitForText("effort reply 1", 20_000)
     expect((await capturedBody(fakeModel!, 0)).reasoning?.effort).toBe("low")
@@ -88,7 +91,7 @@ test.describe("hya TUI /effort", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "/effort low")
     await term.waitForText("Thinking effort → low")
-    await headerShows(term, "thinking low (pref)")
+    await headerShows(term, "gpt-6-astra:low")
     await prompt(term, "hello")
     await term.waitForText("effort reply 1", 20_000)
     expect((await capturedBody(fakeModel!, 0)).reasoning?.effort).toBe("low")
@@ -105,7 +108,7 @@ test.describe("hya TUI /effort", () => {
     // The same preferences file: the new start's auto-created session opens on `#low`.
     const second = await tui(hyaTui(backend))
     await second.waitForText("Connected to hya")
-    await headerShows(second, "thinking low (pref)")
+    await headerShows(second, "gpt-6-astra:low")
 
     await prompt(second, "still low?")
     await second.waitForText("effort reply 1", 20_000)
@@ -123,8 +126,7 @@ test.describe("hya TUI /effort", () => {
 
     await prompt(term, "/effort default")
     await term.waitForText("Thinking effort → default")
-    await headerShows(term, "thinking default")
-    await headerShows(term, "thinking default")
+    await headerShows(term, "gpt-6-astra:default")
     await prompt(term, "reset check")
     await term.waitForText("effort reply 2", 20_000)
     expect((await capturedBody(fakeModel!, 1)).reasoning).toBeUndefined()
@@ -146,7 +148,67 @@ test.describe("hya TUI /effort", () => {
     const { cols } = await term.resize(690, 640)
     expect(cols).toBeGreaterThanOrEqual(78)
     expect(cols).toBeLessThanOrEqual(84)
-    await headerShows(term, "thinking low (pref)")
+    await headerShows(term, "gpt-6-astra:low")
+    await statusShows(term, "gpt-6-astra:low")
+  })
+
+  test.describe("during a turn", () => {
+    test.use({ model: { protocol: "responses", models: ["gpt-6-astra"], steps: [hangStep(), textStep("effort reply 1")] } })
+
+    test("/effort switches while a turn runs: the label updates at once and the next request carries it", async ({ tui, backend, fakeModel }) => {
+      const term = await tui(hyaTui(backend))
+      await term.waitForText("Connected to hya")
+      await prompt(term, "long task")
+      await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
+
+      await prompt(term, "/effort max")
+      await term.waitForText("Thinking effort → max")
+      await headerShows(term, "gpt-6-astra:max")
+      await statusShows(term, "gpt-6-astra:max")
+      expect((await capturedBody(fakeModel!, 0)).reasoning).toBeUndefined()
+      fakeModel!.release()
+      // A prompt sent while the finishing turn still runs queues behind it.
+      await prompt(term, "next turn")
+      await term.waitForText("effort reply 1", 20_000)
+      expect((await capturedBody(fakeModel!, 1)).reasoning?.effort).toBe("max")
+    })
+  })
+
+  test("another client's effort choice shows live without any key press", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    // One finished turn: the startup reads are all done before the other client acts.
+    await prompt(term, "settle")
+    await term.waitForText("effort reply 1", 20_000)
+    await headerShows(term, "gpt-6-astra:default")
+
+    // Another v1 client (a second TUI, the WebUI, a script) saves the model's effort.
+    const response = await fetch(`${backend.url}/v1/model-effort-preferences/fake/gpt-6-astra`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ effort: "high" }) })
+    expect(response.ok).toBe(true)
+
+    await headerShows(term, "gpt-6-astra:high")
+    await statusShows(term, "gpt-6-astra:high")
+  })
+
+  test("an Agent-level effort does not swallow /effort: the switch applies and survives a restart", async ({ tui, backend, fakeModel }) => {
+    const response = await fetch(`${backend.url}/v1/agent-efforts/build`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ effort: "high" }) })
+    expect(response.ok).toBe(true)
+    const first = await tui(hyaTui(backend))
+    await first.waitForText("Connected to hya")
+    await headerShows(first, "gpt-6-astra:high")
+
+    await prompt(first, "/effort low")
+    await first.waitForText("Thinking effort → low")
+    await headerShows(first, "gpt-6-astra:low")
+    await prompt(first, "/exit")
+    expect(await first.waitForExit(20_000)).toBe(0)
+
+    const second = await tui(hyaTui(backend))
+    await second.waitForText("Connected to hya")
+    await headerShows(second, "gpt-6-astra:low")
+    await prompt(second, "agent check")
+    await second.waitForText("effort reply 1", 20_000)
+    expect((await capturedBody(fakeModel!, 0)).reasoning?.effort).toBe("low")
   })
 
   test("Esc closes the effort picker and keeps the current choice", async ({ tui, backend, fakeModel }) => {
