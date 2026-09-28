@@ -1,20 +1,19 @@
-# 0.43.13
+# 0.43.14
 
-## Subagent thinking effort: per-spawn, per-Agent defaults, runtime switching
+## Fix: `hya serve restart` handoff works again
 
-- `task` takes an `effort` (top level and per member) that sets the spawned subagent's thinking effort; a `model: provider/model#level` suffix works too, and an explicit `effort` wins. A level the child's model does not accept fails the call with `INVALID_EFFORT` and spawns nothing. The result names the child's model with its suffix (`<task id="…" model="provider/model#low" state="…">`).
-- Every Agent — the main agent and each subagent — can have its own default effort, independent of its model. Precedence: explicit suffix > the user's runtime choice (new SQLite table `agent_effort_preference`) > `agents.<id>.reasoning` in the owning configuration file > the bundle's authored `model_policy.reasoning` > per-model preference > model default > global `reasoning:` > none. It resolves per request, so a change applies to the Agent's next request without a restart.
-- `list_agents` reports each Agent's `effort` and `effort_source` (`preference`, `configured`, `authored`) so the main agent can choose a spawn `effort` knowingly.
-- New rpc `AgentModels.SetAgentEffort` (`PUT /v1/agent-efforts/{agent_id}`, body `{effort, directory}`, empty `effort` clears); `AgentModelState` gains `effort` and `effortSource` (`AGENT_EFFORT_SOURCE_PREFERENCE|CONFIGURED|AUTHORED|NONE`). `SessionInfo.effortSource` now reports `EFFORT_SOURCE_AGENT`.
-- TUI `/agent-models` shows an `EFFORT` column; `e` opens the effort picker for the highlighted Agent (`default` clears the runtime choice).
-- Fix: the store no longer fails to open with `UNIQUE constraint failed: _sqlx_migrations.version`. The daemon-handoff migrations merged after 0.43.12 reused version 15; they are now 16–18 (`pending_resume`, `pending_interaction`, `pending_interaction_reply`) after the released `0015_model_effort_preference`, and the new `agent_effort_preference` table is 19. A database created by an unreleased hot-reload branch build must be recreated.
+- `hya serve restart` failed on every daemon since the hot-reload merge: the successor stopped with `RUNTIME_OWNER_BUSY: runtime owner lock is already held`, and the old generation parked with its listener stopped. The merge dropped the engine's runtime-owner identity, so the old generation could not release its store claim for the successor. The engine again carries the owner that claimed the store; a regression test covers the release.
+- `docs/cli.md` now documents `hya update apply --authorization FILE` instead of the removed `--owner-authorized-activation`.
 
-```yaml
-agents:
-  explore:
-    reasoning: low   # in ~/.config/hya/config.yaml
-```
+## Daemon hot reload (merged from `feature/hot-reload-implementation`; its release notes were lost in the merge)
 
-```json
-{"description": "map the parser", "prompt": "find every entry point", "subagent_type": "explore", "effort": "high"}
+- `hya serve --listen-fd <FD>` adopts an already-open Unix TCP listener without rebinding the port (ADR-0028).
+- `hya serve restart` transfers the listening socket and database lock to a successor generation running the binary the restart command was invoked with. Active root turns close at a durable handoff boundary and resume exactly once in the successor; completed tool calls are never replayed.
+- Pending permission and question requests survive the handoff with stable ids; replies are durable and idempotent.
+- Client streams receive `serverStopping {reason: "restart"}`, reconnect to the same URL, and re-read durable state.
+- Updater activation requires an owner-issued capability bound to the candidate sequence and the active generation, under an updater-root lease with generation fencing.
+
+```sh
+cargo build -p hya-backend --bin hya
+./target/debug/hya serve restart   # the running daemon hands off to this build
 ```

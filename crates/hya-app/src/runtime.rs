@@ -2641,6 +2641,9 @@ async fn build_session_engine_with_mcp_defer(
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
     let context_settings = crate::config::load_context_settings();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
+        // Handoff checkpoints verify the store's runtime-owner claim, and the
+        // successor's resume skips rows this owner recorded.
+        .with_runtime_owner(owner_run_id)
         .with_global_reasoning(crate::config::load_global_reasoning())
         .with_catalog_scope_cache(crate::config::load_catalog_scope_cache())
         .with_catalog_refresh(catalog_refresh)
@@ -3874,6 +3877,33 @@ mod tests {
         assert_eq!(recovered.finish, Some(hya_proto::FinishReason::Cancelled));
         assert_eq!(recovered.cause, Some(FinishCause::Interrupted));
         built.shutdown().await.unwrap();
+    }
+
+    /// The engine carries the owner that claimed the store, so a restart
+    /// handoff can release that claim for its successor. A mismatched owner
+    /// fails the release and every successor with `RUNTIME_OWNER_BUSY`.
+    #[tokio::test]
+    async fn built_engine_can_release_the_runtime_owner_it_claimed() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine(
+            store.clone(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+        built.shutdown().await.unwrap();
+        store
+            .release_runtime_owner(built.engine().runtime_owner())
+            .expect("the engine names the claimed owner");
+        store
+            .claim_runtime_owner(OwnerRunId::new())
+            .expect("a successor can claim after the release");
     }
 
     /// Building a new runtime owner terminalizes persisted Workflow work before
