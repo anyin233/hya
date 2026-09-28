@@ -35,6 +35,21 @@ user is comparing break-glass recovery.
 5. On failed smoke before activation: `hya update discard --root … --sequence N`.
 6. On crash mid-update: `hya update recover --root …` then `status`.
 
+## Source-checkout flow (rebuild and restart)
+
+To replace the running backend with code you changed in a hya source checkout
+(no signed release involved):
+
+1. Build: `cargo build -p hya-backend --bin hya`.
+2. Restart from the new build with the tests that prove the change:
+   `./target/debug/hya serve restart --verify 'cargo test -p <crate>'`.
+   The restart first runs `hya serve check` of the new build against a snapshot
+   of the live database; a failing check or verify command leaves the running
+   backend untouched — fix and retry.
+3. The current turn resumes in the new build; the next turn runs the new code.
+4. `hya serve status`: a `restart` line means the new build failed to start and
+   the backend rolled back to the previous build; read `<db>.server.log`.
+
 ## Agent boundaries
 
 Do not invent signing keys, waive anti-rollback, load candidate code in-process,

@@ -939,9 +939,10 @@ after the action. The path is made absolute.
 | Action | Behavior | Output | Exit |
 | --- | --- | --- | --- |
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`, `--allow-host`, and relay flags) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
-| `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?}` (text: `relay` and `hosts` lines when set). | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
+| `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?, "lastRestart"?}` (text: `relay` and `hosts` lines when set). `lastRestart: {"rolledBack": true, "error"}` (text: a `restart` line) when this server is the rollback of a failed restart. | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
 | `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
-| `restart [--json] [--force] [--timeout <s>]` | Request a successor generation. The old daemon keeps its listener and database lock capabilities while it quiesces admissions, waits for a safe boundary (up to the drain deadline), checkpoints transferable root turns with `cause: handoff`, and starts a successor with inherited listener, lock, journal, status, and optional gRPC descriptors. The command returns **queued** once the old generation accepts the handoff; the old generation then waits for successor composition, durable resume, and `/v1/health`, parking as the recoverable owner if those fail. `--force` applies only to the stop/start fallback when no handoff-capable daemon is serving. | `restart queued: ...` (or JSON with `queued: true`); the old generation's streams end with `serverStopping {reason: "restart"}`. Query `status` after the queued response for the successor. | **0** when queued or when the fallback starts; **1** when the request is rejected or the fallback cannot start |
+| `restart [--json] [--force] [--timeout <s>] [--verify <cmd>]… [--exe <path>]` | **Self-proof first:** run the successor executable's `hya serve check --db <db> --json` (up to 120 s), then every `--verify` command (`sh -c` in the current directory); any failure prints the reason and output tail and exits 1 without touching the running daemon. The successor is this `hya` (its `current_exe`) or `--exe`. Then request a successor generation. The old daemon keeps its listener and database lock capabilities while it quiesces admissions, waits for a safe boundary (up to the drain deadline), checkpoints transferable root turns with `cause: handoff`, and starts the successor with inherited listener, lock, journal, status, and optional gRPC descriptors. The command returns **queued** once the old generation accepts the handoff; the old generation then waits for successor composition, durable resume, and `/v1/health`. If the successor fails (records `failed`, exits, or is not ready within 90 s) the old generation kills it and **rolls back**: it starts its own pinned build (see [Self-proof and rollback](#self-proof-and-rollback)) over the same listener and lock; only if that also fails does it park as the recoverable owner. `--force` applies only to the stop/start fallback when no handoff-capable daemon is serving. | `self-check passed: …` on stderr, then `restart queued: ...` (or JSON with `queued: true` and `check: {ok, exe, version, verified: [cmd…]}`); the old generation's streams end with `serverStopping {reason: "restart"}`. Query `status` after the queued response for the successor. | **0** when queued or when the fallback starts; **1** when the self-proof fails, the request is rejected, or the fallback cannot start |
+| `check [--json]` | Compose the complete runtime a daemon start would (configuration without the offline fallback, providers, first-party and installed bundles, native tool libraries, plugins, startup recovery) against a private `VACUUM INTO` snapshot of the database (an in-memory store when the file does not exist), then shut it down and delete the snapshot. Binds no port, takes no lock of the live database, publishes nothing; safe beside a running daemon. | `hya <version> composes its runtime (<exe>)`; `--json`: `{"ok": true, "version", "exe"}` or `{"ok": false, "version", "exe", "error"}` | **0** composes; **1** otherwise |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
 
 `start` and `restart` accept the relay flags of plain `hya serve`
@@ -953,6 +954,43 @@ successor's relay join or print a new link; query `hya serve relay link` after
 `restart`. When a server was already running, `start --relay` changes nothing
 and says so (use `hya serve relay connect`).
 `status` shows a `relay` line (`--json`: `relay`) while joined.
+
+#### Self-proof and rollback
+
+`hya serve restart` is how a running backend replaces its own code: build the
+new `hya`, then restart from it. The new build must prove itself before the
+running daemon is touched, and a build that proves itself but still fails to
+start is rolled back instead of taking the backend down
+([ADR-0028](adr/0028-inherited-listener-handoff.md#amendment-2026-09-28-self-proof-and-rollback)).
+
+1. **Self-check.** The restart runs `<new hya> serve check --db <db> --json`:
+   the whole runtime composes against a snapshot of the live database, so
+   configuration errors, a native tool library that does not match the build,
+   a bundle that fails to start, and a migration that fails on your data are
+   caught here.
+2. **Verify commands.** Each `--verify <cmd>` runs next with `sh -c`, in the
+   current directory; use it for the tests that prove the change.
+3. **Handoff.** Root turns stop at their handoff boundary and resume in the
+   new build; clients reconnect to the same URL. The next turn runs new code.
+4. **Rollback.** Every daemon pins the build it runs: at startup it copies its
+   executable and the native tool libraries (installed layout: also the
+   `bundles/*.hyabundle` packages beside `bin/`) into `<db>.server.gen/<pid>/`
+   (a copy-on-write clone on APFS and reflink filesystems), removed when it
+   exits. Why a copy: `cargo build` and updates replace those files in
+   place. If the successor fails, the old generation starts the pinned build
+   over the same listener and lock, and `status` reports
+   `restart  failed and rolled back to the previous build: <error>`.
+   In a source checkout, first-party bundles load from the in-tree sources,
+   which are not pinned. The database stays readable by the previous build
+   because a build tolerates migrations it does not know (migrations are
+   additive only).
+
+```sh
+# the agent edited crates/hya-core; prove and install the change
+cargo build -p hya-backend --bin hya
+./target/debug/hya serve restart --verify 'cargo test -p hya-core'
+hya serve status            # new pid, same URL; a `restart` line if it rolled back
+```
 
 A stop is a stop: connected TUIs start nothing after `hya serve stop` (or a
 plain signal). They show `Backend stopped (hya serve stop) · /reconnect

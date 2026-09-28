@@ -99,3 +99,36 @@ boundary.
    the agent may propose and verify, but activation remains supervisor-owned.
 3. Extend process E2E coverage to a provider stream, a shell-invoked restart,
    and successor bootstrap failure with fallback recovery.
+
+## Amendment (2026-09-28): self-proof and rollback
+
+A handoff replaces running code, so it must neither admit a build that cannot
+compose nor leave the backend down when a build fails after admission.
+
+**Self-proof gate.** `hya serve restart` first runs the successor
+executable's `hya serve check --db <db> --json`, which composes the complete
+runtime (strict configuration, providers, bundles, native tool libraries,
+plugins, startup recovery) against a private `VACUUM INTO` snapshot of the
+database without the live database's locks, then every `--verify <cmd>`. Any
+failure refuses the restart before the handoff journal is written or the
+daemon is signalled. `--exe <path>` names a successor other than the invoking
+binary; it passes the same gate.
+
+**Generation pinning.** A daemon (and every successor) copies its executable
+and the native tool libraries it loaded into `<db>.server.gen/<pid>/`, in the
+layout the loaders resolve from, and removes the copy on exit; copies of dead
+pids are swept. The running file paths cannot serve as the fallback because a
+rebuild or update replaces them in place.
+
+**Rollback.** When the successor records `failed`, exits, or is not ready
+within 90 s, the predecessor kills it, restores its owner pid on the lock,
+writes a fresh journal chain `requested` (successor = pinned executable,
+`rolledBackFrom` = the failure) → `queued` → `released`, and spawns the pinned
+build with the staged listener and lock through the ordinary successor path.
+If it becomes ready, the handoff completes and `hya serve status` reports the
+rollback; otherwise the predecessor parks as before.
+
+**Migration policy.** A build opens a database whose applied migrations
+include versions it does not know (sqlx `ignore_missing`), so the pinned build
+can serve a database the failed successor migrated. Checksums of known
+migrations still must match, and migrations must remain additive.

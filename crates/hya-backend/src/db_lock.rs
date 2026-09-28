@@ -589,6 +589,11 @@ pub(crate) struct HandoffSpec {
     /// generation re-validates it before spawning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) exe: Option<PathBuf>,
+    /// Set on a rollback handoff: why the restart it replaces failed. The
+    /// successor is then the previous generation's pinned executable, and
+    /// `hya serve status` reports the rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rolled_back_from: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1035,6 +1040,7 @@ mod tests {
             allow_hosts: vec!["hya.example.lan".into()],
             relay: None,
             exe: Some(PathBuf::from("/bin/hya")),
+            rolled_back_from: None,
         };
         write_handoff_stage(&path, HandoffStage::Requested, 1, Some(&spec), None).unwrap();
         let journal = read_handoff(&path).unwrap();
