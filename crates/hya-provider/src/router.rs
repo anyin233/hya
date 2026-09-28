@@ -91,6 +91,16 @@ impl ProviderRouter {
     pub fn capabilities(&self, model: &ModelRef) -> Option<crate::Capabilities> {
         self.providers.iter().find_map(|p| p.capabilities(model))
     }
+    /// Reasoning parts replayed by the first route claiming `model`.
+    #[must_use]
+    pub fn reasoning_replay_policy(&self, model: &ModelRef) -> crate::ReasoningReplayPolicy {
+        self.providers
+            .iter()
+            .find(|provider| provider.capabilities(model).is_some())
+            .map_or(crate::ReasoningReplayPolicy::None, |provider| {
+                provider.reasoning_replay_policy()
+            })
+    }
     /// Return the reasoning default from the first provider that claims `model`.
     ///
     /// A claiming provider with no metadata deliberately stops lookup; later

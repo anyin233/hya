@@ -500,6 +500,7 @@ fn assistant_tool_request(input: serde_json::Value) -> CompletionRequest {
                 ],
                 finish: None,
                 tokens: None,
+                last_round: None,
             },
         ],
         tools: Vec::new(),

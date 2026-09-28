@@ -69,8 +69,8 @@ impl Protocol for AnthropicMessagesProtocol {
         output_limit: Option<u32>,
     ) -> Result<Value, ProviderError> {
         let mut messages: Vec<Value> = Vec::new();
-        let replay_after = req.messages.iter().rposition(|message| matches!(message, Message::User { parts, .. } if parts.iter().any(|part| matches!(part, Part::Text { text, .. } if !text.is_empty()))));
         let last_message = req.messages.len().checked_sub(1);
+        let turn_start = crate::current_turn_start(&req.messages);
         for (message_index, m) in req.messages.iter().enumerate() {
             match m {
                 Message::User { parts, .. } => {
@@ -78,8 +78,9 @@ impl Protocol for AnthropicMessagesProtocol {
                 }
                 Message::Assistant { parts, .. } => emit_assistant(
                     &mut messages,
+                    turn_start,
+                    message_index,
                     parts,
-                    replay_after.is_some_and(|index| message_index > index),
                     Some(message_index) == last_message,
                 )?,
                 // Mid-conversation system text is where compaction summaries
@@ -234,8 +235,9 @@ fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
 // message containing text, preserving provider signatures or redacted data.
 fn emit_assistant(
     out: &mut Vec<Value>,
+    turn_start: Option<usize>,
+    message_index: usize,
     parts: &[Part],
-    replay_reasoning: bool,
     is_final_message: bool,
 ) -> Result<(), ProviderError> {
     let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
@@ -256,7 +258,12 @@ fn emit_assistant(
                         std::mem::take(&mut tools),
                     ));
                 }
-                if replay_reasoning && let Some(data) = provider_data {
+                if crate::ReasoningReplayPolicy::SignedCurrentTurn.replays(
+                    turn_start,
+                    message_index,
+                    part,
+                ) && let Some(data) = provider_data
+                {
                     match (
                         data.get("type").and_then(Value::as_str),
                         data.get("signature").and_then(Value::as_str),

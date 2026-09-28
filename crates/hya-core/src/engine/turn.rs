@@ -1346,16 +1346,17 @@ impl SessionEngine {
                 &self.compaction,
                 capabilities.as_ref().map(|c| c.max_context),
             );
-            // Routes advertise usage support they do not always honour, so the
-            // claim is an input to the accounting decision, not the decision.
-            let usage_reporting = capabilities.as_ref().is_some_and(|c| c.usage_reporting);
             // One running token count for the whole reduction sequence. It starts
-            // from the provider-measured value when that is believable, then tracks
-            // request-local edits by delta — re-measuring after an edit would
-            // return the stale pre-edit number and hide the saving.
-            let initial_count = self
-                .token_accounting
-                .tokens_in_use(&messages, usage_reporting);
+            // with the request occupancy and is adjusted after each rung so the
+            // next decision reflects the transcript that will actually be sent.
+            // Route-specific accounting must mirror what its encoder replays.
+            let usage_reporting = capabilities.as_ref().is_some_and(|c| c.usage_reporting);
+            let reasoning_policy = self.provider_router().reasoning_replay_policy(&model);
+            let initial_count = self.token_accounting.tokens_in_use_with_reasoning_policy(
+                &messages,
+                usage_reporting,
+                reasoning_policy,
+            );
             let mut tokens = initial_count.tokens;
             let token_source = initial_count.source;
             let over_threshold = |tokens: usize| tokens > resolved_threshold;
@@ -1427,7 +1428,9 @@ impl SessionEngine {
 
                 match rung {
                     crate::compaction::CompactionRung::SpillToolOutputs => {
-                        let estimate_before = self.token_accounting.estimate(&messages);
+                        let estimate_before = self
+                            .token_accounting
+                            .estimate_with_reasoning_policy(&messages, reasoning_policy);
                         let evicted = crate::compaction::evict_stale_tool_outputs(
                             &mut messages,
                             fold_config.keep_recent,
@@ -1436,8 +1439,10 @@ impl SessionEngine {
                         if evicted == 0 {
                             continue;
                         }
-                        let saved = estimate_before
-                            .saturating_sub(self.token_accounting.estimate(&messages));
+                        let saved = estimate_before.saturating_sub(
+                            self.token_accounting
+                                .estimate_with_reasoning_policy(&messages, reasoning_policy),
+                        );
                         tokens = tokens.saturating_sub(saved);
                         // Record the saving whether or not it sufficed. A partial
                         // reduction that still needed a summary is real work, and

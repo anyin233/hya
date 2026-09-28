@@ -137,12 +137,22 @@ the same compacted boundary from being summarized repeatedly.
 
 ## Thresholds
 
-The walk trips when the request has a foldable prefix and occupancy exceeds
+The walk trips when occupancy exceeds
 `min(window * context_fraction, window - reserve_tokens)`, floored at 1,000
-tokens. When the route advertises no window, the flat `token_threshold` applies.
-Occupancy is measured by the token-accounting mode (`auto` / `provider` /
-`estimate`). See [Configuration](configuration.md) for every field and its
-environment override.
+tokens; each rung then checks its own precondition (`shake` needs a stale tool
+output, the folding rungs a foldable message prefix). When the route advertises
+no window, the flat `token_threshold` applies.
+In `auto` mode, a reported provider measurement is anchored to the **latest
+round** (`input + cache_read + cache_write`), then locally estimated content
+appended after that round is added; cumulative usage from earlier rounds is not
+summed. `ContextStatus.source` is `provider` when this measurement is accepted.
+Estimates follow the route encoder: Chat OpenAI and Google omit reasoning,
+Responses resends only a reasoning part's provider data, and Anthropic replays
+only signed current-turn thinking. Encoder and estimator share one predicate
+(`hya_provider::ReasoningReplayPolicy::replays`), so they cannot drift.
+Tool outputs appended to the running assistant message after its latest round
+are not yet in that round's measurement; the next round's report includes them.
+See [Configuration](configuration.md) for every field and its environment override.
 
 ## Observability
 
@@ -155,12 +165,13 @@ Each mechanism records what it did on the event log:
   a pointer, not a copy: the range plus the event log reconstructs exactly
   what was folded.
 - `ContextEvicted` — recorded whenever `shake` saved tokens, including when
-  the saving alone was not enough and the walk escalated anyway.
+  the saving alone was not enough and the walk escalated anyway. Its payload
+  contains `session`, `evicted_parts`, `tokens_before`, `tokens_after`, and
+  `threshold`; artifact handles are request-local notices, not event fields.
 - `ContextStatus` — emitted once per streaming round after the ladder, with
-  the occupancy the request actually carries, its source
-  (provider-reported or estimated), the accounting mode, and the resolved
-  threshold. Clients surface this report, for example in a context-usage
-  panel.
+  the occupancy the request actually carries, its source (provider-reported or
+  estimated), the accounting mode, and the resolved threshold. Clients surface
+  this report, for example in a context-usage panel.
 
 ## Differences from oh-my-pi
 

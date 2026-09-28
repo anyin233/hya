@@ -1,7 +1,7 @@
-# 0.43.10
+# 0.43.11
 
-## Compaction works inside one long turn
+## Context occupancy reports what the request actually carries
 
-- A long agentic turn is a single assistant message. Every compaction rung used to require a foldable range of whole messages outside `keep_recent`, so a turn with hundreds of tool rounds never compacted, not even by moving old tool outputs out of the request.
-- The `shake` rung (`SpillToolOutputs`) now also works per tool step: once the request is over the threshold it moves completed tool outputs older than the most recent `keep_recent` tool steps to artifacts, including steps inside the running assistant message, in addition to outputs outside the last `keep_recent` messages as before. The transcript keeps `[tool output moved to artifact://…]` handles; `read` still resolves them to the full bytes.
-- The summarizing and folding rungs still require a foldable message range; each rung now checks its own precondition.
+- The provider-measured occupancy is now anchored on the latest round's prompt (`input + cache_read + cache_write`) plus an estimate of what was appended since. Previously a turn's cumulative usage across all rounds was used as the anchor, which made the measured figure implausible and pushed `auto` accounting back to a local estimate for the whole session.
+- The local estimate counts reasoning only where the route's encoder sends it: never for OpenAI Chat or Google, only the opaque provider data for Responses, and only signed current-turn thinking for Anthropic. The Anthropic encoder and the estimator share one predicate (`ReasoningReplayPolicy::replays`). In one traced session the old estimate was 1.24M tokens against an actual prompt of about 280k.
+- Route-agnostic estimates (for example the summary input size) still count every reasoning part, which over-counts rather than under-counts.

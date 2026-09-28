@@ -1094,6 +1094,7 @@ async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
                 ],
                 finish: Some(FinishReason::ToolCalls),
                 tokens: None,
+                last_round: None,
             },
         ],
         tools: Vec::new(),
@@ -1276,8 +1277,6 @@ async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
                 id: MessageId::new(),
                 agent: AgentName::new("build"),
                 model: ModelRef::new("anthropic/claude"),
-                finish: None,
-                tokens: None,
                 parts: vec![
                     Part::Reasoning {
                         id: PartId::new(),
@@ -1299,6 +1298,9 @@ async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
                         },
                     },
                 ],
+                finish: None,
+                tokens: None,
+                last_round: None,
             },
         ],
         tools: Vec::new(),

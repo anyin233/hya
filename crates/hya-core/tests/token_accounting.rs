@@ -250,6 +250,7 @@ fn transcript(reported: Option<TokenUsage>) -> Vec<Message> {
             }],
             finish: Some(FinishReason::Stop),
             tokens: reported,
+            last_round: None,
         },
     ]
 }
@@ -359,6 +360,149 @@ fn cache_write_tokens_count_against_the_window() {
     assert_eq!(accounting.tokens_in_use(&messages, true).tokens, 2_200);
 }
 
+/// The anchor is the latest round's prompt, not the message's cumulative
+/// usage: a 5-round turn that re-sent a growing prompt must not be summed.
+#[test]
+fn occupancy_anchors_on_the_latest_round_not_cumulative_usage() {
+    let accounting = TokenAccounting::new(TokenAccountingMode::Provider);
+    let mut messages = transcript(Some(TokenUsage {
+        input: 50_000,
+        output: 1,
+        ..TokenUsage::default()
+    }));
+    let Message::Assistant { last_round, .. } = &mut messages[1] else {
+        panic!("assistant");
+    };
+    *last_round = Some(TokenUsage {
+        input: 120,
+        cache_read: 30,
+        cache_write: 20,
+        ..TokenUsage::default()
+    });
+    messages.push(user_text("appended after the last round"));
+    let appended = accounting.estimate(&messages[2..]);
+    assert!(appended > 0);
+
+    let count = accounting.tokens_in_use(&messages, true);
+    assert_eq!(count.tokens, 170 + appended);
+    assert_eq!(count.source, TokenSource::Provider);
+}
+
+fn user_text(text: &str) -> Message {
+    Message::User {
+        id: MessageId::new(),
+        parts: vec![Part::Text {
+            id: PartId::new(),
+            text: text.to_string(),
+        }],
+    }
+}
+
+fn reasoning(text: &str, signed: bool) -> Part {
+    Part::Reasoning {
+        id: PartId::new(),
+        text: text.to_string(),
+        provider_data: signed.then(|| serde_json::json!({"type": "thinking", "signature": "sig"})),
+    }
+}
+
+fn assistant(parts: Vec<Part>) -> Message {
+    Message::Assistant {
+        id: MessageId::new(),
+        agent: AgentName::new("build"),
+        model: ModelRef::new("test/model"),
+        parts,
+        finish: None,
+        tokens: None,
+        last_round: None,
+    }
+}
+
+/// [q1, A(old signed), q2, A(current signed, current unsigned)].
+fn replay_fixture() -> Vec<Message> {
+    vec![
+        user_text("q1"),
+        assistant(vec![reasoning(&"o".repeat(400), true)]),
+        user_text("q2"),
+        assistant(vec![
+            reasoning(&"c".repeat(400), true),
+            reasoning(&"u".repeat(400), false),
+        ]),
+    ]
+}
+
+/// Reasoning counts only where the route's encoder sends it: never for Chat /
+/// Google, only current-turn signed thinking for Anthropic.
+#[test]
+fn estimate_counts_only_reasoning_the_route_replays() {
+    use hya_provider::ReasoningReplayPolicy;
+    let accounting = TokenAccounting::new(TokenAccountingMode::Estimate);
+    let messages = replay_fixture();
+    let none = accounting.estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::None);
+    let text_only = accounting.estimate(&[user_text("q1"), user_text("q2")]);
+    assert_eq!(none, text_only, "no route-dropped reasoning is counted");
+
+    let anthropic = accounting
+        .estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::SignedCurrentTurn);
+    let current_signed = accounting.estimate(&[assistant(vec![reasoning(&"c".repeat(400), true)])]);
+    assert_eq!(
+        anthropic,
+        none + current_signed,
+        "only the current turn's signed thinking is replayed"
+    );
+    assert!(
+        accounting.estimate(&messages) > anthropic,
+        "route-agnostic estimate over-counts"
+    );
+}
+
+/// The Anthropic encoder and the estimator use one predicate: the thinking
+/// blocks the encoder emits are exactly the parts the estimator counts.
+#[test]
+fn anthropic_encoder_and_estimator_agree_on_replayed_reasoning() {
+    use hya_provider::{AnthropicMessagesProtocol, Protocol, ReasoningReplayPolicy};
+    let messages = replay_fixture();
+    let turn_start = hya_provider::current_turn_start(&messages);
+    let counted: Vec<String> = messages
+        .iter()
+        .enumerate()
+        .flat_map(|(index, message)| match message {
+            Message::Assistant { parts, .. } => parts
+                .iter()
+                .filter(|part| {
+                    ReasoningReplayPolicy::SignedCurrentTurn.replays(turn_start, index, part)
+                })
+                .filter_map(|part| match part {
+                    Part::Reasoning { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let request = hya_provider::CompletionRequest {
+        model: ModelRef::new("claude"),
+        system: None,
+        messages,
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: Some(64),
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let body = AnthropicMessagesProtocol.encode(&request).unwrap();
+    let emitted: Vec<String> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .filter(|block| block["type"] == "thinking")
+        .map(|block| block["thinking"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(emitted, counted);
+    assert_eq!(emitted, vec!["c".repeat(400)]);
+}
+
 #[test]
 fn accounting_mode_round_trips_through_parse() {
     for mode in [
@@ -396,6 +540,7 @@ fn tool_payloads_are_counted() {
         }],
         finish: Some(FinishReason::Stop),
         tokens: None,
+        last_round: None,
     }];
     assert!(
         accounting.estimate(&bare) > 400,
