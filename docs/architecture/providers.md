@@ -497,8 +497,10 @@ Any `Part::Media` in user or assistant history fails encode with
 ### Decoder
 
 `OpenAiResponsesDecoder` keys reasoning, text, and tool assembly by
-`output_index`, and tracks started / ended / requested state per part
-(`PartAsm` / `ToolAsm`).
+`output_index`, tracks reasoning summary parts by `summary_index`, and tracks
+started / ended / requested state per part (`PartAsm` / `ToolAsm`). A paragraph
+separator (`\n\n`) is emitted between consecutive reasoning summary parts so
+their visible text does not run together.
 
 Handled event `type` values include:
 
