@@ -14,6 +14,8 @@ struct PartAsm {
     part: PartId,
     started: bool,
     ended: bool,
+    summary_index: Option<usize>,
+    pending_summary_index: Option<usize>,
 }
 
 impl PartAsm {
@@ -22,6 +24,8 @@ impl PartAsm {
             part: PartId::new(),
             started: false,
             ended: false,
+            summary_index: None,
+            pending_summary_index: None,
         }
     }
 }
@@ -134,7 +138,12 @@ impl OpenAiResponsesDecoder {
         out
     }
 
-    fn reasoning_delta(&mut self, index: usize, delta: &str) -> Vec<Event> {
+    fn reasoning_delta(
+        &mut self,
+        index: usize,
+        summary_index: Option<usize>,
+        delta: &str,
+    ) -> Vec<Event> {
         let (session, message) = (self.session, self.message);
         let reason = self
             .reasoning_effort
@@ -151,6 +160,18 @@ impl OpenAiResponsesDecoder {
             });
         }
         if !delta.is_empty() {
+            if let Some(summary_index) = summary_index.or(entry.pending_summary_index) {
+                if entry.summary_index.is_some_and(|previous| previous != summary_index) {
+                    out.push(Event::ReasoningDelta {
+                        session,
+                        message,
+                        part: entry.part,
+                        delta: "\n\n".to_string(),
+                    });
+                }
+                entry.summary_index = Some(summary_index);
+                entry.pending_summary_index = None;
+            }
             out.push(Event::ReasoningDelta {
                 session,
                 message,
@@ -159,6 +180,13 @@ impl OpenAiResponsesDecoder {
             });
         }
         out
+    }
+
+    fn reasoning_summary_part_added(&mut self, index: usize, summary_index: usize) {
+        self.reasoning
+            .entry(index)
+            .or_insert_with(PartAsm::new)
+            .pending_summary_index = Some(summary_index);
     }
 
     fn reasoning_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
@@ -354,11 +382,29 @@ impl Decoder for OpenAiResponsesDecoder {
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(0);
         let out = match event.get("type").and_then(Value::as_str).unwrap_or("") {
-            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => self
-                .reasoning_delta(
-                    index,
-                    event.get("delta").and_then(Value::as_str).unwrap_or(""),
-                ),
+            "response.reasoning_summary_part.added" => {
+                if let Some(summary_index) = event
+                    .get("summary_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                {
+                    self.reasoning_summary_part_added(index, summary_index);
+                }
+                Vec::new()
+            }
+            "response.reasoning_summary_text.delta" => self.reasoning_delta(
+                index,
+                event
+                    .get("summary_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok()),
+                event.get("delta").and_then(Value::as_str).unwrap_or(""),
+            ),
+            "response.reasoning_text.delta" => self.reasoning_delta(
+                index,
+                None,
+                event.get("delta").and_then(Value::as_str).unwrap_or(""),
+            ),
             "response.output_item.added"
                 if event.pointer("/item/type").and_then(Value::as_str) == Some("function_call") =>
             {

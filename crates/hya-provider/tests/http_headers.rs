@@ -1043,6 +1043,35 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
 }
 
 #[tokio::test]
+async fn responses_summary_parts_have_paragraph_separator() {
+    for part_added in [
+        "",
+        "data: {\"type\":\"response.reasoning_summary_part.added\",\"output_index\":0,\"summary_index\":1,\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}\n\n",
+    ] {
+        let delta_index = if part_added.is_empty() {
+            "\"summary_index\":1,"
+        } else {
+            ""
+        };
+        let sse = format!(
+            "data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"A\"}}\n\n{part_added}data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,{delta_index}\"delta\":\"B\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\"}}}}\n\n"
+        );
+        let events = response_events(ProviderKind::OpenAiResponse, &sse)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let text = events.iter().fold(String::new(), |mut text, event| {
+            if let Event::ReasoningDelta { delta, .. } = event {
+                text.push_str(delta);
+            }
+            text
+        });
+        assert_eq!(text, "A\n\nB", "part_added={part_added:?}");
+    }
+}
+
+#[tokio::test]
 async fn http_provider_reports_nested_responses_failure() {
     let (base_url, _request_rx) = start_sse_server(
         "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n"
