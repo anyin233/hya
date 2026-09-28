@@ -3,12 +3,44 @@
 
 use std::path::{Path, PathBuf};
 
+fn prepare(root: &std::path::Path, sequence: u64, previous: u64) {
+    let owner = UpdaterOwner::acquire(root).unwrap();
+    let generation = read_selector(root).unwrap().generation;
+    let authorization = owner.authorize(root, sequence, generation).unwrap();
+    owner
+        .prepare_activation(root, &authorization, previous)
+        .unwrap();
+}
+
+fn activate(
+    root: &std::path::Path,
+    sequence: u64,
+    previous: u64,
+) -> hya_updater::ActivationSelector {
+    let owner = UpdaterOwner::acquire(root).unwrap();
+    let generation = read_selector(root).unwrap().generation;
+    let authorization = owner.authorize(root, sequence, generation).unwrap();
+    owner
+        .prepare_activation(root, &authorization, previous)
+        .unwrap();
+    owner.commit_activation(root, &authorization).unwrap()
+}
+
+fn commit_existing(
+    root: &std::path::Path,
+    sequence: u64,
+) -> Result<hya_updater::ActivationSelector, UpdaterError> {
+    let owner = UpdaterOwner::acquire(root)?;
+    let generation = read_selector(root)?.generation;
+    let authorization = owner.authorize(root, sequence, generation)?;
+    owner.commit_activation(root, &authorization)
+}
 use ed25519_dalek::{Signer, SigningKey};
 use hya_updater::{
     AcceptedFloor, ApplyOptions, ArtifactDigest, ReleaseMetadata, SUPPORTED_PROTOCOL_VERSION,
-    TrustRoot, UpdaterError, apply_update, commit_activation, discard_staged_release,
-    journal_prepare, layout, read_selector, recover_activation, smoke_staged_release,
-    stage_verified_release, verify_release_metadata, write_trust_roots,
+    TrustRoot, UpdaterError, UpdaterOwner, apply_update, discard_staged_release, layout,
+    read_selector, recover_activation, smoke_staged_release, stage_verified_release,
+    verify_release_metadata, write_trust_roots,
 };
 use sha2::{Digest, Sha256};
 
@@ -165,11 +197,11 @@ fn failed_smoke_blocks_activation_and_allows_discard() {
         now_unix: 100,
         smoke_command: Some("smoke.sh"),
         smoke_args: &[],
-        owner_authorized: true,
+        activation: None,
     })
     .expect_err("failed smoke must abort apply before activation");
     assert!(matches!(err, UpdaterError::SmokeFailed(_)));
-    // Floor must not advance even if owner_authorized was requested.
+    // Floor must not advance when the staged-only path is used.
     assert_eq!(read_selector(&root).unwrap().accepted_floor, 0);
     assert_eq!(read_selector(&root).unwrap().current_sequence, 0);
     // Candidate was staged before smoke; discard without advancing floor.
@@ -184,15 +216,14 @@ fn failed_smoke_blocks_activation_and_allows_discard() {
 fn prepare_only_recover_keeps_previous_and_floor() {
     let root = tempdir("prepare-only");
     stage_seq(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
 
     stage_seq(&root, 2, 1, b"v2", "hya");
-    journal_prepare(&root, 2, 1).unwrap();
+    prepare(&root, 2, 1);
     let recovered = recover_activation(&root).unwrap();
     assert_eq!(recovered.current_sequence, 1);
     assert_eq!(recovered.accepted_floor, 1);
-    assert!(commit_activation(&root, 1).is_err());
+    assert!(commit_existing(&root, 1).is_err());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -201,10 +232,9 @@ fn prepare_only_recover_keeps_previous_and_floor() {
 fn selector_without_floor_recover_finishes_commit() {
     let root = tempdir("sel-no-floor");
     stage_seq(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
     stage_seq(&root, 2, 1, b"v2", "hya");
-    journal_prepare(&root, 2, 1).unwrap();
+    prepare(&root, 2, 1);
     std::fs::write(root.join("current"), "2\n").unwrap();
     let recovered = recover_activation(&root).unwrap();
     assert_eq!(recovered.current_sequence, 2);

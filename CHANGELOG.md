@@ -1,10 +1,10 @@
-# 0.43.3
+# 0.43.4
 
-## Successor daemon restart handoff
+## Hot-reload completion
 
-- `hya serve restart` now transfers the listening socket and database lock to a
-  healthy successor generation without rebinding the port.
-- Active root turns receive a durable handoff boundary and resume exactly once
-  after successor bootstrap; client streams reconnect and reload durable state.
-- Added quiescence, pending-interaction lifecycle handling, and fallback
-  recovery documentation for restart failures.
+- Hardened updater activation with an owner lease, authorization capability,
+  generation fencing, crash recovery, and atomic selector commits.
+- Preserved pending permission and question requests across daemon handoff,
+  including durable replies and successor continuation recovery.
+- Added reconnect/resync behavior for SDK and HTTP clients and documented the
+  process boundary for streams and provider connections.

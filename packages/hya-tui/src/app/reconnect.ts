@@ -39,6 +39,8 @@
 export interface ServerSwitch {
   url: string
   pid: number
+  /** Stable process generation, normally `${pid}:${startedAt}` from discovery. */
+  generation?: string
   /** This TUI started it (else it was found: another client's, or already running). */
   started: boolean
   version?: string
@@ -49,11 +51,13 @@ export interface ServerSwitch {
 export interface ReconnectorOptions {
   /** The server the client uses now. */
   url(): string
+  /** Current daemon generation, if known. */
+  generation?: () => string | undefined
   /** `GET <url>/v1/health` answers `ok: true` (src/launch.ts `probeHealth`). */
   probe(url: string): Promise<boolean>
   /** Find or start the database's server (src/launch.ts `connectOrStart`). */
   reconnect(): Promise<ServerSwitch>
-  /** Only find the database's running server, never start one (src/launch.ts `findRunningServer`). Without it a stopped TUI waits for `/reconnect`. */
+  /** Only find the database's running server, never start one (src/launch.ts `findRunningServer`). */
   find?(): Promise<ServerSwitch | undefined>
   /** Move the client to `next` and reload what it shows. */
   switchTo(next: ServerSwitch): Promise<void>
@@ -63,12 +67,12 @@ export interface ReconnectorOptions {
   sleep?: (ms: number) => Promise<void>
   now?: () => number
   /** Failed probes before the server counts as gone (default 2). */
-  probes?: number
   /** Wait between probes (default 500 ms). */
-  gapMs?: number
   /** Longest wait for the next server after `restart` (default 60 s). */
-  restartWaitMs?: number
   /** Interval of the lookups while waiting (default 500 ms). */
+  probes?: number
+  gapMs?: number
+  restartWaitMs?: number
   pollMs?: number
 }
 
@@ -89,13 +93,15 @@ export const restartGoneNotice = "Backend did not come back after hya serve rest
 const bare = (url: string): string => url.replace(/\/+$/, "")
 
 export function createReconnector({
-  url, probe, reconnect, find, switchTo, status, onStopped,
+  url, generation, probe, reconnect, find, switchTo, status, onStopped,
   sleep = (ms) => Bun.sleep(ms), now = () => Date.now(),
   probes = 2, gapMs = 500, restartWaitMs = 60_000, pollMs = 500,
 }: ReconnectorOptions) {
   let running: Promise<void> | undefined
-  /** The last `serverStopping` reason, and the server that sent it. */
-  let told: { url: string; reason: string } | undefined
+  /** The last `serverStopping` reason, URL, and generation that sent it. */
+  let told: { url: string; reason: string; generation?: string } | undefined
+  /** Generation observed before a restart; stale discovery must not reattach it. */
+  let restartingGeneration: string | undefined
   /** Stopped on purpose: never start a server until `/reconnect`. */
   let stopped = false
   /** `/reconnect` interrupts a restart wait. */
@@ -123,13 +129,13 @@ export function createReconnector({
     status(switchNotice({ ...next, started: false }))
   }
 
-  /** `restart`: wait for the next server of the database; stopped when none comes. */
-  async function awaitRestart(): Promise<void> {
+  /** `restart`: wait for a different generation; stopped when none comes. */
+  async function awaitRestart(oldGeneration?: string): Promise<void> {
     status(restartWaitNotice)
     const deadline = now() + restartWaitMs
     while (!interrupted) {
       const next = await find?.().catch(() => undefined)
-      if (next) return attach(next)
+      if (next && (!oldGeneration || (next.generation !== undefined && next.generation !== oldGeneration))) return attach(next)
       if (now() >= deadline) break
       await sleep(pollMs)
     }
@@ -147,10 +153,12 @@ export function createReconnector({
       return
     }
     const lost = url()
-    if (!(await gone(lost))) return
     const reason = told && told.url === bare(lost) ? told.reason : undefined
+    const oldGeneration = restartingGeneration
+    if (reason !== "restart" && !(await gone(lost))) return
     told = undefined
-    if (reason === "restart") return awaitRestart()
+    restartingGeneration = undefined
+    if (reason === "restart") return awaitRestart(oldGeneration)
     if (reason !== undefined) {
       setStopped(true)
       status(stoppedNotice(reason))
@@ -200,7 +208,14 @@ export function createReconnector({
     },
     /** A `serverStopping {reason}` frame arrived from the server at `from`. */
     stopping(from: string, reason: string): void {
-      told = { url: bare(from), reason }
+      const currentGeneration = generation?.()
+      told = { url: bare(from), reason, ...(currentGeneration ? { generation: currentGeneration } : {}) }
+      if (reason === "restart") restartingGeneration = currentGeneration
+      // Restart must not probe the old healthy URL, which remains available
+      // while the successor is queued.
+      if (reason === "restart" && !running) {
+        running = run().finally(() => { running = undefined })
+      }
     },
     /** `/reconnect`: interrupt a restart wait, then find or start a server. */
     async reconnectNow(): Promise<void> {

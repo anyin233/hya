@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use hya_proto::{Event, MessageId, PartId, ToolCallId};
 use hya_server::AppState;
 
 use crate::cli_args::RelayFlags;
@@ -979,11 +980,15 @@ pub(crate) async fn serve_until(
                     drop(staged);
                     continue;
                 }
-                // Quiesce and wait: new turns are refused, nothing is
-                // cancelled; each active turn checkpoints itself at its next
-                // round boundary. Stragglers reopen the gate and re-drive the
-                // already-checkpointed sessions in place (inside
-                // `handoff_turns`), so a rejection leaves the server serving.
+                // Pending interaction rows stay durable and are re-exposed by
+                // the successor with their stable request IDs. The turn gate
+                // still refuses an unsafe handoff while the old oneshot is
+                // active; no decision is fabricated here.
+                // Quiesce and wait: new turns are refused; each active turn
+                // checkpoints itself at its next round boundary. Stragglers
+                // reopen the gate and re-drive the already-checkpointed turns
+                // in place (inside `handoff_turns`), so a rejection leaves
+                // the server serving.
                 let report = {
                     let mut guard = closure_built.lock().await;
                     let Some(built) = guard.as_mut() else {
@@ -1006,7 +1011,8 @@ pub(crate) async fn serve_until(
                         .collect();
                     reject(format!(
                         "{} active turn(s) did not reach a safe handoff boundary within the \
-                         deadline ({}…), {} pending ask(s); the turns keep running",
+                         deadline ({}…), {} pending ask(s); the \
+                         turns keep running",
                         report.stragglers.len(),
                         sessions.join(", "),
                         pending_asks
@@ -1146,26 +1152,33 @@ pub(crate) async fn serve_until(
                 "hya: the handoff journal was superseded by a newer restart; not recording the release"
             );
         }
-        // Wait for the successor's health before letting go: a generation
-        // that exits too early would drop the listener with no one serving.
-        // Primarily the successor's published discovery answers (the journal
-        // can be superseded at any moment); its ready/failed stages are the
-        // early signals.
+        // The successor records `ready` after publishing discovery and completing
+        // bootstrap. A quick `stop` may remove its discovery before our next
+        // health probe; that is a completed handoff, not a failed bootstrap.
+        // The journal is also the durable readiness evidence in that race.
         let ready_deadline = tokio::time::Instant::now() + SUCCESSOR_READY_WAIT;
         let mut failure: Option<String> = None;
         let ready = loop {
+            if let Some(state) = db_lock::read_handoff(journal)
+                && journal_ours(journal)
+            {
+                if matches!(
+                    state.stage(),
+                    db_lock::HandoffStage::Ready | db_lock::HandoffStage::Transferred
+                ) && state.stage_pid(db_lock::HandoffStage::Ready) == Some(pid)
+                {
+                    break true;
+                }
+                if state.stage() == db_lock::HandoffStage::Failed {
+                    failure = state.error.clone();
+                    break false;
+                }
+            }
             if daemon::running(&spec.db)
                 .await
                 .is_some_and(|found| found.pid == pid)
             {
                 break true;
-            }
-            if let Some(state) = db_lock::read_handoff(journal)
-                && state.stage() == db_lock::HandoffStage::Failed
-                && journal_ours(journal)
-            {
-                failure = state.error.clone();
-                break false;
             }
             if tokio::time::Instant::now() >= ready_deadline {
                 break false;
@@ -1404,6 +1417,7 @@ pub(crate) async fn prepare_server(
     if !resumed.is_empty() {
         eprintln!("hya: resumed {} handed-off session turn(s)", resumed.len());
     }
+    resume_handed_off_interactions(&built, &agent, resume_fatal).await?;
     if let Some(lock) = lock.as_mut() {
         lock.publish_with(&db_lock::connect_url(addr), &hosts.extra_hosts())
             .context("publish the server discovery file")?;
@@ -1422,6 +1436,205 @@ pub(crate) async fn prepare_server(
         handoff_base: Arc::clone(&agent),
         relay,
     })
+}
+
+/// Deliver answers submitted while the previous generation was transferring.
+///
+/// Replies are claimed in the store before continuation. This explicit
+/// at-most-once fence prevents a successor crash from replaying side effects;
+/// continuation only appends a terminal tool event and never invokes the old
+/// interrupted tool again.
+async fn resume_handed_off_interactions(
+    built: &hya_app::BuiltSessionEngine,
+    base: &hya_core::engine::AgentSpec,
+    resume_fatal: bool,
+) -> anyhow::Result<()> {
+    let engine = built.engine();
+    let store = engine.store();
+    let replies = store
+        .list_pending_interaction_replies()
+        .await
+        .context("list handed-off interaction replies")?;
+    if replies.is_empty() {
+        return Ok(());
+    }
+    let pending = store
+        .list_pending_interactions()
+        .await
+        .context("list handed-off interactions")?;
+    for reply in replies {
+        let Some(interaction) = pending.iter().find(|row| row.id == reply.id) else {
+            // A concurrent in-process owner already resolved this request.
+            let _ = store.claim_pending_interaction_reply(&reply.id).await?;
+            continue;
+        };
+        let Some(session) = interaction.session else {
+            continue_interaction_failure(
+                resume_fatal,
+                format!("handed-off interaction {} has no session", reply.id),
+            )?;
+            continue;
+        };
+        let events = store
+            .replay(session)
+            .await
+            .with_context(|| format!("replay session {session} for handed-off interaction"))?;
+        let (message, part, call) = match interaction_tool_target(&events, &interaction.payload) {
+            Some(target) => target,
+            None => {
+                continue_interaction_failure(
+                    resume_fatal,
+                    format!(
+                        "could not unambiguously correlate handed-off interaction {}",
+                        reply.id
+                    ),
+                )?;
+                continue;
+            }
+        };
+        let value: serde_json::Value = match serde_json::from_str(&reply.payload) {
+            Ok(value) => value,
+            Err(error) => {
+                continue_interaction_failure(
+                    resume_fatal,
+                    format!("invalid reply {}: {error}", reply.id),
+                )?;
+                continue;
+            }
+        };
+        // Claim before driving: a crash after this fence cannot replay a tool
+        // side effect. The continuation itself only appends a terminal event.
+        if !store
+            .claim_pending_interaction_reply(&reply.id)
+            .await
+            .with_context(|| format!("claim handed-off interaction reply {}", reply.id))?
+        {
+            continue;
+        }
+        // A permission allow is represented as a successful synthetic result;
+        // deny remains a tool error. Questions preserve the submitted answer
+        // batch as the tool result. Neither path re-runs the old tool call.
+        let continuation = if interaction.kind == "permission" {
+            match value.get("reply").and_then(serde_json::Value::as_str) {
+                Some("once") | Some("always") => engine.continue_after_handoff_tool_result(
+                    session, message, part, call,
+                    serde_json::json!({"handoff": "permission_allowed", "reply": value.get("reply")}),
+                    0, base,
+                ).await,
+                Some("reject") => engine.continue_after_handoff_tool_error(
+                    session, message, part, call,
+                    value.get("message").and_then(serde_json::Value::as_str)
+                        .unwrap_or("permission denied"), base,
+                ).await,
+                _ => engine.continue_after_handoff_tool_error(
+                    session, message, part, call, "invalid permission reply", base,
+                ).await,
+            }
+        } else if value
+            .get("reject")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            engine
+                .continue_after_handoff_tool_error(
+                    session,
+                    message,
+                    part,
+                    call,
+                    "question cancelled",
+                    base,
+                )
+                .await
+        } else {
+            engine
+                .continue_after_handoff_tool_result(
+                    session,
+                    message,
+                    part,
+                    call,
+                    serde_json::json!({
+                        "title": "Asked questions",
+                        "output": "Questions answered during daemon handoff",
+                        "metadata": { "answers": value.get("answers").cloned().unwrap_or(serde_json::Value::Null) },
+                    }),
+                    0,
+                    base,
+                )
+                .await
+        };
+        match continuation {
+            Ok(_) => {}
+            Err(error) => continue_interaction_failure(
+                resume_fatal,
+                format!("resume handed-off interaction {}: {error:#}", reply.id),
+            )?,
+        }
+    }
+    Ok(())
+}
+
+fn continue_interaction_failure(fatal: bool, message: String) -> anyhow::Result<()> {
+    if fatal {
+        Err(anyhow::anyhow!(message))
+    } else {
+        eprintln!("hya: {message}; the reply was already fenced and will not be replayed");
+        Ok(())
+    }
+}
+
+fn interaction_tool_target(
+    events: &[hya_proto::Envelope],
+    payload: &str,
+) -> Option<(MessageId, PartId, ToolCallId)> {
+    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let tool = value.pointer("/properties/tool");
+    let message = tool
+        .and_then(|v| v.get("messageID"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_id::<MessageId>);
+    let call = tool
+        .and_then(|v| v.get("callID"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_id::<ToolCallId>);
+    let mut open = std::collections::BTreeMap::<ToolCallId, (MessageId, PartId)>::new();
+    for envelope in events {
+        match envelope.event {
+            Event::ToolCallRequested {
+                message: requested_message,
+                part,
+                call: requested_call,
+                ..
+            } => {
+                if message.is_none_or(|id| id == requested_message) {
+                    open.insert(requested_call, (requested_message, part));
+                }
+            }
+            Event::ToolResult { call, .. } | Event::ToolError { call, .. } => {
+                open.remove(&call);
+            }
+            _ => {}
+        }
+    }
+    if let Some(call) = call {
+        return open
+            .get(&call)
+            .copied()
+            .map(|(message, part)| (message, part, call));
+    }
+    // Question payloads omit tool IDs. Infer only for one unambiguous call.
+    if open.len() != 1 {
+        return None;
+    }
+    open.into_iter()
+        .next()
+        .map(|(call, (message, part))| (message, part, call))
+}
+
+fn parse_id<T>(value: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).ok()
 }
 
 /// Successor-side handoff hook: resume the sessions the old generation

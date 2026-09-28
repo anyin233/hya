@@ -190,7 +190,7 @@ test("after `serverStopping {restart}` the TUI attaches to the successor at the 
   const h = harness()
   await h.controller.start()
   const first = await h.nextStream()
-  const id = h.store.state.selected?.id
+  const id = h.store.state.selected?.id!
   expect(id).toBe("s1")
   // A turn was running when the server went away.
   h.store.beginTurn()
