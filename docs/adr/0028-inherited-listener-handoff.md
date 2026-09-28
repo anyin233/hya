@@ -42,19 +42,8 @@ for the child spawn, and starts a successor with `--listen-fd`, `--lock-fd`,
 successor has composed the runtime, resumed durable handoff sessions, published
 discovery, and answered `/v1/health`.
 
-The predecessor enters an engine-wide admission quiesce before the handoff.
-Existing turns and permission asks remain serviceable for the drain deadline;
-new turns are refused. A root turn that reaches its next safe round boundary
-closes with the durable `FinishCause::Handoff` marker and one pending-resume
-row. A turn still active at the deadline is a straggler: the handoff aborts,
-the quiesce lifts, and the old generation keeps serving without terminalizing
-that turn. The successor resumes only root, non-workflow sessions whose folded
-transcript still ends at the marker. The tail predicate is the at-most-once
-fence: a later prompt or continuation makes the session ineligible. Running child/member turns are not cutover boundaries: they keep their lease and
-make the handoff reject if still active at the deadline; idle members are revived
-by successor resident recovery. Running Workflow sessions likewise reject the
-handoff rather than being transferred. Normal stop and crash recovery retain their
-existing `shutdown` and `interrupted` causes.
+The predecessor keeps pending permission and question requests in a durable interaction journal while entering admission quiesce. The request IDs and client payloads remain stable; the successor rebinds each request to its fresh interaction receiver before publishing discovery. New turns are refused. Existing turns reach a safe round boundary, and completed tool calls are never replayed. A root turn that reaches its next safe round boundary closes with the durable `FinishCause::Handoff` marker and one pending-resume row. A turn still active at the deadline is a straggler: the handoff aborts, the quiesce lifts, and the old generation keeps serving without terminalizing that turn. The successor resumes only root, non-workflow sessions whose folded transcript still ends at the marker. The tail predicate is the at-most-once fence: a later prompt or continuation makes the session ineligible. Running child/member turns are not cutover boundaries: they keep their lease and make the handoff reject if still active at the deadline; idle members are revived by successor resident recovery. Running Workflow sessions likewise reject the handoff rather than being transferred. Normal stop and crash recovery retain their existing `shutdown` and `interrupted` causes.
+The internal successor interface and restart readiness remain unchanged; interaction transfer is part of the durable state handoff and never replays a completed tool side effect.
 The internal successor interface is:
 
 | Option | Contract |
@@ -70,11 +59,7 @@ listener parked as the recoverable owner and records an explicit failure. The
 restart controller does not silently start a second generation while that
 owner remains healthy. Forced termination remains an explicit operator action.
 
-Client SSE/WebSocket streams receive `serverStopping {reason: "restart"}` and
-reconnect to the same URL. Durable sessions, event cursors, catalogs, todos,
-and pending interaction listings are re-read from the successor projection;
-process-local permission oneshots are intentionally not serialized across the
-boundary.
+Client SSE/WebSocket streams receive `serverStopping {reason: "restart"}` and reconnect to the same URL. Durable sessions, event cursors, catalogs, todos, and pending interactions are re-read from the successor projection. Pending interaction IDs and payloads remain unchanged across the reconnect.
 
 
 The external foreground primitive transfers only the listener. The daemon
@@ -99,11 +84,8 @@ boundary.
 
 ### Limitations
 
-- Existing HTTP streams are not promised to survive process replacement; clients
-  must process `serverStopping` and resubscribe.
-- Process-local permission oneshots cannot be serialized. The old generation
-  waits for them through the handoff deadline; if the ask keeps its turn active,
-  the handoff is rejected and no durable close is fabricated.
+ - Existing HTTP streams are not promised to survive process replacement; clients must process `serverStopping` and resubscribe.
+ - Pending permission and question requests are durable handoff state. A response is atomically claimed and resolved, so duplicate client replies are idempotent and no tool call is replayed.
 - Native systemd environment-variable discovery and launchd socket activation
   are not implemented; neither supervisor is required for the normal CLI.
 - A descriptor is a capability supplied by the process supervisor; accepting it

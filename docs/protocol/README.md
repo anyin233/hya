@@ -1202,6 +1202,12 @@ WebSocket speaking the same frames as the gRPC `StreamPty` rpc:
 The first server frame replays the current buffer. Resize currently relies
 on the shell's own TTY sizing; a runtime resize API is tracked in the
 consolidation plan.
+The PTY socket and child process are process-local. A WebSocket close or
+backend restart cannot reattach the old shell: clients MUST create a new PTY
+and connect a new ticket, then treat it as a new terminal. The first frame of
+that new connection replays only the new PTY's current buffer; it is not a
+continuity or command-replay guarantee. This differs from event streams,
+whose durable session transcript can be resynchronized with `sinceSeq`.
 
 ## Server shutdown
 

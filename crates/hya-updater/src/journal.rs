@@ -23,21 +23,29 @@ pub enum ActivationPhase {
 /// One journal record written under the independent updater root.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActivationJournalRecord {
-    /// Crash-recovery phase for this journal line.
+    /// Journal phase.
     pub phase: ActivationPhase,
-    /// Candidate (or committed) release sequence for this record.
+    /// Candidate release sequence.
     pub sequence: u64,
-    /// Sequence active before this prepare/commit attempt.
+    /// Previously selected release sequence.
     pub previous_sequence: u64,
+    /// Owner capability token that prepared the record.
+    #[serde(default)]
+    pub owner_token: String,
+    /// Active generation expected by the owner.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 /// Active generation selector and accepted floor under `root/`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ActivationSelector {
-    /// Generation currently selected by `current` (may lag floor during recovery).
+    /// Currently selected release sequence.
     pub current_sequence: u64,
-    /// Monotonic anti-rollback floor; releases must strictly exceed this.
+    /// Highest accepted release sequence.
     pub accepted_floor: u64,
+    /// Monotonic active-generation fence.
+    pub generation: u64,
 }
 
 fn journal_path(root: &Path) -> PathBuf {
@@ -52,11 +60,12 @@ fn floor_path(root: &Path) -> PathBuf {
     layout(root).accepted_floor
 }
 
-/// Write a prepare journal entry before switching the selector.
-pub fn journal_prepare(
+pub(crate) fn journal_prepare_owned(
     root: &Path,
     sequence: u64,
     previous_sequence: u64,
+    owner_token: &str,
+    generation: u64,
 ) -> Result<(), UpdaterError> {
     write_journal(
         root,
@@ -64,16 +73,41 @@ pub fn journal_prepare(
             phase: ActivationPhase::Prepare,
             sequence,
             previous_sequence,
+            owner_token: owner_token.to_string(),
+            generation,
         },
     )
 }
 
-/// Atomically switch the current selector and advance the accepted floor.
-///
-/// The floor never decreases. After commit, old bits activate only through a
-/// newly signed higher-sequence recovery release (verified by metadata policy).
-pub fn commit_activation(root: &Path, sequence: u64) -> Result<ActivationSelector, UpdaterError> {
+pub(crate) fn commit_activation_owned(
+    root: &Path,
+    sequence: u64,
+    owner_token: &str,
+    generation: u64,
+) -> Result<ActivationSelector, UpdaterError> {
+    let last = read_last_journal_record(root)?.ok_or(UpdaterError::StaleOwnerGeneration)?;
+    if last.phase != ActivationPhase::Prepare
+        || last.sequence != sequence
+        || last.owner_token != owner_token
+        || last.generation != generation
+    {
+        return Err(UpdaterError::StaleOwnerGeneration);
+    }
+    commit_activation_unlocked(root, sequence, generation)
+}
+
+fn commit_activation_unlocked(
+    root: &Path,
+    sequence: u64,
+    previous_generation: u64,
+) -> Result<ActivationSelector, UpdaterError> {
     let previous_selector = read_selector(root)?;
+    if previous_selector.generation != previous_generation {
+        return Err(UpdaterError::StaleOwnerGeneration);
+    }
+    let generation = previous_generation
+        .checked_add(1)
+        .ok_or(UpdaterError::StaleOwnerGeneration)?;
     let previous = previous_selector.current_sequence;
     let previous_floor = previous_selector.accepted_floor;
     if sequence <= previous_floor {
@@ -82,43 +116,42 @@ pub fn commit_activation(root: &Path, sequence: u64) -> Result<ActivationSelecto
             floor: previous_floor,
         });
     }
-    // Selector is a small file rewritten then fsynced.
     let path = selector_path(root);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            UpdaterError::InvalidMetadata(format!("create selector parent: {error}"))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| UpdaterError::InvalidMetadata(format!("create selector parent: {e}")))?;
     }
-    let body = format!("{sequence}\n");
     let tmp = root.join("current.tmp");
     {
-        let mut file = fs::File::create(&tmp).map_err(|error| {
-            UpdaterError::InvalidMetadata(format!("create selector temp: {error}"))
-        })?;
-        file.write_all(body.as_bytes()).map_err(|error| {
-            UpdaterError::InvalidMetadata(format!("write selector temp: {error}"))
-        })?;
-        file.sync_all().map_err(|error| {
-            UpdaterError::InvalidMetadata(format!("fsync selector temp: {error}"))
-        })?;
+        let mut file = fs::File::create(&tmp)
+            .map_err(|e| UpdaterError::InvalidMetadata(format!("create selector temp: {e}")))?;
+        file.write_all(format!("{sequence}\n").as_bytes())
+            .map_err(|e| UpdaterError::InvalidMetadata(format!("write selector temp: {e}")))?;
+        file.sync_all()
+            .map_err(|e| UpdaterError::InvalidMetadata(format!("fsync selector temp: {e}")))?;
     }
-    fs::rename(&tmp, &path).map_err(|error| {
-        UpdaterError::InvalidMetadata(format!("atomic selector rename: {error}"))
-    })?;
-
-    let floor = AcceptedFloor { sequence };
-    write_floor(root, &floor)?;
+    fs::rename(&tmp, &path)
+        .map_err(|e| UpdaterError::InvalidMetadata(format!("atomic selector rename: {e}")))?;
+    write_floor(root, &AcceptedFloor { sequence })?;
+    write_generation(root, generation)?;
+    let owner = read_last_journal_record(root)?;
     write_journal(
         root,
         &ActivationJournalRecord {
             phase: ActivationPhase::Committed,
             sequence,
             previous_sequence: previous,
+            owner_token: owner
+                .as_ref()
+                .map(|r| r.owner_token.clone())
+                .unwrap_or_default(),
+            generation,
         },
     )?;
     Ok(ActivationSelector {
         current_sequence: sequence,
         accepted_floor: sequence,
+        generation,
     })
 }
 
@@ -131,6 +164,11 @@ pub fn commit_activation(root: &Path, sequence: u64) -> Result<ActivationSelecto
 ///
 /// Never leaves a mixed selector/floor and never decrements the accepted floor.
 pub fn recover_activation(root: &Path) -> Result<ActivationSelector, UpdaterError> {
+    let _lease = crate::lease::acquire(root)?;
+    recover_activation_locked(root)
+}
+
+pub(crate) fn recover_activation_locked(root: &Path) -> Result<ActivationSelector, UpdaterError> {
     let selector = read_selector(root)?;
     let Some(last) = read_last_journal_record(root)? else {
         return Ok(selector);
@@ -148,17 +186,25 @@ pub fn recover_activation(root: &Path) -> Result<ActivationSelector, UpdaterErro
                         },
                     )?;
                 }
+                let generation = last
+                    .generation
+                    .checked_add(1)
+                    .ok_or(UpdaterError::StaleOwnerGeneration)?;
+                write_generation(root, generation)?;
                 write_journal(
                     root,
                     &ActivationJournalRecord {
                         phase: ActivationPhase::Committed,
                         sequence: last.sequence,
                         previous_sequence: last.previous_sequence,
+                        owner_token: last.owner_token.clone(),
+                        generation,
                     },
                 )?;
                 Ok(ActivationSelector {
                     current_sequence: last.sequence,
                     accepted_floor: last.sequence.max(selector.accepted_floor),
+                    generation,
                 })
             } else {
                 // Crash before selector rename: keep previous complete generation.
@@ -168,6 +214,8 @@ pub fn recover_activation(root: &Path) -> Result<ActivationSelector, UpdaterErro
                         phase: ActivationPhase::Aborted,
                         sequence: last.sequence,
                         previous_sequence: last.previous_sequence,
+                        owner_token: last.owner_token.clone(),
+                        generation: last.generation,
                     },
                 )?;
                 Ok(selector)
@@ -191,10 +239,36 @@ pub fn read_selector(root: &Path) -> Result<ActivationSelector, UpdaterError> {
         }
     };
     let floor = read_floor(root)?.sequence;
+    let generation = match fs::read_to_string(&layout(root).generation) {
+        Ok(text) => text
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| UpdaterError::InvalidMetadata(format!("generation parse: {e}")))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => {
+            return Err(UpdaterError::InvalidMetadata(format!(
+                "read generation: {error}"
+            )));
+        }
+    };
     Ok(ActivationSelector {
         current_sequence: current,
         accepted_floor: floor,
+        generation,
     })
+}
+
+fn write_generation(root: &Path, generation: u64) -> Result<(), UpdaterError> {
+    let path = layout(root).generation;
+    let tmp = root.join("generation.tmp");
+    let mut file = fs::File::create(&tmp)
+        .map_err(|e| UpdaterError::InvalidMetadata(format!("create generation temp: {e}")))?;
+    file.write_all(format!("{generation}\n").as_bytes())
+        .map_err(|e| UpdaterError::InvalidMetadata(format!("write generation temp: {e}")))?;
+    file.sync_all()
+        .map_err(|e| UpdaterError::InvalidMetadata(format!("fsync generation temp: {e}")))?;
+    fs::rename(tmp, path)
+        .map_err(|e| UpdaterError::InvalidMetadata(format!("atomic generation rename: {e}")))
 }
 
 /// Read the accepted anti-rollback floor from `root/accepted_floor`.
@@ -281,4 +355,22 @@ fn write_journal(root: &Path, record: &ActivationJournalRecord) -> Result<(), Up
         .map_err(|error| UpdaterError::InvalidMetadata(format!("write journal: {error}")))?;
     file.sync_all()
         .map_err(|error| UpdaterError::InvalidMetadata(format!("fsync journal: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_owner_generation_cannot_commit_after_newer_prepare() {
+        let root = std::env::temp_dir().join(format!("hya-updater-fence-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        assert!(journal_prepare_owned(&root, 1, 0, "owner-a", 1).is_ok());
+        assert!(journal_prepare_owned(&root, 2, 0, "owner-b", 2).is_ok());
+        assert_eq!(
+            commit_activation_owned(&root, 1, "owner-a", 1),
+            Err(UpdaterError::StaleOwnerGeneration)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }

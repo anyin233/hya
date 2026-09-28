@@ -90,6 +90,15 @@ impl Server {
             0
         }
     }
+    /// Read pending interaction metadata for successor handoff restoration.
+    pub async fn pending_interaction_rows(
+        &self,
+    ) -> Result<Vec<hya_store::PendingInteraction>, hya_store::StoreError> {
+        match &self.app {
+            Some(app) => app.pending_interaction_rows().await,
+            None => Ok(Vec::new()),
+        }
+    }
 
     /// Answer one request: gRPC to the tonic services, anything else to
     /// the router.

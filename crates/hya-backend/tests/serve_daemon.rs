@@ -969,6 +969,10 @@ fn restart_from_a_shell_turn_continues_in_the_successor() -> TestResult {
     let middle_pid = stage_pid(1)?;
     daemons.0.push(middle_pid);
     assert_ne!(
+        first_pid, middle_pid,
+        "the first handoff must create a distinct middle generation: {journal}"
+    );
+    assert_ne!(
         middle_pid,
         stage_pid(3)?,
         "the middle generation must differ from the final successor: {journal}"

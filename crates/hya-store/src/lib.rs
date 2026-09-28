@@ -14,6 +14,7 @@ mod bundle_registry;
 pub mod error;
 mod file_blob;
 mod handoff;
+mod interaction;
 mod mailbox;
 mod materialize;
 mod paths;
@@ -57,6 +58,7 @@ pub use bundle_registry::{
 pub use error::StoreError;
 pub use handoff::{HANDOFF_REASON, HandoffCheckpoint, HandoffResumeStart, PendingResume};
 pub use hya_proto::{ActorClaim, OwnerRunId};
+pub use interaction::{PendingInteraction, PendingInteractionReply};
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use paths::user_cache_dir;
 pub use permission::SavedPermission;

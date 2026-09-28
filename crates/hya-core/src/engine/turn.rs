@@ -580,6 +580,64 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
             .await
     }
+    /// Append a durable handoff reply's tool error and continue exactly once.
+    /// The caller acknowledges its durable reply only after success.
+    pub async fn continue_after_handoff_tool_error(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        call: ToolCallId,
+        reason: impl Into<String>,
+        agent: &AgentSpec,
+    ) -> Result<FinishReason, CoreError> {
+        let lease = self.try_begin_turn(session)?;
+        let reason = reason.into();
+        self.emit(
+            session,
+            Event::ToolError {
+                session,
+                message,
+                part,
+                call,
+                value: Some(serde_json::json!({"error": reason})),
+                message_text: "tool execution was interrupted during daemon handoff".to_string(),
+            },
+        )
+        .await?;
+        self.run_handoff_continuation(session, agent, lease, None)
+            .await
+    }
+    /// Append a transferred tool result and continue exactly once. The result
+    /// must have been produced by the successor-side continuation driver; this
+    /// method never replays the old tool call.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn continue_after_handoff_tool_result(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        call: ToolCallId,
+        output: serde_json::Value,
+        time_ms: u64,
+        agent: &AgentSpec,
+    ) -> Result<FinishReason, CoreError> {
+        let lease = self.try_begin_turn(session)?;
+        self.emit(
+            session,
+            Event::ToolResult {
+                session,
+                message,
+                part,
+                call,
+                output,
+                time_ms,
+            },
+        )
+        .await?;
+        self.run_handoff_continuation(session, agent, lease, None)
+            .await
+    }
     pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,

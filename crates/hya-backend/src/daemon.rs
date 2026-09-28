@@ -627,31 +627,58 @@ pub(crate) async fn restart_by_handoff(
     };
     let old_pid = busy.holder_pid.unwrap_or(old.pid);
     let journal = paths.handoff.clone();
-    // One handoff at a time. The CLI returns at `queued`, so its requester
-    // normally vanishes while the daemon-side transition is still active.
-    // Treat a live lock holder as the authoritative in-flight marker; only
-    // recover a journal after both holder and requester vanish.
-    if let Some(state) = db_lock::read_handoff(&journal)
-        && matches!(
-            state.stage(),
+    // The CLI returns at `queued`, while the old generation still owns the
+    // staged flock and listener. Do not overwrite its journal until it has
+    // observed the successor's readiness and exited: a subsequent restart
+    // otherwise erases the only durable evidence of a quick ready-then-stop.
+    if let Some(state) = db_lock::read_handoff(&journal) {
+        match state.stage() {
             db_lock::HandoffStage::Requested
-                | db_lock::HandoffStage::Queued
-                | db_lock::HandoffStage::Released
-                | db_lock::HandoffStage::Ready
-        )
-    {
-        let requester_alive = state
-            .stage_pid(db_lock::HandoffStage::Requested)
-            .is_some_and(|pid| pid != std::process::id() && process_alive(pid));
-        let holder_alive = process_alive(old_pid);
-        if requester_alive || holder_alive {
-            anyhow::bail!(
-                "a restart handoff is already in progress (journal {}, stage {:?}); \
-                 wait for it to finish",
-                journal.display(),
-                state.stage()
-            );
+            | db_lock::HandoffStage::Queued
+            | db_lock::HandoffStage::Released => {
+                let requester_alive = state
+                    .stage_pid(db_lock::HandoffStage::Requested)
+                    .is_some_and(|pid| pid != std::process::id() && process_alive(pid));
+                if requester_alive || process_alive(old_pid) {
+                    anyhow::bail!(
+                        "a restart handoff is already in progress (journal {}, stage {:?}); wait for it to finish",
+                        journal.display(),
+                        state.stage()
+                    );
+                }
+            }
+            db_lock::HandoffStage::Ready => {
+                // The successor may receive SIGTERM immediately after ready.
+                // Its transfer watcher then disappears with that process, so
+                // `transferred` is not required evidence. Wait for the
+                // predecessor that still owns staged descriptors to exit;
+                // the predecessor's ready evidence makes releasing safe.
+                let predecessor = state.released_pid();
+                let deadline = tokio::time::Instant::now() + HANDOFF_ACK_WAIT;
+                while predecessor.is_some_and(process_alive)
+                    && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                if predecessor.is_some_and(process_alive) {
+                    anyhow::bail!(
+                        "the previous handoff predecessor is still alive (journal {}, stage Ready); wait for it to finish",
+                        journal.display()
+                    );
+                }
+            }
+            db_lock::HandoffStage::Transferred | db_lock::HandoffStage::Failed => {}
         }
+    }
+    // A stop or another requester can change the holder while we wait for
+    // transfer. Never write a request addressed to a stale generation.
+    if db_lock::holder(db)
+        .context("recheck the database lock before restarting")?
+        .is_none_or(|holder| holder.holder_pid.unwrap_or(old.pid) != old_pid)
+    {
+        anyhow::bail!(
+            "the server changed while waiting to restart; retry against the current generation"
+        );
     }
     // The successor runs the binary this restart command was invoked with
     // (its own `current_exe`), not the old daemon's: a restart right after

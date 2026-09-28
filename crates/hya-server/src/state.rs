@@ -66,14 +66,15 @@ impl AppState {
     /// Create state with empty pending queues and no-op MCP, Workflow, and Agent-model controls.
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
-        let permission_requests = pending::PermissionRequests::new(engine.store().clone());
+        let store = engine.store().clone();
+        let permission_requests = pending::PermissionRequests::new(store.clone());
         let (catalog_updates, _) = broadcast::channel(16);
         let (projects_updates, _) = broadcast::channel(16);
         Self {
             engine,
             agent,
             permission_requests,
-            question_requests: pending::QuestionRequests::default(),
+            question_requests: pending::QuestionRequests::new(store),
             mcp_control: Arc::new(EmptyMcpControl),
             agent_model_control: Arc::new(EmptyAgentModelControl),
             provider_control: Arc::new(EmptyProviderControl),
@@ -240,16 +241,22 @@ impl AppState {
     }
 
     /// Number of process-local permission and question requests still awaiting
-    /// a client reply. Restart handoff waits for this to reach zero because
-    /// their oneshot replies cannot cross a process boundary.
+    /// a client reply.
     pub(crate) async fn pending_interactions(&self) -> usize {
         self.permission_requests.list().await.len() + self.question_requests.list().await.len()
+    }
+    /// Durable interaction metadata used by a successor to restore pending
+    /// permission/question views before new interaction receivers bind.
+    pub(crate) async fn pending_interaction_rows(
+        &self,
+    ) -> Result<Vec<hya_store::PendingInteraction>, hya_store::StoreError> {
+        self.engine.store().list_pending_interactions().await
     }
 
     /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {
-        self.question_requests = pending::QuestionRequests::spawn(rx);
+        self.question_requests = pending::QuestionRequests::spawn(rx, self.engine.store().clone());
         self.reconfigured()
     }
 

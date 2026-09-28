@@ -695,7 +695,8 @@ mod tests {
                 "pkg",
                 "--platform",
                 "x86_64-unknown-linux-gnu",
-                "--owner-authorized-activation",
+                "--authorization",
+                "auth.json",
             ],
             &[
                 "hya",
