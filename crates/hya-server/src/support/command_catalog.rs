@@ -140,13 +140,6 @@ pub(crate) fn list(place: &CatalogPlace) -> Vec<CommandInfo> {
             None,
         ),
         command_info(
-            "think",
-            "set reasoning effort",
-            "/think $ARGUMENTS".to_string(),
-            vec!["$ARGUMENTS"],
-            None,
-        ),
-        command_info(
             "workflow",
             "inspect or run workflows",
             "/workflow $ARGUMENTS".to_string(),

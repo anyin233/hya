@@ -11,25 +11,73 @@ import { modelReference, sessionTree } from "./format"
 import { sessionsInScope } from "./projects"
 import type { PickerRow } from "./picker"
 
-/** `/model` picker rows: one per model, tagged with its provider id; `current` is the session's `provider/model`. */
+/** `/model` picker rows: one per model, tagged by provider; `current` ignores an optional `#effort` suffix. */
 export function modelRows(models: readonly ModelSummary[], current: string): PickerRow[] {
+  const currentBase = current.split("#", 1)[0]
   return models.map((model) => ({
     id: model.id,
     label: model.displayName || model.modelId || model.id,
     tag: model.providerId || model.id.split("/")[0] || "",
     detail: model.contextLimit && model.contextLimit !== "0" ? `${Math.round(Number(model.contextLimit) / 1000)}k ctx` : "",
-    current: model.id === current,
+    current: model.id === currentBase,
   }))
 }
 
-/** `/agent` picker rows: visible agents only, tagged with the default `provider/model`; `current` is the session's agent name. */
+/**
+ * The explicit effort labels `model` accepts: `none` is always available
+ * (an explicit off switch — a Responses route sends `none`), followed by the
+ * advertised `reasoningVariants` in provider order. A model with `reasoning:
+ * false` takes only `none`; a model with unknown capabilities (`reasoning`
+ * unset, no variants advertised) still accepts its provider family's labels
+ * at runtime, so nothing is dropped here — the backend validates.
+ */
+export function effortChoices(model: ModelSummary | undefined): string[] {
+  if (model?.reasoning === false) return ["none"]
+  return ["none", ...(model?.reasoningVariants ?? []).filter((variant) => variant !== "none")]
+}
+
+/** Whether `effort` is a valid explicit choice for `model` (`default` means "no suffix"; an unknown model row cannot be checked here). */
+export function isKnownEffort(model: ModelSummary | undefined, effort: string): boolean {
+  return effort === "default" || !model || effortChoices(model).includes(effort)
+}
+
+/**
+ * `/effort` picker rows for the active model: `default` first (no explicit
+ * suffix — the agent's or the model's configured default, else the
+ * provider's own default, applies), then the explicit choices. `explicit` is
+ * the session's current `#suffix` (a remembered-but-unapplied choice counts
+ * too); without one the `default` row is current and `effective` names what
+ * that default resolves to.
+ */
+export function effortRows(model: ModelSummary | undefined, explicit: string | undefined, effective: string): PickerRow[] {
+  return [
+    {
+      id: "default",
+      label: "default",
+      tag: "default",
+      detail: explicit || effective === "default" ? "no explicit effort" : `effective ${effective}`,
+      current: explicit === undefined,
+    },
+    ...effortChoices(model).map((effort) => ({
+      id: effort,
+      label: effort,
+      tag: effort === "none" ? "off" : "thinking",
+      detail: effort === "none" ? "explicitly disable reasoning" : "model effort",
+      current: explicit === effort,
+    })),
+  ]
+}
+
+/** `/agent` picker rows: visible agents only, tagged with the default `provider/model[#variant]`; `current` is the session's agent name. */
 export function agentRows(agents: readonly AgentSummary[], current: string): PickerRow[] {
   return agents
     .filter((agent) => !agent.hidden)
     .map((agent) => ({
       id: agent.name,
       label: agent.name,
-      tag: agent.model?.providerId && agent.model.modelId ? `${agent.model.providerId}/${agent.model.modelId}` : "",
+      tag: agent.model?.providerId && agent.model.modelId
+        ? `${agent.model.providerId}/${agent.model.modelId}${agent.model.variant ? `#${agent.model.variant}` : ""}`
+        : "",
       detail: agent.description ?? "",
       current: agent.name === current,
     }))

@@ -172,7 +172,6 @@ the *stored* init/review template strings, but that body is not applied by
 | `/model $ARGUMENTS` | Switch the active model | Built-in, not expandable; template is `/model $ARGUMENTS`. |
 | `/clear` | Start a fresh session | Built-in, not expandable; template is `/clear`. |
 | `/sessions` | Switch session | Built-in, not expandable; template is `/sessions`. |
-| `/think $ARGUMENTS` | Set reasoning effort | Built-in, not expandable; template is `/think $ARGUMENTS`. |
 | `/workflow $ARGUMENTS` | Inspect or run workflows | Built-in, not expandable; template is `/workflow $ARGUMENTS`. |
 
 User-defined commands from config and on-disk command sources are merged with

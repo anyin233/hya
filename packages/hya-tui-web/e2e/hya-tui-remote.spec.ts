@@ -104,8 +104,10 @@ test.describe("/connect-remote", () => {
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
     await term.waitForText(/Project remote-project/)
-    // The header names the remote (cut to fit), never the bridge's loopback URL.
-    await term.waitForText(`remote: ${remote.relay}/`)
+    // The header can clip the remote URL after reserving space for effort;
+    // `/status` exposes the complete connected server label.
+    await prompt(term, "/status")
+    await term.waitForText(`remote: ${remote.relay}`)
 
     // A prompt over the relay, answered by the remote's offline model.
     await prompt(term, "hello over the relay")
@@ -221,7 +223,10 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText("Remote connection failed: the remote backend rejected the relay link", 30_000)
     expect(await term.find(secretOf(wrong).slice(0, 12))).toBeNull()
-    await term.waitForText(/hya · hysec_\w+ · .* · http:\/\/127\.0\.0\.1:\d+/)
+    // At this narrow width the header intentionally keeps `thinking default`
+    // visible and clips the server URL; `/status` exposes the full local URL.
+    await prompt(term, "/status")
+    await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
   })
 
   test("with the remote backend offline, Project view requests fail as one status line, never a stack trace", async ({ tui, workspace, remote }, testInfo) => {

@@ -1,17 +1,18 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
-import { agentRows, modelRows, relativeTime, sessionRows } from "../state/catalog"
+import { agentRows, effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { modelReference, sessionTree, strategyText, webTabBackgroundNotice } from "../state/format"
+import { currentModel, currentThinkingEffort, modelBaseReference, modelReference, sessionTree, strategyText, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
+import { defaultModelRef, invalidEffortSuffix, rememberedModelRef } from "../state/providers"
 import type { PickerAction } from "../state/picker"
 import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
-import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
+import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
 /**
  * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never
@@ -166,17 +167,87 @@ export function openModelPicker({ store, client, actions }: CommandContext, opti
     rows: first < 0 ? rows : rows.map((row, index) => ({ ...row, current: index === first })),
     onSelect: async (row) => {
       const session = store.state.selected
+      const reference = rememberedModelRef(row.id, store.state.thinkingEfforts, store.state.models)
       if (!session) {
-        store.setPendingModel(row.id)
-        store.setStatus(`Model → ${row.id} · applies when the session is created`)
-        options.onChosen?.(row.id)
+        store.setPendingModel(reference)
+        store.setStatus(`Model → ${reference} · applies when the session is created`)
+        options.onChosen?.(reference)
         return
       }
-      store.setSelected(await client.updateSessionModel(session.id, row.id))
-      store.setStatus(`Model → ${row.id}`)
-      options.onChosen?.(row.id)
+      store.setSelected(await client.updateSessionModel(session.id, reference))
+      store.setStatus(`Model → ${reference}`)
+      options.onChosen?.(reference)
       await actions.refresh()
     },
+  })
+}
+
+function effortModelBase(context: CommandContext): string {
+  const { store } = context
+  if (store.state.selected) return modelBaseReference(store.state.selected)
+  return defaultModelRef({ ...store.state, selected: undefined }).split("#", 1)[0]
+}
+
+/**
+ * Apply one `/effort` (or `/think`) choice, from the picker or typed
+ * directly: switch the open session's model to `base[#effort]` — `default`
+ * sends the bare base, dropping an explicit suffix — or remember the choice
+ * for the next session, then cache it. The cache is written only after the
+ * server accepted the model update (with no session there is no server
+ * step); a failed save keeps the choice in memory and says so.
+ */
+export async function selectEffort(context: CommandContext, effort: string): Promise<void> {
+  const { store, client, actions } = context
+  const base = effortModelBase(context)
+  if (!base) throw new Error("No model is available; configure a provider on the backend")
+  const model = store.state.models.find((row) => row.id === base)
+  if (!isKnownEffort(model, effort)) throw new Error(`Unknown thinking effort ${effort} for ${base}`)
+  const remember = (): void => {
+    const next = { ...store.state.thinkingEfforts }
+    if (effort === "default") delete next[base]
+    else next[base] = effort
+    store.setThinkingEfforts(next)
+    try {
+      actions.savePreferences({ thinkingEfforts: next })
+    } catch (error) {
+      store.setStatus(`Thinking effort → ${effort} · not saved: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  const session = store.state.selected
+  const reference = effort === "default" ? base : `${base}#${effort}`
+  if (!session) {
+    store.setPendingModel(reference)
+    store.setStatus(`Thinking effort → ${effort} · applies when the session is created`)
+    remember()
+    return
+  }
+  if (modelReference(session) !== reference) {
+    store.setSelected(await client.updateSessionModel(session.id, reference))
+    store.setStatus(`Thinking effort → ${effort}`)
+    remember()
+    await actions.refresh()
+    return
+  }
+  // Already in effect (a repeated pick): still let the cache catch up.
+  store.setStatus(`Thinking effort → ${effort}`)
+  remember()
+}
+
+/** Open the request-effort picker for the active model and remember its choice per model. */
+export function openEffortPicker(context: CommandContext): void {
+  const { store, actions } = context
+  const base = effortModelBase(context)
+  if (!base) throw new Error("No model is available; configure a provider on the backend")
+  const session = store.state.selected
+  const model = session ? currentModel(store.state) : store.state.models.find((row) => row.id === base)
+  const pending = store.state.pendingModel
+  // With a session the explicit choice is its `#variant`; before one exists it is the pending model's suffix, else the cached choice that creation would apply.
+  const explicit = session ? session.model?.variant : (pending?.startsWith(`${base}#`) ? pending.slice(base.length + 1) : store.state.thinkingEfforts[base])
+  const effective = session ? currentThinkingEffort(store.state) : (store.state.thinkingEfforts[base] ?? model?.reasoningDefault ?? "default")
+  actions.openPicker({
+    title: "Thinking effort",
+    rows: effortRows(model, explicit, effective),
+    onSelect: (row) => selectEffort(context, row.id),
   })
 }
 
@@ -204,6 +275,13 @@ export async function backendCommand(context: CommandContext, invocation: Comman
   store.setStatus(turn.id ? `Command ${name} · ${turn.state.toLowerCase()}` : `Command ${name} finished`)
   actions.scheduleRefresh()
 }
+
+/** `/effort` (and `/think`): open the picker, or apply the named effort directly. */
+const effortArgumentHint = "[default|none|minimal|low|medium|high|xhigh|max]"
+const effortCompletion = ({ current, head }: ArgumentPosition): string[] =>
+  matchValues(head, current, ["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"])
+const runEffort = (context: CommandContext, { args }: CommandInvocation): Promise<void> | void =>
+  args[0] ? selectEffort(context, args[0]) : openEffortPicker(context)
 
 export const nativeCommandSpecs: CommandSpec[] = [
   {
@@ -270,18 +348,42 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: async ({ store, client, actions }, { args }) => {
       const selected = store.state.selected
       if (args[0]) {
+        // An explicit `#suffix` wins over the remembered effort; a remembered one is applied only if the model's menu still accepts it.
+        const reference = rememberedModelRef(args[0], store.state.thinkingEfforts, store.state.models)
+        const invalid = invalidEffortSuffix(reference, store.state.models)
+        if (invalid !== undefined) {
+          throw new Error(invalid ? `Unknown thinking effort ${invalid} for ${reference.split("#", 1)[0]}` : `Model reference ${args[0]} ends with an empty "#effort" suffix`)
+        }
         if (!selected) {
-          store.setPendingModel(args[0])
-          store.setStatus(`Model → ${args[0]} · applies when the session is created`)
+          store.setPendingModel(reference)
+          store.setStatus(`Model → ${reference} · applies when the session is created`)
           return
         }
-        store.setSelected(await client.updateSessionModel(selected.id, args[0]))
-        store.setStatus(`Model → ${modelReference(store.state.selected!) || args[0]}`)
+        store.setSelected(await client.updateSessionModel(selected.id, reference))
+        store.setStatus(`Model → ${modelReference(store.state.selected!) || reference}`)
         await actions.refresh()
         return
       }
       openModelPicker({ store, client, actions })
     },
+  },
+  {
+    name: "/effort",
+    description: "Pick the thinking effort for the current model; choices are remembered per model",
+    argumentHint: effortArgumentHint,
+    complete: effortCompletion,
+    run: runEffort,
+  },
+  {
+    // Kept for muscle memory from backends that advertised a `think`
+    // placeholder (removed from the catalog); if a backend row ever
+    // re-appears, the local registry claims the name first
+    // (commands/menu.ts drops clashing backend rows).
+    name: "/think",
+    description: "Set the thinking effort (alias of /effort)",
+    argumentHint: effortArgumentHint,
+    complete: effortCompletion,
+    run: runEffort,
   },
   {
     name: "/agent",
@@ -390,6 +492,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         ...(selected?.forkedFrom ? [`Forked      ${forkSourceText(selected.forkedFrom, store.state.sessions)!.replace(/^forked /, "")}`] : []),
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
+        `Thinking    ${selected ? currentThinkingEffort(store.state) : "default"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
         `Backend     ${backendText(store.state.backend, store.state.serverPid)}`,
       ]

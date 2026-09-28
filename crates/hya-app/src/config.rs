@@ -24,7 +24,6 @@ use hya_provider::{
     CatalogFailure, HttpProvider, ModelCatalogSource, ProviderAuthState, ProviderCatalogResult,
     ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState, ProviderDiscoveryOutcome,
     ProviderKind, ProviderModel, ProviderRouter, ReasoningEffort, discover_models,
-    resolve_default_reasoning,
 };
 use hya_tool::{
     InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget, WebSearchConfig,
@@ -423,10 +422,8 @@ struct ParsedModel {
     /// `reasoning: false`); otherwise remote-list variants win over the
     /// kind fallback when the model is also in the model cache.
     variants_configured: bool,
-    /// Explicit default, else the highest effort in `reasoning_variants`.
+    /// Explicit configured default; absent means no request effort.
     reasoning_default: Option<ReasoningEffort>,
-    /// Explicit `reasoning.default` only.
-    explicit_default: Option<ReasoningEffort>,
     /// Configured token limits (`0` in a field means unspecified).
     limit: Option<hya_provider::ModelLimitOverride>,
     /// Image input from `modalities.input`; `None` when not declared.
@@ -1849,10 +1846,9 @@ fn resolve_providers_filtered(
                 id: model_id.to_string(),
                 kind: effective_kind,
                 display_name,
-                reasoning_default: resolve_default_reasoning(explicit_default, None, &variants),
+                reasoning_default: explicit_default,
                 reasoning_variants: variants,
                 variants_configured,
-                explicit_default,
                 limit,
                 image_input,
                 reasoning_declared,
@@ -2405,10 +2401,8 @@ fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> Ef
         kind,
         display_name: row.display_name.clone(),
         reasoning_variants: cached_variants(kind, row),
-        reasoning_default: row
-            .reasoning_default
-            .as_deref()
-            .and_then(ReasoningEffort::parse),
+        // Remote metadata describes capabilities, not a user selection.
+        reasoning_default: None,
         limit: hya_provider::ModelLimitOverride {
             context: row.context_limit,
             output: row.output_limit,
@@ -2423,18 +2417,9 @@ fn override_model(config: &ParsedModel, row: &crate::model_cache::CachedModel) -
     let (reasoning_variants, reasoning_default) = if config.variants_configured {
         (config.reasoning_variants.clone(), config.reasoning_default)
     } else {
-        let variants = cached_variants(config.kind, row);
-        let default = config.explicit_default.or_else(|| {
-            row.reasoning_default
-                .as_deref()
-                .and_then(ReasoningEffort::parse)
-                .filter(|effort| {
-                    *effort == ReasoningEffort::Off
-                        || variants.iter().any(|variant| variant == effort.as_str())
-                })
-        });
-        let default = resolve_default_reasoning(default, None, &variants);
-        (variants, default)
+        // Cached variants refine the menu; the explicit configured default
+        // (if any) still decides the request effort.
+        (cached_variants(config.kind, row), config.reasoning_default)
     };
     let configured_limit = config.limit.clone().unwrap_or_default();
     let mut limit = hya_provider::ModelLimitOverride {
@@ -3591,7 +3576,7 @@ providers:
     }
 
     #[test]
-    fn grok_build_config_defaults_to_high_reasoning() {
+    fn grok_build_config_has_capabilities_without_default_effort() {
         let parsed = parse_providers(
             r#"
 providers:
@@ -3607,10 +3592,7 @@ providers:
             parsed[0].models[0].reasoning_variants,
             vec!["low", "medium", "high"]
         );
-        assert_eq!(
-            parsed[0].models[0].reasoning_default,
-            Some(ReasoningEffort::High)
-        );
+        assert_eq!(parsed[0].models[0].reasoning_default, None);
     }
 
     #[test]
@@ -3754,7 +3736,7 @@ providers:
     }
 
     #[test]
-    fn legacy_string_models_keep_chat_aliases_and_highest_default() {
+    fn legacy_string_models_keep_chat_aliases_without_default_effort() {
         for kind in ["openai", "openai-compatible", "openai-completion"] {
             let yaml = format!(
                 "providers:\n  gw:\n    kind: {kind}\n    base_url: https://gw.example/v1\n    models: [m1]\n"
@@ -3762,10 +3744,7 @@ providers:
             let parsed = parse_providers(&yaml).unwrap();
             assert_eq!(parsed.len(), 1);
             assert_eq!(parsed[0].kind, ProviderKind::OpenAiCompatible);
-            assert_eq!(
-                parsed[0].models[0].reasoning_default,
-                Some(ReasoningEffort::XHigh)
-            );
+            assert_eq!(parsed[0].models[0].reasoning_default, None);
         }
     }
 
@@ -4339,21 +4318,21 @@ plugins:
         let provider = parse_providers(yaml).unwrap().into_iter().next().unwrap();
         let models = &provider.models;
         assert_eq!(models.len(), 3);
-        // Inherits the provider kind: the openai fallback menu and its highest effort.
+        // Inherits the provider kind's capability menu without selecting an effort.
         assert_eq!(
             models[0].reasoning_variants,
             vec!["minimal", "low", "medium", "high", "xhigh"]
         );
-        assert_eq!(models[0].reasoning_default, Some(ReasoningEffort::XHigh));
-        // Entry-level kind override: the anthropic fallback menu and its highest effort.
+        assert_eq!(models[0].reasoning_default, None);
+        // Entry-level kind override changes only the capability menu.
         assert_eq!(
             models[1].reasoning_variants,
             vec!["low", "medium", "high", "max"]
         );
-        assert_eq!(models[1].reasoning_default, Some(ReasoningEffort::Max));
+        assert_eq!(models[1].reasoning_default, None);
         // Explicit reasoning.variants still replaces the overridden kind's menu.
         assert_eq!(models[2].reasoning_variants, vec!["low", "high"]);
-        assert_eq!(models[2].reasoning_default, Some(ReasoningEffort::High));
+        assert_eq!(models[2].reasoning_default, None);
     }
 
     #[test]
@@ -4576,7 +4555,7 @@ providers:
         assert_eq!(shared.limit.context, 100_000, "config field wins");
         assert_eq!(shared.limit.output, 8_000, "unset config field falls back");
         assert_eq!(shared.reasoning_variants, vec!["low", "high"]);
-        assert_eq!(shared.reasoning_default, Some(ReasoningEffort::Low));
+        assert_eq!(shared.reasoning_default, None);
 
         let remote = by_id("remote-only");
         assert_eq!(remote.source, ModelCatalogSource::Discovered);
@@ -4679,6 +4658,39 @@ providers:
         let merged = merge_provider_models(&provider, &[row]);
         assert_eq!(merged[0].limit.context, 1_000);
         assert_eq!(merged[0].limit.output, 0);
+    }
+
+    /// Cached model-list rows refine the variant menu but never choose the
+    /// request effort: only the explicit configured default does.
+    #[test]
+    fn cached_variants_never_override_an_explicit_configured_default() {
+        let provider = parse_providers(
+            r#"
+providers:
+  gw:
+    kind: openai-response
+    base_url: https://gw.example/v1
+    models:
+      - id: shared
+        reasoning:
+          default: high
+"#,
+        )
+        .unwrap()
+        .remove(0);
+        let mut row = cached("shared");
+        row.reasoning_variants = vec!["low".into(), "medium".into()];
+        row.reasoning_default = Some("low".into());
+
+        let merged = merge_provider_models(&provider, &[row]);
+        let shared = merged.iter().find(|model| model.id == "shared").unwrap();
+
+        assert_eq!(shared.source, ModelCatalogSource::Overridden);
+        assert_eq!(shared.reasoning_variants, vec!["low", "medium"]);
+        assert_eq!(
+            shared.reasoning_default,
+            Some(hya_provider::ReasoningEffort::High)
+        );
     }
 
     fn temp_config(label: &str, yaml: &str) -> PathBuf {

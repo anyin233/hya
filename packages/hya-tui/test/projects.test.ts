@@ -107,7 +107,7 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
     findFiles: async (pattern: string) => { calls.push(["findFiles", pattern]); return [] },
     listSessions: async (filter?: { projectId?: string }) => sessions.filter((row) => !filter?.projectId || row.projectId === filter.projectId),
     listInteractions: async () => [],
-    listModels: async () => [{ id: "hya/echo", providerId: "hya", modelId: "echo" }],
+    listModels: async () => [{ id: "hya/echo", providerId: "hya", modelId: "echo", reasoning: true, reasoningVariants: ["low", "medium"] }],
     listAgents: async () => [{ name: "build" }],
     listWorkflows: async () => [],
     listProviders: async () => [],
@@ -128,7 +128,9 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
       const temporary = "temporary" in placement && placement.temporary
       const projectId = temporary ? undefined : ("projectId" in placement && placement.projectId) || "prj_work"
       const workdir = temporary ? "/cache/scratch" : ("workdir" in placement && placement.workdir) || projects.find((row) => row.id === projectId)?.roots[0] || "/work"
-      const session: SessionInfo = { id: `new_${++created}`, agent, workdir, model: { providerId: "hya", modelId: "echo" }, ...(projectId ? { projectId } : {}), kind: temporary ? "SESSION_KIND_TEMPORARY" : "SESSION_KIND_PROJECT" }
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      const session: SessionInfo = { id: `new_${++created}`, agent, workdir, model: { providerId, modelId, ...(variant ? { variant } : {}) }, ...(projectId ? { projectId } : {}), kind: temporary ? "SESSION_KIND_TEMPORARY" : "SESSION_KIND_PROJECT" }
       sessions.unshift(session)
       return session
     },
@@ -288,6 +290,22 @@ test("a new-session attempt without an active Project opens the Project view ins
   expect(h.store.state.projectView).toBeUndefined()
   await expect(h.controller.newSession()).rejects.toThrow()
   expect(h.store.state.projectView).toBeDefined()
+  h.controller.dispose()
+})
+
+test("/new with an explicit model gains the remembered effort; its typed suffix and a stale cache win or fall", async () => {
+  const h = harness()
+  await h.controller.start()
+  h.store.setThinkingEfforts({ "hya/echo": "low" })
+  await h.controller.newSession("build", "hya/echo")
+  expect(h.store.state.selected?.model).toEqual({ providerId: "hya", modelId: "echo", variant: "low" })
+  // A typed suffix is explicit; the cache never overrides it.
+  await h.controller.newSession("build", "hya/echo#medium")
+  expect(h.store.state.selected?.model).toEqual({ providerId: "hya", modelId: "echo", variant: "medium" })
+  // A remembered choice the model no longer advertises is not applied.
+  h.store.setThinkingEfforts({ "hya/echo": "max" })
+  await h.controller.newSession("build", "hya/echo")
+  expect(h.store.state.selected?.model).toEqual({ providerId: "hya", modelId: "echo" })
   h.controller.dispose()
 })
 

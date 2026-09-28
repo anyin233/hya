@@ -982,6 +982,8 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
 { "id": "gw/alpha", "providerId": "gw", "modelId": "alpha",
   "displayName": "Alpha",
   "reasoning": true,        // declared by metadata; absent when unknown
+  "reasoningVariants": ["none", "low", "medium", "high"],
+  "reasoningDefault": "medium", // explicit model config only; optional
   "auth": "AUTH_STATUS_CREDENTIALED",
   "contextLimit": "64000",  // uint64 → strings; absent when unknown
   "outputLimit": "4096",    // absent when unknown
@@ -1025,6 +1027,10 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
   `outputLimit`; without a reasoning claim it omits `reasoning` (the route
   still accepts its provider family's effort variants). `reasoning: false`
   is an explicit claim (`reasoning: false` in config).
+- `ModelSummary.reasoningVariants` reports the model's advertised effort menu.
+  `reasoningDefault` is present only for an explicit configured default; an
+  absent default means the runtime sends no reasoning effort unless the
+  request model reference includes `#variant`.
 - `SetProviderModel` patches one model entry in the provider's `models:`
   (adding a bare `- <modelId>` entry when there is none). An absent field
   keeps the entry's current value; `displayName: ""` removes `name`;

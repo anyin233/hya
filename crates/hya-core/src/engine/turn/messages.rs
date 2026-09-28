@@ -87,15 +87,17 @@ pub(super) fn request_from_messages(
 }
 
 /// Resolve an explicit model-ref variant before the Agent's configured default.
+///
+/// A `#suffix` is an explicit choice: a valid variant wins, and an invalid one
+/// sends no effort rather than silently inheriting the default.
 pub(super) fn reasoning_for_model(
     model: &ModelRef,
     fallback: Option<ReasoningEffort>,
 ) -> Option<ReasoningEffort> {
-    model
-        .as_str()
-        .rsplit_once('#')
-        .and_then(|(_, variant)| ReasoningEffort::parse(variant))
-        .or(fallback)
+    match model.as_str().rsplit_once('#') {
+        Some((_, variant)) => ReasoningEffort::parse(variant),
+        None => fallback,
+    }
 }
 
 fn filtered_tool_schemas(
@@ -253,22 +255,23 @@ mod tests {
 
     use hya_tool::ToolRegistry;
 
-    /// Pin explicit overrides and unchanged request effort for missing or invalid variants.
+    /// Pin explicit overrides, the unsuffixed default, and no silent
+    /// inheritance for an invalid variant.
     #[test]
-    fn model_variant_overrides_or_preserves_request_reasoning() {
-        let original = Some(ReasoningEffort::Low);
+    fn model_variant_overrides_preserves_default_and_rejects_invalid_variants() {
+        let default = Some(ReasoningEffort::Low);
 
         assert_eq!(
-            reasoning_for_model(&ModelRef::new("fallback#high"), original),
+            reasoning_for_model(&ModelRef::new("fallback#high"), default),
             Some(ReasoningEffort::High),
         );
         assert_eq!(
-            reasoning_for_model(&ModelRef::new("fallback"), original),
-            original,
+            reasoning_for_model(&ModelRef::new("fallback"), default),
+            default,
         );
         assert_eq!(
-            reasoning_for_model(&ModelRef::new("fallback#unknown"), original),
-            original,
+            reasoning_for_model(&ModelRef::new("fallback#unknown"), default),
+            None,
         );
     }
 

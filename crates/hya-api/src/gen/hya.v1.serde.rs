@@ -17050,6 +17050,12 @@ impl serde::Serialize for ModelSummary {
         if self.image_input.is_some() {
             len += 1;
         }
+        if !self.reasoning_variants.is_empty() {
+            len += 1;
+        }
+        if self.reasoning_default.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ModelSummary", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -17087,6 +17093,12 @@ impl serde::Serialize for ModelSummary {
         if let Some(v) = self.image_input.as_ref() {
             struct_ser.serialize_field("imageInput", v)?;
         }
+        if !self.reasoning_variants.is_empty() {
+            struct_ser.serialize_field("reasoningVariants", &self.reasoning_variants)?;
+        }
+        if let Some(v) = self.reasoning_default.as_ref() {
+            struct_ser.serialize_field("reasoningDefault", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -17113,6 +17125,10 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
             "source",
             "image_input",
             "imageInput",
+            "reasoning_variants",
+            "reasoningVariants",
+            "reasoning_default",
+            "reasoningDefault",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17127,6 +17143,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
             OutputLimit,
             Source,
             ImageInput,
+            ReasoningVariants,
+            ReasoningDefault,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17158,6 +17176,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             "outputLimit" | "output_limit" => Ok(GeneratedField::OutputLimit),
                             "source" => Ok(GeneratedField::Source),
                             "imageInput" | "image_input" => Ok(GeneratedField::ImageInput),
+                            "reasoningVariants" | "reasoning_variants" => Ok(GeneratedField::ReasoningVariants),
+                            "reasoningDefault" | "reasoning_default" => Ok(GeneratedField::ReasoningDefault),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17187,6 +17207,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                 let mut output_limit__ = None;
                 let mut source__ = None;
                 let mut image_input__ = None;
+                let mut reasoning_variants__ = None;
+                let mut reasoning_default__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -17253,6 +17275,18 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             }
                             image_input__ = map_.next_value()?;
                         }
+                        GeneratedField::ReasoningVariants => {
+                            if reasoning_variants__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reasoningVariants"));
+                            }
+                            reasoning_variants__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ReasoningDefault => {
+                            if reasoning_default__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reasoningDefault"));
+                            }
+                            reasoning_default__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ModelSummary {
@@ -17266,6 +17300,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                     output_limit: output_limit__.unwrap_or_default(),
                     source: source__.unwrap_or_default(),
                     image_input: image_input__,
+                    reasoning_variants: reasoning_variants__.unwrap_or_default(),
+                    reasoning_default: reasoning_default__,
                 })
             }
         }

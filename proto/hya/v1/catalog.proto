@@ -188,6 +188,10 @@ message ModelSummary {
   // contains `image`); unset when unknown. Prompt turns with attachments
   // are refused only when this is `false`.
   optional bool image_input = 10;
+  // Effort labels accepted by this model, in provider order. Empty when unknown or unsupported.
+  repeated string reasoning_variants = 11;
+  // Explicit configured effort default. Empty when no default is selected.
+  optional string reasoning_default = 12;
 }
 
 message ListModelsResponse {

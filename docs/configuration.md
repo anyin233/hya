@@ -616,9 +616,9 @@ is `auth_required`; a credentialed 401/403 is `auth_rejected`. Either produces
 no remote row.
 
 `grok-build` uses the Responses request shape and adds encrypted reasoning
-content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
-defaulting to `high`. Grok streams must end with `response.completed` or
-`response.incomplete`; `[DONE]` alone is not completion.
+content. Its fallback reasoning menu is `low`, `medium`, and `high`; the menu
+does not select a default effort. Grok streams must end with
+`response.completed` or `response.incomplete`; `[DONE]` alone is not completion.
 
 ### Reasoning metadata
 
@@ -652,23 +652,20 @@ on a model, it **replaces** (does not extend) the provider-kind default menu.
 | `grok-build` | `low`, `medium`, `high` |
 | `google` | `high`, `max` |
 
-When `reasoning.default` is omitted, the effective default is the **highest**
-effort in the resulting list (ordering Off &lt; Minimal &lt; Low &lt; Medium &lt;
-High &lt; XHigh &lt; Max). Shipped default resolution uses
-[`resolve_default_reasoning`](../crates/hya-provider/src/lib.rs) from
-[`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs), which always
-passes `last_used: None`:
+An advertised effort menu describes capabilities, not a selection. hya never
+chooses its highest entry automatically, nor treats a remote model-list default
+as a user request. An explicit model `reasoning.default` remains a request
+default for that model; an explicit agent policy or `#variant` can override it.
+Without any explicit choice or configured default, the provider request omits
+effort. The upstream provider then decides its default; omission does **not**
+guarantee that the model will not think.
 
-1. Explicit `reasoning.default` from config (must be advertised, else config error).
-2. Otherwise the highest supported level among the route's advertised variants.
-
-If the model advertises no reasoning at all, the result is `None` and no default
-is shown. A route emits an empty variant list when `reasoning_request` is false.
-
-The helper also accepts a `last_used` argument (kept when it is `none`/`off` or
-present in the advertised variants), but **no production caller supplies it** —
-only unit tests exercise that branch. hya does **not** remember a previously
-selected effort across runs or UI picks.
+The TUI's `/effort` picker shows the advertised choices and remembers the user's
+selection per base `provider/model` in its preferences. A selection is sent as
+`provider/model#variant`. `/effort default` removes the suffix and returns to
+configured/upstream behavior; `/effort none` sends `#none` to override any
+configured effort using the protocol mappings below. See
+[Thinking effort](tui.md#thinking-effort) for selection and persistence examples.
 
 **Provider budget / label mapping:**
 

@@ -150,14 +150,13 @@ async fn load_restores_cached_metadata_without_waiting_on_unreachable_discovery(
     assert_eq!(model.capabilities.max_output, 16_384);
     assert_eq!(model.display_name.as_deref(), Some("Rich Model"));
     assert_eq!(model.source, hya_provider::ModelCatalogSource::Discovered);
+    // Cached remote metadata advertises capabilities but never selects a
+    // request effort without an explicit model configuration.
     assert_eq!(
         model.reasoning_variants,
         vec!["none", "low", "medium", "high"]
     );
-    assert_eq!(
-        model.reasoning_default,
-        Some(hya_provider::ReasoningEffort::Medium)
-    );
+    assert_eq!(model.reasoning_default, None);
     assert!(
         loaded
             .catalog

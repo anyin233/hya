@@ -163,6 +163,13 @@ async fn runtime_model_variant_overrides_agent_reasoning_default() {
 }
 
 #[tokio::test]
+async fn runtime_invalid_variant_sends_no_effort_instead_of_the_default() {
+    let request = completion_request("recording", "gpt-5#bogus", Some(ReasoningEffort::High)).await;
+
+    assert_eq!(request.reasoning, None);
+}
+
+#[tokio::test]
 async fn runtime_tool_request_exposes_websearch_for_every_provider() {
     let compat_ids = tool_ids("compat", "test").await;
     assert!(compat_ids.contains(&"websearch".to_string()));

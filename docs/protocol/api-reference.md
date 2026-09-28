@@ -752,10 +752,7 @@ permission mode, and the archived flag of a root session.
 
 ### `Session.DeleteSession`
 
-Delete a session and its event log. If the session has spawned subagents, this
-also deletes every descendant session in the session tree, including each
-descendant's event log and session-scoped persisted state. Unrelated sessions
-are unchanged.
+Delete a session and its event log.
 
 
 ### `Session.ForkSession`
@@ -1146,6 +1143,8 @@ One selectable model.
 | `output_limit` (8) | `uint64` | Maximum output tokens from the model's metadata (config `limit.output`, else the remote model list); 0 (omitted) when unknown. |
 | `source` (9) | `string` | Where the row comes from: `remote` (the provider's remote model list, via the model cache), `config` (only a `models:` entry in `config.yaml`), `override` (both; config fields win field by field), or `offline` (the built-in `hya/offline` row). |
 | `image_input` (10) | `optional bool` | Whether the model accepts image input (config `modalities.input` contains `image`); unset when unknown. Prompt turns with attachments are refused only when this is `false`. |
+| `reasoning_variants` (11) | `repeated string` | Effort labels accepted by this model, in provider order. Empty when unknown or unsupported. |
+| `reasoning_default` (12) | `optional string` | Explicit configured effort default. Empty when no default is selected. |
 
 ### `ListModelsResponse`
 

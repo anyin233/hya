@@ -568,6 +568,43 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
 }
 
 #[tokio::test]
+async fn http_provider_omits_reasoning_when_no_effort_is_selected() {
+    let (base_url, request_rx) = start_sse_server(
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n".to_string(),
+    )
+    .await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-6-astra".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("openai/gpt-6-astra"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let events: Vec<_> = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let request = captured_request(request_rx).await;
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+
+    assert!(events.iter().all(Result::is_ok));
+    assert!(body.get("reasoning").is_none());
+}
+
+#[tokio::test]
 async fn http_provider_codex_session_sends_account_id_header() {
     let response = concat!(
         "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",

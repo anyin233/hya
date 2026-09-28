@@ -81,3 +81,12 @@ test("vim is a boolean preference; another type is ignored", () => {
   savePreferences(path, { vim: false })
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ vim: false })
 })
+
+test("thinking efforts are cached per model and invalid cache values are ignored", () => {
+  const path = join(temp(), "tui.json")
+  writeFileSync(path, JSON.stringify({ thinkingEfforts: { "openai/gpt-6-astra": "low", "bad": 42, "gone": "", "reset": "default" } }))
+  // Non-string, empty, and `default` (the cleared choice) never come back as a suffix.
+  expect(loadPreferences(path).preferences).toEqual({ thinkingEfforts: { "openai/gpt-6-astra": "low" } })
+  savePreferences(path, { thinkingEfforts: { "openai/gpt-6-astra": "medium" } })
+  expect(JSON.parse(readFileSync(path, "utf8")).thinkingEfforts).toEqual({ "openai/gpt-6-astra": "medium" })
+})
