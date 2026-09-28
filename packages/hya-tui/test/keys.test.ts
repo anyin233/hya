@@ -11,6 +11,12 @@ test("maps Tab to completion and Ctrl+R to refresh", () => {
   expect(resolveBinding(key("r"))).toBeUndefined()
 })
 
+test("slash opens commands only with an empty message; Ctrl+X slash opens them with a draft", () => {
+  expect(resolveBinding(key("/", { sequence: "/" }), { composerEmpty: true })).toBe("openCommands")
+  expect(resolveBinding(key("/", { sequence: "/" }), { composerEmpty: false })).toBeUndefined()
+  expect(resolveBinding(key("/", { sequence: "/" }), { chord: "ctrl+x", composerEmpty: false })).toBe("openCommands")
+})
+
 test("maps the layout, reasoning, and transcript scrolling keys", () => {
   expect(resolveBinding(key("b", { ctrl: true }))).toBe("toggleSidebar")
   expect(resolveBinding(key("o", { ctrl: true }))).toBe("toggleThinking")
@@ -45,15 +51,15 @@ test("every binding is documented and reachable without a browser-reserved short
     key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
     key("?", { shift: true, sequence: "?" }), key("x", { ctrl: true }), key("f4"),
-    key("p", { ctrl: true }),
+    key("p", { ctrl: true }), key("/", { sequence: "/" }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
-    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" })))
+    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" || probe.name === "/" })))
   // The second key of the Ctrl+X chord.
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "fork", "help", "interrupt", "pageDown", "pageUp", "quit", "redo", "refresh", "reviewPending", "scrollBottom", "scrollTop", "toggleProjectsSidebar", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
+    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "fork", "help", "interrupt", "openCommands", "pageDown", "pageUp", "quit", "redo", "refresh", "reviewPending", "scrollBottom", "scrollTop", "toggleProjectsSidebar", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

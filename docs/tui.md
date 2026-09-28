@@ -23,10 +23,11 @@ shows the mode in effect (see [Permission modes](#permission-modes)).
 Models and Workflows have dedicated views, and `/key` opens the full-screen
 [Provider View](#provider-view) (providers, keys, model lists, model tests,
 and model metadata); the API command view exposes the other HTTP/JSON operations
-in `hya.v1`. The input is a multi-line editor with input history; it also
-runs `!command` shell turns, completes `@file` references, and opens a
-command menu on `/` (see [Composer](#composer)). Tab completes slash commands
-using the TUI and server command catalogs. One persistent instruction line
+in `hya.v1`. The message composer is a multi-line editor with its own history;
+it also runs `!command` shell turns and completes `@file` references. `/` on
+an empty composer opens a separate [command pane](#command-pane), with its
+own input and history. Tab completes commands from the TUI and server
+catalogs. One persistent instruction line
 stays below the input at the bottom of the screen and changes with the
 current view. `?` on an empty input (or `/help`) lists every key and
 command (see [Key help](#key-help)).
@@ -230,8 +231,9 @@ or fork yet) is never archived: the daemon deletes it once no TUI shows it
 graceful exit waits at most 2 s for the archive of a used session.
 
 In a WebUI tab (`--web-tab`) `/to-background` is not offered (it is left
-out of the command menu, completion, and `/help`); typing it, or Ctrl+D on
-an empty input, shows `Close the tab to leave this session running` and
+out of the command pane's suggestions, completion, and `/help`); typing it
+there, or Ctrl+D on an empty input, shows
+`Close the tab to leave this session running` and
 does not quit. Closing the tab already does that.
 
 To come back to a session, archived or not: `--resume [id]` at start, or
@@ -547,10 +549,10 @@ A second, narrower sidebar on the left lists every Project live
 | Up / Down | On the input's first / last line: the previous / next submitted input. |
 | `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
-| `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
+| `/` with an empty message, or Ctrl+X then `/` while drafting | Focus the separate command pane. The message draft stays in place (see [Command pane](#command-pane)). |
 | `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
-| Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
-| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
+| Esc | In the command pane, return to the message composer; with a file list open, close it; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
+| Ctrl+C | In the command pane, close it. In the composer, clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
 | Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
 | `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
@@ -564,7 +566,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/agent [name]` | Open the agent picker (visible agents, tagged with their default model); `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
-| Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In an open list (the command menu, the file list, a picker) it moves the highlight up instead. |
+| Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In a command suggestion list, file list, or picker it moves the highlight up instead. |
 | `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
 | `/diff` | Open the full-screen [Diff view](#diff-view): the working tree diff, split per file. |
 | `/mcp` | Open the full-screen [MCP servers](#mcp-servers) view: server status, tools, connect/disconnect, login. |
@@ -600,7 +602,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
 | `/api METHOD /v1/path [JSON]` | Send an HTTP/JSON request and show its JSON response. It is sent as typed: a scoped rpc needs its `directory` (for example `/api GET /v1/fs/list?directory=/abs/dir`). |
 | `/help`, `?` | Open the key and command help overlay (`?` only on an empty input; with text it types `?`). See [Key help](#key-help). |
-| Tab | Complete a slash command name (or, in the command menu, the highlighted entry) or a supported argument; repeat Tab to cycle argument matches. |
+| Tab | In the command pane, complete the highlighted command name or a supported argument; repeat to cycle argument matches. In a file list, insert the highlighted reference. |
 | PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
 | Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
 | Mouse wheel | Scroll the transcript. |
@@ -617,7 +619,7 @@ the next-step instruction.
 Other slash commands are forwarded to the backend as `CommandTurn`s, so
 custom commands and skills from the server catalog (`ListCommands`, which
 already includes skills tagged `source: "skill"`) remain usable in this
-frontend. Tab suggestions and the command menu also use that catalog.
+frontend. The command pane's suggestions and Tab completion also use that catalog.
 Argument completion covers agents, sessions, models, Workflows, pending
 interaction IDs, permission modes, and HTTP operations from the
 generated OpenAPI catalog. Suggestions are refreshed with `/refresh` or
@@ -689,9 +691,9 @@ mode manual · …/work · ⎇ main                           │▸ 1. Review  
 └────────────────────────────────────────────────────┘
 Connected to hya 0.41.0 · /help for commands
 ┌────────────────────────────────────────────────────┐
-│ Message, /command, !shell, or @file                │
+│ Message, !shell, or @file · / commands             │
 └────────────────────────────────────────────────────┘
-Enter a prompt · /new creates a session · /sessions history · F4 requests
+Enter a prompt · /new creates a session · /sessions history · F4 requests · / commands
 ```
 
 The main column holds, from top to bottom: the header line (session, agent,
@@ -1176,7 +1178,7 @@ child's status and what it last did, and it always shows these lines:
 transcript, and the input's placeholder and the footer say so. Enter on a
 prompt or `!command` keeps the text and shows
 `Read-only: this is a subagent's session · Esc returns to the parent`;
-slash commands still run. Esc, when no list is open, opens the parent session
+the command pane still runs slash commands. Esc, when the command pane and file list are closed, opens the parent session
 again (status `Back to the parent session`); the text you typed stays, and a
 second Esc clears it. Opening another session this way resets the parent's
 overlay and prompt queue like any session switch; the parent's turn keeps
@@ -1231,13 +1233,15 @@ under its header, in the error color:
 
 ## Composer
 
-The input at the bottom of the main column is a multi-line editor (OpenTUI's
-built-in `<textarea>`). It keeps the keyboard focus. Its placeholder is
-`Message, /command, !shell, or @file`.
+The input at the bottom of the main column is a multi-line message editor
+(OpenTUI's built-in `<textarea>`). It keeps keyboard focus while the command
+pane is closed. Its placeholder is `Message, !shell, or @file · / commands`.
 
-**Writing.** Enter sends the whole input: a prompt, a `/command`, or a
-`!command`. Ctrl+J, Shift+Enter, and Alt+Enter insert a newline instead of
-sending. The WebUI translates Shift+Enter to the same LF sequence used by
+**Writing.** Enter sends the whole input as a prompt or `!command` shell turn.
+Commands are entered in the separate [command pane](#command-pane). A slash
+inside an existing draft is ordinary text; a pasted line beginning with `/`
+also stays a message. Ctrl+J, Shift+Enter, and Alt+Enter insert a newline
+instead of sending. The WebUI translates Shift+Enter to the same LF sequence used by
 Ctrl+J because xterm.js otherwise reports Shift+Enter as plain Enter. A
 bracketed paste inserts its text, line breaks included, and never sends it.
 In a native terminal, Shift+Enter requires kitty keyboard protocol or
@@ -1253,8 +1257,9 @@ Ctrl+A / Ctrl+E to the start/end of the logical line, Backspace, Delete,
 Alt+Backspace deletes the previous word (Ctrl+W too, outside a browser, which
 reserves it), Ctrl+U / Ctrl+K delete to the line start/end, Ctrl+- undo.
 
-**History.** Every sent input (prompts, `!commands`, `/commands`) is kept for
-the life of the TUI process, up to 200 entries; it is not saved to disk.
+**History.** Every sent prompt or `!command` is kept for the life of the TUI
+process, up to 200 entries; it is not saved to disk. Commands have their own
+history in the command pane.
 Up on the first line of the input shows the previous entry; Down on the last
 line shows the next one, and past the newest entry it restores what you were
 typing before. Any edit ends history navigation. Repeated sends of the same
@@ -1348,8 +1353,8 @@ Tab or Enter replaces the `@text` token with `@<relative path>` and a space;
 Esc closes the list until you edit the token again. The lookup runs 120 ms
 after the last keystroke. Matching is case-sensitive (the server's glob), and
 the best matches come first: file name starts with the text, then file name
-contains it, then only the path does; shorter paths first. Slash-command lines
-(`/…`) have no file references.
+contains it, then only the path does; shorter paths first. The separate
+command input does not resolve file references.
 
 The reference is plain text: the prompt carries `@src/main.rs` as typed. For
 most files nothing else happens — the agent reads the file with its tools if
@@ -1415,19 +1420,28 @@ path is looked up:
 A file only in this machine's `--dir` is `file not found` in remote mode
 unless pasted as above. Local mode is unchanged: everything is read here.
 
-### Command menu
+### Command pane
 
-Typing `/` at the start of the input (before any other character) opens a
-`Commands` box above it, the same overlay position and key handling as the
-`@file` list. Each row shows the name, its argument hint, its description
-(truncated to width), and its source in brackets: `[local]` (this TUI's own
+The `Commands` pane has a single-line input separate from the message
+composer. Press `/` while the message composer is empty, or from the Projects
+sidebar, to focus it. While a message draft is open, press Ctrl+X then `/`;
+the draft stays in the composer. The pane appears above the composer, and
+the footer shows its keys. For example, press `/`, type `models`, and press
+Enter to open the model catalog. To type `src/main.rs` in a message, keep
+typing in the composer; its slash is literal after the first character.
+
+The input starts with `/`. Each suggestion row shows the command name, its
+argument hint, its description (truncated to width), and its source in
+brackets: `[local]` (this TUI's own
 registry), `[command]` (a custom or built-in server command, `/init` and
 `/review` among them), or `[skill]` (a discovered skill — see
 [Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
 keep typing the name: an exact match ranks first, then a prefix match, then a
 substring match, then any name whose letters appear in order (a subsequence
-match); ties break alphabetically. Up/Down move the highlight; Esc closes the
-menu and keeps the typed text.
+match); ties break alphabetically. Up/Down move the highlight; Shift+Tab moves
+it upward. Esc or Ctrl+C closes the pane and keeps its command draft for
+reopening. Shift+Up/Down walks its own last 200 submitted commands. The
+message composer keeps a separate history and draft.
 
 Tab always completes the highlighted name and a trailing space, so you keep
 typing its arguments. Enter's behavior depends on the highlighted command's
@@ -1442,7 +1456,12 @@ name; a local name always wins a clash with a backend name (the registry
 looks up local commands before falling back to the backend, so a local
 command is what actually runs either way). The list refreshes with
 `/refresh`/Ctrl+R and whenever the session or directory changes, the same as
-Tab completion.
+Tab completion. The command pane uses the same registry and `GET /v1/commands`
+catalog as before. A backend command or skill still creates a `CommandTurn`
+through `POST /v1/sessions/{id}/turns` with
+`{ "command": { "command": string, "arguments": string } }`; a local command
+runs its existing TUI handler. View commands such as `/models` still switch
+the main panel in the current layout.
 
 ### Skill commands
 
@@ -1587,7 +1606,7 @@ clipboard; use [Copy](#copy) for that).
 **Esc precedence** (vim on), first match wins:
 
 1. The picker or the one-line yolo confirmation is open: it takes Esc.
-2. The command menu or the file list is open: Esc closes it.
+2. The command pane or the file list is open: Esc closes it.
 3. Insert mode: Esc switches to normal mode — nothing else, even while a
    turn runs or a prompt is shown.
 4. Normal mode with a count or operator pending: Esc cancels it.
@@ -1739,8 +1758,9 @@ without typing its id. The agent's turn waits until you answer.
 The first row is `<header>: <question>`. Each option sends
 `{question: {answer: "<label>"}}`. For a free-text answer, type it into the
 input and press Enter: it sends `{question: {answer: "<text>"}}` instead of a
-prompt (a `/command` still runs as a command). Choosing `Other…` only points
-you at the input. `Reject` (or Esc) sends `{question: {rejected: true}}`;
+prompt. A slash command entered in the command pane runs separately.
+Choosing `Other…` only points you at the input. `Reject` (or Esc) sends
+`{question: {rejected: true}}`;
 `ask_user` then reports the question as unanswered. Only the first question
 of a multi-question `ask_user` call is shown (the backend answers one per
 interaction).
@@ -1759,8 +1779,8 @@ Key order, first match wins:
 1. The permission mode picker, while open, takes every key but Ctrl+C; the
    one-line yolo confirmation takes Enter, Esc, and Shift+Tab (see
    [Permission modes](#permission-modes)), so they never answer the prompt.
-2. An open list (the `/` command menu or the `@file` list) takes Up/Down,
-   Tab, Shift+Tab (highlight up), Enter, and Esc.
+2. The command pane takes its own input and keys. An open `@file` list takes
+   Up/Down, Tab, Shift+Tab (highlight up), Enter, and Esc.
 3. The prompt, with an empty input: `1`–`9` choose that option at once;
    Up/Down move the highlight (`▸`, accent color); Enter chooses the
    highlighted option; Esc declines. With text in the input, a question takes
@@ -1922,8 +1942,8 @@ status bar, and notes every switch in the transcript.
   modes in the backend's listing order → `manual`. The listing is read with
   the other catalogs at start and on `/refresh`; without it (an older
   backend) the cycle is `manual` ↔ `yolo`. Shift+Tab also works while a
-  permission prompt is shown. In an open list (the `/` command menu, the
-  `@file` list, the picker) it moves the highlight up instead and the mode
+  permission prompt is shown. In command suggestions, the `@file` list, or a
+  picker it moves the highlight up instead and the mode
   does not change.
 - **`/permissions`** opens a picker with every mode from
   `GET /v1/permission-modes`: its title, `[source]` (`builtin`, or the id
@@ -2532,7 +2552,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
-| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
+| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for command-pane suggestions and completion. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body (Provider View `x`) | `{provider?}` |
@@ -2552,7 +2572,7 @@ own key line; see [Provider View](#provider-view)):
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
 | Chat in a subagent's session | `Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch` |
 | API | `Next: /api GET /v1/health · /help for command syntax` |
-| Help | `Enter a prompt or choose a /command · Tab completes` |
+| Help | `Esc returns · / opens the command pane · Tab completes there` |
 | Todos | `Next: /refresh to reload the list · /help` |
 | Status | `Next: /model, /agent, or /rename to change what's shown · /help` |
 
@@ -2666,9 +2686,9 @@ together.
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, routing keys and pastes to an open Provider View, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the message `<textarea>`, history, shell mode, file list, global key routing), `CommandPane` (separate `<input>`, suggestions, completion, command history), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
-| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
+| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command pane's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z, and `toggleProjectsSidebar` on Ctrl+P) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
@@ -2758,10 +2778,10 @@ To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
 }
 ```
 
-The name becomes Tab-completable and appears in the command menu and the
+The name becomes Tab-completable and appears in the command pane and the
 help overlay automatically (source `[local]`; it wins a name clash with a
 backend command). An `argumentHint` written `[in brackets]` is optional (the command
-menu's Enter runs it as is); anything else is treated as required (Enter
+pane's Enter runs it as is); anything else is treated as required (Enter
 completes the name and waits). Add a row to the command table above. Unregistered `/names` still go to the backend as
 `CommandTurn`s (custom commands and skills; see
 [Skill commands](#skill-commands)). To add a key, append a
@@ -2797,7 +2817,7 @@ scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
 heading previews without marker or color flashes, queued prompts, and the
 turn status line (`Ready`, provider errors).
-`e2e/hya-tui-commands-menu.spec.ts` covers the `/` command menu (open,
+`e2e/hya-tui-commands-menu.spec.ts` covers the `/` command pane (open,
 fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
 commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,
 `/rename`, and `/status`. `e2e/hya-tui-tools.spec.ts` covers tool cards (read, bash, edit/write diff

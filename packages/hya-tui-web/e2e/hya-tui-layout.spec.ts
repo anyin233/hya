@@ -97,14 +97,14 @@ test.describe("pending interactions", () => {
     // The open session's ask: the permission prompt docked above the composer, no pending block.
     await term.waitForText("asked by build", 20_000)
     const dock = (await term.find("Permission"))!
-    const input = (await term.find("Message, /command, !shell, or @file"))!
+    const input = (await term.find("Message, !shell, or @file · / commands"))!
     expect(dock.row).toBeLessThan(input.row)
     expect(await term.find("Pending (1)")).toBeNull()
     // Open a new session: the first session's ask is now elsewhere, listed in the pending block.
     await prompt(term, "/new")
     await term.waitForText(/Pending \(1\)/, 20_000)
     const block = (await term.find("Pending (1)"))!
-    expect(block.row).toBeLessThan((await term.find("Message, /command, !shell, or @file"))!.row)
+    expect(block.row).toBeLessThan((await term.find("Message, !shell, or @file · / commands"))!.row)
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)

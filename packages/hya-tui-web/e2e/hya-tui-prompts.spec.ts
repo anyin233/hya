@@ -30,7 +30,7 @@ async function at(term: Tui, needle: string) {
 async function promptShown(term: Tui, title: RegExp | string = "Permission"): Promise<void> {
   await term.waitForText(title, 20_000)
   const box = typeof title === "string" ? await at(term, title) : undefined
-  const input = await at(term, "Message, /command, !shell, or @file")
+  const input = await at(term, "Message, !shell, or @file · / commands")
   if (box) expect(box.row).toBeLessThan(input.row)
 }
 

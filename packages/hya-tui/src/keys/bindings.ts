@@ -17,6 +17,7 @@ export type KeyAction =
   | "quit"
   | "eof"
   | "complete"
+  | "openCommands"
   | "cycleMode"
   | "refresh"
   | "toggleSidebar"
@@ -65,6 +66,12 @@ const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.shift
 export const keyBindings: readonly KeyBinding[] = [
   // The second key of a Ctrl+X chord comes first: while the chord is armed it wins over every other binding.
   {
+    action: "openCommands",
+    label: "Ctrl+X /",
+    description: "Focus the command pane without changing the message draft",
+    matches: (key, context) => context.chord === "ctrl+x" && !key.ctrl && !key.meta && key.sequence === "/",
+  },
+  {
     action: "externalEditor",
     label: "Ctrl+X Ctrl+E",
     description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the edited text comes back into the input, not sent (also /editor; Ctrl+X E works too)",
@@ -91,7 +98,7 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "chord",
     label: "Ctrl+X",
-    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor; U undo, R redo, F fork); any other next key cancels it",
+    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor; U undo, R redo, F fork, / commands); any other next key cancels it",
     matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "x" && context.chord === undefined,
   },
   {
@@ -122,8 +129,14 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "complete",
     label: "Tab",
-    description: "Complete the /command or argument; repeat to cycle",
+    description: "Complete the selected file reference in a prompt",
     matches: (key) => key.name === "tab" || key.sequence === "\t",
+  },
+  {
+    action: "openCommands",
+    label: "/",
+    description: "Focus the command pane when the message editor is empty; use Ctrl+X / while writing a message",
+    matches: (key, context) => !key.ctrl && !key.meta && key.sequence === "/" && context.composerEmpty === true,
   },
   {
     action: "reviewPending",

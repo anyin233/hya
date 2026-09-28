@@ -197,6 +197,11 @@ test("the link never reaches a status line, the store, or the backend", async ()
   await h.controller.submit(`here is my link ${link}`)
   expect(h.store.state.status).toBe(relayLinkRefusedStatus)
   expect(h.named("createTurn")).toEqual([])
+  // A pasted command-looking message stays a message, so it cannot use the
+  // command surface's exception for a concealed relay link.
+  await h.controller.submit(`/connect-remote ${link}`, "message")
+  expect(h.store.state.status).toBe(relayLinkRefusedStatus)
+  expect(h.named("createTurn")).toEqual([])
   // A mistyped command with a link is refused too (it would run as a backend command turn).
   await h.controller.submit(`/connect-remot ${link}`)
   expect(h.store.state.status).toBe(relayLinkRefusedStatus)

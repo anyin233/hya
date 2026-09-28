@@ -1098,17 +1098,18 @@ export function createController({ client, store, directory, remote: startedRemo
     return read
   }
 
-  /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */
-  async function submit(value: string): Promise<void> {
+  /** Submit text from a named input surface. `auto` preserves programmatic callers. */
+  async function submit(value: string, source: "auto" | "message" | "command" = "auto"): Promise<void> {
     const text = value.trim()
     if (!text) return
     try {
       // A relay link is a credential: only `/connect-remote` takes it, nothing else sends it anywhere.
-      if (containsRelayLink(text) && !/^\/connect-remote(\s|$)/.test(text)) {
+      if (containsRelayLink(text) && !(source !== "message" && /^\/connect-remote(\s|$)/.test(text))) {
         status(relayLinkRefusedStatus)
         return
       }
-      if (text.startsWith("/")) {
+      if (source === "command" || (source === "auto" && text.startsWith("/"))) {
+        if (!text.startsWith("/")) throw new Error("Command must start with /")
         await registry.dispatch(text, { store, client, actions })
         return
       }
@@ -1590,7 +1591,7 @@ export function createController({ client, store, directory, remote: startedRemo
     secret.clear()
   }
 
-  /** Merged, deduplicated command list for the `/` command menu (commands/menu.ts). */
+  /** Merged, deduplicated suggestions for the command pane (commands/menu.ts). */
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
     const local = registry.list().filter((spec) => !(store.state.webTab && spec.terminalOnly))

@@ -13,9 +13,8 @@ export interface MentionToken {
   query: string
 }
 
-/** The mention the cursor is in, or `undefined`. Slash-command lines have none. */
+/** The mention the cursor is in, or `undefined`. The composer always holds message text. */
 export function mentionAt(text: string, cursor: number): MentionToken | undefined {
-  if (text.startsWith("/")) return undefined
   let at = cursor - 1
   while (at >= 0 && !/\s/.test(text[at]!) && text[at] !== "@") at--
   if (at < 0 || text[at] !== "@") return undefined

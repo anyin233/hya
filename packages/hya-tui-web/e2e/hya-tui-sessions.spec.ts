@@ -147,8 +147,13 @@ test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes an
   await term.waitForText(/hya · First session/)
 
   await prompt(term, "/sessions")
-  await term.waitForText("Sessions")
-  expect(await term.text()).not.toContain(second)
+  await term.waitForText("F2 rename · Ctrl+D del")
+  const lines = await term.lines()
+  const top = lines.findIndex((line) => line.includes("┌─Sessions ·"))
+  const bottom = lines.findIndex((line, index) => index > top && line.includes("└"))
+  expect(top).toBeGreaterThanOrEqual(0)
+  expect(bottom).toBeGreaterThan(top)
+  expect(lines.slice(top, bottom + 1).join("\n")).not.toContain(second)
 })
 
 test("fits about 80 columns", async ({ tui, backend }, testInfo) => {

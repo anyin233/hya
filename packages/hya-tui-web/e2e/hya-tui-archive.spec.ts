@@ -195,16 +195,16 @@ test.describe("WebUI tabs (bare hya)", () => {
     await web.waitForText("Desktop notifications off")
     await web.press("Control+d")
     await web.waitForText(notice)
-    // The command menu offers /todos but not /to-background in the tab…
+    // The command pane offers /todos but not /to-background in the tab…
     await web.type("/to")
     await web.waitForText("/todos")
     expect(await web.text()).not.toContain("/to-background")
     await web.attach(testInfo, "web-menu")
-    for (let index = 0; index < 3; index++) await web.press("Backspace")
+    await web.press("Escape")
     // …and does offer it in the terminal.
     await term.type("/to")
     await term.waitForText("/to-background")
-    for (let index = 0; index < 3; index++) await term.press("Backspace")
+    await term.press("Escape")
 
     // A turn runs in the tab; closing the tab (SIGHUP to its TUI) archives nothing.
     await prompt(web, "a long web job")
