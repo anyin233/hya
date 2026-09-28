@@ -488,6 +488,9 @@ pub struct SessionEngine {
     /// cutover blocks while a session sits here. Shared, because engine
     /// clones run turns.
     pending_asks: Arc<Mutex<HashMap<SessionId, usize>>>,
+    /// Runtime-only sticky shake placeholders per session, shared by engine
+    /// clones (see [`crate::compaction::apply_sticky_evictions`]).
+    pub(crate) sticky_evictions: Arc<Mutex<HashMap<SessionId, crate::compaction::StickyEvictions>>>,
     #[cfg(test)]
     direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
 }
@@ -549,6 +552,7 @@ impl Clone for SessionEngine {
             handoff_generation: Arc::clone(&self.handoff_generation),
             turn_gate: Arc::clone(&self.turn_gate),
             pending_asks: Arc::clone(&self.pending_asks),
+            sticky_evictions: Arc::clone(&self.sticky_evictions),
             #[cfg(test)]
             direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
         }
@@ -653,6 +657,7 @@ impl SessionEngine {
             handoff_generation: Arc::new(AtomicU64::new(1)),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
             pending_asks: Arc::new(Mutex::new(HashMap::new())),
+            sticky_evictions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
         };

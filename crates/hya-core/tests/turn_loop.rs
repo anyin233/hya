@@ -1117,6 +1117,112 @@ async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
     );
 }
 
+/// Eviction is sticky: once a stale output was evicted, later rounds re-apply
+/// the same placeholder before measuring the request. A later turn that is
+/// under the threshold with that placeholder must neither re-run the ladder
+/// (no second `ContextEvicted`) nor escalate to the summarizer.
+#[tokio::test]
+async fn evicted_output_stays_evicted_on_later_turns_without_escalating() {
+    let dir = tempdir();
+    let big_file = dir.join("big.txt");
+    let big = format!("{}\n", "R".repeat(100)).repeat(200);
+    tokio::fs::write(&big_file, &big).await.unwrap();
+    let path = big_file.to_string_lossy().into_owned();
+
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".to_string(),
+                input: json!({ "path": path }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("read it".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("second turn".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("third turn".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(Recording(called.clone())),
+        CompactionConfig {
+            token_threshold: 1_000_000,
+            keep_recent: 1,
+            // Same sizing as the E3 test above: turn 2 crosses the threshold
+            // and evicting turn 1's read output brings it far below.
+            context_fraction: 0.16,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+
+    for prompt in [
+        "read the big file".to_string(),
+        "now summarize ".repeat(1_500),
+        "and once more".to_string(),
+    ] {
+        engine.admit_user_prompt(session, prompt).await.unwrap();
+        engine
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+            .unwrap();
+    }
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let evictions = envelopes
+        .iter()
+        .filter(|e| matches!(e.event, hya_proto::Event::ContextEvicted { .. }))
+        .count();
+    assert_eq!(
+        evictions, 1,
+        "the third turn must re-apply the sticky placeholder, not evict again"
+    );
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "a re-applied eviction keeps the request under the threshold; no summary"
+    );
+}
+
 #[tokio::test]
 async fn context_status_reports_round_occupancy_and_accounting_mode() {
     let dir = tempdir();

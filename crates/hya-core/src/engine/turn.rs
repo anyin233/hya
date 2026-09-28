@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, PartId, Role,
     SessionId, TokenUsage, ToolCallId, UsagePurpose,
@@ -8,6 +5,8 @@ use hya_proto::{
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
@@ -1451,6 +1450,17 @@ impl SessionEngine {
             if matches!(messages.last(), Some(Message::Assistant { .. })) {
                 fold_config.keep_recent = fold_config.keep_recent.saturating_add(1);
             }
+            // Earlier evictions of this session stay in effect: re-apply their
+            // exact placeholders before measuring, so the prefix stays
+            // byte-stable (provider prompt cache) and a request they already
+            // keep under the threshold does not walk the ladder again.
+            let mut sticky_evictions = self
+                .sticky_evictions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&session)
+                .unwrap_or_default();
+            crate::compaction::apply_sticky_evictions(&mut messages, &sticky_evictions);
 
             // Active route for this turn. Its advertised context window scales
             // the compaction threshold, so resolve it before deciding.
@@ -1544,10 +1554,11 @@ impl SessionEngine {
                         let estimate_before = self
                             .token_accounting
                             .estimate_with_reasoning_policy(&messages, reasoning_policy);
-                        let evicted = crate::compaction::evict_stale_tool_outputs(
+                        let evicted = crate::compaction::evict_stale_tool_outputs_sticky(
                             &mut messages,
                             fold_config.keep_recent,
                             Some(&spill),
+                            &mut sticky_evictions,
                         );
                         if evicted == 0 {
                             continue;
@@ -1822,6 +1833,26 @@ impl SessionEngine {
                             .reload_after_compaction(session, &live_agent, &model)
                             .await?;
                     }
+                }
+            }
+            while sticky_evictions.len() > 4096 {
+                if let Some(key) = sticky_evictions.keys().next().copied() {
+                    sticky_evictions.remove(&key);
+                }
+            }
+            self.sticky_evictions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(session, sticky_evictions);
+            {
+                let mut sticky = self
+                    .sticky_evictions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if sticky.len() > 64
+                    && let Some(other) = sticky.keys().find(|key| **key != session).copied()
+                {
+                    sticky.remove(&other);
                 }
             }
             // Notify `compaction.after` best-effort: an enrichment point, so a

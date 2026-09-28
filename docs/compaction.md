@@ -26,15 +26,18 @@ emits. Thresholds and token accounting are configured alongside; see
 Details worth knowing per mechanism:
 
 - **`shake`** evicts a completed tool output when it lies outside the last
-  `keep_recent` messages (stale outputs of earlier turns) **or** outside the
-  last `keep_recent` completed tool steps. The step tail applies inside the
-  active assistant message too, so one long turn — a single assistant message
-  with many tool steps — sheds its early outputs mid-turn. Unlike the other
-  rungs it needs no foldable message range. With the session's artifact
-  store the eviction is a *move*: the transcript keeps
+  `keep_recent` messages (older turns) or outside the last `keep_recent`
+  completed tool steps. The step tail applies inside the active assistant
+  message too, so one long turn sheds its early outputs mid-turn. Shake is
+  sticky for the lifetime of the running session: once a part is moved, every
+  later round reapplies the exact same byte-stable placeholder and does not
+  emit another `ContextEvicted` for it. Only newly encountered stale parts are
+  added. The placeholder retains an appended `--- [NEW MAIL ...]` steer notice
+  verbatim, so consumed mail remains visible to the model. With the session's
+  artifact store the eviction is a *move*: the transcript keeps
   `[tool output moved to artifact://… ]` and `read` resolves the handle back to
   the full bytes. A body smaller than the notice replacing it is not spilled.
-  Idempotent: notices are recognized and never re-evicted.
+  Sticky state is runtime-only; it does not alter the event log.
 - **`remote`** persists the provider's folded window behind the
   `HYA_COMPACTED_CONTEXT` marker; later Responses requests re-inject the items
   verbatim. If the native compact succeeds but the transcript is still over
