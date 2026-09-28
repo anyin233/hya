@@ -800,6 +800,7 @@ as the first `metadata.warnings` entry, for example `3 matches in 1 file.
 (context clamped to 5: requested 8, allowed 0–5)`.
 
 ```json
+The `glob` value is a file-path filter. When it contains no glob metacharacters and names an existing directory relative to the search root, it matches files anywhere under that directory (equivalent to `<directory>/**`); a literal file path continues to match that file.
 {
   "pattern": "TODO|FIXME",
   "path": "src",
