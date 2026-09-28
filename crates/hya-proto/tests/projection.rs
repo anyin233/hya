@@ -156,11 +156,20 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
                 session,
                 message,
                 part,
-                delta: "visible summary".to_string(),
+                delta: "visible ".to_string(),
             },
         ),
         env(
             4,
+            Event::ReasoningDelta {
+                session,
+                message,
+                part,
+                delta: "summary".to_string(),
+            },
+        ),
+        env(
+            5,
             Event::ReasoningEnd {
                 session,
                 message,

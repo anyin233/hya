@@ -715,9 +715,10 @@ While a provider round streams, each assistant text part arrives live as
 `partCompleted`. When the round's stream ends, the durable log records the
 same part once, with the **same** message and part ids: `partStarted`,
 `partReplaced` (`text` = the final full text), `partCompleted`. Reasoning
-deltas and user-message text are durable `partStarted` / `partAppended` /
-`partCompleted` events; tool-call arguments are durable `partStarted` /
-`partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
+deltas are live-only (`seq = 0`) and durable replay emits the same
+`partStarted` / `partReplaced` / `partCompleted` sequence; legacy durable
+reasoning deltas remain accepted. Tool-call arguments are durable
+`partStarted` / `partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
 A prompt's image attachments arrive as one durable `partsAdded` (see
 [Prompt attachments](#prompt-attachments-images)).
 A `text_complete`

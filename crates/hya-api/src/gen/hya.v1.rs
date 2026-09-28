@@ -6809,8 +6809,8 @@ pub struct PartStarted {
     #[prost(string, tag = "5")]
     pub call_id: ::prost::alloc::string::String,
 }
-/// Streaming delta appended to a part. Assistant text deltas are live-only
-/// (`seq = 0`); reasoning and legacy text deltas are durable.
+/// Streaming delta appended to a part. Assistant text and reasoning deltas are
+/// live-only (`seq = 0`); legacy durable deltas remain replay-compatible.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartAppended {
     /// Owning message identifier.

@@ -1619,8 +1619,8 @@ A part was appended to a message.
 
 ### `PartAppended`
 
-Streaming delta appended to a part. Assistant text deltas are live-only
-(`seq = 0`); reasoning and legacy text deltas are durable.
+Streaming delta appended to a part. Assistant text and reasoning deltas are
+live-only (`seq = 0`); legacy durable deltas remain replay-compatible.
 
 | Field | Type | Description |
 |---|---|---|
