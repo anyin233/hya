@@ -10,6 +10,7 @@ import {
 } from "@opentui/core"
 import type { PasteEvent } from "@opentui/core"
 import openapi from "../../../docs/protocol/openapi.json"
+import { TurnActivity, terminalTurnMessage } from "./activity"
 import { argumentsFrom } from "./args"
 import { completeCommand, SecretEntry, type CompletionContext } from "./completion"
 import { footerInstruction, type View } from "./instructions"
@@ -27,6 +28,7 @@ import {
   type ProviderSummary,
   type SessionInfo,
   type StreamFrame,
+  type TurnInfo,
   type WorkflowSummary,
 } from "./client"
 
@@ -97,6 +99,7 @@ async function main(): Promise<void> {
   body.add(sessionPanel)
   body.add(mainPanel)
   body.add(interactionPanel)
+  const activityText = new TextRenderable(renderer, { content: "", height: 1, fg: colors.accent })
   const status = new TextRenderable(renderer, { content: "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit", height: 1, fg: colors.muted })
   const inputPanel = new BoxRenderable(renderer, { height: 3, border: true, borderColor: colors.border, backgroundColor: colors.panel, paddingX: 1 })
   const input = new InputRenderable(renderer, { width: "100%", maxLength: 10_000, placeholder: "Message or /command", textColor: colors.fg, cursorColor: colors.accent })
@@ -106,6 +109,7 @@ async function main(): Promise<void> {
   inputPanel.add(secretText)
   root.add(header)
   root.add(body)
+  root.add(activityText)
   root.add(status)
   root.add(inputPanel)
   root.add(footer)
@@ -131,6 +135,8 @@ async function main(): Promise<void> {
   let workflowState: Record<string, unknown> | undefined
   let selected: SessionInfo | undefined
   let turnId = ""
+  const activity = new TurnActivity()
+  let activityTimer: ReturnType<typeof setInterval> | undefined
   let view: View = "chat"
   let apiOutput = "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations()
   let cursor = "0"
@@ -168,6 +174,59 @@ async function main(): Promise<void> {
   }
 
   function showStatus(text: string): void { status.content = text }
+  function renderActivity(): void { activityText.content = activity.label(Date.now()) }
+  function stopActivityTimer(): void {
+    if (activityTimer) clearInterval(activityTimer)
+    activityTimer = undefined
+  }
+  function resetTrackedTurn(): void {
+    activity.reset()
+    turnId = ""
+    stopActivityTimer()
+    renderActivity()
+  }
+
+  async function watchTurn(sessionId: string, id: string): Promise<void> {
+    while (!closing && activity.matches(sessionId, id)) {
+      try {
+        const turn = await client.waitTurn(sessionId, id, 5_000)
+        if (!activity.matches(sessionId, id)) return
+        activity.setStatusCheck(sessionId, id, true)
+        renderActivity()
+        const terminal = terminalTurnMessage(turn)
+        if (terminal) {
+          resetTrackedTurn()
+          showStatus(terminal)
+          scheduleRefresh()
+          return
+        }
+      } catch (error) {
+        if (!activity.matches(sessionId, id) || closing) return
+        activity.setStatusCheck(sessionId, id, false)
+        renderActivity()
+        showStatus(`Turn status check failed: ${String(error)} · retrying`)
+        await Bun.sleep(1_000)
+      }
+    }
+  }
+
+  function trackTurn(sessionId: string, turn: TurnInfo): void {
+    const terminal = terminalTurnMessage(turn)
+    if (terminal || !turn.id) {
+      showStatus(terminal ?? "Turn finished")
+      scheduleRefresh()
+      return
+    }
+    turnId = turn.id
+    activity.start(sessionId, turn.id, Date.now())
+    stopActivityTimer()
+    renderActivity()
+    activityTimer = setInterval(renderActivity, 250)
+    showStatus(`Turn admitted · ${turn.id}`)
+    void watchTurn(sessionId, turn.id)
+    scheduleRefresh()
+  }
+
   function repaint(): void {
     footer.content = view === "connect" && !connectionDraft
       ? "Next: /connect deepseek · /connect custom <id> <base-url> <model-id>"
@@ -259,10 +318,8 @@ async function main(): Promise<void> {
     const event = frame.event
     if (!event) return
     if (event.seq && BigInt(event.seq) > BigInt(cursor)) cursor = event.seq
-    if (event.messageFinished && event.messageFinished.message === turnId) {
-      turnId = ""
-      showStatus(`Turn finished · ${event.messageFinished.finish ?? "done"}`)
-    }
+    if (event.session) activity.noteEvent(event.session, Date.now())
+    renderActivity()
     scheduleRefresh()
   }
 
@@ -285,6 +342,7 @@ async function main(): Promise<void> {
   async function openSession(sessionId: string): Promise<void> {
     const session = sessions.find((row) => row.id === sessionId)
       ?? await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`)
+    if (selected?.id !== session.id) resetTrackedTurn()
     selected = session
     view = "chat"
     cursor = session.lastSeq ?? "0"
@@ -312,10 +370,9 @@ async function main(): Promise<void> {
       if (!text.startsWith("/")) {
         if (!selected) await newSession()
         if (!selected) throw new Error("Session creation failed")
-        const turn = await client.createTurn(selected.id, text)
-        turnId = turn.id
-        showStatus(`Turn ${turn.state.toLowerCase()} · ${turn.id}`)
-        scheduleRefresh()
+        const sessionId = selected.id
+        const turn = await client.createTurn(sessionId, text)
+        if (selected?.id === sessionId) trackTurn(sessionId, turn)
         return
       }
       const [command, ...args] = text.split(/\s+/)
@@ -433,10 +490,9 @@ async function main(): Promise<void> {
           if (!selected) throw new Error("Session creation failed")
           const name = command?.slice(1) ?? ""
           const argumentsText = text.slice(command.length).trimStart()
-          const turn = await client.createCommandTurn(selected.id, name, argumentsText)
-          turnId = turn.id
-          showStatus(turn.id ? `Command ${name} · ${turn.state.toLowerCase()}` : `Command ${name} finished`)
-          scheduleRefresh()
+          const sessionId = selected.id
+          const turn = await client.createCommandTurn(sessionId, name, argumentsText)
+          if (selected?.id === sessionId) trackTurn(sessionId, turn)
         }
       }
     } catch (error) {
@@ -562,6 +618,7 @@ async function main(): Promise<void> {
   renderer.once("destroy", () => {
     closing = true
     streamAbort?.abort()
+    resetTrackedTurn()
     if (refreshTimer) clearTimeout(refreshTimer)
     renderer.keyInput.off("keypress", onKey)
     renderer.keyInput.off("paste", onPaste)
