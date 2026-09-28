@@ -118,7 +118,7 @@ pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
-pub use effort::{EffectiveEffort, EffortSource, resolve_effort};
+pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::{
     AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
     BoundWorkflowSender, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,

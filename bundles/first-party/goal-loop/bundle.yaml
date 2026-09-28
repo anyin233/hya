@@ -1,7 +1,7 @@
 kind: AgentSetBundle
 identity:
   id: hya/goal-loop
-  version: 0.43.12
+  version: 0.43.13
   publisher: hya
 resources:
   skills:

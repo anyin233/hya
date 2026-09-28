@@ -1447,7 +1447,9 @@ fn resolve_spawn_member(
 /// Branch 1 (exact valid id) and branch 2 (first substring match, bare
 /// vendor ids excluded) replace the request with the resolved id; anything
 /// else clears it so [`apply_spawn_model_policy`] falls through to the
-/// definition/preference chain.
+/// definition/preference chain. A `#effort` suffix on the request is split
+/// off before matching and becomes the member's `effort` unless the call
+/// also passed an explicit `effort`, which wins.
 fn resolve_member_dispatch_model(
     ctx: &ResolveSpawnMemberCtx<'_>,
     mut member: SpawnMember,
@@ -1478,6 +1480,17 @@ fn resolve_member_dispatch_model(
     let Some(requested) = requested else {
         return member;
     };
+    let (requested, suffix) = match requested.rsplit_once('#') {
+        Some((base, effort)) => (base.to_owned(), Some(effort.to_owned())),
+        None => (requested, None),
+    };
+    if member
+        .effort
+        .as_deref()
+        .is_none_or(|effort| effort.trim().is_empty())
+    {
+        member.effort = suffix.filter(|effort| !effort.trim().is_empty());
+    }
     let resolved = resolve_dispatch_model(&requested, &model_ids, &provider_ids)
         .map(|model| model.to_string());
     member.model = resolved.clone();
@@ -1485,6 +1498,52 @@ fn resolve_member_dispatch_model(
         inline.model = resolved;
     }
     member
+}
+
+/// Apply a spawn-time `effort` as the child model's `#effort` suffix.
+///
+/// The suffix is the effort resolver's highest layer, so it outranks the
+/// Agent's configured/remembered default and authored policy. An unknown label,
+/// or one the child's catalog row does not advertise, is rejected (`none` is
+/// always allowed). An absent or empty `effort` leaves the Agent untouched.
+fn apply_spawn_effort(
+    engine: &SessionEngine,
+    mut agent: AgentSpec,
+    effort: Option<&str>,
+) -> Result<AgentSpec, SpawnError> {
+    let Some(label) = effort.map(str::trim).filter(|label| !label.is_empty()) else {
+        return Ok(agent);
+    };
+    let base = agent
+        .model
+        .as_str()
+        .rsplit_once('#')
+        .map_or(agent.model.as_str(), |(base, _)| base)
+        .to_owned();
+    let invalid = || SpawnError::InvalidEffort {
+        effort: label.to_owned(),
+        model: base.clone(),
+    };
+    let parsed = ReasoningEffort::parse(label).ok_or_else(invalid)?;
+    if parsed != ReasoningEffort::Off {
+        let advertised = engine
+            .provider_catalog()
+            .into_iter()
+            .find(|row| {
+                base == format!("{}/{}", row.provider_id, row.model_id) || base == row.model_id
+            })
+            .map(|row| row.reasoning_variants)
+            .filter(|variants| !variants.is_empty());
+        if let Some(variants) = advertised
+            && !variants
+                .iter()
+                .any(|variant| ReasoningEffort::parse(variant) == Some(parsed))
+        {
+            return Err(invalid());
+        }
+    }
+    agent.model = ModelRef::new(format!("{base}#{label}"));
+    Ok(agent)
 }
 
 fn resolve_authorized_spawn_member(
@@ -1522,8 +1581,9 @@ fn resolve_authorized_spawn_member(
     // substring-dispatch). Unresolvable requests defer to the user's
     // configured chain instead of overriding it verbatim.
     let member = resolve_member_dispatch_model(ctx, member);
-    let mut agent =
+    let agent =
         apply_spawn_model_policy(agent, definition, &member, ctx.categories, ctx.is_servable);
+    let mut agent = apply_spawn_effort(ctx.engine, agent, member.effort.as_deref())?;
     if let Some(inline) = member.inline_agent.as_ref() {
         if !inline.prompt.trim().is_empty() {
             agent.system_prompt = inline.prompt.clone();
@@ -2233,6 +2293,7 @@ fn spawn_team_supervisor_with_environment(
                             session: "-".to_string(),
                             status: "failed".to_string(),
                             summary: summary.clone(),
+                            model: None,
                         });
                     }
                 } else {
@@ -2248,6 +2309,7 @@ fn spawn_team_supervisor_with_environment(
                             sidecar_factory,
                             ..
                         } = resolved;
+                        let model = agent.model.to_string();
                         // The handle prefix is the resolved agent id the
                         // call named (not an inline overlay's name).
                         match resident_supervisor
@@ -2273,6 +2335,7 @@ fn spawn_team_supervisor_with_environment(
                                 summary: format!(
                                     "Resident {handle} is live; results arrive as its report."
                                 ),
+                                model: Some(model),
                             }),
                             Err(err) => {
                                 spawn_failed = true;
@@ -2281,6 +2344,7 @@ fn spawn_team_supervisor_with_environment(
                                     session: "-".to_string(),
                                     status: "failed".to_string(),
                                     summary: err.to_string(),
+                                    model: None,
                                 });
                             }
                         }
@@ -2626,6 +2690,16 @@ async fn build_session_engine_with_mcp_defer(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
+    // `agents.<id>.reasoning` defaults load at startup, like model leaves.
+    engine
+        .runtime_registry()
+        .publish_agent_effort_configuration(
+            crate::agent_model_config::AgentModelConfigFiles::new(
+                crate::config::active_config_path(),
+            )
+            .load_efforts()
+            .context("load Agent effort configuration before engine readiness")?,
+        );
     let reconciler = Arc::new(RuntimeReconciler::new(engine.runtime_registry()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
     let plugin_desired = plugin_specs
@@ -5455,6 +5529,8 @@ You are the installed resident agent.
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -5499,6 +5575,84 @@ You are the installed resident agent.
         );
     }
 
+    /// `task` effort becomes the child's `#effort`, over the Agent's resolved
+    /// model (here its remembered preference); a `#effort` on the `model`
+    /// request is honoured, an explicit `effort` beats it, and an unknown label
+    /// is rejected before anything spawns.
+    #[tokio::test]
+    async fn spawn_effort_becomes_the_child_model_suffix() {
+        let workdir = tempdir();
+        let engine = engine_with_catalog(catalog_with_worker_policy(ModelPolicy::default())).await;
+        engine.runtime_registry().publish_agent_model_preferences(
+            [("worker".to_string(), ModelRef::new("remembered/model"))]
+                .into_iter()
+                .collect(),
+        );
+        let binding = engine.bind_runtime(&workdir).expect("bind");
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base/model"),
+            system_prompt: "lead base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let allowed = [AgentDef {
+            name: "worker".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
+        }];
+        let categories = CategoryRegistry::default();
+        let is_servable = |_: &ModelRef| true;
+        let sidecar_environment = BundleSidecarEnvironment::from_command(
+            vec!["bun".to_string(), "sidecar.js".to_string()],
+            tempdir(),
+        );
+        let resolve = |model: Option<&str>, effort: Option<&str>| {
+            resolve_spawn_member(
+                &ResolveSpawnMemberCtx {
+                    engine: &engine,
+                    binding: &binding,
+                    base: &base,
+                    caller: "build",
+                    allowed_agents: &allowed,
+                    categories: &categories,
+                    is_servable: &is_servable,
+                    guidance: None,
+                    sidecar_environment: &sidecar_environment,
+                },
+                SpawnMember {
+                    prompt: "resolve effort".to_string(),
+                    subagent_type: "worker".to_string(),
+                    model: model.map(str::to_string),
+                    effort: effort.map(str::to_string),
+                    ..SpawnMember::default()
+                },
+            )
+            .map(|resolved| resolved.agent.model.to_string())
+        };
+
+        assert_eq!(resolve(None, None).unwrap(), "remembered/model");
+        assert_eq!(
+            resolve(None, Some("high")).unwrap(),
+            "remembered/model#high"
+        );
+        assert_eq!(
+            resolve(Some("offline#low"), None).unwrap(),
+            "hya/offline#low"
+        );
+        assert_eq!(
+            resolve(Some("offline#low"), Some("high")).unwrap(),
+            "hya/offline#high"
+        );
+        assert!(matches!(
+            resolve(None, Some("ludicrous")),
+            Err(SpawnError::InvalidEffort { effort, .. }) if effort == "ludicrous"
+        ));
+    }
+
     /// Highest-to-lowest spawn model chain, each row selecting the first set layer
     /// while lower layers remain present so the winner is unambiguous.
     #[tokio::test]
@@ -5511,6 +5665,8 @@ You are the installed resident agent.
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let base = AgentSpec {
             name: AgentName::new("build"),
@@ -5635,6 +5791,7 @@ You are the installed resident agent.
                 subagent_type: "worker".to_string(),
                 model: case.spawn_model.map(str::to_string),
                 category: case.spawn_category.map(str::to_string),
+                effort: None,
                 inline_agent: has_inline.then(|| InlineAgent {
                     name: "overlay".to_string(),
                     prompt: "overlay prompt".to_string(),
@@ -5700,6 +5857,8 @@ You are the installed resident agent.
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -6758,6 +6917,8 @@ export default {
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -7144,6 +7305,8 @@ export default {
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -7443,6 +7606,8 @@ for line in sys.stdin:
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -7805,6 +7970,8 @@ for line in sys.stdin:
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;

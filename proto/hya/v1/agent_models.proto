@@ -30,7 +30,44 @@ service AgentModels {
   // Empty effort clears the preference.
   // hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
   rpc SetModelEffortPreference(SetModelEffortPreferenceRequest) returns (ModelEffortPreference);
+
+  // Set or clear (empty `effort`) one agent's default thinking effort,
+  // independent of its model. Applies to the agent's next request; a `task`
+  // spawn's own `effort` still wins.
+  //
+  // hya.http: PUT /v1/agent-efforts/{agent_id}
+  rpc SetAgentEffort(SetAgentEffortRequest) returns (AgentEffort);
  }
+
+// Which layer chose an agent's default thinking effort.
+enum AgentEffortSource {
+  // Unset sentinel.
+  AGENT_EFFORT_SOURCE_UNSPECIFIED = 0;
+  // Set by the user at runtime (`SetAgentEffort`).
+  AGENT_EFFORT_SOURCE_PREFERENCE = 1;
+  // `agents.<id>.reasoning` in the user's configuration file.
+  AGENT_EFFORT_SOURCE_CONFIGURED = 2;
+  // The bundle agent's authored `model_policy.reasoning`.
+  AGENT_EFFORT_SOURCE_AUTHORED = 3;
+  // No agent-level effort: the model's default applies.
+  AGENT_EFFORT_SOURCE_NONE = 4;
+}
+
+message SetAgentEffortRequest {
+  // Stable catalog agent id.
+  string agent_id = 1;
+  // Effort label (`low`, `high`, `none`, …); empty clears the choice.
+  string effort = 2;
+  // Directory scope whose catalog must know `agent_id` (its Project's
+  // bundle agents included); empty: the global catalog.
+  string directory = 3;
+}
+
+// One agent's saved runtime effort choice (empty when cleared).
+message AgentEffort {
+  string agent_id = 1;
+  string effort = 2;
+}
 
 message ModelEffortPreference {
   string provider_id = 1;
@@ -100,6 +137,10 @@ message AgentModelState {
   AgentModelSelection configuration = 11;
   // Active root-session override captured for this agent.
   AgentModelSelection session_override = 12;
+  // The agent's default thinking effort (empty: its model's default).
+  string effort = 13;
+  // Which layer chose `effort`.
+  AgentEffortSource effort_source = 14;
 }
 
 message ListAgentModelsRequest {

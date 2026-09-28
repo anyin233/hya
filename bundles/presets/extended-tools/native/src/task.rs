@@ -57,6 +57,8 @@ struct TaskMemberInput {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
     /// Removed in 0.41.0; present only so a call that still sends it fails
     /// with [`REMOVED_NAME`] instead of being silently ignored.
@@ -76,6 +78,8 @@ struct TaskInput {
     category: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
     #[serde(default)]
     command: Option<String>,
     #[serde(default)]
@@ -104,6 +108,7 @@ struct TaskResult {
     subagent_type: String,
     status: String,
     summary: String,
+    model: Option<String>,
     command: Option<String>,
 }
 
@@ -138,6 +143,10 @@ impl Tool for TaskTool {
                     "type": "string",
                     "description": "Optional model request for this spawn; resolved automatically against the current catalog"
                 },
+                "effort": {
+                    "type": "string",
+                    "description": "Thinking effort for this subagent (e.g. low, medium, high, none). Must be one the child's model supports. Omit to use the agent's default effort, shown by `list_agents`."
+                },
                 "command": {
                     "type": "string",
                     "description": "The command that triggered this task"
@@ -163,6 +172,7 @@ impl Tool for TaskTool {
                             "subagent_type": { "type": "string" },
                             "category": { "type": "string" },
                             "model": { "type": "string" },
+                            "effort": { "type": "string", "description": "Thinking effort for this member (see top-level `effort`)" },
                             "inline_agent": {
                                 "type": "object",
                                 "description": "Request-scoped agent overlay for this member spawn only. Supplies its own system prompt and name for the child and folds into the same model/category precedence chain; not retained for later reuse as an agent definition.",
@@ -210,6 +220,7 @@ impl Tool for TaskTool {
                     subagent_type,
                     model: m.model,
                     category: m.category,
+                    effort: m.effort,
                     inline_agent,
                 })
             })
@@ -230,6 +241,7 @@ impl Tool for TaskTool {
                 subagent_type,
                 model: input.model,
                 category: input.category,
+                effort: input.effort,
                 inline_agent,
             });
         }
@@ -260,6 +272,7 @@ impl Tool for TaskTool {
                 SpawnError::UnsupportedInlineAgentField { field } => {
                     ToolError::UnsupportedInlineAgentField { field }
                 }
+                SpawnError::InvalidEffort { .. } => ToolError::Input(error.to_string()),
             })?;
         if members.len() == 1 && outcomes.len() == 1 {
             let member = members.remove(0);
@@ -275,6 +288,7 @@ impl Tool for TaskTool {
                 subagent_type: member.subagent_type,
                 status: outcome.status,
                 summary: outcome.summary,
+                model: outcome.model,
                 command: input.command,
             }));
         }
@@ -293,6 +307,7 @@ impl Tool for TaskTool {
                     "sessionId": o.session,
                     "status": o.status,
                     "summary": o.summary,
+                    "model": o.model,
                     "description": member.map(|m| m.description.as_str()).unwrap_or(""),
                     "subagent_type": member.map(|m| m.subagent_type.as_str()).unwrap_or(""),
                 })
@@ -372,12 +387,20 @@ fn render_single(result: TaskResult) -> Value {
     if let Some(command) = result.command {
         metadata.insert("command".to_string(), json!(command));
     }
+    let model_attr = result
+        .model
+        .as_deref()
+        .map(|model| format!(" model=\"{model}\""))
+        .unwrap_or_default();
+    if let Some(model) = result.model {
+        metadata.insert("model".to_string(), json!(model));
+    }
     json!({
         "title": result.title,
         "metadata": metadata,
         "output": format!(
-            "<task id=\"{}\" state=\"{}\">\n<{}>\n{}\n</{}>\n</task>",
-            result.session, state, tag, result.summary, tag
+            "<task id=\"{}\"{} state=\"{}\">\n<{}>\n{}\n</{}>\n</task>",
+            result.session, model_attr, state, tag, result.summary, tag
         ),
     })
 }

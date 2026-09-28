@@ -391,6 +391,38 @@ impl PersistentAgentModelControl {
         }
         Ok(())
     }
+
+    /// Set or clear (`None`) one Agent's default thinking effort. It applies
+    /// to the Agent's next request (the engine reads it per request).
+    ///
+    /// # Errors
+    ///
+    /// [`AgentModelControlError::InvalidRequest`] for an unknown label;
+    /// [`AgentModelControlError::Store`] for a durable mutation failure.
+    pub async fn set_agent_effort(
+        &self,
+        agent_id: &str,
+        effort: Option<&str>,
+    ) -> Result<(), AgentModelControlError> {
+        match effort.map(str::trim).filter(|effort| !effort.is_empty()) {
+            None => {
+                self.store
+                    .clear_agent_effort_preference(self.owner, agent_id)
+                    .await?;
+            }
+            Some(effort) => {
+                if hya_provider::ReasoningEffort::parse(effort).is_none() {
+                    return Err(AgentModelControlError::InvalidRequest(format!(
+                        "invalid effort `{effort}`"
+                    )));
+                }
+                self.store
+                    .upsert_agent_effort_preference(self.owner, agent_id, effort, now_millis())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Adapt the app-owned durable control to the dependency-inverted server port.
@@ -579,6 +611,18 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
     ) -> hya_server::AgentModelControlFuture<'_, ()> {
         Box::pin(async move {
             self.set_model_effort_preference(&provider_id, &model_id, &effort)
+                .await
+                .map_err(server_control_error)
+        })
+    }
+
+    fn set_agent_effort(
+        &self,
+        agent_id: String,
+        effort: Option<String>,
+    ) -> hya_server::AgentModelControlFuture<'_, ()> {
+        Box::pin(async move {
+            self.set_agent_effort(&agent_id, effort.as_deref())
                 .await
                 .map_err(server_control_error)
         })

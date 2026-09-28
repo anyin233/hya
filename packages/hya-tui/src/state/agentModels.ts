@@ -5,10 +5,11 @@
  * calls, including the model picker Enter opens).
  *
  * One screen: every catalog agent, its effective model and which tier
- * resolved it. Enter on a `settable` agent opens the shared model picker to
- * choose its remembered default; `c` clears a set preference. An agent with
- * direct configuration (`configured`) cannot take one; both keys notice why
- * instead of acting.
+ * resolved it, plus its default thinking effort. Enter on a `settable` agent
+ * opens the shared model picker to choose its remembered default; `c` clears
+ * a set preference. An agent with direct configuration (`configured`) cannot
+ * take one; both keys notice why instead of acting. `e` opens the effort
+ * picker for any agent (`PUT /v1/agent-efforts/{id}`), independent of its model.
  */
 import type { AgentModelState } from "../client"
 import type { KeyLike } from "../keys/bindings"
@@ -40,6 +41,7 @@ export type AgentModelsViewOutcome =
   | { type: "refresh" }
   | { type: "pickModel"; agent: string }
   | { type: "clear"; agent: string }
+  | { type: "pickEffort"; agent: string }
 
 export interface AgentModelsKeyRow {
   keys: string
@@ -51,6 +53,7 @@ export const agentModelsKeyRows: readonly AgentModelsKeyRow[] = [
   { keys: "Up / Down", description: "Move the highlight over agents", hint: "↑↓ move" },
   { keys: "Enter", description: "Pick this agent's remembered default model", hint: "Enter pick" },
   { keys: "c", description: "Clear the agent's remembered preference", hint: "c clear" },
+  { keys: "e", description: "Pick the agent's default thinking effort (default clears it)", hint: "e effort" },
   { keys: "r", description: "Refresh the list", hint: "r refresh" },
   { keys: "/", description: "Filter the rows by typing; Enter keeps the filter, Esc clears it", hint: "/ filter" },
   { keys: "Esc", description: "Cancel a running call, clear the filter, close the view" },
@@ -86,15 +89,32 @@ function cell(text: string, width: number): string {
   return cut + " ".repeat(Math.max(0, width - Bun.stringWidth(cut)))
 }
 
-/** One agent row: id, mode, effective model, source (fits `width`). */
+/** `AgentEffortSource` in words; empty when the model's default applies. */
+export function effortSourceText(source: string | undefined): string {
+  switch ((source ?? "").replace(/^AGENT_EFFORT_SOURCE_/, "")) {
+    case "PREFERENCE": return "set"
+    case "CONFIGURED": return "config"
+    case "AUTHORED": return "bundle"
+    default: return ""
+  }
+}
+
+/** The agent's default effort with its layer, e.g. `high (set)`; `default` when the model decides. */
+export function effortText(row: AgentModelState): string {
+  if (!row.effort) return "default"
+  const source = effortSourceText(row.effortSource)
+  return source ? `${row.effort} (${source})` : row.effort
+}
+
+/** One agent row: id, mode, effective model, source, effort (fits `width`). */
 export function agentModelLine(row: AgentModelState, width: number): string {
   const reason = notSettableReason(row)
-  const line = `${cell(row.agentId, 16)} ${cell(row.mode || "—", 10)} ${cell(effectiveRef(row), 28)} ${cell(sourceText(row.source), 12)} ${reason ? `(${reason})` : ""}`
+  const line = `${cell(row.agentId, 16)} ${cell(row.mode || "—", 10)} ${cell(effectiveRef(row), 28)} ${cell(sourceText(row.source), 12)} ${cell(effortText(row), 16)} ${reason ? `(${reason})` : ""}`
   return truncate(line.trimEnd(), width)
 }
 
 export function agentModelHeaderLine(width: number): string {
-  return truncate(`${cell("AGENT", 16)} ${cell("MODE", 10)} ${cell("EFFECTIVE MODEL", 28)} ${cell("SOURCE", 12)} NOTE`, width)
+  return truncate(`${cell("AGENT", 16)} ${cell("MODE", 10)} ${cell("EFFECTIVE MODEL", 28)} ${cell("SOURCE", 12)} ${cell("EFFORT", 16)} NOTE`, width)
 }
 
 function matches(haystack: string, filter: string): boolean {
@@ -161,6 +181,7 @@ export function agentModelsViewKey(view: AgentModelsViewState, key: KeyLike, row
     if (!row.preference?.providerId) return { type: "update", view: { ...view, notice: { tone: "info", text: `${row.agentId} has no remembered preference` } } }
     return { type: "clear", agent: row.agentId }
   }
+  if (key.sequence === "e") return { type: "pickEffort", agent: row.agentId }
   return { type: "none" }
 }
 

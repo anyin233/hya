@@ -24,6 +24,7 @@ use crate::bundle_config::{
     BUNDLE_CONFIG_FILE_NAME, BundleConfigResolver, decode_bundle_leaf, user_bundle_config_root,
 };
 use hya_proto::ModelRef;
+use hya_provider::ReasoningEffort;
 use serde_norway::{Mapping, Value};
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
@@ -128,6 +129,37 @@ impl AgentModelConfigFiles {
         let builtin = read_models(&self.global_file)?.unwrap_or_default();
         let bundles = self.load_user_bundles()?;
         Ok(AgentModelConfiguration { builtin, bundles })
+    }
+
+    /// `agents.<id>.reasoning` leaves (an Agent's default thinking effort)
+    /// from the global file and every user-scope bundle file, by stable Agent
+    /// id. Missing files count as empty. Read at startup, like model leaves.
+    ///
+    /// # Errors
+    ///
+    /// Malformed YAML, a non-string `reasoning` leaf, an unknown effort
+    /// label, or a filesystem failure.
+    pub fn load_efforts(&self) -> anyhow::Result<BTreeMap<String, ReasoningEffort>> {
+        let mut efforts = read_efforts(&self.global_file)?;
+        let bundle_root = user_bundle_config_root(&self.global_file);
+        let entries = match fs::read_dir(&bundle_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(efforts),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("read bundle config directory {}", bundle_root.display())
+                });
+            }
+        };
+        for entry in entries {
+            let entry = entry.with_context(|| {
+                format!("read bundle config directory {}", bundle_root.display())
+            })?;
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                efforts.extend(read_efforts(&entry.path().join(BUNDLE_CONFIG_FILE_NAME))?);
+            }
+        }
+        Ok(efforts)
     }
 
     /// Model leaves of one Project's bundles: `project_dirs` maps each project
@@ -291,6 +323,47 @@ fn read_models(path: &Path) -> anyhow::Result<Option<BTreeMap<String, ModelRef>>
     };
     let root = parse_document(&raw, path)?;
     extract_models(&root, path).map(Some)
+}
+
+/// `agents.<id>.reasoning` leaves of one file; empty when the file is absent.
+fn read_efforts(path: &Path) -> anyhow::Result<BTreeMap<String, ReasoningEffort>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let root = parse_document(&raw, path)?;
+    let Some(agents) = root
+        .as_mapping()
+        .and_then(|map| map.get(key("agents")))
+        .and_then(Value::as_mapping)
+    else {
+        return Ok(BTreeMap::new());
+    };
+    let mut efforts = BTreeMap::new();
+    for (agent_key, agent_value) in agents {
+        let (Some(agent_id), Some(agent)) = (agent_key.as_str(), agent_value.as_mapping()) else {
+            continue;
+        };
+        match agent.get(key("reasoning")) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(label)) => {
+                let effort = ReasoningEffort::parse(label).ok_or_else(|| {
+                    anyhow!(
+                        "configuration agents.{agent_id}.reasoning in {} is not a thinking \
+                         effort: `{label}`",
+                        path.display()
+                    )
+                })?;
+                efforts.insert(agent_id.to_string(), effort);
+            }
+            Some(_) => bail!(
+                "configuration agents.{agent_id}.reasoning in {} must be a string or null",
+                path.display()
+            ),
+        }
+    }
+    Ok(efforts)
 }
 
 fn key(name: &str) -> Value {
@@ -561,6 +634,50 @@ mod tests {
         let loaded = files.load().unwrap();
         assert!(loaded.builtin.is_empty());
         assert!(loaded.bundles.is_empty());
+    }
+
+    /// `agents.<id>.reasoning` beside `agents.<id>.model`, in the global file
+    /// and in a bundle's `config.yml`, becomes that Agent's configured effort.
+    #[test]
+    fn reasoning_leaves_load_as_agent_efforts() {
+        let (_dir, files) = files();
+        let global = files.global_path().to_path_buf();
+        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+        std::fs::write(
+            &global,
+            "agents:\n  general:\n    model: openai/gpt-6\n    reasoning: high\n  build:\n    model: openai/gpt-6\n",
+        )
+        .unwrap();
+        let bundle_dir = crate::bundle_config::user_bundle_config_root(&global)
+            .join(crate::bundle_config::encode_bundle_leaf("acme/tools").unwrap());
+        std::fs::create_dir_all(&bundle_dir).unwrap();
+        std::fs::write(
+            bundle_dir.join(BUNDLE_CONFIG_FILE_NAME),
+            "agents:\n  acme-scout:\n    reasoning: low\n",
+        )
+        .unwrap();
+
+        let efforts = files.load_efforts().unwrap();
+        assert_eq!(
+            efforts,
+            BTreeMap::from([
+                ("acme-scout".to_string(), ReasoningEffort::Low),
+                ("general".to_string(), ReasoningEffort::High),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_unknown_reasoning_label_is_rejected_with_its_location() {
+        let (_dir, files) = files();
+        let global = files.global_path().to_path_buf();
+        std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+        std::fs::write(&global, "agents:\n  general:\n    reasoning: ludicrous\n").unwrap();
+        let error = files.load_efforts().unwrap_err().to_string();
+        assert!(
+            error.contains("agents.general.reasoning") && error.contains("ludicrous"),
+            "{error}"
+        );
     }
 
     #[test]

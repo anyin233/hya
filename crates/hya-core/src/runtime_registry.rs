@@ -7,6 +7,7 @@ use hya_bundle::{BundleCatalog, BundleError, ExportKind, ResourceView};
 use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 use crate::catalog_scope::{CatalogScope, ScopeKey, ScopeOverlay};
 use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
+use hya_provider::ReasoningEffort;
 use hya_tool::{
     DuplicateName, NamedTool, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
     ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills_with_builtins,
@@ -84,6 +85,9 @@ pub struct RuntimeRegistry {
     scopes: Mutex<HashMap<ScopeKey, ScopeEntry>>,
     agent_model_preferences: AgentModelPreferences,
     agent_model_configuration: AgentModelConfigurations,
+    /// `agents.<id>.reasoning` from the user's configuration files (stable
+    /// Agent id → default effort). Read live per request, not per binding.
+    agent_effort_configuration: watch::Sender<Arc<BTreeMap<String, ReasoningEffort>>>,
     /// `--pure`: bind_turn keeps the embedded builtin skills only and never
     /// reads external skill directories.
     pure_skills: bool,
@@ -456,6 +460,7 @@ impl RuntimeRegistry {
             agent_model_configuration: watch::Sender::new(Arc::new(
                 AgentModelConfiguration::default(),
             )),
+            agent_effort_configuration: watch::Sender::new(Arc::new(BTreeMap::new())),
             pure_skills: false,
         }
     }
@@ -708,6 +713,20 @@ impl RuntimeRegistry {
     pub fn publish_agent_model_configuration(&self, configuration: AgentModelConfiguration) {
         self.agent_model_configuration
             .send_replace(Arc::new(configuration));
+    }
+
+    /// Publish the complete `agents.<id>.reasoning` map. Unlike model
+    /// configuration it is read at request time, so it applies to the next
+    /// request of every session.
+    pub fn publish_agent_effort_configuration(&self, efforts: BTreeMap<String, ReasoningEffort>) {
+        self.agent_effort_configuration
+            .send_replace(Arc::new(efforts));
+    }
+
+    /// The published `agents.<id>.reasoning` map.
+    #[must_use]
+    pub fn agent_effort_configuration(&self) -> Arc<BTreeMap<String, ReasoningEffort>> {
+        Arc::clone(&self.agent_effort_configuration.borrow())
     }
 
     /// Build and validate a complete candidate, then publish it with one pointer

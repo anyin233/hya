@@ -25,6 +25,11 @@ pub struct SpawnMember {
     /// Spawn-time logical category override. `None`/empty defers to inline and
     /// Bundle definition category layers, then the base model.
     pub category: Option<String>,
+    /// Spawn-time thinking effort label (`low`, `high`, `none`, …). Applied
+    /// as the child model's `#effort` after model/category resolution, so it
+    /// outranks every configured or remembered effort. `None`/empty keeps the
+    /// child's own default.
+    pub effort: Option<String>,
     /// Request-scoped agent overlay for this spawn only. Supplies system
     /// prompt + name and folds into the model/category precedence chain; never
     /// a catalog or Bundle definition authority.
@@ -88,6 +93,9 @@ pub struct MemberOutcome {
     pub status: String,
     /// Short summary text for the parent tool result.
     pub summary: String,
+    /// The child's resolved `provider/model`, with `#effort` when the spawn
+    /// or the Agent's default chose one. `None` when the member never started.
+    pub model: Option<String>,
 }
 
 /// Host-bound request carrying parent context and a reply channel.
@@ -146,6 +154,15 @@ pub enum SpawnError {
     UnsupportedInlineAgentField {
         /// Unsupported field name.
         field: &'static str,
+    },
+    /// `effort` is not a known thinking-effort label, or the child's model
+    /// does not advertise it.
+    #[error("INVALID_EFFORT: `{effort}` for `{model}`")]
+    InvalidEffort {
+        /// Requested effort label.
+        effort: String,
+        /// The child's resolved model.
+        model: String,
     },
 }
 
@@ -334,6 +351,7 @@ mod tests {
                         subagent_type: "quick".to_string(),
                         model: None,
                         category: None,
+                        effort: None,
                         inline_agent: None,
                     }],
                     CancellationToken::new(),
@@ -348,6 +366,7 @@ mod tests {
                 session: "s1".to_string(),
                 status: "done".to_string(),
                 summary: "ok".to_string(),
+                model: None,
             }]))
             .expect("reply");
         let outcomes = task.await.expect("join").expect("outcomes");

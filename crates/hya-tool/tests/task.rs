@@ -105,6 +105,7 @@ async fn subagent_can_spawn_nested_task() {
             session: "ses_grandchild".to_string(),
             status: "done".to_string(),
             summary: "nested done".to_string(),
+            model: None,
         }]))
         .unwrap();
     let out = handle.await.unwrap().unwrap();
@@ -140,6 +141,7 @@ async fn omitted_subagent_type_selects_general() {
             session: "ses_general".to_string(),
             status: "done".to_string(),
             summary: "done".to_string(),
+            model: None,
         }]))
         .unwrap();
     handle.await.unwrap().unwrap();
@@ -295,6 +297,7 @@ async fn task_normalizes_empty_inline_description() {
             session: "ses_child".to_string(),
             status: "done".to_string(),
             summary: "done".to_string(),
+            model: None,
         }]))
         .unwrap();
     handle.await.unwrap().unwrap();
@@ -331,6 +334,7 @@ async fn task_foreground_result_uses_open_code_output_shape() {
             session: "ses_child".to_string(),
             status: "done".to_string(),
             summary: "routing summary".to_string(),
+            model: None,
         }]))
         .unwrap();
 
@@ -344,6 +348,79 @@ async fn task_foreground_result_uses_open_code_output_shape() {
         out["output"],
         "<task id=\"ses_child\" state=\"completed\">\n<task_result>\nrouting summary\n</task_result>\n</task>"
     );
+}
+
+/// The main agent chooses a subagent's thinking effort: `effort` reaches the
+/// spawn request and the result names the model the child runs, `#effort`
+/// included.
+#[tokio::test]
+async fn task_effort_reaches_the_spawn_and_the_result_names_the_child_model() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Deep dive",
+                "prompt": "Think hard about the routing",
+                "subagent_type": "explore",
+                "effort": "high"
+            }),
+        )
+        .await
+    });
+
+    let req = rx.recv().await.unwrap();
+    assert_eq!(req.members[0].effort.as_deref(), Some("high"));
+    req.reply
+        .send(Ok(vec![MemberOutcome {
+            member: "main/explore-1".to_string(),
+            session: "ses_child".to_string(),
+            status: "running".to_string(),
+            summary: "live".to_string(),
+            model: Some("fake/model#high".to_string()),
+        }]))
+        .unwrap();
+
+    let out = handle.await.unwrap().unwrap();
+    assert_eq!(out["metadata"]["model"], "fake/model#high");
+    let text = out["output"].as_str().unwrap();
+    assert!(
+        text.starts_with("<task id=\"ses_child\" model=\"fake/model#high\" state=\"running\">"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn task_members_carry_their_own_effort() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Two views",
+                "prompt": "unused",
+                "members": [
+                    {"prompt": "quick look", "subagent_type": "explore", "effort": "low"},
+                    {"prompt": "careful look", "subagent_type": "explore"}
+                ]
+            }),
+        )
+        .await
+    });
+
+    let req = rx.recv().await.unwrap();
+    let efforts: Vec<_> = req.members.iter().map(|m| m.effort.as_deref()).collect();
+    assert_eq!(efforts, [Some("low"), None]);
+    req.reply.send(Ok(Vec::new())).unwrap();
+    let _ = handle.await.unwrap();
 }
 
 #[tokio::test]
@@ -414,6 +491,7 @@ async fn task_returns_immediately_with_running_handles() {
             session: child.clone(),
             status: "running".to_string(),
             summary: "Resident main/explore-1 is live; results arrive as its report.".to_string(),
+            model: None,
         }]))
         .unwrap();
 

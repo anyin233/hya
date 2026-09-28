@@ -8,6 +8,7 @@
 //! cannot run inside the transaction sqlx wraps migrations in.
 
 mod admission;
+mod agent_effort_preference;
 mod agent_model_preference;
 mod bundle_registry;
 /// Typed store errors shared by session and bundle registry APIs.
@@ -50,6 +51,7 @@ pub use admission::{
     AdmissionCounts, AdmissionFinalizeOutcome, AdmissionIntent, AdmissionLaunch, AdmissionRecord,
     AdmissionReleaseOutcome, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
 };
+pub use agent_effort_preference::AgentEffortPreference;
 pub use agent_model_preference::AgentModelPreference;
 pub use bundle_registry::{
     BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleInstallPlan,

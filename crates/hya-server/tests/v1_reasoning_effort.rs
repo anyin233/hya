@@ -84,6 +84,7 @@ impl Provider for EffortProvider {
 struct Fixture {
     app: axum::Router,
     store: SessionStore,
+    engine: Arc<SessionEngine>,
     owner: OwnerRunId,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
     dir: PathBuf,
@@ -121,7 +122,7 @@ async fn fixture_with_global(label: &str, global: Option<ReasoningEffort>) -> Fi
         .with_global_reasoning(global),
     );
     let state = AppState::new(
-        engine,
+        Arc::clone(&engine),
         Arc::new(AgentSpec {
             name: AgentName::new("build"),
             model: ModelRef::new("fake"),
@@ -133,6 +134,7 @@ async fn fixture_with_global(label: &str, global: Option<ReasoningEffort>) -> Fi
     Fixture {
         app: router(state),
         store,
+        engine,
         owner,
         requests,
         dir,
@@ -395,5 +397,67 @@ async fn preference_outranks_the_model_default() {
     assert_eq!(
         fx.reported(&session).await,
         ("high".to_owned(), "EFFORT_SOURCE_PREFERENCE".to_owned())
+    );
+}
+
+/// The Agent's own default effort (layer 2): the user's runtime choice beats
+/// `agents.<id>.reasoning`, both beat the per-model preference, and a model
+/// `#suffix` still beats them all. Session info reports the Agent layer.
+#[tokio::test]
+async fn agent_effort_layers_between_suffix_and_model_preference() {
+    let fx = fixture("effort-agent").await;
+    let session = fx.session("effort/other").await;
+    fx.prefer("effort", "other", Some("medium")).await;
+
+    fx.engine
+        .runtime_registry()
+        .publish_agent_effort_configuration(
+            [("build".to_string(), ReasoningEffort::Low)]
+                .into_iter()
+                .collect(),
+        );
+    let request = fx.prompt_request(&session, 0).await;
+    assert_eq!(
+        request.reasoning,
+        Some(ReasoningEffort::Low),
+        "configured beats model pref"
+    );
+    assert_eq!(
+        fx.reported(&session).await,
+        ("low".to_owned(), "EFFORT_SOURCE_AGENT".to_owned())
+    );
+
+    fx.store
+        .upsert_agent_effort_preference(fx.owner, "build", "high", 1)
+        .await
+        .unwrap();
+    let request = fx.prompt_request(&session, 1).await;
+    assert_eq!(
+        request.reasoning,
+        Some(ReasoningEffort::High),
+        "runtime beats configured"
+    );
+
+    fx.switch(&session, "effort/other#minimal").await;
+    let request = fx.prompt_request(&session, 2).await;
+    assert_eq!(
+        request.reasoning,
+        Some(ReasoningEffort::Minimal),
+        "suffix beats agent"
+    );
+
+    fx.switch(&session, "effort/other").await;
+    fx.store
+        .clear_agent_effort_preference(fx.owner, "build")
+        .await
+        .unwrap();
+    fx.engine
+        .runtime_registry()
+        .publish_agent_effort_configuration(Default::default());
+    let request = fx.prompt_request(&session, 3).await;
+    assert_eq!(
+        request.reasoning,
+        Some(ReasoningEffort::Medium),
+        "back to model pref"
     );
 }

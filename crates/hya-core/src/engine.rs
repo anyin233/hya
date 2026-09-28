@@ -750,20 +750,102 @@ impl SessionEngine {
         self
     }
 
-    /// The effort a request for `model` carries, and which layer chose it:
-    /// `model#variant` > `agent` (authored Agent policy) > the user's stored
-    /// per-model preference > the model's configured default > the global
-    /// `reasoning:` default > none. The turn loop and the v1 session info both
-    /// call this, so what clients display is what requests send.
+    /// An Agent's own default effort and its layer: the user's runtime choice
+    /// (durable, per Agent) > `agents.<id>.reasoning` configuration > the
+    /// bundle Agent's authored `model_policy.reasoning` (`authored`).
     ///
     /// # Errors
     ///
-    /// Store read failure for the preference.
+    /// Store read failure for the runtime choice.
+    pub async fn agent_effort(
+        &self,
+        agent_id: &str,
+        authored: Option<ReasoningEffort>,
+    ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
+        let preference = self
+            .store
+            .get_agent_effort_preference(agent_id)
+            .await?
+            .and_then(|row| ReasoningEffort::parse(&row.effort));
+        let configured = self
+            .runtime
+            .agent_effort_configuration()
+            .get(agent_id)
+            .copied();
+        Ok(crate::agent_effort(preference, configured, authored))
+    }
+
+    /// Layer the user's runtime (durable) and configured Agent efforts over a
+    /// roster's authored ones, so `list_agents` shows what each Agent would
+    /// run at. One store read for the whole roster.
+    ///
+    /// # Errors
+    ///
+    /// Store read failure.
+    pub async fn annotate_agent_efforts(
+        &self,
+        agents: Arc<[AgentDef]>,
+    ) -> Result<Arc<[AgentDef]>, CoreError> {
+        let preferences: BTreeMap<String, ReasoningEffort> = self
+            .store
+            .list_agent_effort_preferences()
+            .await?
+            .into_iter()
+            .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
+            .collect();
+        let configured = self.runtime.agent_effort_configuration();
+        if preferences.is_empty() && configured.is_empty() {
+            return Ok(agents);
+        }
+        Ok(agents
+            .iter()
+            .map(|agent| {
+                let authored = agent.effort.as_deref().and_then(ReasoningEffort::parse);
+                let mut agent = agent.clone();
+                if let Some((effort, source)) = crate::agent_effort(
+                    preferences.get(&agent.name).copied(),
+                    configured.get(&agent.name).copied(),
+                    authored,
+                ) {
+                    agent.effort = Some(effort.as_str().to_string());
+                    agent.effort_source = Some(
+                        match source {
+                            crate::AgentEffortSource::Preference => "preference",
+                            crate::AgentEffortSource::Configured => "configured",
+                            crate::AgentEffortSource::Authored => "authored",
+                        }
+                        .to_string(),
+                    );
+                }
+                agent
+            })
+            .collect::<Vec<_>>()
+            .into())
+    }
+
+    /// The effort a request for `model` by Agent `agent_id` carries, and
+    /// which layer chose it: `model#variant` > the Agent's own default
+    /// ([`Self::agent_effort`]) > the user's stored per-model preference > the
+    /// model's configured default > the global `reasoning:` default > none.
+    /// The turn loop and the v1 session info both call this, so what clients
+    /// display is what requests send.
+    ///
+    /// # Errors
+    ///
+    /// Store read failure for a preference.
     pub async fn effective_effort(
         &self,
         model: &ModelRef,
-        agent: Option<ReasoningEffort>,
+        agent_id: Option<&str>,
+        authored: Option<ReasoningEffort>,
     ) -> Result<crate::EffectiveEffort, CoreError> {
+        let agent = match agent_id {
+            Some(agent_id) => self
+                .agent_effort(agent_id, authored)
+                .await?
+                .map(|(effort, _)| effort),
+            None => authored,
+        };
         let base = model
             .as_str()
             .rsplit_once('#')
@@ -2245,12 +2327,18 @@ fn agent_roster(binding: &TurnBinding, caller: &str) -> Result<Arc<[AgentDef]>, 
         .into())
 }
 
+/// A roster row with the Agent's authored effort; the user's runtime and
+/// configured choices are layered on by
+/// [`SessionEngine::annotate_agent_efforts`] where the roster reaches a model.
 fn agent_def(agent: &AgentDefinition<'_>) -> AgentDef {
+    let authored = agent.model_policy.reasoning.clone();
     AgentDef {
         name: agent.stable_id.to_string(),
         description: agent.description.map(str::to_string),
         category: agent.model_policy.category.clone(),
         mode: agent.selector_mode().to_string(),
+        effort_source: authored.as_ref().map(|_| "authored".to_string()),
+        effort: authored,
     }
 }
 

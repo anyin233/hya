@@ -47,6 +47,7 @@ control handle.
 | `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
 | `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `hya.v1.AgentModels.ListModelEffortPreferences` | `ListModelEffortPreferencesRequest` | `ListModelEffortPreferencesResponse` |
 | `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `hya.v1.AgentModels.SetModelEffortPreference` | `SetModelEffortPreferenceRequest` | `ModelEffortPreference` |
+| `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `hya.v1.AgentModels.SetAgentEffort` | `SetAgentEffortRequest` | `AgentEffort` |
 
 ### `AgentModels.ListAgentModels`
 
@@ -62,6 +63,13 @@ post-commit state.
 ### `AgentModels.SetModelEffortPreference`
 
 Empty effort clears the preference.
+
+### `AgentModels.SetAgentEffort`
+
+Set or clear (empty `effort`) one agent's default thinking effort,
+independent of its model. Applies to the agent's next request; a `task`
+spawn's own `effort` still wins.
+
 
 ## Service `Auth`
 
@@ -884,6 +892,24 @@ Reset a worktree to a clean state at its branch head.
 
 ## Messages
 
+### `SetAgentEffortRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` (1) | `string` | Stable catalog agent id. |
+| `effort` (2) | `string` | Effort label (`low`, `high`, `none`, …); empty clears the choice. |
+| `directory` (3) | `string` | Directory scope whose catalog must know `agent_id` (its Project's bundle agents included); empty: the global catalog. |
+
+### `AgentEffort`
+
+One agent's saved runtime effort choice (empty when cleared).
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` (1) | `string` |  |
+| `effort` (2) | `string` |  |
+
 ### `ModelEffortPreference`
 
 
@@ -937,6 +963,8 @@ Effective model state for one catalog agent.
 | `source` (10) | `AgentModelSource` | Which tier resolved the effective model. |
 | `configuration` (11) | `AgentModelSelection` | Model explicitly stored in the owning user configuration file. |
 | `session_override` (12) | `AgentModelSelection` | Active root-session override captured for this agent. |
+| `effort` (13) | `string` | The agent's default thinking effort (empty: its model's default). |
+| `effort_source` (14) | `AgentEffortSource` | Which layer chose `effort`. |
 
 ### `ListAgentModelsRequest`
 
@@ -3237,6 +3265,18 @@ One git worktree.
 | `directory` (2) | `string` | Directory scope (absolute): the repository the worktree belongs to. Required: without one the rpc fails with invalid_argument. |
 
 ## Enums
+
+### `AgentEffortSource`
+
+Which layer chose an agent's default thinking effort.
+
+| Value | Number | Description |
+|---|---|---|
+| `AGENT_EFFORT_SOURCE_UNSPECIFIED` | 0 | Unset sentinel. |
+| `AGENT_EFFORT_SOURCE_PREFERENCE` | 1 | Set by the user at runtime (`SetAgentEffort`). |
+| `AGENT_EFFORT_SOURCE_CONFIGURED` | 2 | `agents.<id>.reasoning` in the user's configuration file. |
+| `AGENT_EFFORT_SOURCE_AUTHORED` | 3 | The bundle agent's authored `model_policy.reasoning`. |
+| `AGENT_EFFORT_SOURCE_NONE` | 4 | No agent-level effort: the model's default applies. |
 
 ### `AgentModelSource`
 
