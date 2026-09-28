@@ -1,7 +1,7 @@
 kind: AgentSetBundle
 identity:
   id: hya/agent-channels
-  version: 0.43.3
+  version: 0.43.4
   publisher: hya
 namespace: agent-channels
 channels:

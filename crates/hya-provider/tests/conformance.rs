@@ -855,6 +855,139 @@ fn anthropic_encodes_tool_use_and_result() {
     assert_eq!(result["content"][0]["content"], "hello");
 }
 
+#[test]
+fn anthropic_replays_signed_reasoning_before_tool_use() {
+    let mut req = assistant_tool_request(json!({"path":"a"}));
+    let Message::Assistant { parts, .. } = &mut req.messages[1] else {
+        panic!("assistant fixture");
+    };
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: "think".into(),
+            provider_data: Some(json!({"type":"thinking","signature":"sig"})),
+        },
+    );
+    let body = AnthropicMessagesProtocol.encode(&req).unwrap();
+    let content = &body["messages"][1]["content"];
+    assert_eq!(
+        content[0],
+        json!({"type":"thinking","thinking":"think","signature":"sig"})
+    );
+    assert_eq!(content[1]["type"], "text");
+    assert_eq!(content[2]["type"], "tool_use");
+}
+
+#[test]
+fn anthropic_replay_omits_old_and_unsigned_reasoning_and_replays_redacted() {
+    let mut req = assistant_tool_request(json!({}));
+    let old = req.messages[1].clone();
+    req.messages.insert(1, old);
+    req.messages.insert(
+        2,
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "new turn".into(),
+            }],
+        },
+    );
+    for index in [1, 3] {
+        let Message::Assistant { parts, .. } = &mut req.messages[index] else {
+            panic!("assistant fixture");
+        };
+        parts.insert(
+            0,
+            Part::Reasoning {
+                id: PartId::new(),
+                text: "hidden".into(),
+                provider_data: None,
+            },
+        );
+    }
+    let Message::Assistant { parts, .. } = &mut req.messages[3] else {
+        panic!("assistant fixture");
+    };
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: String::new(),
+            provider_data: Some(json!({"type":"redacted_thinking","data":"opaque"})),
+        },
+    );
+    let body = AnthropicMessagesProtocol.encode(&req).unwrap();
+    let blocks: Vec<_> = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["content"].as_array().into_iter().flatten())
+        .collect();
+    assert_eq!(
+        blocks
+            .iter()
+            .filter(|b| b["type"] == "redacted_thinking")
+            .count(),
+        1
+    );
+    assert_eq!(blocks.iter().filter(|b| b["type"] == "thinking").count(), 0);
+}
+
+#[test]
+fn anthropic_legacy_final_tool_text_ends_with_tool_results() {
+    let mut req = assistant_tool_request(json!({}));
+    let Message::Assistant { parts, .. } = &mut req.messages[1] else {
+        panic!("assistant fixture");
+    };
+    parts.swap(0, 1);
+    let messages = AnthropicMessagesProtocol.encode(&req).unwrap()["messages"].clone();
+    assert_eq!(messages.as_array().unwrap().len(), 3);
+    assert_eq!(messages[1]["content"][0]["type"], "text");
+    assert_eq!(messages[1]["content"][1]["type"], "tool_use");
+    assert_eq!(messages[2]["role"], "user");
+}
+
+#[test]
+fn anthropic_replays_two_reasoning_tool_steps_in_order() {
+    let mut req = assistant_tool_request(json!({"step": 1}));
+    let mut second = req.messages[1].clone();
+    let Message::Assistant { parts, .. } = &mut second else {
+        panic!("assistant fixture");
+    };
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: "second".into(),
+            provider_data: Some(json!({"type":"thinking","signature":"s2"})),
+        },
+    );
+    req.messages.push(second);
+    let Message::Assistant { parts, .. } = &mut req.messages[1] else {
+        panic!("assistant fixture");
+    };
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: "first".into(),
+            provider_data: Some(json!({"type":"thinking","signature":"s1"})),
+        },
+    );
+    let messages = AnthropicMessagesProtocol.encode(&req).unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        messages.iter().filter(|m| m["role"] == "assistant").count(),
+        2
+    );
+    assert_eq!(messages[1]["content"][0]["signature"], "s1");
+    assert_eq!(messages[3]["content"][0]["signature"], "s2");
+}
+
 /// A compaction summary is injected as a mid-conversation `Message::System`
 /// carrying `HYA_COMPACTED_CONTEXT`, and the turn loop slices the transcript to
 /// start at that marker. If the encoder drops the marker message, Anthropic

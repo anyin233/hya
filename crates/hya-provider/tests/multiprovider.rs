@@ -94,6 +94,45 @@ fn anthropic_decodes_thinking() {
 }
 
 #[test]
+fn anthropic_decodes_signature_and_redacted_thinking() {
+    let events = decode_all(
+        &AnthropicMessagesProtocol,
+        &[
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"private"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque"}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+        ],
+    );
+    assert_eq!(
+        summarize(&events)[..5],
+        [
+            "reasoning_start",
+            "reasoning_delta:private",
+            "reasoning_end",
+            "reasoning_start",
+            "reasoning_end"
+        ]
+    );
+    let data: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReasoningEnd { provider_data, .. } => provider_data.as_ref(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        data,
+        vec![
+            &json!({"type":"thinking","signature":"sig"}),
+            &json!({"type":"redacted_thinking","data":"opaque"})
+        ]
+    );
+}
+
+#[test]
 fn anthropic_decodes_tool_call() {
     let events = decode_all(
         &AnthropicMessagesProtocol,

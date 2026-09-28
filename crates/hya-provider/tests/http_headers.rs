@@ -1232,6 +1232,81 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
 }
 
 #[tokio::test]
+async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
+    let (base_url, request_rx) =
+        start_sse_server("data: {\"type\":\"message_stop\"}\n\n".to_string()).await;
+    let provider = HttpProvider::new(
+        "anthropic",
+        ProviderKind::Anthropic,
+        &base_url,
+        Some("token".to_string()),
+        ["claude".to_string()],
+    )
+    .unwrap();
+    let call_id = ToolCallId::new();
+    let req = CompletionRequest {
+        model: ModelRef::new("anthropic/claude"),
+        system: None,
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "read".into(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("anthropic/claude"),
+                finish: None,
+                tokens: None,
+                parts: vec![
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: "think".into(),
+                        provider_data: Some(json!({"type":"thinking","signature":"sig"})),
+                    },
+                    Part::Text {
+                        id: PartId::new(),
+                        text: "done".into(),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id,
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input: json!({}),
+                            output: json!("ok"),
+                            time_ms: 1,
+                        },
+                    },
+                ],
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: Some(128),
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let _ = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let body: Value = serde_json::from_str(&captured_request(request_rx).await.body).unwrap();
+    let content = &body["messages"][1]["content"];
+    assert_eq!(
+        content[0],
+        json!({"type":"thinking","thinking":"think","signature":"sig"})
+    );
+    assert_eq!(content[1]["type"], "text");
+    assert_eq!(content[2]["type"], "tool_use");
+}
+
+#[tokio::test]
 async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
     let (base_url, connections, requests) = start_scripted_server(vec![
         "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n".to_string(),
