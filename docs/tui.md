@@ -544,7 +544,8 @@ A second, narrower sidebar on the left lists every Project live
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
-| `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. With no session yet, a picker or direct choice is remembered for the next one (see [Pickers](#pickers)). |
+| `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. A remembered effort for that model is included as `#variant`; with no session the choice is remembered for the next one (see [Pickers](#pickers)). |
+| `/effort [level]` | Pick or set the thinking effort for the current model (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). The selection is shown in the header/status and remembered per model. |
 | `/agent [name]` | Open the agent picker (visible agents, tagged with their default model); `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
@@ -653,7 +654,7 @@ list as plain text instead.
 ## Layout
 
 ```text
-hya · <session> · <agent> <provider/model> · <server>   ┌─Sessions───────────┐
+hya · <session> · <agent> <provider/model> · thinking none · <server>   ┌─Sessions───────┐
 mode manual · …/work · ⎇ main                           │▸ 1. Review         │
                                                         │   build · ◌ waiting│
 ┃ your prompt                                           │                    │
@@ -821,6 +822,7 @@ interface TuiPreferences {
   theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
+  thinkingEfforts?: Record<string, string> // last /effort by base provider/model
 }
 ```
 
@@ -829,11 +831,12 @@ interface TuiPreferences {
   is not an object is ignored, and the status line says
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
-  wrong type is ignored.
-- A change (`/theme`'s Enter, `/vim`) merges the changed key into what is on disk —
-  keys this TUI does not know are kept — and writes a temporary file in the
-  same directory, then renames it over the file, so a crash never leaves a
-  half-written file. The directory is created when missing.
+  wrong type is ignored; malformed entries in `thinkingEfforts` are dropped.
+- A change (`/theme`'s Enter, `/vim`, or `/effort`) merges the changed key into
+  what is on disk — keys this TUI does not know are kept — and writes a
+  temporary file in the same directory, then renames it over the file, so a
+  crash never leaves a half-written file. The directory is created when
+  missing.
 
 **Interfaces for components.** `src/theme.ts` exports the palette of the
 theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
@@ -2046,30 +2049,45 @@ For example, after the model wrote `notes.txt` in reply to `write notes`:
 | `/fork` Enter | `POST /v1/sessions/{id}/fork` | `{}` (head) or `{messageId}` | `ForkSessionResponse {session, promptText}`; `session.forkedFrom {session, messageId}`; then `GET /v1/sessions` and the new session is opened |
 | Live | session stream | — | `sessionReverted {messageId, undone, files}` (durable): the overlay is dropped and the session row and transcript are re-read; a later durable `messageStarted` clears `revert` locally |
 
+## Thinking effort
+
+Thinking effort is selected per model, not globally. The header and status line
+show the effective label (`default` when no suffix or configured default is
+available, otherwise the selected variant). `/effort` opens the model's
+advertised menu; `/effort low` sends `provider/model#low`, while
+`/effort default` removes the suffix and lets the configured or upstream default
+apply. `/effort none` sends `provider/model#none` to request no reasoning where
+the provider protocol supports that mapping.
+
+For example, `/model openai/gpt-6-astra` followed by `/effort medium` updates the
+session with `model: "openai/gpt-6-astra#medium"`, sends the selected effort in
+the next provider request, and saves `thinkingEfforts["openai/gpt-6-astra"]`.
+Choosing another model reuses only that model's saved selection. The saved
+selection is a TUI preference; it is not a server-side default.
+
 ## Pickers
 
-`/model`, `/agent`, and `/sessions` (with no argument) open the same
-reusable modal picker `/permissions` uses (see
-[Permission modes — Switching](#switching) for the shared filter/move/select
-keys). Rows are loaded from the catalog already held by the TUI (`refresh()`
-at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
+`/model`, `/effort`, `/agent`, and `/sessions` (with no argument) open the same
+reusable modal picker `/permissions` uses (see [Permission modes — Switching](#switching)
+for the shared filter/move/select keys). Rows are loaded from the catalog already
+held by the TUI (`refresh()` at start and `/refresh`/Ctrl+R), so a picker opens
+with no loading state.
 
 - **`/model`** lists every model from `GET /v1/models`, `[tag]`ged with its
-  provider id and, when the route advertises one, its context window
-  (`128k ctx`); `●` marks the open session's model. Enter sends
-  `UpdateSession {model}` and shows `Model → <provider>/<model>`.
-  `/model <provider/model>` still switches directly, with Tab completion.
-- **`/agent`** lists visible (non-`hidden`) agents from `GET /v1/agents`,
-  tagged with the agent's default `provider/model` and its one-line
-  description; `●` marks the open session's agent. Enter sends
-  `UpdateSession {agent}` and shows `Agent → <name>`. `/agent <name>` still
-  switches directly.
-- **No session yet.** Before any session exists, a `/model`/`/agent` choice
-  (picker or direct form) is remembered — the status line reads
-  `Model → <id> · applies when the session is created` (`Agent → …` for the
-  agent) — and is used for the next `CreateSession` in place of the usual
-  default, the same way a chosen [permission mode](#permission-modes)
-  applies once the session exists.
+  provider id and, when the route advertises one, its context window (`128k ctx`);
+  `●` marks the open session's model. Enter sends `UpdateSession {model}`. If a
+  cached effort exists, the model reference includes `#variant`.
+- **`/effort`** lists `none` plus the current model's advertised
+  `reasoningVariants`; `●` marks the effective current effort. Enter sends
+  `UpdateSession {model: "provider/model#variant"}` and shows
+  `Thinking effort → <variant>`. `none` is sent as `#none`, which disables the
+  request effort explicitly. The same selection is saved in `thinkingEfforts`.
+- **`/agent`** lists visible agents from `GET /v1/agents`, tagged with their
+  default `provider/model` and description; `●` marks the open session's agent.
+  Enter sends `UpdateSession {agent}`. `/agent <name>` switches directly.
+- **No session yet.** Before any session exists, a `/model`/`/effort`/`/agent`
+  choice (picker or direct form) is remembered for the next `CreateSession`;
+  the status line says it applies when the session is created.
 - **`/sessions`** opens a picker with a `New session` row first, then every
   session as a tree (top-level sessions, subagent sessions nested under
   their parent and `[subagent]` tagged — see [Subagents](#subagents)),
@@ -2121,7 +2139,7 @@ a picker with no `actions` behaves exactly as before. See
 
 ### Session titles
 
-The header (`hya · <title or id> · <agent> <provider/model> · <server>`),
+The header (`hya · <title or id> · <agent> <provider/model> · thinking <effort> · <server>`),
 the sidebar's `Sessions` box, and the `/sessions` picker all show the
 session's `title` when the backend has set one (`/rename`, the picker's F2,
 or the backend's own auto-generated title once it lands), falling back to
@@ -2479,7 +2497,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
@@ -2590,9 +2608,9 @@ together.
 | --- | --- |
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text (which also names `HYA_TUI_CONFIG`). |
-| `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences`. |
+| `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences` including per-model `thinkingEfforts`. |
 | `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
-| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`); an optional relay bridge token sent as `x-hya-bridge-token`. |
+| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`); `ModelSummary` carries reasoning variants/defaults for `/effort`; an optional relay bridge token sent as `x-hya-bridge-token`. |
 | `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, the open Provider View's state, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`; transcript notices spliced in by `withDividers()`, including the dividers derived from compaction summaries in the history. |
@@ -2601,7 +2619,7 @@ together.
 | `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
 | `src/state/providers.ts` | The [Provider View](#provider-view)'s pure state: `initialProviderView()`, `providerViewKey()` (screens, filter, busy), the pop-up forms (`addProviderForm()`, `setKeyForm()`, `addModelForm()`, `editModelForm()`, `formKey()`, `formPaste()`, `withSecretLength()`), validation (`validateProviderId()`, `validateBaseUrl()`), row text (`providerLine()`, `modelLine()`, `providerDetailHeader()`, `tokenCount()`, `discoveryNotice()`, `testResultText()`), `providerKeyRows` (footer hint and help), and `defaultModelRef()`. |
 | `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
-| `src/state/catalog.ts` | `/model`/`/agent`/`/sessions` picker row builders: `modelRows()` (tagged by provider), `agentRows()` (visible agents, tagged by default model), `sessionRows()` (the `New session` row + `sessionTree()`, relative time), `relativeTime()`. |
+| `src/state/catalog.ts` | `/model`/`/effort`/`/agent`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `agentRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |

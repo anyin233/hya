@@ -225,8 +225,12 @@ export interface ModelSummary {
   contextLimit?: string
   /** Output ceiling in tokens, a decimal string; "0" or omitted when unknown. */
   outputLimit?: string
-  /** The route takes reasoning effort variants (omitted = false). */
+  /** Whether the model accepts reasoning efforts; omitted when unknown. */
   reasoning?: boolean
+  /** Effort labels accepted by this model, in provider order. */
+  reasoningVariants?: string[]
+  /** Explicit configured effort default; absent means no request effort by default. */
+  reasoningDefault?: string
   /** `false`: the model refuses image attachments (`ModelSummary.imageInput`); absent/unset means unknown, which is allowed. */
   imageInput?: boolean
   /** Where the row comes from: `remote` (model cache), `config` (config.yaml only), `override` (both; config wins per field), `offline`. */
@@ -370,7 +374,8 @@ export interface TodoItem {
 
 export interface AgentSummary {
   name: string
-  model?: { providerId?: string; modelId?: string }
+  /** The agent's default model; `variant` is the configured `#effort` suffix. */
+  model?: { providerId?: string; modelId?: string; variant?: string }
   /** One-line description shown in the `/agent` picker. */
   description?: string
   hidden?: boolean

@@ -87,8 +87,10 @@ test.describe("bare hya", () => {
     await expect.poll(() => webPage.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
     await web.waitForText("Connected to hya", 30_000)
-    // The header names the server the tab's TUI is connected to.
-    await web.waitForText(`${backend}/`)
+    // The header now keeps the current effort visible and may clip the server
+    // URL; `/status` is the unambiguous server contract.
+    await prompt(web, "/status")
+    await web.waitForText(backend.replace(/\/$/, ""))
     await prompt(web, "/sessions")
     await web.waitForText("New session")
     await web.waitForText("hello from the terminal")

@@ -26,6 +26,8 @@ export interface TuiPreferences {
   vim?: boolean
   /** Desktop notifications when unfocused (`/notifications`; src/notify.ts); default on. */
   notifications?: boolean
+  /** Last explicitly selected effort, keyed by the base `provider/model` reference. */
+  thinkingEfforts?: Record<string, string>
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -34,6 +36,7 @@ const validators: Validators = {
   theme: (value): value is string => typeof value === "string" && value.length > 0,
   vim: (value): value is boolean => typeof value === "boolean",
   notifications: (value): value is boolean => typeof value === "boolean",
+  thinkingEfforts: (value): value is Record<string, string> => typeof value === "object" && value !== null && !Array.isArray(value),
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */
@@ -80,7 +83,13 @@ export function loadPreferences(path: string): LoadedPreferences {
   if (raw === null) return { preferences: {}, warning: `Ignored unreadable TUI preferences ${path}` }
   const preferences: Record<string, unknown> = {}
   for (const [key, valid] of Object.entries(validators) as [string, (value: unknown) => boolean][]) {
-    if (key in raw && valid(raw[key])) preferences[key] = raw[key]
+    if (!(key in raw) || !valid(raw[key])) continue
+    if (key === "thinkingEfforts" && isObject(raw[key])) {
+      // A stored `default` is the no-suffix choice (the cache entry was cleared when it was picked); never apply it as a suffix.
+      preferences[key] = Object.fromEntries(Object.entries(raw[key]).filter(([model, effort]) => model.length > 0 && typeof effort === "string" && effort.length > 0 && effort !== "default"))
+    } else {
+      preferences[key] = raw[key]
+    }
   }
   return { preferences: preferences as TuiPreferences }
 }

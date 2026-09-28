@@ -99,7 +99,7 @@ import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
-import { defaultModelRef } from "../state/providers"
+import { defaultModelRef, rememberedModelRef } from "../state/providers"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
@@ -798,7 +798,8 @@ export function createController({ client, store, directory, remote: startedRemo
     // A `/model`/`/agent` choice made before any session existed (state/picker.ts, C11/C12) applies to
     // the next `CreateSession` the same way an explicit argument would.
     const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
-    const model = modelArg ?? (defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined)
+    // An explicit model keeps its `#suffix` and gains the remembered effort otherwise, exactly like the no-argument default.
+    const model = (modelArg ? rememberedModelRef(modelArg, store.state.thinkingEfforts, store.state.models) : defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent })) || undefined
     if (!model) throw new Error("No model is available; configure a provider on the backend")
     // Ephemeral: dropped by the daemon while unused once nobody watches it (app/sessionKeeper.ts).
     const session = await client.createSession(agent, model, placement, { ephemeral: true })

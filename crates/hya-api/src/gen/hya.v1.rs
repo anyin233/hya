@@ -654,6 +654,12 @@ pub struct ModelSummary {
     /// are refused only when this is `false`.
     #[prost(bool, optional, tag = "10")]
     pub image_input: ::core::option::Option<bool>,
+    /// Effort labels accepted by this model, in provider order. Empty when unknown or unsupported.
+    #[prost(string, repeated, tag = "11")]
+    pub reasoning_variants: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Explicit configured effort default. Empty when no default is selected.
+    #[prost(string, optional, tag = "12")]
+    pub reasoning_default: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListModelsResponse {

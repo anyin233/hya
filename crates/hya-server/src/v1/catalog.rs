@@ -175,6 +175,10 @@ pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
             output_limit: u64::from(row.capabilities.max_output),
             source: row.source.as_str().to_owned(),
             image_input: row.capabilities.image_input,
+            reasoning_variants: row.reasoning_variants.clone(),
+            reasoning_default: row
+                .reasoning_default
+                .map(|effort| effort.as_str().to_owned()),
         })
         .collect()
 }

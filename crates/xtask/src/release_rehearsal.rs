@@ -1907,6 +1907,33 @@ mod tests {
         assert!(opentui_native_package("x86_64-pc-windows-msvc").is_err());
         Ok(())
     }
+    /// Keep the packaged frontend's self-reported version aligned with the backend.
+    #[test]
+    fn packaged_frontend_versions_match_workspace() -> Result<()> {
+        let root = repo_root()?;
+        let cargo: toml::Value = toml::from_str(&read_text(&root, "Cargo.toml")?)?;
+        let version = cargo
+            .get("workspace")
+            .and_then(|workspace| workspace.get("package"))
+            .and_then(|package| package.get("version"))
+            .and_then(toml::Value::as_str)
+            .context("workspace package version is missing")?;
+        for path in [
+            "packages/hya-tui/package.json",
+            "packages/hya-tui-web/package.json",
+        ] {
+            let package: serde_json::Value = serde_json::from_str(&read_text(&root, path)?)?;
+            let package_version = package
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| format!("{path} package version is missing"))?;
+            ensure!(
+                package_version == version,
+                "{path} has version {package_version}, expected workspace version {version}"
+            );
+        }
+        Ok(())
+    }
 
     /// Each packaged program's copied files and directories exist in the workspace.
     #[test]

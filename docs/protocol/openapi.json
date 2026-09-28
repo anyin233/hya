@@ -1608,6 +1608,15 @@
           },
           "image_input": {
             "type": "boolean"
+          },
+          "reasoning_variants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasoning_default": {
+            "type": "string"
           }
         }
       },

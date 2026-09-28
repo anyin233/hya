@@ -119,7 +119,7 @@ export async function run(options: Options): Promise<void> {
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
   const client = new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
-  const store = createAppStore()
+  const store = createAppStore({ thinkingEfforts: loaded.preferences.thinkingEfforts })
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)
   store.setBackend(backend)
