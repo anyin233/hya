@@ -841,6 +841,19 @@ impl TeamActor {
         }
     }
 
+    /// In-turn steering consumed the lead's queued mail. Do not replay that
+    /// already-seen work as a quiescence synthesis wake when the lease ends.
+    fn on_mail_consumed(&self, session: SessionId) {
+        let mut st = self.lock();
+        if st.main_session != Some(session) {
+            return;
+        }
+        if let Some(slot) = st.residents.get_mut(&session) {
+            slot.pending = false;
+        }
+        st.last_synth_work_seq = st.work_seq;
+    }
+
     /// A turn on `session` ended (its lease was released). Deliver work that
     /// was deferred while it ran — mail or a synthesis owed to that slot — and
     /// re-check quiescence, which that turn was holding back.
@@ -2606,6 +2619,12 @@ fn unread_mail_rejection(
 /// the owning team re-wakes that slot if work was deferred behind the turn and
 /// re-checks quiescence.
 impl TurnBoundaryObserver for ResidentSupervisor {
+    fn mail_consumed(&self, session: SessionId) {
+        if let Some(team) = self.team_with_resident(session) {
+            team.on_mail_consumed(session);
+        }
+    }
+
     fn turn_released(&self, session: SessionId) {
         if let Some(team) = self.team_with_resident(session) {
             team.on_turn_released(session);

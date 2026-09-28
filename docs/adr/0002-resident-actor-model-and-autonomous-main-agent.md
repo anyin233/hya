@@ -16,6 +16,11 @@ that wakes the main agent to synthesize.
   (the fire decision happens in the same locked section that observes no pending work, with a
   `work_seq` termination guard so a no-new-work synthesis doesn't re-fire) and per-team
   turn/message budgets that cancel a runaway team.
+
+- Mail consumed by the lead's active turn is marked delivered before the turn
+  lease is released; that already-seen work does not cause an empty synthesis
+  follow-up. Mail arriving after the final in-turn drain remains queued and
+  still wakes the lead normally.
 - Resident spawns are **non-blocking** (parent gets the handle and continues), which diverges from
   the transient `run_team` join model — the two spawn paths coexist.
 - User input never wakes a resident: residents wake *only* via mail. This is what lets the TUI bind
