@@ -1048,6 +1048,16 @@ unclosed code fence shows its lines as code so far and an unclosed `**` shows
 as plain text until it closes. When the reply finishes, its final text is
 parsed again from the start.
 
+A streamed ATX heading (`#` through `######` followed by a space) keeps its
+accent color and bold style as its text arrives. A marker-only chunk such as
+`### ` waits for heading text instead of flashing literal hashes. For
+example, ask the model to reply with `### Summary` followed by a paragraph;
+the TUI shows `Summary` in accent as it streams, with no key or setting to
+enable. The input contract is unchanged: `partAppended {message, part,
+textDelta}` on the session event stream extends an assistant `text` part,
+`partReplaced {message, part, text}` may replace it, and `messageFinished`
+finalizes the Markdown. A `###` line inside a fenced code block remains code.
+
 **Reasoning.** Reasoning parts arrive as `reasoning` parts (durable deltas;
 see the protocol guide). They are collapsed by default. Ctrl+O or `/thinking`
 expands or collapses all of them (and forgets per-block choices); a click on
@@ -2785,7 +2795,8 @@ covers user and assistant styling, Markdown and code highlighting, reasoning
 (Ctrl+O, `/thinking`, click), error, length, and cancel notices, and
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
-queued prompts, and the turn status line (`Ready`, provider errors).
+heading previews without marker or color flashes, queued prompts, and the
+turn status line (`Ready`, provider errors).
 `e2e/hya-tui-commands-menu.spec.ts` covers the `/` command menu (open,
 fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
 commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,

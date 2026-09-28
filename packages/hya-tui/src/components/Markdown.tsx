@@ -6,11 +6,13 @@
  * switch (theme.ts `setTheme`) swaps the style and rebuilds the blocks.
  *
  * `streaming` keeps the trailing block unstable while deltas arrive, so an
- * unclosed fence or emphasis renders as plain text until it closes.
+ * unclosed fence or emphasis renders as plain text until it closes. Ordinary
+ * Markdown blocks stay separate while streaming: OpenTUI's combined preview
+ * otherwise exposes heading `###` markers before highlighting finishes.
  * Highlighting covers the grammars bundled with @opentui/core (TypeScript,
  * JavaScript, Markdown, Zig); other languages render unhighlighted.
  */
-import { BoxRenderable, SyntaxStyle, TextRenderable, type CodeRenderable, type MarkdownOptions, type MarkdownRenderable } from "@opentui/core"
+import { BoxRenderable, CodeRenderable, StyledText, SyntaxStyle, TextRenderable, bold, fg, type MarkdownOptions, type MarkdownRenderable } from "@opentui/core"
 import { createEffect, on } from "solid-js"
 import { colors, currentTheme, syntaxStylesFor, themeName } from "../theme"
 
@@ -35,6 +37,7 @@ const renderNode: NonNullable<MarkdownOptions["renderNode"]> = (token, context) 
   // A custom block is rebuilt when its text changes, so draw the text at once
   // instead of waiting for the asynchronous highlight.
   code.drawUnstyledText = true
+  code.marginTop = 0
   code.marginBottom = 0
   const box = new BoxRenderable(code.ctx, {
     width: "100%",
@@ -49,25 +52,61 @@ const renderNode: NonNullable<MarkdownOptions["renderNode"]> = (token, context) 
   box.add(code)
   return box
 }
-// Only code tokens are custom: the other blocks keep OpenTUI's coalesced
-// Markdown rendering (blank lines between paragraphs, headings, and lists).
-Object.assign(renderNode, { codeBlockOnly: true })
+// Preserve the lexer tokens for headings. OpenTUI's code-block-only mode
+// combines ordinary blocks into a synthetic paragraph, whose synchronous
+// preview displays `###` until the asynchronous Markdown highlighter runs.
+Object.assign(renderNode, { codeBlockOnly: false })
+
+/** A marker-only heading at the end of a chunk has no text to show yet. */
+function visibleStreamingText(text: string): string {
+  const lineStart = text.lastIndexOf("\n") + 1
+  if (!/^ {0,3}#{1,6}[ \t]*$/.test(text.slice(lineStart))) return text
+
+  // A `###` line inside an open fenced code block is code, not a heading.
+  let fence: { marker: string; length: number } | undefined
+  for (const line of text.slice(0, lineStart).split("\n")) {
+    const found = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (!found) continue
+    const marker = found[1]![0]!
+    const length = found[1]!.length
+    if (!fence) fence = { marker, length }
+    else if (fence.marker === marker && length >= fence.length && !found[2]?.trim()) fence = undefined
+  }
+  return fence ? text : text.slice(0, lineStart)
+}
+
+/** Show heading text with its final accent while tree-sitter catches up. */
+function previewStreamingHeadings(view: MarkdownRenderable, previewed: WeakMap<CodeRenderable, string>): void {
+  for (const block of view._blockStates) {
+    if (block.token.type !== "heading" || !(block.renderable instanceof CodeRenderable)) continue
+    const heading = block.token.text
+    if (!heading) continue
+    const accent = colors.accent
+    const signature = `${accent}\0${heading}`
+    if (previewed.get(block.renderable) === signature) continue
+    previewed.set(block.renderable, signature)
+    const styled = new StyledText([bold(fg(accent)(heading))])
+    block.renderable.updateStreamingPreview(block.renderable.content, styled)
+  }
+}
 
 export function Markdown(props: { text: string; streaming?: boolean }) {
   let view: MarkdownRenderable | undefined
-  // Content first, then the streaming flag, in one effect: OpenTUI's
-  // non-streaming incremental parse reuses a previous token whose raw text is
-  // a prefix of the new content, so an unclosed fence from the last delta
-  // would stay open-ended. Outside streaming, a changed text is parsed afresh.
+  const previewed = new WeakMap<CodeRenderable, string>()
+  // Set streaming before content so the first chunk uses OpenTUI's provisional
+  // parser. Outside streaming, a changed text is parsed afresh: reusing a
+  // previous incomplete token could leave an unclosed fence open-ended.
   createEffect(() => {
     const text = props.text
     const streaming = props.streaming ?? false
     if (!view) return
-    if (view.content !== text) {
-      if (!streaming) view._parseState = null
-      view.content = text
-    }
     view.streaming = streaming
+    const visible = streaming ? visibleStreamingText(text) : text
+    if (view.content !== visible) {
+      if (!streaming) view._parseState = null
+      view.content = visible
+    }
+    if (streaming) previewStreamingHeadings(view, previewed)
   })
   // A theme switch: the new style, then every block rebuilt, so fenced code
   // boxes (drawn by `renderNode` with the palette of their time) repaint too.
@@ -86,6 +125,7 @@ export function Markdown(props: { text: string; streaming?: boolean }) {
       fg={colors.fg}
       conceal
       renderNode={renderNode}
+      internalBlockMode="top-level"
       width="100%"
     />
   )
