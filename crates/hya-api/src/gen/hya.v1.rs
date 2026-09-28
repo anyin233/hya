@@ -429,7 +429,8 @@ pub mod agent_models_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /// Empty effort clears the preference.
+        /// Empty effort clears the preference. Emits a live `catalogUpdated` frame
+        /// (sessions on the model may now resolve another `effective_effort`).
         /// hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
         pub async fn set_model_effort_preference(
             &mut self,
@@ -459,7 +460,7 @@ pub mod agent_models_client {
         }
         /// Set or clear (empty `effort`) one agent's default thinking effort,
         /// independent of its model. Applies to the agent's next request; a `task`
-        /// spawn's own `effort` still wins.
+        /// spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
         ///
         /// hya.http: PUT /v1/agent-efforts/{agent_id}
         pub async fn set_agent_effort(
@@ -524,7 +525,8 @@ pub mod agent_models_server {
             tonic::Response<super::ListModelEffortPreferencesResponse>,
             tonic::Status,
         >;
-        /// Empty effort clears the preference.
+        /// Empty effort clears the preference. Emits a live `catalogUpdated` frame
+        /// (sessions on the model may now resolve another `effective_effort`).
         /// hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
         async fn set_model_effort_preference(
             &self,
@@ -535,7 +537,7 @@ pub mod agent_models_server {
         >;
         /// Set or clear (empty `effort`) one agent's default thinking effort,
         /// independent of its model. Applies to the agent's next request; a `task`
-        /// spawn's own `effort` still wins.
+        /// spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
         ///
         /// hya.http: PUT /v1/agent-efforts/{agent_id}
         async fn set_agent_effort(

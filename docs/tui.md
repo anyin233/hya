@@ -2058,18 +2058,66 @@ For example, after the model wrote `notes.txt` in reply to `write notes`:
 
 ## Thinking effort
 
-Thinking effort is selected per base provider/model and resolved by the server.
-The header, status bar, and `/status` show the effective label and source (for
-example, `thinking high (pref)`). `/effort` (or `/think`) opens the model's
-picker; `/effort <level>` sets the durable preference, while `/effort default`
-clears it. If the session model has a `#suffix`, changing or clearing effort
-switches the session to the bare model.
+Thinking effort controls how hard the model reasons on each request. The TUI
+(and so the WebUI) lets you switch it at any moment — before a session
+exists, between turns, or while a turn runs — and always shows the effort in
+use right after the model name, as `<model>:<effort>`:
 
-For example, `/model openai/gpt-6-astra` followed by `/effort medium` stores the
-preference with `PUT /v1/model-effort-preferences/openai/gpt-6-astra` and sends
-the selected effort in the next provider request. The preference is stored by
-the backend's database/daemon, not in `tui.json`, so it survives TUI restarts
-and applies to later sessions using that base model. Empty effort clears it.
+- the header: `hya · <title> · build openai/gpt-6-astra:max · <server>`;
+- the status bar, right after the mode: `mode manual · gpt-6-astra:max · …`
+  (kept at 80 columns, where the header truncates);
+- `/status`: `Thinking    max (pref)`, with the layer that chose it (`pref`,
+  `agent`, `suffix`, `model default`, `global default`).
+
+`:default` means no request effort: the provider's own default applies.
+`:none` is an explicit off switch. The effort is the server-resolved
+`SessionInfo.effectiveEffort`, so the label shows exactly what the next
+request sends.
+
+**Usage.** `/effort` (or `/think`) opens the picker for the session's model;
+`/effort <level>` sets it directly (`default`, `none`, or one of the model's
+advertised variants such as `low`, `high`, `xhigh`, `max`):
+
+```text
+/model openai/gpt-6-astra
+/effort max        → Thinking effort → max   header: … build openai/gpt-6-astra:max …
+/effort default    → Thinking effort → default   header: … openai/gpt-6-astra:default …
+```
+
+**Where the choice is saved.** The choice is remembered by the backend
+(SQLite, shared by every client of the daemon), not in `tui.json`, so the
+next start — and every later session on that model — comes back with it. It
+is saved on the layer that decides the session's effort, so a switch always
+takes effect:
+
+1. A `#suffix` on the session model outranks every saved choice: the session
+   switches to the bare model first.
+2. If the session's Agent has its own effort (`effortSource` `EFFORT_SOURCE_AGENT`,
+   from the Agent Models view `e`, `agents.<id>.reasoning`, or a bundle), the
+   choice becomes the Agent's runtime effort (`PUT /v1/agent-efforts/{agent}`),
+   which outranks its configured and authored ones.
+3. Otherwise it becomes the model's preference
+   (`PUT /v1/model-effort-preferences/{provider}/{model}`).
+
+`/effort default` clears the model's preference, and the Agent's runtime
+effort too when the Agent decides.
+
+**Live updates.** A running turn resolves the effort again for every request
+round, so a switch during a turn applies from its next request. Both
+setters emit a live `catalogUpdated` frame; on it every TUI re-reads its open
+session (`GET /v1/sessions/{id}`), so a switch made in one client (for
+example the WebUI) shows in every other one (the terminal TUI) without a key
+press.
+
+**Interfaces.**
+
+| Action | Call | Body | Reads |
+| --- | --- | --- | --- |
+| Model's choice | `PUT /v1/model-effort-preferences/{providerId}/{modelId}` | `{effort: string}` (`""` clears) | `ModelEffortPreference {providerId, modelId, effort, updatedAt}` |
+| Agent's choice | `PUT /v1/agent-efforts/{agentId}` | `{effort: string, directory?: string}` (`""` clears) | `AgentEffort {agentId, effort}` |
+| Drop a suffix | `PATCH /v1/sessions/{id}` | `{model: "provider/model"}` | `SessionInfo` |
+| Label | `GET /v1/sessions/{id}` | — | `SessionInfo.effectiveEffort` (`""` = default), `SessionInfo.effortSource` (`EFFORT_SOURCE_SUFFIX`, `_AGENT`, `_PREFERENCE`, `_MODEL_DEFAULT`, `_GLOBAL_DEFAULT`, `_NONE`) |
+| Live | global and session streams | — | `catalogUpdated {}` after either setter |
 
 ## Pickers
 
@@ -2084,11 +2132,10 @@ with no loading state.
   `●` marks the open session's model. Enter sends `UpdateSession {model}`; the
   model's saved effort preference (if any) applies on the server.
 - **`/effort`** lists `default`, `none`, and the current model's advertised
-  `reasoningVariants`; `●` marks the effective current effort. Enter saves the
-  choice as that model's preference (`PUT /v1/model-effort-preferences/…`,
-  `default` clears it), drops a `#variant` from the session model so the
-  preference applies, and shows `Thinking effort → <variant>`. `none` disables
-  the request effort explicitly.
+  `reasoningVariants`; `●` marks the effort the session uses now. Enter saves
+  the choice (see [Thinking effort](#thinking-effort) for which layer takes
+  it) and shows `Thinking effort → <level>`. `none` disables the request
+  effort explicitly.
 - **`/agent`** lists visible agents from `GET /v1/agents`, tagged with their
   default `provider/model` and description; `●` marks the open session's agent.
   Enter sends `UpdateSession {agent}`. `/agent <name>` switches directly.
@@ -2146,7 +2193,7 @@ a picker with no `actions` behaves exactly as before. See
 
 ### Session titles
 
-The header (`hya · <title or id> · <agent> <provider/model> · thinking <effort> · <server>`),
+The header (`hya · <title or id> · <agent> <provider/model>:<effort> · <server>`),
 the sidebar's `Sessions` box, and the `/sessions` picker all show the
 session's `title` when the backend has set one (`/rename`, the picker's F2,
 or the backend's own auto-generated title once it lands), falling back to

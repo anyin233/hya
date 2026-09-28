@@ -427,7 +427,7 @@
     "/v1/model-effort-preferences/{provider_id}/{model_id}": {
       "put": {
         "operationId": "AgentModels.SetModelEffortPreference",
-        "summary": "Empty effort clears the preference.",
+        "summary": "Empty effort clears the preference. Emits a live `catalogUpdated` frame",
         "tags": [
           "AgentModels"
         ],

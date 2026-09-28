@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { askSessionLabel, compactionText, contextText, shownServer, currentModel, currentThinkingEffort, modelReference, otherAskNotice, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { askSessionLabel, compactionText, contextText, shownServer, currentModel, modelEffortLabel, modelReference, otherAskNotice, thinkingEffortLabel, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -21,11 +21,8 @@ test("renders the header, the sidebar session list, and pending lines", () => {
     models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(selected)
-  // The header composes `hya · <session> · <agent> <model> · thinking <effort> · <server>`
-  // (format.ts `headerText`); its exact wording is not pinned here — the
-  // effort label itself is covered by `currentThinkingEffort` and the status
-  // bar segment tests below.
-  expect(headerText(store.state, server)).toContain("hya/offline")
+  // The header composes `hya · <session> · <agent> <provider/model:effort> · <server>`.
+  expect(headerText(store.state, server)).toContain("build hya/offline:default")
   expect(sessionListText(store.state)).toBe("▸ 1. hysec_1\n   build\n\n  2. Second\n   plan · running")
   expect(sessionListText(store.state, 10)).toBe("▸ 1. hyse…\n   build\n\n  2. Seco…\n   plan ·…")
   expect(pendingLines(store.state)).toEqual(["? Pick one · req_1"])
@@ -33,17 +30,18 @@ test("renders the header, the sidebar session list, and pending lines", () => {
   expect(mainContent(store.state)).toBe("No messages yet. Type a prompt below.")
 })
 
-test("thinking effort follows the session variant, then the model default, else default", () => {
-  const withEffort = { id: "hysec_1", agent: "build", workdir: "/w", effectiveEffort: "low", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } }
-  const explicitNone = { id: "hysec_3", agent: "build", workdir: "/w", effectiveEffort: "none", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "none" } }
+test("the model label carries the server-resolved effort right after the model name", () => {
+  const withEffort = { id: "hysec_1", agent: "build", workdir: "/w", effectiveEffort: "max", effortSource: "EFFORT_SOURCE_PREFERENCE", model: { providerId: "openai", modelId: "gpt-6-astra" } }
+  const explicitNone = { id: "hysec_3", agent: "build", workdir: "/w", effectiveEffort: "none", effortSource: "EFFORT_SOURCE_SUFFIX", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "none" } }
   const withoutEffort = { id: "hysec_2", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
-  expect(modelReference(withEffort)).toBe("openai/gpt-6-astra#low")
-  expect(modelReference(withoutEffort)).toBe("openai/gpt-6-astra")
-  expect(currentThinkingEffort({ selected: withEffort, models: [] })).toBe("low")
+  expect(modelEffortLabel(withEffort)).toBe("openai/gpt-6-astra:max")
+  expect(modelEffortLabel(withEffort, true)).toBe("gpt-6-astra:max")
   // An explicit `#none` is a choice, not the unset default.
-  expect(currentThinkingEffort({ selected: explicitNone, models: [] })).toBe("none")
-  expect(currentThinkingEffort({ selected: withoutEffort, models: [] })).toBe("default")
-  expect(currentThinkingEffort({ selected: undefined, models: [] })).toBe("default")
+  expect(modelEffortLabel(explicitNone, true)).toBe("gpt-6-astra:none")
+  expect(modelEffortLabel(withoutEffort, true)).toBe("gpt-6-astra:default")
+  expect(modelEffortLabel({ id: "hysec_4", agent: "build", workdir: "/w" })).toBe("")
+  expect(thinkingEffortLabel(withEffort)).toBe("max (pref)")
+  expect(thinkingEffortLabel(withoutEffort)).toBe("default")
 })
 
 test("renders empty panels and per-view titles", () => {
@@ -92,19 +90,17 @@ test("the status bar shows mode, directory, branch, todos, and connection state,
   expect(statusBarText(fields, 20)).toBe("mode manual")
 })
 
-test("the status bar keeps the thinking effort visible at 80 columns", () => {
-  const fields = { mode: "manual", effort: "low", directory: "/home/me/projects/very/long/workspace", branch: "main", todos: "Todos 1/3", connected: true }
+test("the status bar keeps the model:effort label visible at 80 columns", () => {
+  const fields = { mode: "manual", model: "gpt-6-astra:low", directory: "/home/me/projects/very/long/workspace", branch: "main", todos: "Todos 1/3", connected: true }
   // The segment sits right after the mode, ahead of the drop-from-the-end tail.
   expect(statusBarSegments(fields, 80).slice(0, 2)).toEqual([
     { text: "mode manual", tone: "mode" },
-    { text: "thinking low", tone: "muted" },
+    { text: "gpt-6-astra:low", tone: "muted" },
   ])
-  expect(statusBarText(fields, 80)).toContain("thinking low")
-  // Narrower: the tail (directory, branch, todos) drops before the effort does.
-  expect(statusBarText(fields, 30)).toBe("mode manual · thinking low")
-  // Tighter than mode + effort: the effort is dropped whole, then the line clips.
+  // Narrower: the tail (directory, branch, todos) drops before the label does.
+  expect(statusBarText(fields, 30)).toBe("mode manual · gpt-6-astra:low")
+  // Tighter than mode + label: the label is dropped whole, then the line clips.
   expect(statusBarText(fields, 24)).toBe("mode manual")
-  expect(statusBarText({ ...fields, effort: undefined }, 80)).not.toContain("thinking")
 })
 
 test("a compact todo count is `completed/total`, or undefined with no todos", () => {

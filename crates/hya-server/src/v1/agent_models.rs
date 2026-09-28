@@ -274,6 +274,9 @@ async fn set_model_effort_preference(
         .set_model_effort_preference(provider_id.clone(), model_id.clone(), effort.to_string())
         .await
         .map_err(map_control_error)?;
+    // Every session on this model may now resolve another effort: clients
+    // re-read their session rows on this live frame.
+    super::providers::notify_catalog_updated(&st);
     let row = st
         .agent_model_control
         .list_model_effort_preferences()
@@ -336,5 +339,6 @@ async fn set_agent_effort(
         )
         .await
         .map_err(map_control_error)?;
+    super::providers::notify_catalog_updated(&st);
     Ok(Json(pb::AgentEffort { agent_id, effort }))
 }

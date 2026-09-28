@@ -4,7 +4,7 @@ import type { TuiPreferences } from "../src/prefs"
 import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
-import { currentThinkingEffort, modelReference } from "../src/state/format"
+import { modelReference } from "../src/state/format"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 
@@ -60,28 +60,41 @@ test("registers every native slash command with a description", () => {
   expect(registry.get("/login")).toBeUndefined()
 })
 
-test("/effort persists the base model preference and strips a session suffix; default clears", async () => {
-  const requests: Array<{ providerId: string; modelId: string; effort: string }> = []
-  const updates: string[] = []
+test("/effort saves the choice on the layer that decides the session's effort", async () => {
+  const writes: string[] = []
+  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
+  // The session's effort as the server resolves it after each write.
+  let resolved: { effectiveEffort?: string; effortSource?: string } = { effectiveEffort: "high", effortSource: "EFFORT_SOURCE_AGENT" }
   const h = harness({
     setModelEffortPreference: async (providerId, modelId, effort) => {
-      requests.push({ providerId, modelId, effort })
+      writes.push(`model ${providerId}/${modelId}=${effort}`)
       return { providerId, modelId, effort }
     },
-    updateSessionModel: async (session, model) => {
-      updates.push(`${session}:${model}`)
-      return { id: session, agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
+    setAgentEffort: async (agentId, effort) => {
+      writes.push(`agent ${agentId}=${effort}`)
+      resolved = effort ? { effectiveEffort: effort, effortSource: "EFFORT_SOURCE_AGENT" } : {}
+      return { agentId, effort }
     },
+    updateSessionModel: async (id, model) => {
+      writes.push(`session ${id}=${model}`)
+      return { ...session, ...resolved }
+    },
+    request: (async () => ({ ...session, ...resolved })) as HyaClient["request"],
   })
-  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoningVariants: ["low"] }], workflows: [], providers: [], commands: [] })
-  h.store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoningVariants: ["low", "high"] }], workflows: [], providers: [], commands: [] })
+  // A `#high` suffix outranks everything: it is dropped, then the Agent's effort (which decides next) takes the choice.
+  h.store.openSession({ ...session, model: { ...session.model, variant: "high" }, effectiveEffort: "high", effortSource: "EFFORT_SOURCE_SUFFIX" })
   await h.run("/effort low")
+  expect(writes).toEqual(["session hysec_1=openai/gpt-6-astra", "agent build=low"])
+  expect(h.store.state.selected?.effectiveEffort).toBe("low")
+  // `default` clears both remembered layers.
+  writes.length = 0
   await h.run("/effort default")
-  expect(requests).toEqual([
-    { providerId: "openai", modelId: "gpt-6-astra", effort: "low" },
-    { providerId: "openai", modelId: "gpt-6-astra", effort: "" },
-  ])
-  expect(updates).toEqual(["hysec_1:openai/gpt-6-astra"])
+  expect(writes).toEqual(["agent build=", "model openai/gpt-6-astra="])
+  // No Agent effort: the per-model preference takes the choice.
+  writes.length = 0
+  await h.run("/effort high")
+  expect(writes).toEqual(["model openai/gpt-6-astra=high"])
 })
 
 test("parses a command line into name, words, and the raw argument text", () => {

@@ -27,13 +27,14 @@ service AgentModels {
   // hya.http: GET /v1/model-effort-preferences
   rpc ListModelEffortPreferences(ListModelEffortPreferencesRequest) returns (ListModelEffortPreferencesResponse);
 
-  // Empty effort clears the preference.
+  // Empty effort clears the preference. Emits a live `catalogUpdated` frame
+  // (sessions on the model may now resolve another `effective_effort`).
   // hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
   rpc SetModelEffortPreference(SetModelEffortPreferenceRequest) returns (ModelEffortPreference);
 
   // Set or clear (empty `effort`) one agent's default thinking effort,
   // independent of its model. Applies to the agent's next request; a `task`
-  // spawn's own `effort` still wins.
+  // spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
   //
   // hya.http: PUT /v1/agent-efforts/{agent_id}
   rpc SetAgentEffort(SetAgentEffortRequest) returns (AgentEffort);
