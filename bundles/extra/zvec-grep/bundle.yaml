@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya-extra/zvec-grep
-  version: 0.43.18
+  version: 0.43.20
   publisher: hya-extra
 resources:
   mcp:
