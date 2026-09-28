@@ -55,6 +55,19 @@ server as SSE or gRPC frames arrive. For example, type `summarize this repositor
 then `/models` to inspect available routes, and `/open 1` to return to the
 first session. Press Ctrl+C to exit and restore the terminal.
 
+While a turn started from this TUI runs in the selected session, a dedicated
+row above the status message animates and shows
+elapsed time and the time since the last session event. For example, after
+typing `hello` it may show `⠋ Agent working · 00:08 elapsed · last update 2s ago`.
+After 15 seconds without an event it shows `No update for 15s` and the `/cancel`
+hint. The animation shows that the frontend is responsive; event silence alone
+cannot establish whether the model is thinking or a backend request is stalled.
+If the turn-status request fails, the row says `Backend status unavailable` while
+the frontend retries.
+The row disappears when the backend reports the turn finished, failed, or was
+cancelled, or when you switch sessions. Failures display the backend's error
+message in the status row.
+
 To set a provider API key, type `/key set anthropic`, paste the key into the
 concealed prompt, and press Enter. The prompt draws bullets only and clears its
 buffer after submission; Esc cancels. `/keys` lists saved provider IDs, and
@@ -176,6 +189,7 @@ maps each binding to the `Service.Method` in the
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
+| `POST /v1/sessions/{id}/turns/{turn}/wait?timeoutMs=5000` | `{}` while the local turn is active | `TurnInfo` (`id: string`, `state: TURN_STATE_UNSPECIFIED \| TURN_STATE_ADMITTED \| TURN_STATE_RUNNING \| TURN_STATE_FINISHED \| TURN_STATE_FAILED \| TURN_STATE_CANCELLED`, optional `finish`, `errorCode`, `errorMessage`). The TUI repeats a timed-out wait until a terminal state. The gRPC binding is `Turn.WaitTurn` with `WaitTurnRequest {session: string, turn: string, timeoutMs: uint64}`. |
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `CancelTurnResponse` |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync` |
 | `GET /v1/sessions/{id}/events?sinceSeq=N` | No body | `ListEventsResponse` on stream resync |

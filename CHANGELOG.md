@@ -1,11 +1,9 @@
-# 0.37.10
+# 0.37.11
 
-## Native gRPC connection for OpenTUI
+## OpenTUI turn heartbeat
 
-The OpenTUI frontend can connect to the backend's separate `hya.v1` gRPC
-listener with `--grpc host:port`. Sessions, turns, catalogs, provider keys,
-workflows, interactions, and the API command view use the same frontend
-workflows over the selected transport. Session event streams now replay durable
-events after `sinceSeq` before continuing live, so reconnecting a frontend
-does not miss a completed turn. A real-backend process test covers unary calls,
-replay, and live event delivery.
+Active turns now show an animated row with elapsed time and the time since the
+last backend event. After 15 seconds of silence, the row reports that no update
+has arrived and offers `/cancel`. The frontend checks the existing `Turn.WaitTurn`
+status to stop the indicator on success, failure, or cancellation and surfaces
+terminal errors in the status row.

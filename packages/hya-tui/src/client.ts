@@ -12,6 +12,8 @@ export interface SessionInfo {
 export interface TurnInfo {
   id: string
   state: string
+  finish?: string
+  errorCode?: string
   errorMessage?: string
 }
 
@@ -241,6 +243,14 @@ export class HyaClient {
       { command: { command, arguments: argumentsText } },
     )
     return result.turn
+  }
+
+  waitTurn(session: string, turn: string, timeoutMs: number): Promise<TurnInfo> {
+    return this.request(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/wait?timeoutMs=${timeoutMs}`,
+      {},
+    )
   }
 
   bootstrap(): Promise<Bootstrap> {

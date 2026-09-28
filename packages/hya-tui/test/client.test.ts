@@ -39,6 +39,20 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
   ])
 })
 
+test("waits for terminal turn state through the selected v1 transport", async () => {
+  const requests: Array<{ path: string; method?: string; body?: string }> = []
+  const fetcher: FetchLike = async (path, init) => {
+    requests.push({ path, method: init?.method, body: String(init?.body) })
+    return Response.json({ id: "turn-1", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" })
+  }
+  const client = new HyaClient("http://127.0.0.1:8080", "/work", fetcher)
+  expect((await client.waitTurn("session-1", "turn-1", 5_000)).state).toBe("TURN_STATE_FINISHED")
+  expect(requests).toEqual([{
+    path: "http://127.0.0.1:8080/v1/sessions/session-1/turns/turn-1/wait?timeoutMs=5000",
+    method: "POST", body: "{}",
+  }])
+})
+
 test("decodes SSE frames split across transport chunks", () => {
   const decoder = new SseDecoder()
   expect(decoder.push(": keepalive\n\ndata: {\"event\":{\"seq\":\"12\",\"session\":\"s\"}}\n\n")).toEqual([
