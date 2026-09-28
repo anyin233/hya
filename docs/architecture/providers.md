@@ -326,7 +326,7 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
   connection but does not return headers fails as a retryable transport error.
 - **Pre-stream retries:** at most `max_attempts` request attempts (default
   three) for transport errors, HTTP 429, and HTTP 5xx. Backoff is exponential
-  with jitter from `backoff_base` (default 100 ms) up to `backoff_max`
+  with jitter from `backoff_base` (default 1 s) up to `backoff_max`
   (default 30 s); a valid `Retry-After` value takes precedence and is capped
   at 30 seconds. Reading a non-success response body for diagnostics is capped
   at 2 seconds so an error body cannot prevent the next retry. The budget is

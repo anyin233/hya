@@ -255,6 +255,49 @@ async fn retry_config_limits_total_attempts_to_one() {
 }
 
 #[tokio::test]
+async fn exhausted_retryable_status_reports_attempt_count() {
+    let busy = "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy".to_string();
+    let (base_url, connections, _requests) =
+        start_scripted_server(vec![busy.clone(), busy.clone(), busy]).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_retry(hya_provider::RetryConfig {
+        backoff_base: Duration::from_millis(1),
+        ..hya_provider::RetryConfig::default()
+    });
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let error = match provider.stream(req, SessionId::new(), MessageId::new()).await {
+        Err(error) => error,
+        Ok(_) => panic!("three 503 responses must exhaust the retry budget"),
+    };
+    assert!(matches!(&error, ProviderError::HttpStatus { status: 503, .. }));
+    assert_eq!(connections.load(Ordering::SeqCst), 3);
+    assert!(error.to_string().contains("after 3 attempts"), "{error}");
+    assert!(error.to_string().contains("busy"), "{error}");
+    assert!(error.is_retryable_before_stream());
+    assert_eq!(
+        hya_provider::RetryConfig::default().backoff_base,
+        Duration::from_secs(1)
+    );
+}
+
+#[tokio::test]
 async fn post_event_body_failure_is_never_replayed() {
     // One valid frame is delivered before the body truncates: the consumer has
     // now seen an event, so the no-replay boundary holds and the decode error

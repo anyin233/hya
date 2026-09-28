@@ -593,7 +593,7 @@ over both:
 ```yaml
 provider_retry:
   max_attempts: 5        # total request attempts per completion (default 3)
-  backoff_base_ms: 250   # exponential backoff seed (default 100)
+  backoff_base_ms: 250   # exponential backoff seed (default 1000)
   backoff_max_ms: 60000  # backoff / Retry-After ceiling (default 30000)
 
 providers:
@@ -609,7 +609,7 @@ providers:
 | Field | Env override | Default | Meaning |
 | --- | --- | --- | --- |
 | `max_attempts` | `HYA_PROVIDER_RETRY_MAX_ATTEMPTS` | `3` | Total request attempts per streamed completion, shared by pre-stream retries (transport, 429, 5xx) and the zero-event replay window (link-level failures and transient in-stream error frames). Clamped to at least 1. |
-| `backoff_base_ms` | `HYA_PROVIDER_RETRY_BACKOFF_BASE_MS` | `100` | Exponential backoff seed; grows `2^attempt` with jitter (75–125%). |
+| `backoff_base_ms` | `HYA_PROVIDER_RETRY_BACKOFF_BASE_MS` | `1000` | Exponential backoff seed; grows `2^attempt` with jitter (75–125%). |
 | `backoff_max_ms` | `HYA_PROVIDER_RETRY_BACKOFF_MAX_MS` | `30000` | Ceiling for the exponential backoff and `Retry-After` waits (the latter is additionally hard-capped at 30 s). |
 
 The budget covers both recovery layers: the pre-stream attempt loop, and the
@@ -621,6 +621,12 @@ the whole request is re-issued while budget remains. Non-transient error frames
 (invalid request, auth, unclassified) are never retried. Once a single event has
 been delivered the strict no-replay boundary applies and errors surface exactly
 once. See [In-stream error frames](architecture/providers.md#in-stream-error-frames).
+
+If the pre-stream loop exhausts multiple attempts on a retryable status or
+transport failure, the error includes the number of attempts and elapsed time
+alongside the original status and response detail (for example,
+`http status 503: after 3 attempts over 2.1s: busy`). A single failed attempt
+retains the original error text.
 
 Discovery uses the declared provider kind and base URL: OpenAI-compatible and
 Responses use `/models`; Anthropic uses `/models` with bounded cursor pages;
