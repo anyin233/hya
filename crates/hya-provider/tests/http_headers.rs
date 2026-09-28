@@ -256,7 +256,9 @@ async fn retry_config_limits_total_attempts_to_one() {
 
 #[tokio::test]
 async fn exhausted_retryable_status_reports_attempt_count() {
-    let busy = "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy".to_string();
+    let busy =
+        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy"
+            .to_string();
     let (base_url, connections, _requests) =
         start_scripted_server(vec![busy.clone(), busy.clone(), busy]).await;
     let provider = HttpProvider::new(
@@ -282,11 +284,17 @@ async fn exhausted_retryable_status_reports_attempt_count() {
         headers: Default::default(),
     };
 
-    let error = match provider.stream(req, SessionId::new(), MessageId::new()).await {
+    let error = match provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+    {
         Err(error) => error,
         Ok(_) => panic!("three 503 responses must exhaust the retry budget"),
     };
-    assert!(matches!(&error, ProviderError::HttpStatus { status: 503, .. }));
+    assert!(matches!(
+        &error,
+        ProviderError::HttpStatus { status: 503, .. }
+    ));
     assert_eq!(connections.load(Ordering::SeqCst), 3);
     assert!(error.to_string().contains("after 3 attempts"), "{error}");
     assert!(error.to_string().contains("busy"), "{error}");

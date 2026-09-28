@@ -161,7 +161,10 @@ impl OpenAiResponsesDecoder {
         }
         if !delta.is_empty() {
             if let Some(summary_index) = summary_index.or(entry.pending_summary_index) {
-                if entry.summary_index.is_some_and(|previous| previous != summary_index) {
+                if entry
+                    .summary_index
+                    .is_some_and(|previous| previous != summary_index)
+                {
                     out.push(Event::ReasoningDelta {
                         session,
                         message,
