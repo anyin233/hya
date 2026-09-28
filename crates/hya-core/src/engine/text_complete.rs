@@ -99,6 +99,10 @@ impl TextPartAccumulator {
     pub(super) fn replace(&mut self, part: PartId, text: String) {
         self.parts.insert(part, text);
     }
+
+    pub(super) fn text(&self, part: PartId) -> Option<String> {
+        self.parts.get(&part).cloned()
+    }
 }
 
 impl SessionEngine {
