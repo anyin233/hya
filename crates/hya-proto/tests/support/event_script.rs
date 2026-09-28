@@ -393,6 +393,7 @@ impl Script {
                     files: vec![FileChange {
                         path: format!("/tmp/scripted/f{}", self.rng.below(4)),
                         before: self.file_state(),
+                        observed: false,
                     }],
                 },
                 None => self.title(),
@@ -405,6 +406,7 @@ impl Script {
                         path: format!("/tmp/scripted/f{}", self.rng.below(4)),
                         restored: self.file_state(),
                         saved: self.file_state(),
+                        observed: false,
                         error: self.rng.chance(10).then(|| "denied".to_string()),
                     }],
                 },

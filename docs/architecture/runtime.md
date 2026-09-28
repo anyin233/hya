@@ -1209,9 +1209,10 @@ Before a tool call runs, the engine captures the prior state of the files it
 may change ([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
 after the call it keeps the prior content of each file that actually changed
 as a per-session blob (`file_blob` table, keyed by sha256) and appends one
-`files_changed { message, call, files: [{path, before}] }` after the call's
-`tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
-`omitted {size, reason}`.
+ `files_changed { message, call, files: [{path, before, observed}] }` after the call's
+ `tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
+ `omitted {size, reason}`; `observed` is true only for bash changes inferred from
+ git status (and defaults to false when replaying older events).
 
 | Tool | What is captured |
 | --- | --- |
@@ -1240,9 +1241,13 @@ images (see [Prompt Admission](#prompt-admission)) share the table: they are alw
 stored (their own limits are 10 MiB each, 20 MiB per turn), and they count
 toward the 256 MiB session total, so a session with many images keeps fewer
 file snapshots. A
-capture problem never fails the tool call; an `omitted` file is simply not
-restored. The bash capture compares the tree before and after the command,
-so a file some other process changed while the command ran is recorded too.
+ A capture problem never fails the tool call; an `omitted` file is simply not
+ restored. Bash's before/after git-status detector is necessarily observational:
+ it can include a file changed concurrently by another process. Such entries are
+ marked `observed: true` in `FilesChanged`; revert still restores them, but marks
+ the corresponding `FileRestore` so clients can warn that the change may include
+ edits made outside hya. Older events omit the field and retain their historical
+ restore behavior.
 
 ### Revert, unrevert, commit
 

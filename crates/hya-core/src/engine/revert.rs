@@ -124,14 +124,14 @@ impl SessionEngine {
             .flat_map(|m| &m.file_changes)
         {
             if seen.insert(record.path.clone()) {
-                targets.push((record.path.clone(), record.before.clone()));
+                targets.push((record.path.clone(), record.before.clone(), record.observed));
             }
         }
         let mut budget = self.blob_budget(session).await?;
         let mut files = Vec::with_capacity(targets.len());
-        for (path, restored) in targets {
+        for (path, restored, observed) in targets {
             files.push(
-                self.restore_file(session, path, restored, &mut budget)
+                self.restore_file(session, path, restored, observed, &mut budget)
                     .await?,
             );
         }
@@ -182,6 +182,7 @@ impl SessionEngine {
                 restored: file.saved,
                 // …over what the revert had written.
                 saved: file.restored,
+                observed: file.observed,
                 error,
             });
         }
@@ -212,6 +213,7 @@ impl SessionEngine {
         session: SessionId,
         path: String,
         restored: FileState,
+        observed: bool,
         budget: &mut BlobBudget,
     ) -> Result<FileRestore, CoreError> {
         let target = Path::new(&path);
@@ -225,6 +227,7 @@ impl SessionEngine {
             path,
             restored,
             saved,
+            observed,
             error,
         })
     }

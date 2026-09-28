@@ -1341,6 +1341,7 @@ impl Projection {
                             call: *call,
                             path: file.path.clone(),
                             before: file.before.clone(),
+                            observed: file.observed,
                         }));
                 }
             }
