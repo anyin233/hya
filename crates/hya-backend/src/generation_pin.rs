@@ -3,7 +3,10 @@
 //!
 //! A running daemon copies the executable it runs and the native tool
 //! libraries/packages it loaded into `<db>.server.gen/<pid>/`, in the same
-//! relative layout, so the copied executable resolves the same libraries.
+//! relative layout, so the copied executable resolves the same libraries. A
+//! Cargo build also loads the in-tree first-party bundle sources; those are
+//! copied to `<pin>/first-party/` and a rollback points the pinned build at
+//! them (`HYA_FIRST_PARTY_SOURCE_ROOT`).
 //! Why: a rebuild (`cargo build`) or an update replaces those files in place,
 //! so after a failed restart the old generation's own `current_exe()` path
 //! may already be the failed build. The pin is what a failed handoff rolls
@@ -20,6 +23,7 @@ use anyhow::Context as _;
 pub(crate) struct GenerationPin {
     dir: PathBuf,
     exe: PathBuf,
+    first_party_root: Option<PathBuf>,
 }
 
 impl GenerationPin {
@@ -27,6 +31,20 @@ impl GenerationPin {
     pub(crate) fn exe(&self) -> &Path {
         &self.exe
     }
+
+    /// The pinned first-party source root (same `presets/`/`first-party/`
+    /// layout as the tree), when this build loaded in-tree sources.
+    pub(crate) fn first_party_root(&self) -> Option<&Path> {
+        self.first_party_root.as_deref()
+    }
+}
+
+/// One in-tree first-party bundle directory this build loaded, and its path
+/// relative to the first-party source root.
+#[derive(Debug)]
+pub(crate) struct FirstPartyDir {
+    pub(crate) source: PathBuf,
+    pub(crate) relative: PathBuf,
 }
 
 impl Drop for GenerationPin {
@@ -46,7 +64,28 @@ pub(crate) fn pin_root(db: &str) -> PathBuf {
 pub(crate) fn pin(db: &str) -> anyhow::Result<GenerationPin> {
     let exe = std::env::current_exe().context("find the running executable")?;
     let libraries = hya_tool::native_bundle::loaded_library_sources();
-    pin_files(&pin_root(db), std::process::id(), &exe, &libraries)
+    let exe_dir = exe.parent().context("the executable has no directory")?;
+    let root = hya_bundle::first_party_source_root();
+    let first_party: Vec<FirstPartyDir> = hya_bundle::FIRST_PARTY_BUNDLES
+        .iter()
+        .filter_map(
+            |identity| match hya_bundle::first_party_source(exe_dir, identity)? {
+                hya_bundle::FirstPartySource::Directory(source) => Some(source),
+                hya_bundle::FirstPartySource::Package(_) => None,
+            },
+        )
+        .filter_map(|source| {
+            let relative = source.strip_prefix(&root).ok()?.to_path_buf();
+            Some(FirstPartyDir { source, relative })
+        })
+        .collect();
+    pin_files(
+        &pin_root(db),
+        std::process::id(),
+        &exe,
+        &libraries,
+        &first_party,
+    )
 }
 
 /// Copy `exe` and the loaded `libraries` into `root/<pid>/`, keeping the
@@ -58,6 +97,7 @@ pub(crate) fn pin_files(
     pid: u32,
     exe: &Path,
     libraries: &[PathBuf],
+    first_party: &[FirstPartyDir],
 ) -> anyhow::Result<GenerationPin> {
     sweep(root);
     let dir = root.join(pid.to_string());
@@ -73,10 +113,17 @@ pub(crate) fn pin_files(
     std::fs::create_dir_all(&pinned_dir)
         .with_context(|| format!("create {}", pinned_dir.display()))?;
     let pinned_exe = pinned_dir.join(file_name);
+    let first_party_root = (!first_party.is_empty()).then(|| dir.join("first-party"));
     let pin = GenerationPin {
         dir: dir.clone(),
         exe: pinned_exe.clone(),
+        first_party_root: first_party_root.clone(),
     };
+    if let Some(root) = &first_party_root {
+        for bundle in first_party {
+            copy_tree(&bundle.source, &root.join(&bundle.relative))?;
+        }
+    }
     copy(exe, &pinned_exe)?;
     for library in libraries {
         let Some(name) = library.file_name() else {
@@ -122,6 +169,25 @@ fn copy(from: &Path, to: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Copy a bundle source directory, skipping build output and dependencies.
+fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(to).with_context(|| format!("create {}", to.display()))?;
+    for entry in std::fs::read_dir(from).with_context(|| format!("read {}", from.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some("target" | "node_modules" | ".git")) {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &to.join(&name))?;
+        } else if kind.is_file() {
+            copy(&entry.path(), &to.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
 /// Remove the pins of processes that no longer run.
 fn sweep(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -158,14 +224,42 @@ mod tests {
         std::fs::create_dir_all(build.join("deps")).unwrap();
         std::fs::write(build.join("hya"), b"old exe").unwrap();
         std::fs::write(build.join("deps/libhya_base_tools.dylib"), b"old lib").unwrap();
+        let tree = root.join("bundles");
+        std::fs::create_dir_all(tree.join("presets/core-agents/prompts")).unwrap();
+        std::fs::write(
+            tree.join("presets/core-agents/bundle.yaml"),
+            b"old manifest",
+        )
+        .unwrap();
+        std::fs::write(tree.join("presets/core-agents/prompts/a.md"), b"old prompt").unwrap();
+        std::fs::create_dir_all(tree.join("presets/core-agents/target/debug")).unwrap();
+        std::fs::write(tree.join("presets/core-agents/target/debug/junk"), b"x").unwrap();
         let pins = root.join("s.db.server.gen");
         let pin = pin_files(
             &pins,
             4242,
             &build.join("hya"),
             &[build.join("deps/libhya_base_tools.dylib")],
+            &[FirstPartyDir {
+                source: tree.join("presets/core-agents"),
+                relative: PathBuf::from("presets/core-agents"),
+            }],
         )
         .unwrap();
+        std::fs::write(
+            tree.join("presets/core-agents/prompts/a.md"),
+            b"edited prompt",
+        )
+        .unwrap();
+        // The in-tree first-party sources this build loaded are pinned too;
+        // a rollback points the pinned build at them.
+        let first_party = pin.first_party_root().unwrap();
+        assert_eq!(first_party, pins.join("4242/first-party"));
+        assert_eq!(
+            std::fs::read(first_party.join("presets/core-agents/prompts/a.md")).unwrap(),
+            b"old prompt"
+        );
+        assert!(!first_party.join("presets/core-agents/target").exists());
         // A rebuild replaces the originals; the pin keeps the old ones.
         std::fs::write(build.join("hya"), b"new exe").unwrap();
         std::fs::write(build.join("deps/libhya_base_tools.dylib"), b"new lib").unwrap();
@@ -196,8 +290,10 @@ mod tests {
             7,
             &prefix.join("bin/hya"),
             &[prefix.join("bundles/hya-base-tools.hyabundle")],
+            &[],
         )
         .unwrap();
+        assert_eq!(pin.first_party_root(), None, "packages are pinned instead");
         assert_eq!(pin.exe(), pins.join("7/bin/hya"));
         assert_eq!(
             std::fs::read(pins.join("7/bundles/hya-core-agents.hyabundle")).unwrap(),
@@ -219,7 +315,7 @@ mod tests {
         std::fs::create_dir_all(pins.join("2147483632")).unwrap();
         std::fs::create_dir_all(pins.join("junk")).unwrap();
         std::fs::write(root.join("hya"), b"exe").unwrap();
-        let pin = pin_files(&pins, std::process::id(), &root.join("hya"), &[]).unwrap();
+        let pin = pin_files(&pins, std::process::id(), &root.join("hya"), &[], &[]).unwrap();
         assert!(!pins.join("2147483632").exists());
         assert!(!pins.join("junk").exists());
         assert!(pin.exe().is_file());

@@ -94,9 +94,17 @@ async fn refresh_bundles(
         errors: refreshed
             .errors
             .iter()
-            .map(|error| pb::BundleRefreshError {
-                bundle_id: String::new(),
-                message: format!("{error:#}"),
+            .map(|error| match error {
+                hya_core::CoreError::BundleRuntime { bundle_id, source } => {
+                    pb::BundleRefreshError {
+                        bundle_id: bundle_id.clone(),
+                        message: source.to_string(),
+                    }
+                }
+                other => pb::BundleRefreshError {
+                    bundle_id: String::new(),
+                    message: other.to_string(),
+                },
             })
             .collect(),
     }))

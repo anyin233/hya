@@ -504,7 +504,15 @@ async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> any
         .map(|errors| {
             errors
                 .iter()
-                .filter_map(|error| error["message"].as_str().map(str::to_owned))
+                .filter_map(|error| {
+                    let message = error["message"].as_str()?;
+                    Some(
+                        match error["bundleId"].as_str().filter(|id| !id.is_empty()) {
+                            Some(bundle) => format!("{bundle}: {message}"),
+                            None => message.to_owned(),
+                        },
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();

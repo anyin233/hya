@@ -2093,6 +2093,8 @@ resources:
         );
         let stderr = String::from_utf8(install.stderr)?;
         assert!(stderr.contains("installed but not activated"), "{stderr}");
+        // The failure is attributed to the bundle that could not start.
+        assert!(stderr.contains("\n  acme/dead-process: "), "{stderr}");
         Ok(())
     })();
     let _ = bundle_command(&data_root)

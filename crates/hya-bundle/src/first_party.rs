@@ -41,10 +41,22 @@ pub enum FirstPartySource {
     Package(PathBuf),
 }
 
-/// Root of the in-tree first-party bundle sources for this build.
+/// Environment override of [`first_party_source_root`]: a directory with the
+/// same `presets/` and `first-party/` layout. A daemon rolling back a failed
+/// restart sets it for its pinned previous build, so that build loads the
+/// first-party sources it ran with instead of the since-edited tree.
+pub const FIRST_PARTY_SOURCE_ROOT_ENV: &str = "HYA_FIRST_PARTY_SOURCE_ROOT";
+
+/// Root of the in-tree first-party bundle sources for this build
+/// ([`FIRST_PARTY_SOURCE_ROOT_ENV`] when set).
 #[must_use]
 pub fn first_party_source_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bundles")
+    std::env::var_os(FIRST_PARTY_SOURCE_ROOT_ENV)
+        .filter(|root| !root.is_empty())
+        .map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bundles"),
+            PathBuf::from,
+        )
 }
 
 /// Package file name for a first-party identity, such as `hya-core-agents.hyabundle`.

@@ -48,9 +48,12 @@ cargo build -p hya-backend --bin hya
   activation.journal    # prepare/commit/abort + owner token/generation
 
 Control files must never live under `releases/`. Session databases and secrets
-must not appear under the updater root. The trusted owner obtains an
-`UpdaterOwner`, binds a candidate and expected generation with `authorize`, and
-writes the capability JSON with `write_authorization`. Same-UID processes that
+must not appear under the updater root. The trusted owner issues the
+capability with `hya update authorize --root … --sequence N --out FILE`: it
+takes the root lease (`UpdaterOwner`), binds release `N` to the active
+generation (`authorize`), and writes the JSON (`write_authorization`). At a
+terminal it asks for confirmation; without one it refuses unless `--yes` (for
+the owner's own supervisor). Agents never issue it. Same-UID processes that
 can write this root share the trust boundary; the capability is not a sandbox.
 
 ## CLI
@@ -79,8 +82,13 @@ Commands:
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh
 
-# The owner may release its lease after writing the capability; the updater
-# validates supplied JSON against root/authorization.json before activation.
+# The owner issues the capability (confirms at the terminal), which releases
+# its lease on exit; the updater validates the supplied JSON against
+# root/authorization.json before activation.
+./target/debug/hya update authorize \
+  --root /var/lib/hya/updater \
+  --sequence 42 \
+  --out ./activation.authorization.json
 ./target/debug/hya update apply \
   --root /var/lib/hya/updater \
   --metadata ./release.metadata.json \

@@ -307,6 +307,10 @@ pub(crate) struct SuccessorSpawn {
     /// `--inherit-status`: the old generation's discovery `startedAt` (unix
     /// ms); the successor republishes it so status and uptime survive.
     pub(crate) started_at: Option<u64>,
+    /// A rollback's pinned first-party source root
+    /// ([`hya_bundle::FIRST_PARTY_SOURCE_ROOT_ENV`]); `None` for an ordinary
+    /// successor, which never inherits one.
+    pub(crate) first_party_root: Option<PathBuf>,
 }
 
 /// The successor executable recorded in the handoff journal must exist, be a
@@ -403,10 +407,15 @@ fn successor_command(
         command.args(["--allow-host", host]);
     }
     // The daemon never inherits a relay link or a bridge token of the
-    // generation that spawns it.
+    // generation that spawns it, nor a rolled-back generation's pinned
+    // first-party root: only a rollback successor gets its own.
     command
         .env_remove(crate::bridge::LINK_ENV)
-        .env_remove(crate::bridge::TOKEN_ENV);
+        .env_remove(crate::bridge::TOKEN_ENV)
+        .env_remove(hya_bundle::FIRST_PARTY_SOURCE_ROOT_ENV);
+    if let Some(root) = &handoff.first_party_root {
+        command.env(hya_bundle::FIRST_PARTY_SOURCE_ROOT_ENV, root);
+    }
     if let Some(url) = &relay.relay {
         command.args(["--relay", url]);
         if let Some(transport) = &relay.relay_transport {
@@ -1010,5 +1019,51 @@ mod tests {
         };
         let error = start(&spec, Duration::from_millis(10)).await.unwrap_err();
         assert!(error.to_string().contains("--db"), "{error}");
+    }
+
+    /// A rollback successor loads the first-party sources pinned with its
+    /// build; an ordinary successor never inherits a pinned root from the
+    /// generation that spawns it (a rolled-back daemon's own environment).
+    #[test]
+    fn only_a_rollback_successor_gets_the_pinned_first_party_root() {
+        let spec = DaemonSpec {
+            db: "/tmp/s.db".into(),
+            model: None,
+            yolo: false,
+            pure: false,
+            allow_hosts: Vec::new(),
+            exe: PathBuf::from("/pin/hya"),
+        };
+        let spawn = |first_party_root: Option<PathBuf>| SuccessorSpawn {
+            journal: PathBuf::from("/tmp/s.db.server.handoff"),
+            listener_fd: 3,
+            lock_fd: 4,
+            extra_fd: None,
+            started_at: None,
+            first_party_root,
+        };
+        let env_of = |command: &Command| {
+            command
+                .get_envs()
+                .find(|(key, _)| *key == hya_bundle::FIRST_PARTY_SOURCE_ROOT_ENV)
+                .map(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+        };
+        let rollback = successor_command(
+            &spec,
+            &RelayFlags::default(),
+            &spawn(Some(PathBuf::from("/pin/first-party"))),
+            std::path::Path::new("/"),
+        );
+        assert_eq!(
+            env_of(&rollback),
+            Some(Some(std::ffi::OsString::from("/pin/first-party")))
+        );
+        let ordinary = successor_command(
+            &spec,
+            &RelayFlags::default(),
+            &spawn(None),
+            std::path::Path::new("/"),
+        );
+        assert_eq!(env_of(&ordinary), Some(None), "the variable is removed");
     }
 }
