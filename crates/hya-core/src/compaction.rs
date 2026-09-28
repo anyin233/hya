@@ -476,66 +476,86 @@ fn is_eviction_notice(output: &serde_json::Value) -> bool {
     })
 }
 
-/// Drop stale completed tool outputs from `messages`, keeping calls and inputs.
+/// Completed, not-yet-evicted tool outputs that are stale: outside the last
+/// `keep_recent` messages (older turns, as before) OR outside the last
+/// `keep_recent` tool steps. The step tail is what lets a long turn — one
+/// assistant message holding many tool steps — shed its own early outputs.
+fn stale_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<(usize, usize)> {
+    let mut candidates = Vec::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        let parts = match message {
+            Message::Assistant { parts, .. } | Message::User { parts, .. } => parts,
+            Message::System { .. } => continue,
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            if let Part::Tool {
+                state: hya_proto::ToolPartState::Completed { output, .. },
+                ..
+            } = part
+                && !is_eviction_notice(output)
+            {
+                candidates.push((message_index, part_index));
+            }
+        }
+    }
+    let step_cut = candidates.len().saturating_sub(keep_recent);
+    let message_cut = messages.len().saturating_sub(keep_recent);
+    candidates
+        .into_iter()
+        .enumerate()
+        .filter(|(rank, (message_index, _))| *rank < step_cut || *message_index < message_cut)
+        .map(|(_, location)| location)
+        .collect()
+}
+
+/// Drop stale completed tool outputs from `messages` (see
+/// [`stale_tool_outputs`]), scanning the whole request including the active
+/// assistant message.
 ///
-/// Returns how many parts were evicted. Messages in the most recent
-/// `keep_recent` are never touched, so the model keeps full fidelity on what it
-/// just did.
-///
-/// **Request-local.** Callers pass a transcript built for one provider request;
-/// the event log is untouched, so the full output stays recoverable offline.
-///
-/// This is tried before summarizing because tool output dominates a tool-heavy
-/// transcript, and losing it costs the model far less than folding whole turns
-/// into prose: every call, its input, and all reasoning survive.
+/// Returns how many parts were evicted. This operation is request-local; the
+/// event log remains unchanged and handles returned by the sink stay retrievable.
 pub fn evict_stale_tool_outputs(
     messages: &mut [Message],
     keep_recent: usize,
     sink: Option<&dyn EvictionSink>,
 ) -> u32 {
-    let Some((start, end)) = foldable_range(messages, keep_recent) else {
-        return 0;
-    };
     let mut evicted = 0;
-    for message in messages.iter_mut().skip(start).take(end - start) {
-        let (Message::Assistant { parts, .. } | Message::User { parts, .. }) = message else {
+    for (message_index, part_index) in stale_tool_outputs(messages, keep_recent) {
+        let (Message::Assistant { parts, .. } | Message::User { parts, .. }) =
+            &mut messages[message_index]
+        else {
             continue;
         };
-        for part in parts.iter_mut() {
-            let Part::Tool { name, state, .. } = part else {
-                continue;
-            };
-            let hya_proto::ToolPartState::Completed {
-                input,
-                output,
-                time_ms,
-            } = state
-            else {
-                continue;
-            };
-            // Already evicted: skip so a repeat pass is idempotent and the count
-            // reflects real work.
-            if is_eviction_notice(output) {
-                continue;
-            }
-            // Prefer moving the body to dropping it. The sink is handed the
-            // rendered output because an artifact is bytes and a tool result is
-            // only sometimes a string.
-            let notice = sink
-                .and_then(|sink| sink.spill(name.as_str(), &value_text(output)))
-                .map_or_else(
-                    || EVICTED_OUTPUT_NOTICE.to_string(),
-                    |handle| spilled_output_notice(&handle),
-                );
-            *state = hya_proto::ToolPartState::Completed {
-                input: input.clone(),
-                output: serde_json::Value::String(notice),
-                time_ms: *time_ms,
-            };
-            evicted += 1;
-        }
+        let Part::Tool { name, state, .. } = &mut parts[part_index] else {
+            continue;
+        };
+        let hya_proto::ToolPartState::Completed {
+            input,
+            output,
+            time_ms,
+        } = state
+        else {
+            continue;
+        };
+        let notice = sink
+            .and_then(|sink| sink.spill(name.as_str(), &value_text(output)))
+            .map_or_else(
+                || EVICTED_OUTPUT_NOTICE.to_string(),
+                |handle| spilled_output_notice(&handle),
+            );
+        *state = hya_proto::ToolPartState::Completed {
+            input: input.clone(),
+            output: serde_json::Value::String(notice),
+            time_ms: *time_ms,
+        };
+        evicted += 1;
     }
     evicted
+}
+
+/// Whether at least one completed tool output is stale enough to spill.
+pub(crate) fn has_spillable_tool_output(messages: &[Message], keep_recent: usize) -> bool {
+    !stale_tool_outputs(messages, keep_recent).is_empty()
 }
 
 /// The anchored summary already present in `messages`, if any.
@@ -1420,6 +1440,52 @@ mod tests {
             panic!("expected completed state");
         };
         assert_eq!(input["pattern"], "*.rs", "tool input must be preserved");
+    }
+    #[test]
+    fn eviction_spills_old_tool_steps_inside_active_assistant() {
+        use hya_proto::{ToolCallId, ToolName, ToolPartState};
+        let parts = (0..4)
+            .map(|index| Part::Tool {
+                id: PartId::new(),
+                call_id: ToolCallId::new(),
+                name: ToolName::new("find"),
+                state: ToolPartState::Completed {
+                    input: serde_json::json!({"step": index}),
+                    output: serde_json::Value::String(format!(
+                        "output-{index}-{}",
+                        "x".repeat(100)
+                    )),
+                    time_ms: 1,
+                },
+            })
+            .collect();
+        let mut messages = vec![Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts,
+            finish: None,
+            tokens: None,
+        }];
+
+        assert_eq!(evict_stale_tool_outputs(&mut messages, 2, None), 2);
+        let Message::Assistant { parts, .. } = &messages[0] else {
+            panic!("expected assistant");
+        };
+        let outputs: Vec<_> = parts
+            .iter()
+            .map(|part| match part {
+                Part::Tool {
+                    state: ToolPartState::Completed { output, .. },
+                    ..
+                } => output.as_str().unwrap_or_default().to_string(),
+                _ => String::new(),
+            })
+            .collect();
+        assert!(outputs[0].starts_with("[tool output evicted"));
+        assert!(outputs[1].starts_with("[tool output evicted"));
+        assert!(outputs[2].starts_with("output-2"));
+        assert!(outputs[3].starts_with("output-3"));
     }
 
     #[test]

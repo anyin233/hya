@@ -1208,3 +1208,119 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
     assert_eq!(folded.mode, mode);
     assert_eq!(folded.threshold, threshold);
 }
+
+/// A long agentic turn is ONE assistant message: its stale tool outputs must
+/// be spilled mid-turn once the request crosses the threshold, keeping the most
+/// recent `keep_recent` tool outputs intact (previously nothing compacted
+/// until the turn ended, because every rung required a foldable message range).
+#[tokio::test]
+async fn stale_tool_outputs_spill_inside_one_long_turn() {
+    let dir = tempdir();
+    let big_file = dir.join("big.txt");
+    let big = format!("{}\n", "R".repeat(100)).repeat(200);
+    tokio::fs::write(&big_file, &big).await.unwrap();
+    let path = big_file.to_string_lossy().into_owned();
+    let read = || FakeStep::ToolCall {
+        name: "read".to_string(),
+        input: json!({ "path": path }),
+    };
+
+    // Three read rounds, then a final answer, all in one turn.
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+        vec![read(), FakeStep::Finish(FinishReason::ToolCalls)],
+        vec![
+            FakeStep::Text("done".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Read,
+        "/**",
+        Mode::Allow,
+    )]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(Recording(called.clone())),
+        CompactionConfig {
+            token_threshold: 1_000_000,
+            keep_recent: 1,
+            // ~32,000-token threshold: one ~30,100-token read output fits,
+            // two do not (see the cross-turn eviction test above).
+            context_fraction: 0.16,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .admit_user_prompt(session, "read the big file three times".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let assistant_messages = hya_proto::Projection::from_events(&envelopes)
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .count();
+    assert_eq!(
+        assistant_messages, 1,
+        "the whole turn is one assistant message"
+    );
+    let evictions: Vec<_> = envelopes
+        .iter()
+        .filter_map(|e| match &e.event {
+            hya_proto::Event::ContextEvicted {
+                evicted_parts,
+                tokens_before,
+                tokens_after,
+                ..
+            } => Some((*evicted_parts, *tokens_before, *tokens_after)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !evictions.is_empty(),
+        "stale tool outputs inside the running turn must be spilled"
+    );
+    for (parts, before, after) in &evictions {
+        assert!(*parts > 0);
+        assert!(after < before);
+    }
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "spilling was enough; nothing was summarized"
+    );
+}
