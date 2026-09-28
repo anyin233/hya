@@ -1,8 +1,8 @@
 /**
  * Sessions on connect and exit (docs/tui.md "Sessions on start and exit"): a
- * TUI started without `--session`/`--continue` creates a session as soon as
- * it connects, so it is ready to type into. That session (and every one
- * `/new` makes) is created `ephemeral`: the backend daemon deletes it once it
+ * plain TUI start reopens a saved Project conversation, or creates an
+ * `ephemeral` session when none exists. That session (and every one `/new`
+ * makes) is deleted by the backend daemon once it
  * is still unused and no client watches it (ADR-0023 amendment "the daemon
  * drops unused sessions"). So this client never deletes anything itself:
  * leaving an unused session (another one opened, or the TUI exiting in any
@@ -60,6 +60,8 @@ export function createSessionKeeper({ client }: SessionKeeperOptions) {
   }
 
   return {
+    /** Find a child session's root for navigation or archiving. */
+    rootOf,
     /** This client created `id` (on connect, or `/new`) as an ephemeral session. */
     created(id: string): void { fresh.add(id) },
     /** The user sent something in `id`: the daemon keeps it from now on. */

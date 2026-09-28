@@ -96,7 +96,7 @@ Options:
   -h, --help        Show this help
 
 Environment:
-  HYA_TUI_CONFIG    TUI preferences file (theme); default
+  HYA_TUI_CONFIG    TUI preferences file (theme, permission mode); default
                     $XDG_CONFIG_HOME/hya/tui.json, else ~/.config/hya/tui.json
 `
 

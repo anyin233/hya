@@ -5,9 +5,8 @@
  * while any are waiting. Each line names the session it belongs to (its
  * `/open` number and title, state/format.ts `pendingLines`); asks of any
  * session arrive live over the global stream (app/controller.ts). Shows up
- * to three; the rest are counted. `/open <n>` goes to the session to answer
- * there with its prompt; `/approve`, `/deny`, or `/answer` answer from here;
- * `/interactions` lists every detail.
+ * to three; the rest are counted. F4 opens the oldest request's root session
+ * and shows its normal numbered choices. `/interactions` lists every detail.
  */
 import { useTerminalDimensions } from "@opentui/solid"
 import { For, Show } from "solid-js"
@@ -39,7 +38,7 @@ export function PendingBlock(props: { width?: number }) {
           {(line) => <text height={1} wrapMode="none" fg={colors.fg}>{line}</text>}
         </For>
         <text height={1} wrapMode="none" fg={colors.muted}>
-          {`${more() > 0 ? `+${more()} more · ` : ""}/open <n> answers there · /approve <id> · /deny <id> · /answer <id> <text> · /interactions`}
+          {`${more() > 0 ? `+${more()} more · ` : ""}F4 review request · /sessions past chats · /interactions details`}
         </text>
       </box>
     </Show>

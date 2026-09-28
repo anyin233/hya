@@ -33,6 +33,7 @@ export type KeyAction =
   | "undo"
   | "redo"
   | "fork"
+  | "reviewPending"
 
 /** The subset of OpenTUI's KeyEvent a binding looks at. */
 export interface KeyLike {
@@ -123,6 +124,12 @@ export const keyBindings: readonly KeyBinding[] = [
     label: "Tab",
     description: "Complete the /command or argument; repeat to cycle",
     matches: (key) => key.name === "tab" || key.sequence === "\t",
+  },
+  {
+    action: "reviewPending",
+    label: "F4",
+    description: "Open the oldest pending permission or question in another session; then use its numbered choices",
+    matches: (key) => key.name === "f4" && !key.ctrl && !key.meta && !key.shift,
   },
   {
     action: "refresh",

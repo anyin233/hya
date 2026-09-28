@@ -61,11 +61,11 @@ export function backendText(backend: BackendInfo | undefined, serverPid?: number
  * Open the `/sessions` picker (C13): a `New session` row first, then the
  * tree, scoped to the active Project unless F3's "all projects" toggle is on
  * (state/store.ts `sessionsPickerAllProjects`); Enter opens, F2 renames,
- * Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions
- * (listed with `includeArchived`, tagged `archived`; opening one unarchives
+ * Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions
+ * (listed with `includeArchived` by default, tagged `archived`; opening one unarchives
  * it, like `/resume`).
  */
-async function openSessionsPicker(context: CommandContext, showArchived = false): Promise<void> {
+async function openSessionsPicker(context: CommandContext, showArchived = true): Promise<void> {
   const { store, client, actions } = context
   const allProjects = store.state.sessionsPickerAllProjects
   // The sidebar keeps the default listing; the archived view is this picker's own.

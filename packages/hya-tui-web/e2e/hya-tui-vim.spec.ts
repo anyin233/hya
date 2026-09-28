@@ -101,7 +101,7 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
 
   // A restarted TUI reads `vim: true` and starts in insert mode.
   term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
-  await term.waitForText("Connected to hya")
+  await term.waitForText("next line")
   await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
   await term.type("/vim off")
   await term.press("Enter")

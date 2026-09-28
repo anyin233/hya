@@ -86,13 +86,13 @@ test.describe("one-command launch", () => {
 
     // A new TUI attaches to it instead of starting another.
     const next = await tui(...selfLaunch(workspace))
-    await next.waitForText("Connected to hya", 30_000)
+    await next.waitForText("Launched and replying.", 30_000)
     expect(await backendPid(next)).toBe(pid)
     await prompt(next, "/exit")
     expect(await next.waitForExit()).toBe(0)
   })
 
-  test("a plain start opens a new session; an empty one is dropped by the daemon after exit, one with messages kept; --continue reopens it", async ({ tui, workspace }) => {
+  test("a plain start reopens the saved session; an explicit empty new one is dropped after exit; --continue reopens the saved chat", async ({ tui, workspace }) => {
     // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
@@ -105,9 +105,10 @@ test.describe("one-command launch", () => {
     await first.press("Control+d")
     await first.waitForExit()
 
-    // A fresh start gets its own new, empty session…
+    // A plain start restores the saved chat; /new creates an empty one.
     const fresh = await tui(...selfLaunch(workspace))
-    await fresh.waitForText("Connected to hya", 30_000)
+    await fresh.waitForText("remember this", 30_000)
+    await prompt(fresh, "/new")
     await fresh.waitForText("No messages yet")
     const empty = /hya · (hysec_\w+)/.exec(await fresh.text())![1]!
     const url = (await daemonStatus(workspace))!.url
