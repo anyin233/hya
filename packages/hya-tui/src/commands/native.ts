@@ -174,12 +174,24 @@ export function openModelPicker({ store, client, actions }: CommandContext, opti
         options.onChosen?.(reference)
         return
       }
-      store.setSelected(await client.updateSessionModel(session.id, reference))
+      const updated = await client.updateSessionModel(session.id, reference)
+      store.setSelected(updated)
+      await persistAgentModel({ store, client, actions }, updated, reference)
       store.setStatus(`Model → ${reference}`)
       options.onChosen?.(reference)
       await actions.refresh()
     },
   })
+}
+
+/** Persist `/model`'s choice for the active agent, including an explicit `#effort` suffix. */
+async function persistAgentModel(context: CommandContext, session: SessionInfo, reference: string): Promise<void> {
+  const [base, effort] = reference.split("#", 2)
+  const [providerId, ...modelParts] = base!.split("/")
+  const modelId = modelParts.join("/")
+  if (!providerId || !modelId) return
+  await context.client.setAgentModel(session.agent, { providerId, modelId }, session.id)
+  if (effort) await context.client.setAgentEffort(session.agent, effort)
 }
 
 function effortModelBase(context: CommandContext): string {
@@ -343,7 +355,9 @@ export const nativeCommandSpecs: CommandSpec[] = [
           store.setStatus(`Model → ${reference} · applies when the session is created`)
           return
         }
-        store.setSelected(await client.updateSessionModel(selected.id, reference))
+        const updated = await client.updateSessionModel(selected.id, reference)
+        store.setSelected(updated)
+        await persistAgentModel({ store, client, actions }, updated, reference)
         store.setStatus(`Model → ${modelReference(store.state.selected!) || reference}`)
         await actions.refresh()
         return

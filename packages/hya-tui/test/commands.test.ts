@@ -45,9 +45,43 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     deleteSession: async (id) => { calls.push(`delete ${id}`); await (client as HyaClient).deleteSession(id) },
   }
   const registry = createCommandRegistry()
-  const context = { store, client: client as HyaClient, actions }
+  const clientWithDefaults = {
+    setAgentModel: async () => ({}),
+    setAgentEffort: async (agent: string, effort: string) => ({ agentId: agent, effort }),
+    ...client,
+  } as HyaClient
+  const context = { store, client: clientWithDefaults, actions }
   return { store, calls, pickers, registry, run: (text: string) => registry.dispatch(text, context) }
 }
+
+test("/model persists an agent model and explicit effort", async () => {
+  const writes: string[] = []
+  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
+  const h = harness({
+    updateSessionModel: async (id, model) => {
+      writes.push(`session ${id}=${model}`)
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      return { ...session, model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+    },
+    setAgentModel: async (agent, preference, id) => {
+      writes.push(`agent-model ${agent}=${preference?.providerId}/${preference?.modelId} session=${id}`)
+      return {} as Awaited<ReturnType<HyaClient["setAgentModel"]>>
+    },
+    setAgentEffort: async (agent, effort) => {
+      writes.push(`agent-effort ${agent}=${effort}`)
+      return { agentId: agent, effort }
+    },
+  })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], workflows: [], providers: [], commands: [] })
+  h.store.openSession(session)
+  await h.run("/model openai/gpt#high")
+  expect(writes).toEqual([
+    "session hysec_1=openai/gpt#high",
+    "agent-model build=openai/gpt session=hysec_1",
+    "agent-effort build=high",
+  ])
+})
 
 test("registers every native slash command with a description", () => {
   const { registry } = harness()
