@@ -1730,6 +1730,31 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
             .await?,
         )
     }
+    async fn list_model_effort_preferences(
+        &self,
+        request: GrpcRequest<pb::ListModelEffortPreferencesRequest>,
+    ) -> Result<GrpcResponse<pb::ListModelEffortPreferencesResponse>, Status> {
+        get_rpc!(self, "/v1/model-effort-preferences", request)
+    }
+
+    async fn set_model_effort_preference(
+        &self,
+        request: GrpcRequest<pb::SetModelEffortPreferenceRequest>,
+    ) -> Result<GrpcResponse<pb::ModelEffortPreference>, Status> {
+        let (ctx, inner) = split(request);
+        let provider_id = field(&inner, "providerId");
+        let model_id = field(&inner, "modelId");
+        into_response(
+            self.dispatch(
+                &ctx,
+                "PUT",
+                &format!("/v1/model-effort-preferences/{provider_id}/{model_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------

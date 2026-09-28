@@ -78,6 +78,9 @@ struct FileConfig {
     /// Model used when neither `--model` nor `HYA_MODEL` is set.
     #[serde(default)]
     default_model: Option<String>,
+    /// Global default reasoning effort label.
+    #[serde(default)]
+    reasoning: Option<String>,
     /// Agent selected by default when a workdir does not specify one. Falls back to `build`.
     #[serde(default)]
     default_agent: Option<String>,
@@ -2055,6 +2058,20 @@ pub fn load_subagent_limits() -> SubagentLimits {
     resolve_subagent_limits(file_block.as_ref())
 }
 
+/// The top-level `reasoning:` effort, the last fallback before sending no
+/// effort. Read independently of provider config so the engine builder can
+/// install it; [`load`] already rejects an invalid label, so an unparsable
+/// value here yields `None`.
+#[must_use]
+pub fn load_global_reasoning() -> Option<ReasoningEffort> {
+    config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .and_then(|file| file.reasoning)
+        .and_then(|value| ReasoningEffort::parse(&value))
+}
+
 /// Compaction thresholds plus the token-accounting mode they are measured with.
 ///
 /// The two travel together because a threshold is only as trustworthy as the
@@ -2879,6 +2896,13 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         requested_default,
     ));
     router = router.with_catalog_snapshot(Arc::clone(&catalog));
+    // The engine reads `reasoning:` itself (`load_global_reasoning`); reject a
+    // typo here so it fails loudly instead of silently sending no effort.
+    if let Some(value) = file.reasoning.as_deref()
+        && ReasoningEffort::parse(value).is_none()
+    {
+        anyhow::bail!("invalid global reasoning effort `{value}`");
+    }
     let categories = resolve_categories(&file);
     let subagents = resolve_subagent_limits(file.subagents.as_ref());
     let websearch = file

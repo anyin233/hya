@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test"
 import { agentRows, effortRows, modelRows, relativeTime, sessionRows } from "../src/state/catalog"
-import { defaultModelRef, invalidEffortSuffix, rememberedModelRef } from "../src/state/providers"
 import type { AgentSummary, ModelSummary, SessionInfo } from "../src/client"
 
 const models: ModelSummary[] = [
@@ -21,48 +20,6 @@ test("modelRows tags each row with its provider and marks the current model", ()
 
 const effortModel: ModelSummary = { id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoning: true, reasoningVariants: ["minimal", "low", "medium", "high"] }
 
-test("restores a cached effort on the next session only while the model's menu accepts it", () => {
-  // A remembered choice applies when the catalog row advertises it.
-  expect(defaultModelRef({
-    selected: undefined, pendingModel: undefined, pendingAgent: undefined, agents: [],
-    models: [effortModel],
-    thinkingEfforts: { "openai/gpt-6-astra": "low" },
-  })).toBe("openai/gpt-6-astra#low")
-  // A stale choice the model no longer advertises falls back to the bare base.
-  expect(defaultModelRef({
-    selected: undefined, pendingModel: undefined, pendingAgent: undefined, agents: [],
-    models: [effortModel],
-    thinkingEfforts: { "openai/gpt-6-astra": "max" },
-  })).toBe("openai/gpt-6-astra")
-  // `default` (the reset choice) never becomes a suffix; when the catalog has
-  // no row for a model, capability validation is deferred to the backend.
-  expect(defaultModelRef({
-    selected: undefined, pendingModel: undefined, pendingAgent: undefined, agents: [],
-    models: [effortModel],
-    thinkingEfforts: { "openai/gpt-6-astra": "default" },
-  })).toBe("openai/gpt-6-astra")
-  expect(defaultModelRef({
-    selected: undefined, pendingModel: "openai/gpt-6-astra", pendingAgent: undefined, agents: [],
-    models: [],
-    thinkingEfforts: { "openai/gpt-6-astra": "low" },
-  })).toBe("openai/gpt-6-astra#low")
-})
-
-test("an explicit suffix and the agent's configured variant win over the cache", () => {
-  // An explicit `#suffix` is never overridden…
-  expect(rememberedModelRef("openai/gpt-6-astra#high", { "openai/gpt-6-astra": "low" }, [effortModel])).toBe("openai/gpt-6-astra#high")
-  // …nor is the agent's configured variant (the preferred default keeps it).
-  expect(defaultModelRef({
-    selected: undefined, pendingModel: undefined, pendingAgent: undefined,
-    agents: [{ name: "build", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "xhigh" } }],
-    models: [effortModel],
-    thinkingEfforts: { "openai/gpt-6-astra": "low" },
-  })).toBe("openai/gpt-6-astra#xhigh")
-  // A typed suffix a known row rejects is named by `invalidEffortSuffix`; unknown rows are the backend's to validate.
-  expect(invalidEffortSuffix("openai/gpt-6-astra#bogus", [effortModel])).toBe("bogus")
-  expect(invalidEffortSuffix("openai/gpt-6-astra#high", [effortModel])).toBeUndefined()
-  expect(invalidEffortSuffix("unlisted/model#anything", [effortModel])).toBeUndefined()
-})
 
 test("the effort picker lists default first, then none, then the advertised variants", () => {
   const rows = effortRows(effortModel, undefined, "default")

@@ -1,7 +1,18 @@
-# 0.43.11
+# 0.43.12
 
-## Context occupancy reports what the request actually carries
+## Thinking effort: one resolver, saved preferences, global default, `--effort`
 
-- The provider-measured occupancy is now anchored on the latest round's prompt (`input + cache_read + cache_write`) plus an estimate of what was appended since. Previously a turn's cumulative usage across all rounds was used as the anchor, which made the measured figure implausible and pushed `auto` accounting back to a local estimate for the whole session.
-- The local estimate counts reasoning only where the route's encoder sends it: never for OpenAI Chat or Google, only the opaque provider data for Responses, and only signed current-turn thinking for Anthropic. The Anthropic encoder and the estimator share one predicate (`ReasoningReplayPolicy::replays`). In one traced session the old estimate was 1.24M tokens against an actual prompt of about 280k.
-- Route-agnostic estimates (for example the summary input size) still count every reasoning part, which over-counts rather than under-counts.
+- Every request resolves its effort with one precedence: `model#variant` suffix > authored Agent `model_policy.reasoning` > the user's saved per-model preference > the model's `reasoning.default` > the new top-level `reasoning:` config key > none (effort omitted). It is resolved each round, so a preference saved mid-session applies to the next request without a restart.
+- Saved preferences live in the session database (`model_effort_preference`), are shared by every client of the backend, and are exposed as `AgentModels.ListModelEffortPreferences` (`GET /v1/model-effort-preferences`) and `AgentModels.SetModelEffortPreference` (`PUT /v1/model-effort-preferences/{provider_id}/{model_id}`, empty `effort` clears).
+- `SessionInfo` gains `effectiveEffort` and `effortSource` (`EFFORT_SOURCE_SUFFIX|PREFERENCE|MODEL_DEFAULT|GLOBAL_DEFAULT|NONE`) computed by the same resolver, so the TUI header shows what the next request sends (`thinking high (pref)`).
+- TUI `/effort <level>` now saves the server-side preference for the current model (dropping any `#suffix`); `/effort default` clears it. The client-side `thinkingEfforts` cache in `tui.json` is removed.
+- New global `--effort <level>` flag appends `#level` to `--model` for `exec`/`run`/`-p`/`loop`; combining it with a model that already has a `#suffix` is an error.
+- A spawned subagent that runs on a different model no longer inherits its parent's effort; the root Agent no longer bakes the model default in (which previously outranked any preference).
+
+```yaml
+reasoning: medium   # global fallback in ~/.config/hya/config.yaml
+```
+
+```sh
+hya exec --model openai/gpt-6-astra --effort high "summarize the diff"
+```

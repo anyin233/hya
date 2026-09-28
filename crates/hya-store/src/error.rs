@@ -164,6 +164,14 @@ pub enum StoreError {
     /// Malformed or inconsistent Workflow control mutation.
     #[error("workflow control: {0}")]
     WorkflowData(String),
+    /// Corrupt or invalid persisted model effort preference data.
+    #[error("model effort preference {field}: {detail}")]
+    InvalidPreferenceData {
+        /// Field that failed validation.
+        field: &'static str,
+        /// Validation detail.
+        detail: String,
+    },
     /// Mail append rejected by roster / permission / validation rules.
     #[error("mailbox rejected: {0}")]
     MailboxRejected(String),

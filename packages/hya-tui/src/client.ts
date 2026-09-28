@@ -17,6 +17,9 @@ export interface SessionInfo {
   members?: MemberInfo[]
   /** When the session projection last changed (RFC 3339); the `/sessions` picker's relative time (state/catalog.ts). */
   timeUpdated?: string
+  /** Server-resolved reasoning effort and the precedence source. */
+  effectiveEffort?: string
+  effortSource?: string
   /** Everything billed for the session (turn rounds and side calls); the status bar's token total. */
   usage?: TokenUsage
   /** Where a forked session came from (`ForkSession`); unset for sessions that are not forks. */
@@ -328,6 +331,14 @@ export interface McpServerStatus {
   /** Set when `state` is `_FAILED`. */
   error?: string
   authRequired?: boolean
+}
+
+/** `ModelEffortPreference`: durable preference for a base provider/model. */
+export interface ModelEffortPreference {
+  providerId: string
+  modelId: string
+  effort?: string
+  updatedAt?: string
 }
 
 /** `AgentModelSelection`: a concrete provider/model pick. */
@@ -923,6 +934,17 @@ export class HyaClient {
       ...(session ? { session } : {}),
       ...(preference ? { preference } : {}),
     }, signal)
+  }
+
+  /** `ListModelEffortPreferences` (`GET /v1/model-effort-preferences`). */
+  async listModelEffortPreferences(): Promise<ModelEffortPreference[]> {
+    const result = await this.request<{ preferences?: ModelEffortPreference[] }>("GET", this.scoped("/v1/model-effort-preferences"))
+    return result.preferences ?? []
+  }
+
+  /** `SetModelEffortPreference`; an empty effort clears the durable preference. */
+  async setModelEffortPreference(providerId: string, modelId: string, effort: string, signal?: AbortSignal): Promise<ModelEffortPreference> {
+    return this.request("PUT", `/v1/model-effort-preferences/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { effort }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

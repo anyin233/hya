@@ -20,8 +20,15 @@ pub(crate) fn router() -> Router<ServerState> {
     Router::new()
         .route("/v1/agent-models", get(list_agent_models))
         .route("/v1/agent-models/:agent_id", put(set_agent_model))
+        .route(
+            "/v1/model-effort-preferences",
+            get(list_model_effort_preferences),
+        )
+        .route(
+            "/v1/model-effort-preferences/:provider_id/:model_id",
+            put(set_model_effort_preference),
+        )
 }
-
 fn selection(identity: &AgentModelIdentity) -> pb::AgentModelSelection {
     pb::AgentModelSelection {
         provider_id: identity.provider_id.clone(),
@@ -193,4 +200,64 @@ async fn set_agent_model(
         .await
         .map_err(map_control_error)?;
     Ok(Json(state_row(&row)))
+}
+
+async fn list_model_effort_preferences(
+    State(st): State<ServerState>,
+) -> Result<Json<pb::ListModelEffortPreferencesResponse>, V1Error> {
+    ensure_available(&st)?;
+    let preferences = st
+        .agent_model_control
+        .list_model_effort_preferences()
+        .await
+        .map_err(map_control_error)?;
+    Ok(Json(pb::ListModelEffortPreferencesResponse {
+        preferences: preferences
+            .into_iter()
+            .map(|row| pb::ModelEffortPreference {
+                provider_id: row.provider_id,
+                model_id: row.model_id,
+                effort: row.effort,
+                updated_at: row.updated_at,
+            })
+            .collect(),
+    }))
+}
+
+async fn set_model_effort_preference(
+    State(st): State<ServerState>,
+    AxumPath((provider_id, model_id)): AxumPath<(String, String)>,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<Json<pb::ModelEffortPreference>, V1Error> {
+    ensure_available(&st)?;
+    let effort = body
+        .as_ref()
+        .and_then(|Json(value)| value.get("effort"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    st.agent_model_control
+        .set_model_effort_preference(provider_id.clone(), model_id.clone(), effort.to_string())
+        .await
+        .map_err(map_control_error)?;
+    let row = st
+        .agent_model_control
+        .list_model_effort_preferences()
+        .await
+        .map_err(map_control_error)?
+        .into_iter()
+        .find(|row| row.provider_id == provider_id && row.model_id == model_id);
+    Ok(Json(row.map_or(
+        pb::ModelEffortPreference {
+            provider_id,
+            model_id,
+            effort: String::new(),
+            updated_at: 0,
+        },
+        |row| pb::ModelEffortPreference {
+            provider_id: row.provider_id,
+            model_id: row.model_id,
+            effort: row.effort,
+            updated_at: row.updated_at,
+        },
+    )))
 }

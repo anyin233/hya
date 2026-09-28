@@ -86,6 +86,9 @@ pub(crate) struct Cli {
     /// Model id to use (overrides config `default_model` + `HYA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     pub(crate) model: Option<String>,
+    /// Reasoning effort for the selected model, encoded as a `#effort` suffix.
+    #[arg(long, global = true, value_name = "EFFORT")]
+    pub(crate) effort: Option<String>,
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
@@ -605,6 +608,27 @@ pub(crate) fn bare_resume(cli: &Cli) -> anyhow::Result<Option<crate::frontend::R
     }))
 }
 
+/// Merge a validated `--effort` flag into a model reference.
+pub(crate) fn merge_model_effort(
+    model: Option<String>,
+    effort: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    let Some(effort) = effort
+        .map(|value| value.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(model);
+    };
+    hya_provider::ReasoningEffort::parse(&effort)
+        .ok_or_else(|| anyhow::anyhow!("invalid effort `{effort}`"))?;
+    let Some(model) = model else {
+        anyhow::bail!("--effort requires --model");
+    };
+    if model.contains('#') {
+        anyhow::bail!("--effort conflicts with a model effort suffix");
+    }
+    Ok(Some(format!("{model}#{effort}")))
+}
 pub(crate) fn serve_bind(
     bind: String,
     hostname: Option<String>,
@@ -812,6 +836,20 @@ mod tests {
         assert!(
             error.contains("--resume only applies to bare `hya`"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn effort_flag_merges_and_rejects_conflicts() {
+        assert_eq!(
+            super::merge_model_effort(Some("openai/gpt".into()), Some("high".into())).unwrap(),
+            Some("openai/gpt#high".into())
+        );
+        assert!(
+            super::merge_model_effort(Some("openai/gpt#low".into()), Some("high".into())).is_err()
+        );
+        assert!(
+            super::merge_model_effort(Some("openai/gpt".into()), Some("bogus".into())).is_err()
         );
     }
 

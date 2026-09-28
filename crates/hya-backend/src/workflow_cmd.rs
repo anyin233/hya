@@ -103,9 +103,9 @@ impl WorkflowRuntime {
             .with_yolo(yolo)
             .with_pure(pure);
         let mut agent = if pure {
-            crate::agent_with_model_pure(&runtime.model, runtime.reasoning)
+            crate::agent_with_model_pure(&runtime.model, None)
         } else {
-            agent_with_model(&runtime.model, runtime.reasoning)
+            agent_with_model(&runtime.model, None)
         };
         let mut built = if pure {
             crate::build_session_engine_pure(

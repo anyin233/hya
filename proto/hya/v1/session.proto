@@ -137,6 +137,21 @@ message SessionInfo {
   string project_id = 20;
   // Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
   SessionKind kind = 21;
+  // Effective reasoning effort selected for the current model. Empty means no effort.
+  string effective_effort = 22;
+  // Precedence layer that selected effective_effort.
+  EffortSource effort_source = 23;
+}
+
+// Source of a session's effective reasoning effort.
+enum EffortSource {
+  EFFORT_SOURCE_UNSPECIFIED = 0;
+  EFFORT_SOURCE_SUFFIX = 1;
+  EFFORT_SOURCE_AGENT = 2;
+  EFFORT_SOURCE_PREFERENCE = 3;
+  EFFORT_SOURCE_MODEL_DEFAULT = 4;
+  EFFORT_SOURCE_GLOBAL_DEFAULT = 5;
+  EFFORT_SOURCE_NONE = 6;
 }
 
 // Kind of a session (ADR-0024).

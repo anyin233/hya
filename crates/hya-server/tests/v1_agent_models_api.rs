@@ -89,6 +89,21 @@ impl AgentModelControl for FakeAgentModelControl {
     ) -> AgentModelControlFuture<'_, AgentModelState> {
         async move { Err(AgentModelControlError::unavailable()) }.boxed()
     }
+
+    fn list_model_effort_preferences(
+        &self,
+    ) -> AgentModelControlFuture<'_, Vec<hya_store::ModelEffortPreference>> {
+        async move { Err(AgentModelControlError::unavailable()) }.boxed()
+    }
+
+    fn set_model_effort_preference(
+        &self,
+        _provider_id: String,
+        _model_id: String,
+        _effort: String,
+    ) -> AgentModelControlFuture<'_, ()> {
+        async move { Err(AgentModelControlError::unavailable()) }.boxed()
+    }
 }
 
 fn row(preference: Option<AgentModelIdentity>) -> AgentModelState {

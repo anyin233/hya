@@ -298,6 +298,7 @@ Whenever it moves to another server the TUI:
 
 Several TUIs that lose the server together end up on one new daemon: one
 starts it (after a crash, or on `/reconnect`), the others find it. Example:
+
 `hya serve stop` with a terminal TUI and two WebUI tabs open leaves all three
 showing `Backend stopped`; `/reconnect` in the terminal starts the daemon and
 the tabs move to it by themselves. A turn that was running on the old server
@@ -544,8 +545,8 @@ A second, narrower sidebar on the left lists every Project live
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
-| `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. A remembered effort for that model is included as `#variant`; with no session the choice is remembered for the next one (see [Pickers](#pickers)). |
-| `/effort [level]` | Pick or set the thinking effort for the current model (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`). The selection is shown in the header/status and remembered per model. |
+| `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. |
+| `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the agent picker (visible agents, tagged with their default model); `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
@@ -822,7 +823,6 @@ interface TuiPreferences {
   theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
-  thinkingEfforts?: Record<string, string> // last /effort by base provider/model
 }
 ```
 
@@ -831,8 +831,8 @@ interface TuiPreferences {
   is not an object is ignored, and the status line says
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
-  wrong type is ignored; malformed entries in `thinkingEfforts` are dropped.
-- A change (`/theme`'s Enter, `/vim`, or `/effort`) merges the changed key into
+  wrong type is ignored.
+- A change (`/theme`'s Enter or `/vim`) merges the changed key into
   what is on disk — keys this TUI does not know are kept — and writes a
   temporary file in the same directory, then renames it over the file, so a
   crash never leaves a half-written file. The directory is created when
@@ -2051,19 +2051,18 @@ For example, after the model wrote `notes.txt` in reply to `write notes`:
 
 ## Thinking effort
 
-Thinking effort is selected per model, not globally. The header and status line
-show the effective label (`default` when no suffix or configured default is
-available, otherwise the selected variant). `/effort` opens the model's
-advertised menu; `/effort low` sends `provider/model#low`, while
-`/effort default` removes the suffix and lets the configured or upstream default
-apply. `/effort none` sends `provider/model#none` to request no reasoning where
-the provider protocol supports that mapping.
+Thinking effort is selected per base provider/model and resolved by the server.
+The header, status bar, and `/status` show the effective label and source (for
+example, `thinking high (pref)`). `/effort` (or `/think`) opens the model's
+picker; `/effort <level>` sets the durable preference, while `/effort default`
+clears it. If the session model has a `#suffix`, changing or clearing effort
+switches the session to the bare model.
 
-For example, `/model openai/gpt-6-astra` followed by `/effort medium` updates the
-session with `model: "openai/gpt-6-astra#medium"`, sends the selected effort in
-the next provider request, and saves `thinkingEfforts["openai/gpt-6-astra"]`.
-Choosing another model reuses only that model's saved selection. The saved
-selection is a TUI preference; it is not a server-side default.
+For example, `/model openai/gpt-6-astra` followed by `/effort medium` stores the
+preference with `PUT /v1/model-effort-preferences/openai/gpt-6-astra` and sends
+the selected effort in the next provider request. The preference is stored by
+the backend's database/daemon, not in `tui.json`, so it survives TUI restarts
+and applies to later sessions using that base model. Empty effort clears it.
 
 ## Pickers
 
@@ -2075,13 +2074,14 @@ with no loading state.
 
 - **`/model`** lists every model from `GET /v1/models`, `[tag]`ged with its
   provider id and, when the route advertises one, its context window (`128k ctx`);
-  `●` marks the open session's model. Enter sends `UpdateSession {model}`. If a
-  cached effort exists, the model reference includes `#variant`.
-- **`/effort`** lists `none` plus the current model's advertised
-  `reasoningVariants`; `●` marks the effective current effort. Enter sends
-  `UpdateSession {model: "provider/model#variant"}` and shows
-  `Thinking effort → <variant>`. `none` is sent as `#none`, which disables the
-  request effort explicitly. The same selection is saved in `thinkingEfforts`.
+  `●` marks the open session's model. Enter sends `UpdateSession {model}`; the
+  model's saved effort preference (if any) applies on the server.
+- **`/effort`** lists `default`, `none`, and the current model's advertised
+  `reasoningVariants`; `●` marks the effective current effort. Enter saves the
+  choice as that model's preference (`PUT /v1/model-effort-preferences/…`,
+  `default` clears it), drops a `#variant` from the session model so the
+  preference applies, and shows `Thinking effort → <variant>`. `none` disables
+  the request effort explicitly.
 - **`/agent`** lists visible agents from `GET /v1/agents`, tagged with their
   default `provider/model` and description; `●` marks the open session's agent.
   Enter sends `UpdateSession {agent}`. `/agent <name>` switches directly.
@@ -2608,7 +2608,7 @@ together.
 | --- | --- |
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text (which also names `HYA_TUI_CONFIG`). |
-| `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences` including per-model `thinkingEfforts`. |
+| `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences`. Thinking effort is not stored here; it is a server-side model preference. |
 | `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient` with `streamSession` and `streamGlobal`, `SseDecoder`, `parseApiCommand`); `ModelSummary` carries reasoning variants/defaults for `/effort`; an optional relay bridge token sent as `x-hya-bridge-token`. |
 | `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, the open Provider View's state, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |

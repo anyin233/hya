@@ -396,6 +396,8 @@ pub struct SessionEngine {
     /// candidate chain (the preferred model itself first). Empty by default,
     /// which keeps turn streaming byte-identical to a direct router call.
     model_fallbacks: HashMap<ModelRef, Vec<ModelRef>>,
+    /// Process-wide reasoning fallback applied after model defaults.
+    global_reasoning: Option<ReasoningEffort>,
     /// Configured Agent model categories used by fixed system-Agent calls.
     model_categories: Arc<CategoryRegistry>,
     runtime: Arc<RuntimeRegistry>,
@@ -463,6 +465,7 @@ impl Clone for SessionEngine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone(),
             ),
+            global_reasoning: self.global_reasoning,
             model_fallbacks: self.model_fallbacks.clone(),
             model_categories: self.model_categories.clone(),
             runtime: self.runtime.clone(),
@@ -568,6 +571,7 @@ impl SessionEngine {
             store,
             providers: RwLock::new(providers),
             catalog: RwLock::new(catalog),
+            global_reasoning: None,
             model_fallbacks: HashMap::new(),
             model_categories: Arc::new(CategoryRegistry::default()),
             runtime,
@@ -657,6 +661,49 @@ impl SessionEngine {
     pub fn with_model_categories(mut self, categories: Arc<CategoryRegistry>) -> Self {
         self.model_categories = categories;
         self
+    }
+
+    /// Install the process-wide reasoning fallback.
+    #[must_use]
+    pub fn with_global_reasoning(mut self, reasoning: Option<ReasoningEffort>) -> Self {
+        self.global_reasoning = reasoning;
+        self
+    }
+
+    /// The effort a request for `model` carries, and which layer chose it:
+    /// `model#variant` > `agent` (authored Agent policy) > the user's stored
+    /// per-model preference > the model's configured default > the global
+    /// `reasoning:` default > none. The turn loop and the v1 session info both
+    /// call this, so what clients display is what requests send.
+    ///
+    /// # Errors
+    ///
+    /// Store read failure for the preference.
+    pub async fn effective_effort(
+        &self,
+        model: &ModelRef,
+        agent: Option<ReasoningEffort>,
+    ) -> Result<crate::EffectiveEffort, CoreError> {
+        let base = model
+            .as_str()
+            .rsplit_once('#')
+            .map_or(model.as_str(), |(base, _)| base);
+        let preference = match base.split_once('/') {
+            Some((provider, model_id)) => self
+                .store
+                .get_model_effort_preference(provider, model_id)
+                .await?
+                .and_then(|row| ReasoningEffort::parse(&row.effort)),
+            None => None,
+        };
+        Ok(crate::resolve_effort(
+            model,
+            agent,
+            preference,
+            self.provider_router().reasoning_default(model),
+            self.global_reasoning,
+            None,
+        ))
     }
 
     /// Ordered cross-model candidates for a preferred model (preferred

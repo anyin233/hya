@@ -26,14 +26,15 @@ hya <subcommand> --help                # flags for one area
 ## Global Options
 
 ```text
-hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
+hya [--model <MODEL>] [--effort <LEVEL>] [--prompt <GOAL>] [--max-iterations <N>]
      [--port <PORT>] [--backend <URL>] [--connect [<LINK>]] [--relay-ca <PEM>]
      [--transport <auto|grpc|ws>] [--allow-host <HOST>]... [--resume [<ID>]] [--yolo] [--db <PATH>] [COMMAND]
 ```
 
 | Option | Meaning |
 | --- | --- |
-| `--model <MODEL>` | Override `default_model` from hya config and `HYA_MODEL`. |
+| `--model <MODEL>` | Override `default_model` from hya config and `HYA_MODEL`. A model may include an explicit `#effort` suffix. |
+| `--effort <LEVEL>` | Append a validated reasoning effort suffix to `--model` (for example `--model openai/gpt --effort high`); errors when `--model` already contains `#`. |
 | `-p, --prompt <GOAL>` | Run headless goal mode instead of a subcommand. |
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
 | `--port <PORT>` | WebUI port of [bare `hya`](#bare-hya) on `127.0.0.1`. Default `3250`; `0` picks a free port. Only valid without a subcommand and without `-p` (`hya --port 1 sessions` is an error); `hya serve --port` is the server's own flag. |

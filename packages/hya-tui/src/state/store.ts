@@ -120,8 +120,6 @@ export interface AppState {
   readonly sidebar: SidebarMode
   /** Terminal width in columns, kept current by the root layout. */
   readonly columns: number
-  /** Last selected request effort, keyed by base `provider/model` reference. */
-  readonly thinkingEfforts: Readonly<Record<string, string>>
   /** Global reasoning switch (`/thinking`, Ctrl+O): expand every reasoning block. */
   readonly thinking: boolean
   /** Vim mode in the composer (`/vim`, the `vim` preference; composer/vim.ts). */
@@ -292,7 +290,8 @@ export interface Catalog {
 
 export const startupStatus = "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit"
 
-function initialState(thinkingEfforts: Readonly<Record<string, string>> = {}): { [K in keyof AppState]: AppState[K] } {
+function initialState(): { [K in keyof AppState]: AppState[K] } {
+ 
   return {
     ready: false,
     sessions: [],
@@ -324,7 +323,6 @@ function initialState(thinkingEfforts: Readonly<Record<string, string>> = {}): {
     agentModelRows: [],
     sidebar: "auto",
     columns: 80,
-    thinkingEfforts,
     thinking: false,
     vim: false,
     vimMode: "insert",
@@ -376,8 +374,8 @@ function initialState(thinkingEfforts: Readonly<Record<string, string>> = {}): {
 
 type Signals = { [K in keyof AppState]: [Accessor<AppState[K]>, Setter<AppState[K]>] }
 
-export function createAppStore(options: { thinkingEfforts?: Readonly<Record<string, string>> } = {}) {
-  const initial = initialState(options.thinkingEfforts ?? {})
+export function createAppStore() {
+  const initial = initialState()
   const signals = Object.fromEntries(
     Object.entries(initial).map(([key, value]) => [key, createSignal(value, { equals: false })]),
   ) as unknown as Signals
@@ -639,8 +637,6 @@ export function createAppStore(options: { thinkingEfforts?: Readonly<Record<stri
     setPendingMode(mode: string | undefined): void { set("pendingMode", mode) },
     /** A `/model` choice made before any session exists (C11); `undefined` clears it (applied or cancelled). */
     setPendingModel(model: string | undefined): void { set("pendingModel", model) },
-    /** Replace the remembered efforts (keyed by base model reference); the next map omits cleared choices. */
-    setThinkingEfforts(efforts: Readonly<Record<string, string>>): void { set("thinkingEfforts", efforts) },
     /** A `/agent` choice made before any session exists (C12); `undefined` clears it. */
     setPendingAgent(agent: string | undefined): void { set("pendingAgent", agent) },
     /** No session is open (after deleting the open one with none left to switch to). */

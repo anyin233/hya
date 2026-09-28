@@ -1059,8 +1059,6 @@ pub struct RuntimeConfig {
     pub catalog: Arc<ProviderCatalogSnapshot>,
     /// Active request model id for new sessions.
     pub model: String,
-    /// Default reasoning effort for the active model, when configured.
-    pub reasoning: Option<ReasoningEffort>,
     /// MCP server configs to connect at engine build.
     pub mcp: BTreeMap<String, McpServerConfig>,
     /// Plugin specs from `config.yaml` (process-wide). Project plugins
@@ -1121,7 +1119,6 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
         router,
         catalog,
         model,
-        reasoning: None,
         mcp: BTreeMap::new(),
         plugins: Vec::new(),
         default_agent: None,
@@ -1147,22 +1144,6 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
             let model = model_override
                 .or_else(|| std::env::var("HYA_MODEL").ok())
                 .unwrap_or_else(|| cfg.default_model.clone());
-            let reasoning = cfg
-                .catalog
-                .models()
-                .iter()
-                .find(|entry| {
-                    entry.model_ref().as_str() == model
-                        || (entry.model_id == model
-                            && cfg
-                                .catalog
-                                .models()
-                                .iter()
-                                .filter(|candidate| candidate.model_id == model)
-                                .count()
-                                == 1)
-                })
-                .and_then(|entry| entry.reasoning_default);
             let offline_notice = cfg.catalog.notice().map(|_| OfflineNotice {
                 config_path: config::expected_config_path(),
             });
@@ -1170,7 +1151,6 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 router: cfg.router,
                 catalog: cfg.catalog,
                 model,
-                reasoning,
                 mcp: cfg.mcp,
                 plugins: plugins::resolve(cfg.plugins),
                 default_agent: cfg.default_agent,
@@ -2560,8 +2540,9 @@ async fn build_session_engine_with_mcp_defer(
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
     let context_settings = crate::config::load_context_settings();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
-        .with_catalog_refresh(catalog_refresh)
+        .with_global_reasoning(crate::config::load_global_reasoning())
         .with_catalog_scope_cache(crate::config::load_catalog_scope_cache())
+        .with_catalog_refresh(catalog_refresh)
         .with_sidecar_environment(sidecar_environment.clone())
         .with_model_categories(categories.clone())
         // Route `categories:` failover chains into the engine's cross-model
@@ -2975,7 +2956,7 @@ impl HyaRuntime {
         }
         // Server/TUI AppState: agent base only. Per-turn guidance layers
         // Environment + AGENTS + references once.
-        let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
+        let agent = Arc::new(agent_base_with_model(&runtime.model, None));
         let mut built = build_session_engine(
             store,
             runtime.router,
@@ -5013,16 +4994,15 @@ You are the installed resident agent.
 
         let runtime = resolve_runtime(None).await;
 
+        // The model default stays in the catalog, where the per-request
+        // resolver reads it; it is not baked into the root Agent, which would
+        // make it outrank a stored user preference.
         assert_eq!(
-            runtime.reasoning,
+            runtime.router.catalog()[0].reasoning_default,
             Some(hya_provider::ReasoningEffort::Medium)
         );
-        assert_eq!(
-            runtime.router.catalog()[0].reasoning_variants,
-            ["low", "medium"]
-        );
-        let agent = agent_with_model(&runtime.model, runtime.reasoning);
-        assert_eq!(agent.reasoning, Some(hya_provider::ReasoningEffort::Medium));
+        let agent = agent_with_model(&runtime.model, None);
+        assert_eq!(agent.reasoning, None);
     }
 
     #[test]

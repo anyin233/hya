@@ -30,10 +30,13 @@ export function modelReference(session: SessionInfo): string {
 export function currentThinkingEffort(state: Pick<AppState, "selected" | "models">): string {
   const session = state.selected
   if (!session) return "default"
-  const variant = session.model?.variant
-  if (variant) return variant
-  const row = state.models.find((model) => model.id === modelBaseReference(session))
-  return row?.reasoningDefault || "default"
+  return session.effectiveEffort || "default"
+}
+
+export function thinkingEffortLabel(session: SessionInfo | undefined): string {
+  if (!session?.effectiveEffort) return "default"
+  const source = session.effortSource?.replace(/^EFFORT_SOURCE_/, "").toLowerCase()
+  return source && source !== "unspecified" ? `${session.effectiveEffort} (${source === "preference" ? "pref" : source})` : session.effectiveEffort
 }
 
 /** The open session's model catalog row, matched without its optional effort suffix. */
@@ -63,7 +66,7 @@ export function shownServer(state: AppState, fallback: string): string {
 export function headerText(state: AppState, server: string): string {
   if (!state.ready) return "hya · connecting…"
   const selected = state.selected
-  return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)} · thinking ${currentThinkingEffort(state)}` : "· no session"} · ${server}`
+  return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)} · thinking ${thinkingEffortLabel(selected)}` : "· no session"} · ${server}`
 }
 
 export interface SessionRow {

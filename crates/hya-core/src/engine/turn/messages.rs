@@ -55,14 +55,15 @@ pub(super) fn projection_to_messages(
         .collect()
 }
 
+/// `reasoning` is the already-resolved effort ([`crate::SessionEngine::effective_effort`]).
 pub(super) fn request_from_messages(
     agent: &AgentSpec,
     messages: Vec<Message>,
     resources: &CompiledResourceView,
     model: &ModelRef,
     depth: u32,
+    reasoning: Option<ReasoningEffort>,
 ) -> CompletionRequest {
-    let reasoning = reasoning_for_model(model, agent.reasoning);
     let tools = filtered_tool_schemas(resources, model, depth);
     // The team quick reference teaches exactly the coordination tools this
     // request advertises (harness-allocated per agent and depth).
@@ -87,7 +88,8 @@ pub(super) fn request_from_messages(
     }
 }
 
-/// Resolve an explicit model-ref variant before the Agent's configured default.
+/// Effort for a cross-model fallback attempt: the candidate's own `#variant`
+/// wins; otherwise the effort resolved for the preferred model carries over.
 ///
 /// A `#suffix` is an explicit choice: a valid variant wins, and an invalid one
 /// sends no effort rather than silently inheriting the default.

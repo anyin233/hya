@@ -272,6 +272,23 @@ async fn projection_info_at(
 ) -> Result<pb::SessionInfo, V1Error> {
     let projection = st.engine.read_projection_shared(session).await?;
     let mut info = session_info(&projection, started, updated);
+    if let Some(model) = projection.session.model.as_ref() {
+        // Same resolver as the turn loop. Authored Agent `model_policy`
+        // effort is applied per request and is not reflected here.
+        let resolved = st.engine.effective_effort(model, None).await?;
+        let (effort, source) = (resolved.effort, resolved.source);
+        info.effective_effort = effort
+            .map(|value| value.as_str().to_string())
+            .unwrap_or_default();
+        info.effort_source = match source {
+            hya_core::EffortSource::Suffix => pb::EffortSource::Suffix,
+            hya_core::EffortSource::Agent => pb::EffortSource::Agent,
+            hya_core::EffortSource::Preference => pb::EffortSource::Preference,
+            hya_core::EffortSource::ModelDefault => pb::EffortSource::ModelDefault,
+            hya_core::EffortSource::GlobalDefault => pb::EffortSource::GlobalDefault,
+            hya_core::EffortSource::None => pb::EffortSource::None,
+        } as i32;
+    }
     info.busy = st.is_busy(session);
     info.permission_mode = st.engine.permission_mode(session).await?;
     Ok(info)

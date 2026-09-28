@@ -181,6 +181,19 @@ pub trait AgentModelControl: Send + Sync {
         base_model: ModelRef,
     ) -> AgentModelControlFuture<'_, AgentModelState>;
 
+    /// List persisted per-model effort preferences.
+    fn list_model_effort_preferences(
+        &self,
+    ) -> AgentModelControlFuture<'_, Vec<hya_store::ModelEffortPreference>>;
+
+    /// Set or clear a persisted per-model effort preference.
+    fn set_model_effort_preference(
+        &self,
+        provider_id: String,
+        model_id: String,
+        effort: String,
+    ) -> AgentModelControlFuture<'_, ()>;
+
     /// Persist only the configured default, preserving any distinct Session override.
     fn save_configuration(
         &self,
@@ -228,6 +241,20 @@ impl AgentModelControl for EmptyAgentModelControl {
         _model: Option<AgentModelIdentity>,
         _base_model: ModelRef,
     ) -> AgentModelControlFuture<'_, AgentModelState> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+    fn list_model_effort_preferences(
+        &self,
+    ) -> AgentModelControlFuture<'_, Vec<hya_store::ModelEffortPreference>> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+
+    fn set_model_effort_preference(
+        &self,
+        _provider_id: String,
+        _model_id: String,
+        _effort: String,
+    ) -> AgentModelControlFuture<'_, ()> {
         Box::pin(async { Err(AgentModelControlError::unavailable()) })
     }
 }

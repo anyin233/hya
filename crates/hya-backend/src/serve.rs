@@ -401,7 +401,7 @@ pub(crate) async fn prepare_server(
     // Server AppState: base-only agent slot. Environment + AGENTS + references
     // are discovered per turn so Bundle Some does not drop project AGENTS and
     // Bundle None does not duplicate startup-baked AGENTS.
-    let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
+    let agent = Arc::new(agent_base_with_model(&runtime.model, None));
     let mut built = if pure {
         build_session_engine_pure(
             store,

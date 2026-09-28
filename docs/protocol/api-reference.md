@@ -45,6 +45,8 @@ control handle.
 |---|---|---|---|---|
 | `ListAgentModels` | `GET /v1/agent-models` | `hya.v1.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
 | `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
+| `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `hya.v1.AgentModels.ListModelEffortPreferences` | `ListModelEffortPreferencesRequest` | `ListModelEffortPreferencesResponse` |
+| `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `hya.v1.AgentModels.SetModelEffortPreference` | `SetModelEffortPreferenceRequest` | `ModelEffortPreference` |
 
 ### `AgentModels.ListAgentModels`
 
@@ -56,6 +58,10 @@ Effective model state for every catalog agent under one binding.
 Set or clear one agent's remembered preference; returns the
 post-commit state.
 
+
+### `AgentModels.SetModelEffortPreference`
+
+Empty effort clears the preference.
 
 ## Service `Auth`
 
@@ -877,6 +883,32 @@ Reset a worktree to a clean state at its branch head.
 
 
 ## Messages
+
+### `ModelEffortPreference`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` |  |
+| `model_id` (2) | `string` |  |
+| `effort` (3) | `string` |  |
+| `updated_at` (4) | `int64` |  |
+
+### `ListModelEffortPreferencesResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `preferences` (1) | `repeated ModelEffortPreference` |  |
+
+### `SetModelEffortPreferenceRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` |  |
+| `model_id` (2) | `string` |  |
+| `effort` (3) | `string` |  |
 
 ### `AgentModelSelection`
 
@@ -2726,6 +2758,8 @@ Projection summary of one session.
 | `ephemeral` (19) | `bool` | Whether this root session was created `ephemeral` and is still unused (no message, title, archive, or fork from it yet): the server deletes it once no client has a `StreamSessionEvents` stream open on it. |
 | `project_id` (20) | `string` | Project the session belongs to (a subagent session carries its root's); empty for a temporary session or one created before Projects existed. The id may name a Project that was deleted since. |
 | `kind` (21) | `SessionKind` | Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`. |
+| `effective_effort` (22) | `string` | Effective reasoning effort selected for the current model. Empty means no effort. |
+| `effort_source` (23) | `EffortSource` | Precedence layer that selected effective_effort. |
 
 ### `ForkSource`
 
@@ -3400,6 +3434,20 @@ The host connector's state.
 | `RELAY_STATE_CONNECTING` | 2 | Opening the control stream or registering the room. |
 | `RELAY_STATE_CONNECTED` | 3 | The room is registered: clients holding the link can connect. |
 | `RELAY_STATE_BACKOFF` | 4 | The last attempt failed; waiting before the next (`last_error`). |
+
+### `EffortSource`
+
+Source of a session's effective reasoning effort.
+
+| Value | Number | Description |
+|---|---|---|
+| `EFFORT_SOURCE_UNSPECIFIED` | 0 |  |
+| `EFFORT_SOURCE_SUFFIX` | 1 |  |
+| `EFFORT_SOURCE_AGENT` | 2 |  |
+| `EFFORT_SOURCE_PREFERENCE` | 3 |  |
+| `EFFORT_SOURCE_MODEL_DEFAULT` | 4 |  |
+| `EFFORT_SOURCE_GLOBAL_DEFAULT` | 5 |  |
+| `EFFORT_SOURCE_NONE` | 6 |  |
 
 ### `SessionKind`
 

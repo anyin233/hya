@@ -34,16 +34,14 @@ test("renders the header, the sidebar session list, and pending lines", () => {
 })
 
 test("thinking effort follows the session variant, then the model default, else default", () => {
-  const withEffort = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } }
-  const explicitNone = { id: "hysec_3", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "none" } }
+  const withEffort = { id: "hysec_1", agent: "build", workdir: "/w", effectiveEffort: "low", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } }
+  const explicitNone = { id: "hysec_3", agent: "build", workdir: "/w", effectiveEffort: "none", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "none" } }
   const withoutEffort = { id: "hysec_2", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
   expect(modelReference(withEffort)).toBe("openai/gpt-6-astra#low")
   expect(modelReference(withoutEffort)).toBe("openai/gpt-6-astra")
   expect(currentThinkingEffort({ selected: withEffort, models: [] })).toBe("low")
   // An explicit `#none` is a choice, not the unset default.
   expect(currentThinkingEffort({ selected: explicitNone, models: [] })).toBe("none")
-  // No suffix: the active model's configured default, else `default` (the backend never invents an effort).
-  expect(currentThinkingEffort({ selected: withoutEffort, models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoning: true, reasoningVariants: ["low"], reasoningDefault: "low" }] })).toBe("low")
   expect(currentThinkingEffort({ selected: withoutEffort, models: [] })).toBe("default")
   expect(currentThinkingEffort({ selected: undefined, models: [] })).toBe("default")
 })

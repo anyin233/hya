@@ -15,6 +15,7 @@ pub mod error;
 mod file_blob;
 mod mailbox;
 mod materialize;
+mod model_effort_preference;
 mod paths;
 mod permission;
 mod project;
@@ -56,6 +57,7 @@ pub use bundle_registry::{
 pub use error::StoreError;
 pub use hya_proto::{ActorClaim, OwnerRunId};
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
+pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
 pub use project::{Project, ProjectSummary, normalize_project_path};

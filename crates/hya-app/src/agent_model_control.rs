@@ -13,6 +13,7 @@ use hya_core::{
     AgentModelConfiguration, AgentOrigin, CategoryRegistry, RuntimeRegistry, TurnBinding,
     resolve_configured_agent_model,
 };
+use hya_proto::now_millis;
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
 use hya_provider::ProviderRouter;
 use hya_store::{AgentModelPreference, SessionStore, StoreError};
@@ -94,6 +95,9 @@ pub enum AgentModelControlError {
         /// Provider-local model id supplied by the caller.
         model_id: String,
     },
+    /// The effort preference request is malformed.
+    #[error("invalid model effort preference: {0}")]
+    InvalidRequest(String),
     /// The durable preference store rejected or could not complete an
     /// operation.
     #[error(transparent)]
@@ -344,6 +348,49 @@ impl PersistentAgentModelControl {
             .publish_agent_model_preferences(preferences.clone());
         Ok(published)
     }
+
+    /// List server-persisted per-model effort preferences.
+    pub async fn list_model_effort_preferences(
+        &self,
+    ) -> Result<Vec<hya_store::ModelEffortPreference>, AgentModelControlError> {
+        Ok(self.store.list_model_effort_preferences().await?)
+    }
+
+    /// Set or clear one per-model effort preference and publish the next
+    /// request's preference snapshot through the normal runtime path.
+    pub async fn set_model_effort_preference(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        effort: &str,
+    ) -> Result<(), AgentModelControlError> {
+        if provider_id.trim().is_empty() || model_id.trim().is_empty() {
+            return Err(AgentModelControlError::InvalidRequest(
+                "provider_id and model_id must not be empty".to_string(),
+            ));
+        }
+        if effort.trim().is_empty() {
+            self.store
+                .clear_model_effort_preference(self.owner, provider_id, model_id)
+                .await?;
+        } else {
+            if hya_provider::ReasoningEffort::parse(effort).is_none() {
+                return Err(AgentModelControlError::InvalidRequest(format!(
+                    "invalid effort `{effort}`"
+                )));
+            }
+            self.store
+                .upsert_model_effort_preference(
+                    self.owner,
+                    provider_id,
+                    model_id,
+                    effort,
+                    now_millis(),
+                )
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 /// Adapt the app-owned durable control to the dependency-inverted server port.
@@ -514,6 +561,28 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
             Ok(row)
         })
     }
+    fn list_model_effort_preferences(
+        &self,
+    ) -> hya_server::AgentModelControlFuture<'_, Vec<hya_store::ModelEffortPreference>> {
+        Box::pin(async move {
+            self.list_model_effort_preferences()
+                .await
+                .map_err(server_control_error)
+        })
+    }
+
+    fn set_model_effort_preference(
+        &self,
+        provider_id: String,
+        model_id: String,
+        effort: String,
+    ) -> hya_server::AgentModelControlFuture<'_, ()> {
+        Box::pin(async move {
+            self.set_model_effort_preference(&provider_id, &model_id, &effort)
+                .await
+                .map_err(server_control_error)
+        })
+    }
 }
 
 /// The process-wide model configuration as one Project scope sees it: the
@@ -537,6 +606,9 @@ fn scope_configuration(
 /// Convert app control failures to stable server codes and bounded messages.
 fn server_control_error(error: AgentModelControlError) -> hya_server::AgentModelControlError {
     let (code, message) = match error {
+        AgentModelControlError::InvalidRequest(message) => {
+            (hya_server::AGENT_MODEL_INVALID_REQUEST, message)
+        }
         AgentModelControlError::UnknownAgent { agent_id } => (
             hya_server::AGENT_MODEL_UNKNOWN_AGENT,
             format!("unknown Agent `{agent_id}`"),
