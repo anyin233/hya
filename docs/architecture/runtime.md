@@ -29,14 +29,16 @@ three write/publish seams:
 1. **`emit`** — appends the event to SQLite, takes the returned sequence
    number, **then** publishes an `Envelope` with that seq. A live observer
    never sees a non-durable event on this path.
-2. **`publish_live`** — publishes an `Envelope` at `seq: 0` with **no** store
-   write. Used only for high-frequency **text** streaming
-   (`TextStart` / `TextDelta` / `TextEnd`, and live `TextReplace` from the
-   `text_complete` hook). At round end those text parts are re-emitted
-   **durably** as a `TextStart` / `TextReplace` / `TextEnd` triple. Reasoning
-   and other non-text stream events are **not** live-only: they go straight to
-   `emit_for_actor` and are durable on first emit (no reasoning re-emission
-   loop).
+2. **`publish_live`** publishes an `Envelope` at `seq: 0` with **no** store
+   write. Used only for high-frequency **text** streaming (`TextStart` /
+   `TextDelta` / `TextEnd`, and live `TextReplace` from the `text_complete`
+   hook). Each text part is committed as a durable `TextStart` /
+   `TextReplace` / `TextEnd` triple immediately at its own `TextEnd`, in
+   stream order; if the stream fails first, the partial text is committed
+   without running `text_complete`. Complete parts run `text_complete` before
+   their durable replacement is appended. Reasoning and other non-text stream
+   events are not live-only: they go straight to `emit_for_actor` and are
+   durable on first emit (no reasoning re-emission loop).
 3. **`emit_for_actor`** — the fencing seam for resident work: when given
    `Some(&ActorClaim)` it routes through `commit_resident_mutation` (fenced
    SQLite commit, publish only after commit); when `None` it falls through to

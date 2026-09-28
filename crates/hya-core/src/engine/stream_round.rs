@@ -88,12 +88,23 @@ impl SessionEngine {
         tokens: &mut Option<TokenUsage>,
     ) -> Result<(Vec<ToolCallReq>, FinishReason), CoreError> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
-        let mut durable_text_parts: Vec<(PartId, String)> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
+        let mut active_text_part = None;
         let mut finish = FinishReason::Stop;
         while let Some(item) = stream.next().await {
             self.validate_actor_claim(actor_claim).await?;
-            let event = item?;
+            let event = match item {
+                Ok(event) => event,
+                Err(error) => {
+                    if let Some(part) = active_text_part
+                        && let Some(text) = text_parts.text(part)
+                    {
+                        self.persist_text_part(actor_claim, session, message, part, text)
+                            .await?;
+                    }
+                    return Err(error.into());
+                }
+            };
             if let Event::ToolCallRequested {
                 part,
                 call,
@@ -123,6 +134,9 @@ impl SessionEngine {
                 &event,
                 Event::TextStart { .. } | Event::TextDelta { .. } | Event::TextEnd { .. }
             ) {
+                if let Event::TextStart { part, .. } = &event {
+                    active_text_part = Some(*part);
+                }
                 let completed = if let Some((part, text)) = text_parts.apply(&event) {
                     let text = match self
                         .complete_text_part(session, message, part, text.clone())
@@ -145,47 +159,57 @@ impl SessionEngine {
                     None
                 };
                 self.publish_live(event);
-                if let Some(part_text) = completed {
-                    durable_text_parts.push(part_text);
+                if let Some((part, text)) = completed {
+                    self.persist_text_part(actor_claim, session, message, part, text)
+                        .await?;
+                    active_text_part = None;
                 }
                 continue;
             }
             self.emit_for_actor(actor_claim, session, event).await?;
         }
-        for (part, text) in durable_text_parts {
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::TextStart {
-                    session,
-                    message,
-                    part,
-                },
-            )
-            .await?;
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::TextReplace {
-                    session,
-                    message,
-                    part,
-                    text,
-                },
-            )
-            .await?;
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::TextEnd {
-                    session,
-                    message,
-                    part,
-                },
-            )
-            .await?;
-        }
         Ok((tool_calls, finish))
+    }
+
+    async fn persist_text_part(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+    ) -> Result<(), CoreError> {
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+        )
+        .await?;
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TextReplace {
+                session,
+                message,
+                part,
+                text,
+            },
+        )
+        .await?;
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+        )
+        .await
     }
 }
 

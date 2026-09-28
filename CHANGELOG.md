@@ -1,7 +1,7 @@
-# 0.43.4
+# 0.43.5
 
-## Anthropic routes keep the model's thinking between tool steps
+## Text parts are stored in the order the model wrote them
 
-- The Anthropic decoder now keeps each thinking block's `signature` (and `redacted_thinking` data) as the reasoning part's provider data.
-- Within the current turn, the Anthropic encoder replays signed thinking blocks before the text and `tool_use` blocks of the same step, so the model sees its own earlier reasoning in a tool loop instead of re-deriving it every step. Reasoning from earlier turns, or without provider data, is not replayed.
-- Assistant parts are grouped per step as `[thinking*, text?, tool_use+]`. For histories recorded before the text-ordering fix, trailing text in the final assistant message is folded into its step instead of becoming a trailing assistant message the model could mistake for user input.
+- Each assistant text part now becomes durable at its own `TextEnd` (after any `text_complete` rewrite), instead of after the whole provider round. Text the model wrote before a tool call is stored before that tool call, so replay, the TUI transcript, and later model requests see the real order.
+- Previously the stored order was reasoning, tools, then text; rebuilt requests placed the step's text after its tool results, and on Anthropic routes the latest step's text became a trailing assistant message that models read as a new user instruction.
+- If a provider stream fails mid-part, the text streamed so far is stored (without the `text_complete` hook) instead of being lost from replay.

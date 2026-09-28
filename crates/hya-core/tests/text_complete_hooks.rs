@@ -16,7 +16,7 @@ use hya_core::{
 use hya_proto::{AgentName, Envelope, Event, FinishReason, ModelRef, PartProjection, Role};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
 struct TextCompleteHost;
@@ -26,9 +26,12 @@ impl HookDispatcher for TextCompleteHost {
     fn dispatch_event(&self, _envelope: &Envelope) {}
 
     async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        assert_eq!(input.text, "draft");
-        TextCompleteOutcome::Continue {
-            text: "final".to_string(),
+        if input.text == "draft" {
+            TextCompleteOutcome::Continue {
+                text: "final".to_string(),
+            }
+        } else {
+            TextCompleteOutcome::Continue { text: input.text }
         }
     }
 
@@ -64,13 +67,27 @@ impl HookDispatcher for TextCompleteHost {
 async fn text_complete_replaces_assistant_text_before_projection_finishes() {
     // Given: a provider emits a draft text block and a text-complete hook rewrites it.
     let dir = PathBuf::from(".");
-    let provider = FakeProvider::scripted(vec![
-        FakeStep::Text("draft".to_string()),
-        FakeStep::Finish(FinishReason::Stop),
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::Text("draft".to_string()),
+            FakeStep::ToolCall {
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "true"}),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("done".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
     ]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Bash,
+        "**",
+        Mode::Allow,
+    )]));
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
@@ -121,6 +138,17 @@ async fn text_complete_replaces_assistant_text_before_projection_finishes() {
             .parts
             .iter()
             .any(|part| { matches!(part, PartProjection::Text { text, .. } if text == "final") })
+    );
+
+    assert!(matches!(
+        assistant.parts.first(),
+        Some(PartProjection::Text { text, .. }) if text == "final"
+    ));
+    assert!(
+        assistant
+            .parts
+            .iter()
+            .any(|part| matches!(part, PartProjection::Tool { .. }))
     );
     assert!(
         engine
