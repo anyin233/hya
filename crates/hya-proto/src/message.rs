@@ -366,6 +366,9 @@ pub enum Message {
         model: ModelRef,
         /// Content parts (text, reasoning, tools).
         parts: Vec<Part>,
+        /// Latest provider round usage, distinct from cumulative `tokens`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_round: Option<TokenUsage>,
         /// Set when the assistant message is finished.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         finish: Option<FinishReason>,
@@ -416,6 +419,7 @@ mod message_id_tests {
             parts: Vec::new(),
             finish: None,
             tokens: None,
+            last_round: None,
         };
         let system = Message::System {
             id: system_id,

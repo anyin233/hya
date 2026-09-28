@@ -45,6 +45,7 @@ pub(super) fn projection_to_messages(
                 parts: map_parts(&m.parts),
                 finish: m.finish,
                 tokens: m.tokens,
+                last_round: m.usage.as_ref().map(|usage| usage.last_round),
             },
             Role::System => Message::System {
                 id: m.id,

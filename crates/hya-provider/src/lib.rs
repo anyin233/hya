@@ -39,7 +39,7 @@ mod wire;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use hya_proto::{Event, Message, MessageId, ModelRef, SessionId, ToolSchema};
+use hya_proto::{Event, Message, MessageId, ModelRef, Part, SessionId, ToolSchema};
 use thiserror::Error;
 
 pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
@@ -452,6 +452,64 @@ pub struct CompactedWindow {
     pub items: Vec<serde_json::Value>,
 }
 
+/// Which reasoning parts a route replays into its next request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReasoningReplayPolicy {
+    /// The encoder omits reasoning parts.
+    None,
+    /// The encoder sends only provider-native reasoning payloads.
+    ProviderData,
+    /// The encoder sends signed current-turn reasoning text and metadata.
+    SignedCurrentTurn,
+}
+
+/// Index of the latest user message that carries text: assistant messages
+/// after it form the current turn. Compute once per transcript and pass it to
+/// [`ReasoningReplayPolicy::replays`].
+#[must_use]
+pub fn current_turn_start(messages: &[Message]) -> Option<usize> {
+    messages.iter().rposition(|message| {
+        matches!(message, Message::User { parts, .. }
+            if parts.iter().any(|part| matches!(part, Part::Text { text, .. } if !text.is_empty())))
+    })
+}
+
+impl ReasoningReplayPolicy {
+    /// Whether the route's encoder sends `part` (at `message_index` of the full
+    /// transcript whose [`current_turn_start`] is `turn_start`). Shared by the
+    /// request encoders and token accounting so the two cannot drift.
+    #[must_use]
+    pub fn replays(self, turn_start: Option<usize>, message_index: usize, part: &Part) -> bool {
+        let Part::Reasoning { provider_data, .. } = part else {
+            return false;
+        };
+        match self {
+            Self::None => false,
+            Self::ProviderData => provider_data.is_some(),
+            Self::SignedCurrentTurn => {
+                turn_start.is_some_and(|start| message_index > start)
+                    && provider_data
+                        .as_ref()
+                        .is_some_and(is_signed_anthropic_reasoning)
+            }
+        }
+    }
+}
+
+fn is_signed_anthropic_reasoning(data: &serde_json::Value) -> bool {
+    match data.get("type").and_then(serde_json::Value::as_str) {
+        Some("thinking") => data
+            .get("signature")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|signature| !signature.is_empty()),
+        Some("redacted_thinking") => data
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        _ => false,
+    }
+}
+
 /// A configured model route: claims models, streams completions, optional compaction.
 ///
 /// Minimum implement surface: [`Provider::id`], [`Provider::capabilities`], and
@@ -469,6 +527,10 @@ pub trait Provider: Send + Sync {
     /// that distinct from an explicit [`ReasoningEffort::Off`] value.
     fn reasoning_default(&self, _model: &ModelRef) -> Option<ReasoningEffort> {
         None
+    }
+    /// Reasoning replay behavior of this route's request encoder.
+    fn reasoning_replay_policy(&self) -> ReasoningReplayPolicy {
+        ReasoningReplayPolicy::None
     }
     /// Report whether a claimed model supports one typed reasoning effort.
     ///

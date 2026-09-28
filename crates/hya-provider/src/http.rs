@@ -1077,6 +1077,17 @@ impl Provider for HttpProvider {
         let served = self.served_model_name(model)?;
         Some(self.caps_for_model(served))
     }
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        match self.kind {
+            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
+                crate::ReasoningReplayPolicy::ProviderData
+            }
+            ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
+            ProviderKind::OpenAiCompatible | ProviderKind::Google => {
+                crate::ReasoningReplayPolicy::None
+            }
+        }
+    }
 
     fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {
         let served_model = self.served_model_name(model)?;

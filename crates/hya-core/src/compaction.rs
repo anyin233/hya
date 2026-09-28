@@ -1332,6 +1332,7 @@ mod tests {
             }],
             finish: None,
             tokens: None,
+            last_round: None,
         }];
         // Text-only estimator would be ~0; tool body alone is 100 tokens.
         assert!(estimate_tokens(&msgs) >= tool_body.len() / 4);
@@ -1382,6 +1383,7 @@ mod tests {
             }],
             finish: None,
             tokens: None,
+            last_round: None,
         }
     }
 
@@ -1466,6 +1468,7 @@ mod tests {
             parts,
             finish: None,
             tokens: None,
+            last_round: None,
         }];
 
         assert_eq!(evict_stale_tool_outputs(&mut messages, 2, None), 2);
@@ -1645,6 +1648,7 @@ mod tests {
             }],
             finish: None,
             tokens: None,
+            last_round: None,
         }];
         let archive = snapcompact_archive(&msgs);
         assert!(
@@ -1904,6 +1908,7 @@ mod tests {
             parts: Vec::new(),
             finish: None,
             tokens: usage,
+            last_round: None,
         }
     }
 
