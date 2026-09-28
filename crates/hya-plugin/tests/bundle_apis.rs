@@ -150,6 +150,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         workdir: PathBuf::from("/tmp/bundle-apis"),
         roots: vec![PathBuf::from("/tmp/bundle-apis")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

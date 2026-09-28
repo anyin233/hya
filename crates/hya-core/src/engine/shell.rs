@@ -441,6 +441,7 @@ impl SessionEngine {
                                 .mailbox
                                 .for_session(session)
                                 .with_channel_policy(channel_policy),
+                            project_activity: self.project_activity.for_session(session),
                             lifecycle: self
                                 .lifecycle
                                 .for_session(session)

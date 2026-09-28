@@ -33,12 +33,12 @@ declared tools before the runtime can publish it.
 | Bundle | Canonical tool names |
 | --- | --- |
 | `hya/base-tools` | `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` |
-| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit`, `wait` |
+| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit`, `project_activity`, `wait` |
 | `hya/network-tools` | `webfetch`, `websearch` |
 | `hya/channel-tools` | `send`, `list_channel`, `report`, `wait` (overrides extended-tools' `wait`) |
 | `hya/todo-tools` | `todo__read`, `todo__update_status`, `todo__update_content` |
 
-The registry holds 28 canonical names: `wait` is exported by two families and
+The registry holds 29 canonical names: `wait` is exported by two families and
 installed once.
 
 `ask_user` is the existing canonical name for the requested `ask` function;

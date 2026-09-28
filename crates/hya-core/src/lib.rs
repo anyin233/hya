@@ -60,6 +60,7 @@ mod member_wait;
 pub mod model_tokenizers;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
+pub(crate) mod project_activity;
 
 /// Session permission modes (`manual`, `yolo`, bundle-declared approvers).
 pub mod permission_mode;

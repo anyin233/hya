@@ -106,6 +106,7 @@ async fn run(
         roots: vec![layout.one.clone(), layout.two.clone()],
         workdir: layout.one.clone(),
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
     let tool = ToolRegistry::builtins().get(tool).unwrap();
     let result = tokio::time::timeout(Duration::from_secs(10), tool.execute(&ctx, input))
