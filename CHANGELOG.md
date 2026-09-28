@@ -1,14 +1,7 @@
-# 0.43.6
+# 0.43.7
 
-## Anthropic prompt caching
+## Reasoning is stored once per part
 
-- Anthropic routes now mark up to three `cache_control: {"type": "ephemeral"}` breakpoints per request: the last system block, the last tool definition, and the last content block of the final message. Repeated tool-loop requests reuse the cached prefix instead of paying for the full prompt every step.
-- New per-provider switch `providers.<id>.prompt_cache` (boolean; default `true` for `kind: anthropic`, ignored for other kinds). Set `prompt_cache: false` for an Anthropic-compatible gateway that rejects `cache_control`.
-
-```yaml
-providers:
-  my-gateway:
-    kind: anthropic
-    base_url: https://gateway.example/v1
-    prompt_cache: false
-```
+- Reasoning deltas are now live-only (streamed to connected clients as before). The durable log keeps `ReasoningStart` in stream order, then one `ReasoningReplace` with the full text and the `ReasoningEnd` (with provider data) when the part closes. A long thinking block is a handful of rows instead of one row per token; one traced session had 631k reasoning rows.
+- If the provider stream fails, or ends without closing a reasoning part, the thinking streamed so far is still stored.
+- Logs written by earlier versions (durable per-token deltas) replay unchanged.

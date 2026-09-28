@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use futures::StreamExt;
 use hya_proto::{
     Event, FinishReason, MessageId, ModelRef, PartId, SessionId, TokenUsage, ToolCallId,
@@ -89,6 +91,7 @@ impl SessionEngine {
     ) -> Result<(Vec<ToolCallReq>, FinishReason), CoreError> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
+        let mut reasoning_parts: HashMap<PartId, String> = HashMap::new();
         let mut active_text_part = None;
         let mut finish = FinishReason::Stop;
         while let Some(item) = stream.next().await {
@@ -101,6 +104,17 @@ impl SessionEngine {
                     {
                         self.persist_text_part(actor_claim, session, message, part, text)
                             .await?;
+                    }
+                    for (part, text) in reasoning_parts {
+                        self.persist_reasoning_part(
+                            actor_claim,
+                            session,
+                            message,
+                            part,
+                            text,
+                            None,
+                        )
+                        .await?;
                     }
                     return Err(error.into());
                 }
@@ -166,9 +180,81 @@ impl SessionEngine {
                 }
                 continue;
             }
-            self.emit_for_actor(actor_claim, session, event).await?;
+            match event {
+                Event::ReasoningStart { part, .. } => {
+                    reasoning_parts.insert(part, String::new());
+                    self.emit_for_actor(actor_claim, session, event).await?;
+                }
+                Event::ReasoningDelta { part, delta, .. } => {
+                    if let Some(text) = reasoning_parts.get_mut(&part) {
+                        text.push_str(&delta);
+                    }
+                    self.publish_live(Event::ReasoningDelta {
+                        session,
+                        message,
+                        part,
+                        delta,
+                    });
+                }
+                Event::ReasoningEnd {
+                    part,
+                    provider_data,
+                    ..
+                } => {
+                    let text = reasoning_parts.remove(&part).unwrap_or_default();
+                    self.persist_reasoning_part(
+                        actor_claim,
+                        session,
+                        message,
+                        part,
+                        text,
+                        provider_data,
+                    )
+                    .await?;
+                }
+                event => self.emit_for_actor(actor_claim, session, event).await?,
+            }
+        }
+        // A stream that ends without a part's `ReasoningEnd` still keeps the
+        // thinking it streamed: only its deltas were live-only.
+        for (part, text) in reasoning_parts {
+            self.persist_reasoning_part(actor_claim, session, message, part, text, None)
+                .await?;
         }
         Ok((tool_calls, finish))
+    }
+
+    async fn persist_reasoning_part(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+        provider_data: Option<serde_json::Value>,
+    ) -> Result<(), CoreError> {
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::ReasoningReplace {
+                session,
+                message,
+                part,
+                text,
+            },
+        )
+        .await?;
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data,
+            },
+        )
+        .await
     }
 
     async fn persist_text_part(

@@ -215,9 +215,11 @@ Field name for streaming chunks is **`delta`**, not `text`.
 | `reasoning_delta` | `session`, `message`, `part`, `delta: String` | Fold: append |
 | `reasoning_end` | `session`, `message`, `part`, `provider_data: Option<Value>` | Fold: stores `provider_data` (opaque provider state such as encrypted thinking blocks — must be round-tripped back to the provider verbatim) |
 | `reasoning_replace` | `session`, `message`, `part`, `text: String` | Fold: wholesale overwrite |
-
-Unlike text, reasoning events are **not** re-batched as a durable triple; they
-take the normal durable `emit_for_actor` path inside `collect_stream_round`.
+Reasoning starts are durable immediately to establish stream order. Reasoning
+deltas are live-only; at part end the runtime appends one durable
+`ReasoningReplace` containing the accumulated text followed by `ReasoningEnd`.
+On a stream failure, any open reasoning part is finalized with the same
+snapshot (without provider data), preserving partial thinking for replay.
 
 #### Tool lifecycle
 

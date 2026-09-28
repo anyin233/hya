@@ -114,8 +114,21 @@ impl Provider for PartialFailureProvider {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
+        let reasoning = PartId::new();
         let part = PartId::new();
         Ok(Box::pin(stream::iter([
+            Ok(Event::ReasoningStart {
+                session,
+                message,
+                part: reasoning,
+                reason: None,
+            }),
+            Ok(Event::ReasoningDelta {
+                session,
+                message,
+                part: reasoning,
+                delta: "partial thought".to_string(),
+            }),
             Ok(Event::TextStart {
                 session,
                 message,
@@ -408,6 +421,20 @@ async fn partial_text_is_persisted_when_stream_fails() {
         part,
         PartProjection::Text { text, .. } if text == "partial"
     )));
+    assert!(assistant.parts.iter().any(|part| matches!(
+        part,
+        PartProjection::Reasoning { text, .. } if text == "partial thought"
+    )));
+    let reasoning_snapshot_events = replay
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                envelope.event,
+                Event::ReasoningReplace { .. } | Event::ReasoningEnd { .. }
+            )
+        })
+        .count();
+    assert_eq!(reasoning_snapshot_events, 2);
     assert_eq!(assistant.finish, Some(FinishReason::Error));
 }
 
@@ -476,4 +503,72 @@ async fn completed_text_parts_replay_in_stream_order_around_tools() {
         })
         .collect::<Vec<_>>();
     assert_eq!(kinds, ["before", "<tool>", "done"]);
+}
+
+#[tokio::test]
+async fn reasoning_deltas_are_snapshotted_once_and_replayed() {
+    let workdir = tempdir();
+    let router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![
+        FakeStep::Reasoning("think one and two".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ])));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.expect("store"),
+        Arc::new(router),
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    ));
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .expect("create session");
+    engine
+        .admit_user_prompt(session, "reasoning".to_string())
+        .await
+        .expect("admit prompt");
+    engine
+        .run_turn(session, &agent(&workdir), CancellationToken::new())
+        .await
+        .expect("turn");
+    let replay = engine.store().replay(session).await.expect("replay");
+    let reasoning_events = replay
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                envelope.event,
+                Event::ReasoningStart { .. }
+                    | Event::ReasoningReplace { .. }
+                    | Event::ReasoningEnd { .. }
+            )
+        })
+        .count();
+    assert_eq!(reasoning_events, 3);
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|envelope| matches!(envelope.event, Event::ReasoningDelta { .. }))
+            .count(),
+        0
+    );
+    let projection = Projection::from_events(&replay);
+    let text = projection
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .find_map(|part| match part {
+            PartProjection::Reasoning { text, .. } => Some(text.as_str()),
+            _ => None,
+        });
+    assert_eq!(text, Some("think one and two"));
 }
