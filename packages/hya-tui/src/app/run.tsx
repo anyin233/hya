@@ -126,6 +126,7 @@ export async function run(options: Options): Promise<void> {
   if (options.web) store.setWeb(options.web)
   if (options.webTab) store.setWebTab(true)
   if (loaded.preferences.vim) store.setVim(true)
+  if (loaded.preferences.paneLayout) store.setPaneLayout(loaded.preferences.paneLayout)
   controller = createController({
     client, store, directory: options.directory, remote: options.remote === true,
     quit: (mode) => void shutdown(0, mode),

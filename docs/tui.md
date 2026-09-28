@@ -582,6 +582,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
+| `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
@@ -764,7 +765,74 @@ the bordered input, and the instruction line. The permission mode picker
   terminal alike.)
 - **Focus.** The input keeps the keyboard focus. Mouse clicks (on the
   transcript, a `Thinking` line, a tool card, or the sidebar) never move it (the renderer
-  runs with `autoFocus: false`).
+  runs with `autoFocus: false`). In a tiled workspace, clicking a pane selects
+  its scroll target; the message composer remains the text input.
+
+### Tiled workspace
+
+The central workspace can be split into nested rectangles. One pane always
+shows the current conversation; auxiliary panes show read-only views of the
+same server projection. This lets you keep jobs, sessions, todos, context,
+models, Workflows, interactions, status, or the API output beside the chat.
+The global header, permission prompts, command input, and message composer
+stay outside the split tree. The default single-conversation layout keeps the
+usual sidebars; splitting hides those sidebars to give the panes the full
+width. `/layout reset` restores the default screen.
+
+Open the command pane with `/` on an empty message, then enter a layout
+command. For example:
+
+```text
+/layout split vertical jobs       # conversation left, jobs right
+Alt+Left                          # select the conversation pane
+/layout split horizontal todos    # split that pane into top and bottom
+/layout assign conversation       # move conversation to the selected pane
+/layout resize +10                # grow the selected pane by 10 percentage points
+/layout close                     # close a selected auxiliary pane
+/layout reset                     # restore the default single pane
+```
+
+`vertical` divides left/right; `horizontal` divides top/bottom. A new pane
+starts selected. The selected pane has an accent border and `▸` in its title.
+Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
+also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
+`/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
+pane. In a tiled workspace Alt+Left/Right are pane keys, so use plain arrow
+keys for cursor movement in the message editor. Commands still use the
+single [command pane](#command-pane). Existing main views such as `/models`
+temporarily replace the tiled area; full-screen views and modal pickers
+cover it. `/layout show` returns to the tiles.
+
+| Command | Effect |
+| --- | --- |
+| `/layout` or `/layout show` | Show the pane count and selected pane; return from another main view. |
+| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to eight panes. |
+| `/layout assign <job>` | Change the selected pane's job. Assigning `conversation` swaps it with the current conversation pane; the sole conversation cannot be removed. |
+| `/layout focus <left\|right\|up\|down\|pane-id>` | Select a neighboring pane or a stable id such as `pane-2`. Alt+arrows use this action. |
+| `/layout resize <+N\|-N>` | Grow or shrink the selected pane against its nearest sibling by N percentage points, clamped to 20–80%. |
+| `/layout close` | Close the selected auxiliary pane and give its rectangle to its sibling. |
+| `/layout reset` | Restore one conversation pane and the normal sidebars. |
+
+Jobs are derived from the TUI's current projection: busy sessions, live
+subagent members of the open session, queued prompts, and pending requests.
+The open session's turn and member activity update through its stream; busy
+state for other sessions follows their catalog updates or `/refresh`. This
+layout does not start another session stream or create another chat input.
+
+The layout is saved automatically in the TUI preferences file and restored
+on the next start. TUI processes sharing that file (including WebUI tabs)
+each keep their loaded layout in memory; the last layout edit saved wins for
+the next start. Its exact JSON contract is `paneLayout: {version: 1,
+root: PaneNode, active: string}`. A `PaneNode` is either
+`{type: "pane", id: "pane-N", kind: PaneKind}` or
+`{type: "split", axis: "horizontal"|"vertical", weight: number,
+first: PaneNode, second: PaneNode}`. `weight` is the first child's fraction
+and stays between `0.2` and `0.8`. `PaneKind` is `conversation`, `jobs`,
+`sessions`, `todos`, `context`, `models`, `workflows`, `interactions`,
+`status`, or `api`. Saved trees with duplicate ids, no conversation,
+unknown jobs, invalid weights, or more than eight panes are ignored. Layout
+editing uses no new backend route: each pane reads the existing session,
+catalog, interaction, and stream data already held by the TUI.
 
 The colors come from the theme in effect (see [Themes](#themes)). The
 default `hya` theme:
@@ -840,6 +908,7 @@ interface TuiPreferences {
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
   permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
+  paneLayout?: PaneLayout // versioned central split tree; see Tiled workspace above
 }
 ```
 
@@ -1252,7 +1321,8 @@ press Enter to submit one prompt containing `first line\nsecond line`.
 The box grows with its content up to 8 rows (wrapped lines count), then
 scrolls. Newlines stay in the prompt text, so the transcript shows the lines
 as typed. Editing keys: Left/Right, Up/Down between lines, Home/End to the
-start/end of the current line, Ctrl+Left/Right or Alt+Left/Right by word,
+start/end of the current line, Ctrl+Left/Right or Alt+Left/Right by word
+(Alt+Left/Right selects panes while the workspace is tiled),
 Ctrl+A / Ctrl+E to the start/end of the logical line, Backspace, Delete,
 Alt+Backspace deletes the previous word (Ctrl+W too, outside a browser, which
 reserves it), Ctrl+U / Ctrl+K delete to the line start/end, Ctrl+- undo.
@@ -2566,7 +2636,8 @@ own key line; see [Provider View](#provider-view)):
 
 | View or state | Bottom instruction |
 | --- | --- |
-| Chat | `Enter a prompt · /new creates a session · /sessions history · F4 requests` |
+| Chat | `Enter a prompt · /new creates a session · /sessions history · F4 requests · / commands` |
+| Tiled chat | `Alt+arrows select pane · /layout split|assign|resize|close|reset · / commands` |
 | Models | `Next: /model <provider/model> to switch this session · /key opens the Provider View · /help` |
 | Workflows | `Next: /workflow select <name> or /workflow run [name]` |
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
@@ -2678,6 +2749,7 @@ together.
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()` (right sidebar), `projectsSidebarVisible()`, `toggledProjectsSidebar()`, `projectsSidebarWidth()` (left Projects sidebar), and `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/panes.ts`, `src/components/PaneWorkspace.tsx` | Versioned split tree, validation, focus geometry, assignment, close/resize reducers, and the recursive central-pane renderer. |
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
 | `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |

@@ -18,6 +18,9 @@ test("slash opens commands only with an empty message; Ctrl+X slash opens them w
 })
 
 test("maps the layout, reasoning, and transcript scrolling keys", () => {
+  for (const [direction, action] of [["left", "focusPaneLeft"], ["right", "focusPaneRight"], ["up", "focusPaneUp"], ["down", "focusPaneDown"]] as const) {
+    expect(resolveBinding(key(direction, { meta: true }))).toBe(action)
+  }
   expect(resolveBinding(key("b", { ctrl: true }))).toBe("toggleSidebar")
   expect(resolveBinding(key("o", { ctrl: true }))).toBe("toggleThinking")
   expect(resolveBinding(key("g", { ctrl: true }))).toBe("toggleTools")
@@ -52,6 +55,7 @@ test("every binding is documented and reachable without a browser-reserved short
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
     key("?", { shift: true, sequence: "?" }), key("x", { ctrl: true }), key("f4"),
     key("p", { ctrl: true }), key("/", { sequence: "/" }),
+    key("left", { meta: true }), key("right", { meta: true }), key("up", { meta: true }), key("down", { meta: true }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
     .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" || probe.name === "/" })))
@@ -59,7 +63,7 @@ test("every binding is documented and reachable without a browser-reserved short
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "fork", "help", "interrupt", "openCommands", "pageDown", "pageUp", "quit", "redo", "refresh", "reviewPending", "scrollBottom", "scrollTop", "toggleProjectsSidebar", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
+    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "focusPaneDown", "focusPaneLeft", "focusPaneRight", "focusPaneUp", "fork", "help", "interrupt", "openCommands", "pageDown", "pageUp", "quit", "redo", "refresh", "reviewPending", "scrollBottom", "scrollTop", "toggleProjectsSidebar", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

@@ -21,6 +21,31 @@ async function sidebarShown(term: Tui): Promise<boolean> {
 test.describe("layout", () => {
   test.use({ model: { steps: [textStep("layout reply marker l1")] } })
 
+  test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
+    let term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "/layout split vertical jobs")
+    await term.waitForText("▸ jobs · pane-2")
+    const conversation = (await term.find("conversation · pane-1"))!
+    const jobs = (await term.find("jobs · pane-2"))!
+    expect(jobs.col).toBeGreaterThan(conversation.col)
+    await term.press("Alt+ArrowLeft")
+    await term.waitForText("▸ conversation · pane-1")
+    await prompt(term, "/layout split horizontal todos")
+    await term.waitForText("▸ todos · pane-3")
+    expect((await term.find("todos · pane-3"))!.col).toBeLessThan(jobs.col)
+    await prompt(term, "/layout assign conversation")
+    await term.waitForText("▸ conversation · pane-3")
+    await term.waitForText("todos · pane-1")
+
+    term = await tui(hyaTui(backend))
+    await term.waitForText("▸ conversation · pane-3")
+    await term.waitForText("jobs · pane-2")
+    await prompt(term, "/layout reset")
+    await expect.poll(() => term.find("pane-3")).toBeNull()
+    await term.waitForText("Sessions")
+  })
+
   test("the default viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
@@ -110,5 +135,19 @@ test.describe("pending interactions", () => {
     await term.waitForText(/! .*bash/)
     await term.waitForText("F4 review request")
     expect(await term.find("asked by build")).toBeNull()
+  })
+})
+
+test.describe("jobs pane", () => {
+  test.use({ model: { steps: [textStep("finished from tiled jobs pane", { chunkSize: 3, delayMs: 120 })] } })
+
+  test("shows the open session working while its turn streams", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "/layout split vertical jobs")
+    await term.waitForText("▸ jobs · pane-2")
+    await prompt(term, "show the work")
+    await term.waitForText("turn running", 20_000)
+    await term.waitForText("finished from tiled jobs pane", 20_000)
   })
 })

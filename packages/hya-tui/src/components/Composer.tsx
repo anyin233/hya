@@ -14,6 +14,7 @@ import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { projectsSidebarVisible } from "../state/layout"
+import { paneLeaves } from "../state/panes"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
@@ -355,6 +356,15 @@ export function Composer() {
         return
       }
     }
+    // Pane navigation is global to the tiled workspace, including while the
+    // command input is open. Modal pickers and full-screen views above win.
+    const focusAction = resolveBinding(key)
+    if (paneLeaves(store.state.paneLayout.root).length > 1 && focusAction?.startsWith("focusPane")) {
+      consume()
+      const direction = focusAction.slice("focusPane".length).toLowerCase()
+      void controller.submit(`/layout focus ${direction}`, "command")
+      return
+    }
     // A command pane owns its input and history. Ordinary keys continue to
     // its focused <input>; navigation and submission are handled there.
     if (ui.command?.active()) {
@@ -475,7 +485,10 @@ export function Composer() {
     const action = resolveBinding(key, { composerEmpty: !(editor?.plainText ?? value()) })
     if (action !== "quit") quitGuard.disarm()
     if (!action) return
-    const transcript = store.state.view === "chat" ? ui.transcript : undefined
+    const focusedPane = paneLeaves(store.state.paneLayout.root).find((pane) => pane.id === store.state.paneLayout.active)
+    const transcript = store.state.view === "chat"
+      ? focusedPane?.kind === "conversation" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
+      : undefined
     switch (action) {
       case "interrupt": {
         consume()

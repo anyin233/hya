@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadPreferences, preferencesPath, savePreferences } from "../src/prefs"
+import { defaultPaneLayout, splitPane } from "../src/state/panes"
 
 const dirs: string[] = []
 function temp(): string {
@@ -91,4 +92,13 @@ test("permissionMode is a nonempty string and is saved alongside other preferenc
   savePreferences(path, { permissionMode: "yolo" })
   savePreferences(path, { theme: "hya" })
   expect(loadPreferences(path).preferences).toEqual({ theme: "hya", permissionMode: "yolo" })
+})
+
+test("a valid tiled layout survives preferences round-trip; an invalid tree is ignored", () => {
+  const path = join(temp(), "tui.json")
+  const paneLayout = splitPane(defaultPaneLayout(), "vertical", "jobs")
+  savePreferences(path, { theme: "light", paneLayout })
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light", paneLayout })
+  writeFileSync(path, JSON.stringify({ theme: "light", paneLayout: { ...paneLayout, active: "missing" } }))
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light" })
 })

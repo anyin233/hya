@@ -24,6 +24,7 @@ import { StatusBar } from "../components/StatusBar"
 import { StatusLine } from "../components/StatusLine"
 import { WorkingIndicator } from "../components/WorkingIndicator"
 import { projectsSidebarVisible, projectsSidebarWidth, sidebarVisible, sidebarWidth } from "../state/layout"
+import { paneLeaves } from "../state/panes"
 import { colors } from "../theme"
 import { useApp } from "./context"
 
@@ -59,9 +60,10 @@ export function App() {
     if (event.button === 0) paintSelection(renderer.root, colors.selection)
   }
   createEffect(() => store.setColumns(size().width))
-  const shown = () => sidebarVisible(store.state.sidebar, size().width)
+  const tiled = () => store.state.view === "chat" && paneLeaves(store.state.paneLayout.root).length > 1
+  const shown = () => !tiled() && sidebarVisible(store.state.sidebar, size().width)
   const side = () => sidebarWidth(size().width)
-  const leftShown = () => projectsSidebarVisible(store.state.projectsSidebar, size().width)
+  const leftShown = () => !tiled() && projectsSidebarVisible(store.state.projectsSidebar, size().width)
   const leftSide = () => projectsSidebarWidth(size().width)
   return (
     <box width="100%" height="100%" flexDirection="row" backgroundColor={colors.bg} onMouseDown={paint}>

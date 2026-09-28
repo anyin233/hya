@@ -45,6 +45,7 @@ import type { View } from "../instructions"
 import type { AgentModelsViewState } from "./agentModels"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
+import { defaultPaneLayout, type PaneLayout } from "./panes"
 import { foldMember, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -98,6 +99,8 @@ export interface AppState {
   /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
+  /** Local editable workspace inside the central panel; exactly one conversation pane. */
+  readonly paneLayout: PaneLayout
   readonly apiOutput: string
   readonly status: string
   /** The full-screen Provider View (`/key`, state/providers.ts), while open. */
@@ -310,6 +313,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     turnStartedAt: undefined,
     cursor: "0",
     view: "chat",
+    paneLayout: defaultPaneLayout(),
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
     providerView: undefined,
@@ -782,6 +786,7 @@ export function createAppStore() {
     },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
+    setPaneLayout(layout: PaneLayout): void { set("paneLayout", layout) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
 
