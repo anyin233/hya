@@ -1811,6 +1811,36 @@ impl Projection {
                     }
                 }
             }
+            Event::ContextCompacted {
+                message: marker,
+                to_message,
+                ..
+            } => {
+                // MessageStarted is append-only, so the marker is recorded after
+                // the in-flight assistant message. Move it to the boundary named
+                // by the compaction record; otherwise request reconstruction
+                // drops the assistant's retained tail on the next round.
+                if let Some(marker_index) = self
+                    .session
+                    .messages
+                    .iter()
+                    .position(|row| row.id == *marker)
+                {
+                    let marker_row = self.session.messages.remove(marker_index);
+                    if let Some(to_index) = self
+                        .session
+                        .messages
+                        .iter()
+                        .position(|row| row.id == *to_message)
+                    {
+                        self.session.messages.insert(to_index + 1, marker_row);
+                    } else {
+                        self.session
+                            .messages
+                            .insert(marker_index.min(self.session.messages.len()), marker_row);
+                    }
+                }
+            }
             Event::TextEnd { .. }
             | Event::SessionStatus { .. }
             | Event::ToolInputDelta { .. }
@@ -1821,9 +1851,9 @@ impl Projection {
                 failed_message: None,
                 ..
             }
-            // Observability record, not a state transition: the folded messages
-            // stay in the log and the marker System message carries the output.
-            | Event::ContextCompacted { .. }
+            // The marker placement is the one stateful part: the folded
+            // messages stay in the log, and request reconstruction slices at
+            // this boundary. Other context events remain observability-only.
             | Event::ContextEvicted { .. }
             | Event::Unknown => {}
             Event::SessionForked {
@@ -2555,6 +2585,96 @@ mod context_status_tests {
             },
         ));
         assert_eq!(p.session.context_status.unwrap().tokens, 9_000);
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::CompactionStrategy;
+    use crate::ids::EventSeq;
+
+    fn env(seq: u64, event: Event) -> Envelope {
+        Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        }
+    }
+
+    #[test]
+    fn compaction_marker_precedes_retained_in_flight_message() {
+        let session = SessionId::new();
+        let user = MessageId::new();
+        let assistant = MessageId::new();
+        let marker = MessageId::new();
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: AgentName::new("build"),
+                    model: ModelRef::new("fake"),
+                    workdir: "/tmp".to_string(),
+                    project: None,
+                    kind: crate::SessionKind::Project,
+                },
+            ),
+            env(
+                2,
+                Event::MessageStarted {
+                    session,
+                    message: user,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+            ),
+            env(
+                3,
+                Event::MessageStarted {
+                    session,
+                    message: assistant,
+                    role: Role::Assistant,
+                    agent: Some(AgentName::new("build")),
+                    model: Some(ModelRef::new("fake")),
+                },
+            ),
+            env(
+                4,
+                Event::MessageStarted {
+                    session,
+                    message: marker,
+                    role: Role::System,
+                    agent: None,
+                    model: None,
+                },
+            ),
+            env(
+                5,
+                Event::ContextCompacted {
+                    session,
+                    message: marker,
+                    strategy: CompactionStrategy::LocalSummarizer,
+                    from_message: user,
+                    to_message: user,
+                    folded_count: 1,
+                    input_tokens_est: 100,
+                    threshold: 75,
+                },
+            ),
+        ]);
+
+        let ids: Vec<MessageId> = projection
+            .session
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect();
+        assert_eq!(ids, vec![user, marker, assistant]);
     }
 }
 

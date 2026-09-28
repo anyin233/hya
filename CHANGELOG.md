@@ -1,6 +1,7 @@
-# 0.43.1
+# 0.43.2
 
-## Browser Shift+Enter newline
+## Compaction preserves in-flight turns
 
-- Shift+Enter in the WebUI now inserts a newline in the TUI composer instead of submitting the draft, matching the native terminal behavior. Plain Enter still submits.
-- The key help and TUI/WebUI documentation now describe the shared shortcut behavior.
+- Compaction markers now sit before the retained tail in the event-sourced projection, so a mid-turn compaction keeps the active assistant's prior tool calls and results in later model requests instead of restarting the task.
+- The compaction ladder excludes the marker and active assistant tail from the foldable range, preventing repeated compaction of the same boundary.
+- Added regression coverage for marker placement and post-compaction request reconstruction; the compaction reference documents the boundary contract.
