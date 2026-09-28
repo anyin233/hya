@@ -794,9 +794,24 @@ in your home directory, so for it that is `~/.hya/` (run `hya serve --db
 cwd to the TUI as `--dir`, and `hya exec`/`run`/`-p`/`loop` record the
 caller's cwd as their session's workdir.
 
+For a supervisor-owned listener, pass the inherited descriptor directly:
+
+```sh
+hya serve --listen-fd 3 --db hya.db
+```
+
+The listener handoff only preserves the TCP listening socket. Existing SSE or
+WebSocket application state still follows hya's normal shutdown, reconnect, and
+event-log recovery semantics. It is a handoff primitive for the later successor
+daemon restart path, not yet an automatic `hya serve restart` implementation.
+Because `--listen-fd` does not carry a bind hostname, non-loopback requests
+must be named explicitly with one or more `--allow-host` flags. The existing
+loopback host names remain allowed by default.
+
 | Flag | Meaning |
 | --- | --- |
-| `--bind <ADDR>` | Socket address. Defaults to `127.0.0.1:8080`; use `127.0.0.1:0` for an ephemeral port. |
+| `--bind <ADDR>` | Socket address. Defaults to `127.0.0.1:8080`; use `127.0.0.1:0` for an ephemeral port. Mutually exclusive with `--listen-fd`. |
+| `--listen-fd <FD>` | Foreground Unix-only supervisor handoff. Adopt an already-open TCP listening socket (FD must be **3 or greater**); hya takes ownership, marks it close-on-exec, and never falls back to `--bind` if adoption fails. This option cannot be used with `serve start|status|stop|restart`. |
 | `--hostname <HOST>` | Compat-compatible alias for the host part of `--bind`. |
 | `--port <PORT>` | Compat-compatible alias for the port part of `--bind`. |
 | `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |

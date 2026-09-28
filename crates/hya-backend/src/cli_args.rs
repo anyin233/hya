@@ -273,8 +273,16 @@ pub(crate) enum Command {
     /// Start the HTTP + SSE server.
     Serve {
         /// Address to bind. Use `127.0.0.1:0` for an ephemeral port.
-        #[arg(long, default_value = "127.0.0.1:8080")]
+        #[arg(long, default_value = "127.0.0.1:8080", conflicts_with = "listen_fd")]
         bind: String,
+        /// Use an already-open Unix listener file descriptor from a supervisor.
+        /// This is foreground-only; the descriptor must be >= 3 and is owned by hya.
+        #[arg(
+            long,
+            value_name = "FD",
+            conflicts_with_all = ["hostname", "port", "mdns"]
+        )]
+        listen_fd: Option<u32>,
         /// Hostname to listen on. Compat-compatible alias for the host part of `--bind`.
         #[arg(long)]
         hostname: Option<String>,
@@ -1073,6 +1081,30 @@ mod tests {
         assert_eq!(
             action(parse(["hya", "serve", "--bind", "127.0.0.1:0"])).0,
             None
+        );
+    }
+
+    #[test]
+    fn parses_foreground_inherited_listener_fd() {
+        match parse(["hya", "serve", "--listen-fd", "3"]).command {
+            Some(super::Command::Serve {
+                listen_fd, action, ..
+            }) => {
+                assert_eq!(listen_fd, Some(3));
+                assert!(action.is_none());
+            }
+            _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn rejects_listener_fd_with_bind_aliases() {
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--listen-fd", "3", "--port", "8081"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--listen-fd", "3", "--bind", "127.0.0.1:0"])
+                .is_err()
         );
     }
 
