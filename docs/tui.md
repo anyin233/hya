@@ -983,6 +983,11 @@ reconnecting: <error>` in the status line while it retries (also reflected
 in the status bar's `reconnecting`); a version mismatch between this TUI and
 the backend's bootstrap version appends `backend <version> ≠ tui <version>`
 to the initial `Connected to hya …` status.
+The packaged TUI and WebUI use the same version as the backend in this source
+checkout. If that notice appears after replacing only the backend executable,
+reinstall or run the TUI from the matching checkout and reconnect; for example,
+run `HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"`
+from the checkout used to build that `hya` binary.
 
 ## Messages
 

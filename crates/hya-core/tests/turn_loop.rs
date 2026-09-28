@@ -142,6 +142,23 @@ async fn text_tool_result_text_round_trip() {
         .find(|m| m.role == Role::Assistant)
         .expect("assistant message");
 
+    let text_index = assistant
+        .parts
+        .iter()
+        .position(
+            |part| matches!(part, PartProjection::Text { text, .. } if text == "I'll read it"),
+        )
+        .expect("text before read call");
+    let tool_index = assistant
+        .parts
+        .iter()
+        .position(|part| matches!(part, PartProjection::Tool { .. }))
+        .expect("read call");
+    assert!(
+        text_index < tool_index,
+        "the provider's text must precede its tool call in durable replay"
+    );
+
     let completed_read = assistant.parts.iter().any(|p| {
         matches!(
             p,

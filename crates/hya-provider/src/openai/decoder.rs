@@ -3,9 +3,11 @@ use std::collections::BTreeMap;
 use hya_proto::{
     Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{Decoder, ProviderError};
+
+use super::CHAT_REASONING_MARKER;
 
 struct ToolAsm {
     part: PartId,
@@ -31,6 +33,7 @@ impl ToolAsm {
 pub struct OpenAiChatDecoder {
     session: SessionId,
     message: MessageId,
+    reasoning_part: Option<PartId>,
     text_part: Option<PartId>,
     tools: BTreeMap<usize, ToolAsm>,
     finish_reason: Option<String>,
@@ -45,6 +48,7 @@ impl OpenAiChatDecoder {
         Self {
             session,
             message,
+            reasoning_part: None,
             text_part: None,
             tools: BTreeMap::new(),
             finish_reason: None,
@@ -60,6 +64,17 @@ impl OpenAiChatDecoder {
         self.finished = true;
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
+        if let Some(part) = self.reasoning_part.take() {
+            out.push(Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data: Some(Value::Object(Map::from_iter([(
+                    CHAT_REASONING_MARKER.to_string(),
+                    Value::Bool(true),
+                )]))),
+            });
+        }
         if let Some(part) = self.text_part.take() {
             out.push(Event::TextEnd {
                 session,
@@ -124,6 +139,33 @@ impl Decoder for OpenAiChatDecoder {
             return Ok(out);
         };
 
+        if let Some(content) = choice
+            .pointer("/delta/reasoning_content")
+            .and_then(Value::as_str)
+            && !content.is_empty()
+        {
+            let part = match self.reasoning_part {
+                Some(part) => part,
+                None => {
+                    let part = PartId::new();
+                    self.reasoning_part = Some(part);
+                    out.push(Event::ReasoningStart {
+                        session,
+                        message,
+                        part,
+                        reason: None,
+                    });
+                    part
+                }
+            };
+            out.push(Event::ReasoningDelta {
+                session,
+                message,
+                part,
+                delta: content.to_string(),
+            });
+        }
+
         if let Some(content) = choice.pointer("/delta/content").and_then(Value::as_str)
             && !content.is_empty()
         {
@@ -152,6 +194,15 @@ impl Decoder for OpenAiChatDecoder {
             .pointer("/delta/tool_calls")
             .and_then(Value::as_array)
         {
+            if !tool_calls.is_empty()
+                && let Some(part) = self.text_part.take()
+            {
+                out.push(Event::TextEnd {
+                    session,
+                    message,
+                    part,
+                });
+            }
             for tc in tool_calls {
                 let index = usize::try_from(tc.get("index").and_then(Value::as_u64).unwrap_or(0))
                     .unwrap_or(0);

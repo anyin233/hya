@@ -1,6 +1,11 @@
-# 0.43.1
+# 0.43.2
 
-## Browser Shift+Enter newline
+## Continue DeepSeek tool turns
 
-- Shift+Enter in the WebUI now inserts a newline in the TUI composer instead of submitting the draft, matching the native terminal behavior. Plain Enter still submits.
-- The key help and TUI/WebUI documentation now describe the shared shortcut behavior.
+- OpenAI Chat streaming preserves reasoning content and sends it back with
+  assistant history after tool calls, as required by DeepSeek thinking mode.
+- DeepSeek assistant history includes an empty reasoning field when a model
+  produced no reasoning chunks. Durable replay keeps assistant text before
+  its tool calls so the follow-up request retains the original order.
+- The TUI and WebUI package versions now match the 0.43.2 backend, so a fresh
+  frontend no longer reports a version mismatch at connection.

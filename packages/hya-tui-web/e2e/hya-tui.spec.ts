@@ -12,6 +12,7 @@ test.describe("hya TUI in the browser", () => {
     const text = await term.text()
     expect(text).not.toContain("Chat")
     expect(text).not.toContain("Pending")
+    expect(text).not.toMatch(/backend \d+\.\d+\.\d+ ≠ tui \d+\.\d+\.\d+/)
   })
 
   test("admits a prompt and shows the offline model's reply", async ({ tui, backend }) => {
