@@ -10,9 +10,10 @@ const key = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift:
 const session: SessionInfo = { id: "hysec_1", agent: "build", workdir: "/w", permissionMode: "manual" }
 const ask: Interaction = { id: "perm_1", session: "hysec_1", type: "INTERACTION_TYPE_PERMISSION", title: "bash echo hi" } as Interaction
 
-function harness(options: { interactions?: Interaction[][]; fail?: boolean } = {}) {
+function harness(options: { interactions?: Interaction[][]; fail?: boolean; preferredMode?: string } = {}) {
   const store = createAppStore()
   const calls: Array<{ method: string; body?: unknown }> = []
+  const saved: string[] = []
   const listings = [...(options.interactions ?? [])]
   const client = {
     async updateSession(id: string, patch: { permissionMode?: string }) {
@@ -25,8 +26,8 @@ function harness(options: { interactions?: Interaction[][]; fail?: boolean } = {
       return listings.shift() ?? []
     },
   }
-  const modes = createModeSwitcher({ store, client })
-  return { store, calls, modes }
+  const modes = createModeSwitcher({ store, client, preferredMode: options.preferredMode, saveMode: (mode) => saved.push(mode) })
+  return { store, calls, modes, saved }
 }
 
 const notices = (store: ReturnType<typeof createAppStore>): string[] =>
@@ -126,12 +127,46 @@ test("before a session exists the choice is remembered and applied right after t
 })
 
 test("a rejected mode keeps the old one and reports the error", async () => {
-  const { store, modes } = harness({ fail: true })
+  const { store, modes, saved } = harness({ fail: true })
   store.openSession(session)
   await modes.request("bogus")
   expect(store.state.selected?.permissionMode).toBe("manual")
   expect(store.state.status).toContain("Permission mode failed: ")
   expect(notices(store)).toEqual([])
+  expect(saved).toEqual([])
+})
+
+test("a confirmed mode becomes the default for newly created sessions, and manual replaces it", async () => {
+  const { store, calls, modes, saved } = harness({ interactions: [[], [], []] })
+  store.openSession(session)
+  await modes.request("yolo")
+  expect(store.state.modeConfirm).toBeDefined()
+  expect(saved).toEqual([])
+  modes.key(key("return"))
+  await modes.idle()
+  expect(saved).toEqual(["yolo"])
+  store.openSession({ ...session, id: "hysec_2" })
+  await modes.applyPending()
+  expect(calls).toContainEqual({ method: "PATCH hysec_2", body: { permissionMode: "yolo" } })
+  expect(saved).toEqual(["yolo"])
+  await modes.request("manual")
+  expect(saved).toEqual(["yolo", "manual"])
+  store.openSession({ ...session, id: "hysec_3" })
+  await modes.applyPending()
+  expect(calls.filter((call) => call.method === "PATCH hysec_3")).toEqual([])
+  expect(store.state.selected?.permissionMode).toBe("manual")
+})
+
+test("a saved default is loaded for a new session but does not change an existing session", async () => {
+  const { store, calls, modes, saved } = harness({ preferredMode: "yolo", interactions: [[]] })
+  expect(store.state.pendingMode).toBe("yolo")
+  store.openSession({ ...session, id: "hysec_old" })
+  expect(modes.current()).toBe("manual")
+  expect(calls).toEqual([])
+  store.openSession({ ...session, id: "hysec_new" })
+  await modes.applyPending()
+  expect(store.state.selected?.permissionMode).toBe("yolo")
+  expect(saved).toEqual([])
 })
 
 test("a sessionUpdated frame with a new mode updates the session and adds one notice", () => {

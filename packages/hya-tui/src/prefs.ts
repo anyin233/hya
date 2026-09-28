@@ -2,7 +2,7 @@
  * TUI preferences (docs/tui.md "Preferences file"): a small JSON object in
  * `$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
  * `~/.config/hya/tui.json`. The TUI reads it once at start and writes it
- * when a preference changes (`/theme`, `/vim`).
+ * when a preference changes (`/theme`, `/vim`, `/permissions`).
  *
  * - Missing file: no preferences, no warning.
  * - Unreadable or corrupt file (not a JSON object): no preferences, and a
@@ -26,6 +26,8 @@ export interface TuiPreferences {
   vim?: boolean
   /** Desktop notifications when unfocused (`/notifications`; src/notify.ts); default on. */
   notifications?: boolean
+  /** Default permission mode for sessions this TUI creates; unset defaults to manual. */
+  permissionMode?: string
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -34,6 +36,7 @@ const validators: Validators = {
   theme: (value): value is string => typeof value === "string" && value.length > 0,
   vim: (value): value is boolean => typeof value === "boolean",
   notifications: (value): value is boolean => typeof value === "boolean",
+  permissionMode: (value): value is string => typeof value === "string" && value.trim().length > 0,
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */

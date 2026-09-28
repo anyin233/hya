@@ -157,6 +157,8 @@ export interface ControllerOptions {
   connectionHint?: string
   /** TUI preferences file (src/prefs.ts); unset = preference changes apply for this run only. */
   preferencesPath?: string
+  /** Saved default for newly created sessions; existing sessions retain their backend mode. */
+  preferredPermissionMode?: string
   /** The terminal behind the renderer (app/run.tsx): clipboard and handing it to an external editor. */
   terminal?: TerminalAccess
   /** Environment for `$VISUAL` / `$EDITOR` (default `process.env`). */
@@ -216,7 +218,7 @@ type FileRead = { size: number; data?: string } | { error: string }
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   let remote = startedRemote
   let streamAbort: AbortController | undefined
@@ -277,7 +279,12 @@ export function createController({ client, store, directory, remote: startedRemo
     client,
     onEnd: (outcome) => sendNotification(outcome.ok ? "turnFinished" : "turnFailed", outcome.ok ? (store.state.selected?.title ?? "") : outcome.detail),
   })
-  const modes = createModeSwitcher({ store, client })
+  const modes = createModeSwitcher({
+    store,
+    client,
+    preferredMode: preferredPermissionMode,
+    saveMode: preferencesPath ? (mode) => savePreferences(preferencesPath, { permissionMode: mode }) : undefined,
+  })
   const keeper = createSessionKeeper({
     client: {
       getSession: (id) => client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),

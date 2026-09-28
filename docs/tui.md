@@ -821,6 +821,7 @@ interface TuiPreferences {
   theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
+  permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
 }
 ```
 
@@ -830,7 +831,8 @@ interface TuiPreferences {
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
   wrong type is ignored.
-- A change (`/theme`'s Enter, `/vim`) merges the changed key into what is on disk —
+- A change (`/theme`'s Enter, `/vim`, or a successful permission mode switch)
+  merges the changed key into what is on disk —
   keys this TUI does not know are kept — and writes a temporary file in the
   same directory, then renames it over the file, so a crash never leaves a
   half-written file. The directory is created when missing.
@@ -1947,6 +1949,23 @@ is sent right after the next session is created (the first prompt, `/new`,
 or a command that creates one), before the prompt is admitted. Opening an
 existing session instead shows that session's own mode.
 
+**Default for new sessions.** After a successful mode switch, the TUI saves
+the selected mode as `permissionMode` in its [preferences file](#preferences-file).
+New sessions created by this TUI use that mode, including after a TUI restart;
+existing sessions retain the mode stored by the backend. For example, run
+`/permissions yolo`, press Enter to confirm, then run `/new`: the new session
+starts in `yolo`. Restart the TUI and create another session to use the same
+default without another confirmation prompt. Run `/permissions manual` to make
+later new sessions ask for permission again. A canceled or rejected switch
+does not change the saved default. If a saved bundle mode is no longer
+available, applying it to a new session reports a permission mode error and
+leaves that session in `manual`.
+The preference accepts `manual`, `yolo`, or a `<bundle-id>/<mode-id>` string;
+the backend validates the mode when the TUI sends
+`PATCH /v1/sessions/{id}` with `{ "permissionMode": "<mode>" }` after
+creating a session. The TUI also saves a mode chosen before a session exists
+once that mode is successfully applied to the first session.
+
 ### Display
 
 | Mode | Status bar | Color |
@@ -2607,7 +2626,7 @@ together.
 | `src/state/providers.ts` | The [Provider View](#provider-view)'s pure state: `initialProviderView()`, `providerViewKey()` (screens, filter, busy), the pop-up forms (`addProviderForm()`, `setKeyForm()`, `addModelForm()`, `editModelForm()`, `formKey()`, `formPaste()`, `withSecretLength()`), validation (`validateProviderId()`, `validateBaseUrl()`), row text (`providerLine()`, `modelLine()`, `providerDetailHeader()`, `tokenCount()`, `discoveryNotice()`, `testResultText()`), `providerKeyRows` (footer hint and help), and `defaultModelRef()`. |
 | `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
 | `src/state/catalog.ts` | `/model`/`/agent`/`/sessions` picker row builders: `modelRows()` (tagged by provider), `agentRows()` (visible agents, tagged by default model), `sessionRows()` (the `New session` row + `sessionTree()`, relative time), `relativeTime()`. |
-| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
+| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |

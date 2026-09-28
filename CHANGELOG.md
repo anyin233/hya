@@ -1,11 +1,6 @@
-# 0.43.2
+# 0.43.3
 
-## Continue DeepSeek tool turns
+## Remember the TUI permission mode
 
-- OpenAI Chat streaming preserves reasoning content and sends it back with
-  assistant history after tool calls, as required by DeepSeek thinking mode.
-- DeepSeek assistant history includes an empty reasoning field when a model
-  produced no reasoning chunks. Durable replay keeps assistant text before
-  its tool calls so the follow-up request retains the original order.
-- The TUI and WebUI package versions now match the 0.43.2 backend, so a fresh
-  frontend no longer reports a version mismatch at connection.
+- The OpenTUI frontend saves a successfully selected permission mode in its local `tui.json` preferences and applies it to new sessions, including after a restart.
+- Existing sessions keep their backend-stored permission mode; canceled or rejected changes do not replace the saved default.
