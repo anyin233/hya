@@ -97,7 +97,8 @@ fall back to `general`.
 | `prompt` | Work for the agent (required). |
 | `subagent_type` | Agent id — the only way to choose the agent (also per member); empty/omitted normalizes to `"general"`. It also names the member: the handle leaf is `<subagent_type>-<operator>`, where the resolved agent id is sanitized (lowercased; other characters → `-`; at most 32 characters) and the harness appends one random operator name (`"subagent_type": "scout"` → `main/scout-suzuran`; omitted → `main/general-amiya`). |
 | `category` | Logical model-category override. |
-| `model` | Concrete provider/model override (wins over category). |
+| `model` | Concrete provider/model override (wins over category). A `#level` suffix (`anthropic/claude-sonnet-4-5#low`) sets the child's thinking effort. |
+| `effort` | Thinking effort for this spawn (also per member): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
 | `command` | Optional command that triggered the task. |
 | `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
 | `members[]` | Fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
@@ -473,7 +474,12 @@ Removed tools: `roster`, `channels`, `join`, `leave` — their information folds
 into `list_channel`/`search_agent`; named user-created channels no longer
 exist. `kill` became `archive` (0.41.0).
 
-`list_agents` enumerates definitions usable by `task`.
+`list_agents` enumerates definitions usable by `task`. Each row carries the
+agent's default thinking effort (`effort`, `effort_source`: `preference` —
+the user's runtime choice, `configured` — `agents.<id>.reasoning`, or
+`authored` — the bundle's `model_policy.reasoning`; absent means the model's
+default), so the main agent can pick a spawn `effort` knowingly; the text
+form appends `[effort: <level>]`.
 ([crates/hya-tool/src/agents.rs:22-84](../../crates/hya-tool/src/agents.rs#L22-L84))
 
 ### Bash

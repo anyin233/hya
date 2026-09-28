@@ -2443,8 +2443,12 @@ next matching call asks again.
 ## Agent Models
 
 `/agent-models` opens a full-screen list of every catalog agent's base
-model: its mode (`primary`/`subagent`), the effective `provider/model`, and
-which tier resolved it (`session`, `configured`, `remembered`, `default`).
+model: its mode (`primary`/`subagent`), the effective `provider/model`,
+which tier resolved it (`session`, `configured`, `remembered`, `default`),
+and the agent's own default thinking effort (`EFFORT`: `high (set)` for a
+runtime choice, `(config)` for `agents.<id>.reasoning`, `(bundle)` for the
+authored policy; `default` means the model's own default applies — see
+[Agent default effort](configuration.md#agent-default-effort)).
 
 ### Keys
 
@@ -2452,17 +2456,22 @@ Up/Down move the highlight. Enter on a `settable` agent opens the shared
 model picker (the same one `/model` uses) to choose its remembered default;
 `c` clears a set preference. An agent with direct model or category
 configuration cannot take a remembered preference — Enter and `c` on it (or
-`c` with no preference set) show why instead of acting. `r` refreshes, `/`
-filters. Esc closes the view; Ctrl+C closes it too and keeps its quit
-meaning. The help overlay (`?`, group `agentmodels`) lists the same keys.
+`c` with no preference set) show why instead of acting. `e` opens the effort
+picker for any agent (the same rows `/effort` shows for the agent's effective
+model): an explicit level saves it as the agent's runtime default and
+`default` clears it; the next request of that agent, and every later subagent
+spawn of it, uses the new level. `r` refreshes, `/` filters. Esc closes the
+view; Ctrl+C closes it too and keeps its quit meaning. The help overlay (`?`,
+group `agentmodels`) lists the same keys.
 
 ### Agent Models interfaces
 
 | Action | Call | Body | Reads |
 | --- | --- | --- | --- |
-| Open, `r` refresh | `GET /v1/agent-models?directory=<dir>` | — | `AgentModelState[]` (`agentId`, `mode`, `hidden`, `configured`, `settable`, `preference`, `preferenceAvailable`, `effective`, `source`) |
+| Open, `r` refresh | `GET /v1/agent-models?directory=<dir>` | — | `AgentModelState[]` (`agentId`, `mode`, `hidden`, `configured`, `settable`, `preference`, `preferenceAvailable`, `effective`, `source`, `effort`, `effortSource`) |
 | Enter → picker Enter | `PUT /v1/agent-models/{agentId}` | `{directory, preference: {providerId, modelId}}` | `AgentModelState` |
 | `c` clear | `PUT /v1/agent-models/{agentId}` | `{directory}` (no `preference`) | `AgentModelState` |
+| `e` → picker Enter | `PUT /v1/agent-efforts/{agentId}` | `{directory, effort}` (`""` for `default`) | `AgentEffort` (`agentId`, `effort`) |
 
 ## Interface definitions
 

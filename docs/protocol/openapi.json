@@ -6,6 +6,17 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/agent-efforts/{agent_id}": {
+      "put": {
+        "operationId": "AgentModels.SetAgentEffort",
+        "summary": "Set or clear (empty `effort`) one agent's default thinking effort,",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SetAgentEffort",
+        "x-server-streaming": false
+      }
+    },
     "/v1/agent-models": {
       "get": {
         "operationId": "AgentModels.ListAgentModels",
@@ -1170,6 +1181,33 @@
   },
   "components": {
     "schemas": {
+      "SetAgentEffortRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentEffort": {
+        "type": "object",
+        "description": "One agent's saved runtime effort choice (empty when cleared).",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        }
+      },
       "ModelEffortPreference": {
         "type": "object",
         "description": "",
@@ -1267,6 +1305,12 @@
           },
           "session_override": {
             "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "effort_source": {
+            "$ref": "#/components/schemas/AgentEffortSource"
           }
         }
       },
@@ -5167,6 +5211,17 @@
             "type": "string"
           }
         }
+      },
+      "AgentEffortSource": {
+        "type": "string",
+        "description": "Which layer chose an agent's default thinking effort.",
+        "enum": [
+          "AGENT_EFFORT_SOURCE_UNSPECIFIED",
+          "AGENT_EFFORT_SOURCE_PREFERENCE",
+          "AGENT_EFFORT_SOURCE_CONFIGURED",
+          "AGENT_EFFORT_SOURCE_AUTHORED",
+          "AGENT_EFFORT_SOURCE_NONE"
+        ]
       },
       "AgentModelSource": {
         "type": "string",

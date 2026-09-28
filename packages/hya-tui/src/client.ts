@@ -367,6 +367,10 @@ export interface AgentModelState {
   source?: string
   configuration?: AgentModelSelection
   sessionOverride?: AgentModelSelection
+  /** The agent's own default thinking effort; absent: its model's default applies. */
+  effort?: string
+  /** `AGENT_EFFORT_SOURCE_PREFERENCE` (runtime), `_CONFIGURED` (`agents.<id>.reasoning`), `_AUTHORED` (bundle), `_NONE`. */
+  effortSource?: string
 }
 
 export interface CommandSummary {
@@ -945,6 +949,11 @@ export class HyaClient {
   /** `SetModelEffortPreference`; an empty effort clears the durable preference. */
   async setModelEffortPreference(providerId: string, modelId: string, effort: string, signal?: AbortSignal): Promise<ModelEffortPreference> {
     return this.request("PUT", `/v1/model-effort-preferences/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { effort }, signal)
+  }
+
+  /** `SetAgentEffort` (`PUT /v1/agent-efforts/{agentId}`); an empty effort clears the agent's runtime choice. */
+  async setAgentEffort(agentId: string, effort: string, signal?: AbortSignal): Promise<{ agentId: string; effort?: string }> {
+    return this.request("PUT", `/v1/agent-efforts/${encodeURIComponent(agentId)}`, { effort, ...(this.directory ? { directory: this.directory } : {}) }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

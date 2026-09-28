@@ -13,7 +13,7 @@ import {
   type AgentModelsNotice,
   type AgentModelsViewState,
 } from "../state/agentModels"
-import { modelRows } from "../state/catalog"
+import { effortRows, modelRows } from "../state/catalog"
 import { errorText } from "../state/providers"
 import type { PickerSpec } from "../state/picker"
 import type { AppStore } from "../state/store"
@@ -100,6 +100,37 @@ export function createAgentModelsController({ store, client, openPicker }: Agent
     })
   }
 
+  async function setEffort(agentId: string, effort: string): Promise<void> {
+    const controller = new AbortController()
+    abort = controller
+    patch((current) => ({ ...current, busy: { label: `Saving ${agentId}'s effort`, startedAt: Date.now() }, notice: undefined }))
+    try {
+      await client.setAgentEffort(agentId, effort, controller.signal)
+      patch((current) => ({ ...current, busy: undefined, notice: { tone: "ok", text: effort ? `${agentId} effort → ${effort}` : `Cleared ${agentId}'s effort` } }))
+      await reload()
+    } catch (error) {
+      patch((current) => ({ ...current, busy: undefined }))
+      if (!controller.signal.aborted) notify({ tone: "error", text: errorText(error) })
+      else await reload()
+    } finally {
+      if (abort === controller) abort = undefined
+    }
+  }
+
+  /** `default` clears the agent's runtime choice; the rows are the effective model's accepted labels. */
+  function pickEffort(agentId: string): void {
+    const row = store.state.agentModelRows.find((candidate) => candidate.agentId === agentId)
+    const current = row?.effective?.providerId && row.effective.modelId ? `${row.effective.providerId}/${row.effective.modelId}` : ""
+    const model = store.state.models.find((candidate) => candidate.id === current)
+    const explicit = row?.effortSource === "AGENT_EFFORT_SOURCE_PREFERENCE" ? row.effort : undefined
+    openPicker({
+      title: `Thinking effort · ${agentId}'s default`,
+      rows: effortRows(model, explicit, row?.effort || "default"),
+      hint: "Enter picks · Esc cancels",
+      onSelect: (selected) => void setEffort(agentId, selected.id === "default" ? "" : selected.id),
+    })
+  }
+
   function key(pressed: KeyLike): void {
     const current = view()
     if (!current) return
@@ -111,6 +142,7 @@ export function createAgentModelsController({ store, client, openPicker }: Agent
       case "refresh": void refresh(); return
       case "pickModel": pickModel(outcome.agent); return
       case "clear": void setPreference(outcome.agent, undefined, `Clearing ${outcome.agent}'s preference`); return
+      case "pickEffort": pickEffort(outcome.agent); return
     }
   }
 

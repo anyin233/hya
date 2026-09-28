@@ -1,5 +1,11 @@
 [
   {
+    "method": "PUT",
+    "path": "/v1/agent-efforts/{agent_id}",
+    "operationId": "AgentModels.SetAgentEffort",
+    "streaming": false
+  },
+  {
     "method": "GET",
     "path": "/v1/agent-models",
     "operationId": "AgentModels.ListAgentModels",

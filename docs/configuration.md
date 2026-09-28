@@ -145,7 +145,9 @@ agents:
 Use the bundle Agent's stable id instead of `hya-main` in a bundle file. Saves
 lock and reread the file, then atomically replace only the model leaf, preserving
 unrelated settings (including the bundle's own keys), credentials, reasoning
-fields and file permissions. Prepared bundle content is never rewritten.
+fields and file permissions. Prepared bundle content is never rewritten. The
+same `agents.<id>` entry may carry `reasoning:`, the Agent's default thinking
+effort; see [Agent default effort](#agent-default-effort).
 
 `GET /v1/bootstrap` advertises the effective catalog (agents, models,
 providers) to frontends, and `PATCH /v1/sessions/{session}` switches a
@@ -676,8 +678,10 @@ order (highest precedence first):
 
 | Layer | Source | Example |
 | --- | --- | --- |
-| Suffix | `#level` on the model reference (also `--effort`) | `openai/gpt#high` |
-| Agent | An authored bundle Agent `model_policy.reasoning` | `reasoning: high` |
+| Suffix | `#level` on the model reference (also `--effort`, a `task` spawn's `effort`, or `model: provider/model#level` on `task`) | `openai/gpt#high` |
+| Agent (runtime) | The user's saved per-Agent effort (SQLite, all clients; TUI `/agent-models` `e`) | `PUT /v1/agent-efforts/scout {"effort":"low"}` |
+| Agent (configured) | `agents.<id>.reasoning` in the owning configuration file | `reasoning: medium` |
+| Agent (authored) | An authored bundle Agent `model_policy.reasoning` | `reasoning: high` |
 | Preference | The user's saved per-`provider/model` effort (SQLite, all clients) | `/effort high` in the TUI |
 | Model default | `providers.<id>.models[].reasoning.default` | `default: medium` |
 | Global default | Top-level `reasoning` | `reasoning: low` |
@@ -692,19 +696,47 @@ Without any explicit choice or configured default, the provider request omits
 effort. The upstream provider then decides its default; omission does **not**
 guarantee that the model will not think.
 
-Saved preferences live in the session database (table
-`model_effort_preference`) and are shared by every client of that backend.
-Interface (`hya.v1.AgentModels`):
+#### Agent default effort
+
+Each Agent — the main agent and every subagent — can carry its own default
+thinking effort, independent of which model it runs on. It sits between an
+explicit suffix and the per-model preference, so `scout` can think `low` and
+`reviewer` `high` on the same model. Three layers set it, highest first:
+
+1. the user's runtime choice, saved in the session database (table
+   `agent_effort_preference`) and applied to the Agent's next request;
+2. `agents.<id>.reasoning` in the same file that holds the Agent's model
+   leaf (`config.yaml` for built-in Agents, the bundle's `config.yml` for
+   bundle Agents), read at backend start;
+3. the authored bundle Agent's `model_policy.reasoning`.
+
+```yaml
+agents:
+  explore:
+    model: anthropic/claude-sonnet-4-5
+    reasoning: low
+```
+
+An unknown label in `agents.<id>.reasoning` fails startup with
+`configuration agents.<id>.reasoning in <path> is not a thinking effort`.
+The main agent sees each Agent's default through `list_agents` (`effort`,
+`effort_source`: `preference`, `configured`, or `authored`) and can override
+it for one spawn with `task`'s `effort` parameter.
+
+Saved preferences live in the session database (tables
+`model_effort_preference` and `agent_effort_preference`) and are shared by
+every client of that backend. Interface (`hya.v1.AgentModels`):
 
 | RPC | HTTP | Body / result |
 | --- | --- | --- |
 | `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `{preferences: [{providerId, modelId, effort, updatedAt}]}` |
 | `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `{effort}`; an empty `effort` clears the preference |
+| `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `{effort}` → `{agentId, effort}`; an empty `effort` clears the runtime choice. Unknown label → `INVALID_ARGUMENT`; unknown Agent → `NOT_FOUND` |
+| `ListAgentModels` | `GET /v1/agent-models` | each `AgentModelState` also carries `effort` (empty: the model decides) and `effortSource` (`AGENT_EFFORT_SOURCE_PREFERENCE`, `_CONFIGURED`, `_AUTHORED`, `_NONE`) |
 
 `SessionInfo.effectiveEffort` (empty when none) and `SessionInfo.effortSource`
-(`EFFORT_SOURCE_SUFFIX`, `_PREFERENCE`, `_MODEL_DEFAULT`, `_GLOBAL_DEFAULT`,
-`_NONE`; `_AGENT` is applied per request but not reported) show what the
-session's next request sends.
+(`EFFORT_SOURCE_SUFFIX`, `_AGENT`, `_PREFERENCE`, `_MODEL_DEFAULT`,
+`_GLOBAL_DEFAULT`, `_NONE`) show what the session's next request sends.
 
 The TUI's `/effort` picker shows the advertised choices and saves the choice
 as the model's preference; `/effort default` clears it. See

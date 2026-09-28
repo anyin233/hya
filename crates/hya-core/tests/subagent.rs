@@ -1519,6 +1519,7 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
             session: SessionId::new().to_string(),
             status: "done".to_string(),
             summary: "nested complete".to_string(),
+            model: None,
         }]))
         .expect("nested spawn reply must be accepted");
 

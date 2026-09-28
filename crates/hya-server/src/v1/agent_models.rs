@@ -28,6 +28,7 @@ pub(crate) fn router() -> Router<ServerState> {
             "/v1/model-effort-preferences/:provider_id/:model_id",
             put(set_model_effort_preference),
         )
+        .route("/v1/agent-efforts/:agent_id", put(set_agent_effort))
 }
 fn selection(identity: &AgentModelIdentity) -> pb::AgentModelSelection {
     pb::AgentModelSelection {
@@ -60,7 +61,32 @@ fn state_row(row: &crate::agent_model_control::AgentModelState) -> pb::AgentMode
         source: source(row.effective.source),
         configuration: row.configuration.as_ref().map(selection),
         session_override: row.session_override.as_ref().map(selection),
+        effort: String::new(),
+        effort_source: pb::AgentEffortSource::None as i32,
     }
+}
+
+/// Fill the row's default effort with the same Agent layer the turn loop
+/// uses: runtime choice > `agents.<id>.reasoning` > authored policy.
+async fn with_agent_effort(
+    st: &ServerState,
+    binding: &hya_core::TurnBinding,
+    mut row: pb::AgentModelState,
+) -> Result<pb::AgentModelState, V1Error> {
+    let authored = binding
+        .agent_catalog()
+        .resolve(&row.agent_id)
+        .and_then(|definition| definition.model_policy.reasoning.clone())
+        .and_then(|label| hya_provider::ReasoningEffort::parse(&label));
+    if let Some((effort, source)) = st.engine.agent_effort(&row.agent_id, authored).await? {
+        row.effort = effort.as_str().to_string();
+        row.effort_source = match source {
+            hya_core::AgentEffortSource::Preference => pb::AgentEffortSource::Preference,
+            hya_core::AgentEffortSource::Configured => pb::AgentEffortSource::Configured,
+            hya_core::AgentEffortSource::Authored => pb::AgentEffortSource::Authored,
+        } as i32;
+    }
+    Ok(row)
 }
 
 fn map_control_error(error: AgentModelControlError) -> V1Error {
@@ -129,12 +155,14 @@ async fn list_agent_models(
     let binding = model_binding(&st, &request.directory, session).await?;
     let rows = st
         .agent_model_control
-        .list(binding, st.agent.model.clone())
+        .list(binding.clone(), st.agent.model.clone())
         .await
         .map_err(map_control_error)?;
-    Ok(Json(pb::ListAgentModelsResponse {
-        agents: rows.iter().map(state_row).collect(),
-    }))
+    let mut agents = Vec::with_capacity(rows.len());
+    for row in &rows {
+        agents.push(with_agent_effort(&st, &binding, state_row(row)).await?);
+    }
+    Ok(Json(pb::ListAgentModelsResponse { agents }))
 }
 
 fn validate_identity(selection: &pb::AgentModelSelection) -> Result<(), V1Error> {
@@ -196,10 +224,17 @@ async fn set_agent_model(
     let binding = model_binding(&st, &directory, session).await?;
     let row = st
         .agent_model_control
-        .set(binding, agent_id, preference, st.agent.model.clone())
+        .set(
+            binding.clone(),
+            agent_id,
+            preference,
+            st.agent.model.clone(),
+        )
         .await
         .map_err(map_control_error)?;
-    Ok(Json(state_row(&row)))
+    Ok(Json(
+        with_agent_effort(&st, &binding, state_row(&row)).await?,
+    ))
 }
 
 async fn list_model_effort_preferences(
@@ -260,4 +295,46 @@ async fn set_model_effort_preference(
             updated_at: row.updated_at,
         },
     )))
+}
+
+async fn set_agent_effort(
+    State(st): State<ServerState>,
+    AxumPath(agent_id): AxumPath<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<Json<pb::AgentEffort>, V1Error> {
+    ensure_available(&st)?;
+    let effort = match body.as_ref().and_then(|Json(value)| value.get("effort")) {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::String(text)) => text.trim().to_string(),
+        Some(_) => {
+            return Err(V1Error::invalid_argument(
+                "invalid request body: `effort` must be a string",
+            ));
+        }
+    };
+    if !effort.is_empty() && hya_provider::ReasoningEffort::parse(&effort).is_none() {
+        return Err(V1Error::invalid_argument(format!(
+            "unknown thinking effort `{effort}`"
+        )));
+    }
+    let directory = body
+        .as_ref()
+        .and_then(|Json(value)| value.get("directory"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let binding = catalog_scope(&st, directory).await?.bind(&st).await?;
+    if binding.agent_catalog().resolve(&agent_id).is_none() {
+        return Err(V1Error::new(
+            hya_api::error::Code::NotFound,
+            format!("unknown Agent `{agent_id}`"),
+        ));
+    }
+    st.agent_model_control
+        .set_agent_effort(
+            agent_id.clone(),
+            (!effort.is_empty()).then(|| effort.clone()),
+        )
+        .await
+        .map_err(map_control_error)?;
+    Ok(Json(pb::AgentEffort { agent_id, effort }))
 }

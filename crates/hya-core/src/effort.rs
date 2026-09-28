@@ -6,7 +6,7 @@ use hya_provider::ReasoningEffort;
 pub enum EffortSource {
     /// Explicit `#variant` model suffix.
     Suffix,
-    /// Authored Agent policy.
+    /// The Agent's own default effort (see [`AgentEffortSource`]).
     Agent,
     /// Persisted per-model user preference.
     Preference,
@@ -25,6 +25,31 @@ pub struct EffectiveEffort {
     pub effort: Option<ReasoningEffort>,
     /// Precedence layer that supplied `effort`.
     pub source: EffortSource,
+}
+
+/// Which Agent-level layer chose an Agent's default effort, highest first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentEffortSource {
+    /// Set by the user at runtime (durable, per Agent).
+    Preference,
+    /// `agents.<id>.reasoning` in the user's configuration file.
+    Configured,
+    /// The bundle Agent's authored `model_policy.reasoning`.
+    Authored,
+}
+
+/// Pick an Agent's default effort: runtime preference > configuration >
+/// authored policy. `None` when the Agent has no effort of its own.
+#[must_use]
+pub fn agent_effort(
+    preference: Option<ReasoningEffort>,
+    configured: Option<ReasoningEffort>,
+    authored: Option<ReasoningEffort>,
+) -> Option<(ReasoningEffort, AgentEffortSource)> {
+    preference
+        .map(|effort| (effort, AgentEffortSource::Preference))
+        .or_else(|| configured.map(|effort| (effort, AgentEffortSource::Configured)))
+        .or_else(|| authored.map(|effort| (effort, AgentEffortSource::Authored)))
 }
 
 /// Resolve the effective effort using suffix, agent, preference, model-default,

@@ -194,6 +194,16 @@ pub trait AgentModelControl: Send + Sync {
         effort: String,
     ) -> AgentModelControlFuture<'_, ()>;
 
+    /// Set or clear (`None`) one Agent's default thinking effort, independent
+    /// of its model tiers. `effort` is an already-validated label.
+    fn set_agent_effort(
+        &self,
+        _agent_id: String,
+        _effort: Option<String>,
+    ) -> AgentModelControlFuture<'_, ()> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+
     /// Persist only the configured default, preserving any distinct Session override.
     fn save_configuration(
         &self,

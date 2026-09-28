@@ -273,9 +273,15 @@ async fn projection_info_at(
     let projection = st.engine.read_projection_shared(session).await?;
     let mut info = session_info(&projection, started, updated);
     if let Some(model) = projection.session.model.as_ref() {
-        // Same resolver as the turn loop. Authored Agent `model_policy`
-        // effort is applied per request and is not reflected here.
-        let resolved = st.engine.effective_effort(model, None).await?;
+        // Same resolver as the turn loop, including the session Agent's
+        // runtime/configured effort. An authored bundle `model_policy`
+        // effort is applied per request but not reflected here.
+        let agent = projection
+            .session
+            .agent
+            .as_ref()
+            .map(|agent| agent.as_str());
+        let resolved = st.engine.effective_effort(model, agent, None).await?;
         let (effort, source) = (resolved.effort, resolved.source);
         info.effective_effort = effort
             .map(|value| value.as_str().to_string())

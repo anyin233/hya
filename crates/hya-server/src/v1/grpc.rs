@@ -1755,6 +1755,24 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
             .await?,
         )
     }
+
+    async fn set_agent_effort(
+        &self,
+        request: GrpcRequest<pb::SetAgentEffortRequest>,
+    ) -> Result<GrpcResponse<pb::AgentEffort>, Status> {
+        let (ctx, inner) = split(request);
+        let agent_id = field(&inner, "agentId");
+        into_response(
+            self.dispatch(
+                &ctx,
+                "PUT",
+                &format!("/v1/agent-efforts/{agent_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
