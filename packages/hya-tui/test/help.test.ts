@@ -63,7 +63,7 @@ test("? opens help only while the composer is empty", () => {
   const key = { name: "?", ctrl: false, meta: false, shift: true, sequence: "?" }
   expect(resolveBinding(key, { composerEmpty: true })).toBe("help")
   expect(resolveBinding(key, { composerEmpty: false })).toBeUndefined()
-  expect(resolveBinding({ ...key, name: "/", sequence: "/" }, { composerEmpty: true })).toBeUndefined()
+  expect(resolveBinding({ ...key, name: "/", sequence: "/" }, { composerEmpty: true })).toBe("openCommands")
 })
 
 test("the key help text (connection-failure view) is generated from the same rows", () => {

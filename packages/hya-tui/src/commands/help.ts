@@ -37,6 +37,7 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   quit: "App",
   eof: "App",
   complete: "Composer",
+  openCommands: "Composer",
   cycleMode: "Modes",
   reviewPending: "Prompts",
   refresh: "Views",
@@ -69,7 +70,7 @@ export function composerKeyLabel(binding: ComposerKeyBinding): string {
 }
 
 const editingText: Partial<Record<TextareaAction, string>> = {
-  submit: "Send the input (a prompt, /command, or !command)",
+  submit: "Send the input (a prompt or !command)",
   newline: "Insert a newline",
   "visual-line-home": "Cursor to the start of the line (Home also scrolls to the top when the input is empty)",
   "visual-line-end": "Cursor to the end of the line (End also scrolls to the bottom when the input is empty)",
@@ -106,8 +107,10 @@ function composerRows(): HelpRow[] {
   }
   return [
     ...rows,
-    { group: "Composer", keys: "Up / Down", description: "On the first / last line: the previous / next submitted input (in an open list: move)" },
-    { group: "Composer", keys: "/", description: "At the start of the input: open the command menu (fuzzy filter; Enter runs or completes)" },
+    { group: "Composer", keys: "Up / Down", description: "On the first / last message line: previous / next message; in the command pane: move suggestions" },
+    { group: "Composer", keys: "Shift+Up / Down", description: "In the command pane: previous / next submitted command" },
+    { group: "Composer", keys: "Command pane: Esc", description: "Return to the prior input, keeping the command draft" },
+    { group: "Composer", keys: "Command pane: Enter", description: "Run the selected command or complete a required argument" },
     { group: "Composer", keys: "!<command>", description: "Run a shell command in the session (ShellTurn)" },
     { group: "Composer", keys: "@<text>", description: "Pick a file path to reference (Up/Down, Tab/Enter insert, Esc closes)" },
   ]
@@ -207,6 +210,6 @@ export function keyHelpText(): string {
     }
     lines.push(`  ${row.keys.padEnd(26)} ${row.description}`)
   }
-  lines.push("", "Commands", "  Type / for the command menu once connected; /help lists every command.")
+  lines.push("", "Commands", "  Type / with an empty message to open the command pane; /help lists every command.")
   return lines.join("\n").trimStart()
 }

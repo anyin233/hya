@@ -112,9 +112,10 @@ test.describe("/connect-remote", () => {
     await term.waitForText("No live provider is available", 20_000)
     await term.attach(testInfo, "remote-session")
 
-    // Up recalls the command without its link.
-    await term.press("ArrowUp")
-    await term.press("ArrowUp")
+    // The command pane has its own history; Shift+Up recalls the command
+    // without its link, while the message composer keeps only prompt history.
+    await term.type("/")
+    await term.press("Shift+ArrowUp")
     await term.waitForText("/connect-remote")
     expect(await term.find(secretOf(remote.link))).toBeNull()
     // Run again, the recalled command asks for the link in the concealed entry; Esc cancels it.

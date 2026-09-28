@@ -1,8 +1,8 @@
-// The `/` command menu (docs/tui.md "Command menu"): fuzzy filtering, key
+// The separate `/` command pane (docs/tui.md "Command pane"): fuzzy filtering, key
 // handling, merged local/server/skill sources, skill command turns, /compact,
 // /rename, and /status, against the offline echo model or the fake model.
 //
-// Command-menu filtering runs off the composer's content-change event, which
+// Command-menu filtering runs off the command input's content-change event, which
 // can lag one render behind fast programmatic typing; every spec waits for
 // the specific highlighted `▸ /name` row before pressing Tab/Enter/ArrowDown,
 // the same pattern the `@file` specs (hya-tui-composer.spec.ts) use.
@@ -32,7 +32,7 @@ async function box(term: Tui, title: string): Promise<{ top: number; rows: strin
   return { top, rows }
 }
 
-const placeholder = "Message, /command, !shell, or @file"
+const placeholder = "Message, !shell, or @file · / commands"
 
 /** The composer's text (trailing spaces are trimmed by the row reader, same as the `@file` specs). */
 async function composerText(term: Tui): Promise<string> {
@@ -45,6 +45,11 @@ async function composerText(term: Tui): Promise<string> {
     return line.slice(1, end < 0 ? undefined : end).trim()
   }).join("\n")
   return text === placeholder ? "" : text
+}
+
+/** The command input is the row immediately above the pane's key hint. */
+async function commandText(term: Tui): Promise<string | undefined> {
+  return (await box(term, "Commands"))?.rows.at(-2)
 }
 
 async function writeSkill(dir: string, name: string, description: string, body: string): Promise<void> {
@@ -70,6 +75,25 @@ async function createSessionViaMenu(term: Tui): Promise<void> {
 }
 
 test.describe("command menu", () => {
+  test("slash focuses a separate command pane without changing the message draft", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await connected(term)
+    await term.type("/")
+    await term.waitForText("Commands")
+    expect(await composerText(term)).toBe("")
+    await term.type("help")
+    expect(await composerText(term)).toBe("")
+    await term.press("Escape")
+    await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+
+    await term.type("draft with /path")
+    await expect.poll(() => composerText(term)).toBe("draft with /path")
+    await term.press("Control+x")
+    await term.type("/")
+    await term.waitForText("Commands")
+    expect(await composerText(term)).toBe("draft with /path")
+  })
+
   test("typing / opens the menu; typing filters it by name, sources tagged", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
@@ -96,21 +120,42 @@ test.describe("command menu", () => {
     await term.press("ArrowDown")
     await term.waitForText("▸ /models")
     await term.press("Tab")
-    await expect.poll(() => composerText(term)).toBe("/models")
-    expect((await box(term, "Commands"))).toBeUndefined()
+    await expect.poll(() => commandText(term)).toBe("/models")
+    expect((await box(term, "Commands"))?.rows.some((row) => row.includes("▸ /model"))).toBe(false)
     // Tab left a trailing space (keeps typing args), not a glued-on word.
     await term.type("x")
-    await expect.poll(() => composerText(term)).toBe("/models x")
+    await expect.poll(() => commandText(term)).toBe("/models x")
   })
 
-  test("Esc closes the menu and keeps the typed text", async ({ tui, backend }) => {
+  test("Esc closes the command pane and keeps its draft for reopening", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("/hel")
     await term.waitForText("Commands")
     await term.press("Escape")
     await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
-    expect(await composerText(term)).toBe("/hel")
+    expect(await composerText(term)).toBe("")
+    await term.type("/")
+    await expect.poll(() => commandText(term)).toBe("/hel")
+  })
+
+  test("command history stays in the command pane and pasted slash text stays a message", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await connected(term)
+    await term.type("/status")
+    await term.waitForText("▸ /status")
+    await term.press("Enter")
+    await term.waitForText("Status")
+    await term.type("/")
+    await term.press("Shift+ArrowUp")
+    await expect.poll(() => commandText(term)).toBe("/status")
+    await term.press("Escape")
+    await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+    await term.page.evaluate(() => window.hyaTerm.term.paste("/help"))
+    await expect.poll(() => composerText(term)).toBe("/help")
+    await term.press("Enter")
+    await term.waitForText("Messages 2")
+    expect(await term.find("Help · keys and commands")).toBeNull()
   })
 
   test("Enter on a command with no arguments runs it; Enter on one with an argument hint completes and waits", async ({ tui, backend }) => {
@@ -127,9 +172,9 @@ test.describe("command menu", () => {
     await term.type("/open")
     await term.waitForText("▸ /open")
     await term.press("Enter")
-    await expect.poll(() => composerText(term)).toBe("/open")
+    await expect.poll(() => commandText(term)).toBe("/open")
     await term.type("1")
-    await expect.poll(() => composerText(term)).toBe("/open 1")
+    await expect.poll(() => commandText(term)).toBe("/open 1")
   })
 })
 
@@ -141,10 +186,8 @@ test.describe("skill commands", () => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("/greet world")
-    // The space after "greet" closes the command menu; wait for the editor
-    // (and this test's own sync()) to settle before Enter, so Enter submits
-    // the prompt rather than racing a still-open menu (see the header note).
-    await expect.poll(() => composerText(term)).toBe("/greet world")
+    // The space after "greet" hides suggestions; the command input stays focused.
+    await expect.poll(() => commandText(term)).toBe("/greet world")
     await term.press("Enter")
     await term.waitForText("┃ /greet world", 20_000)
     await term.waitForText("hello from the greet skill")

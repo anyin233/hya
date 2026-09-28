@@ -1,5 +1,5 @@
 /**
- * The `/` command menu: merges the local command registry with the backend
+ * The command pane's suggestions: merges the local command registry with the backend
  * command catalog (`ListCommands`, which already includes skills and custom
  * commands — see `crates/hya-server/src/support/command_catalog.rs`) into one
  * deduplicated, sorted list, and fuzzy-filters it as the user types a command
@@ -64,7 +64,7 @@ function matchScore(name: string, query: string): number | undefined {
 
 /**
  * A `[bracketed]` argument hint (`/new [agent] [model]`) is optional — the
- * command menu's Enter runs the command as is. Any other hint (`/open
+ * command pane's Enter runs the command as is. Any other hint (`/open
  * <id|number>`, `/answer <interaction id> <text>`) names a required first
  * argument — Enter only completes the name and waits, the same as Tab.
  */

@@ -3,6 +3,7 @@ import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentu
 import { createEffect, Show } from "solid-js"
 import { AgentModelsView } from "../components/AgentModelsView"
 import { Composer } from "../components/Composer"
+import { CommandPane } from "../components/CommandPane"
 import { DiffView } from "../components/DiffView"
 import { Footer } from "../components/Footer"
 import { Header } from "../components/Header"
@@ -32,7 +33,8 @@ export { layoutBreakpoints } from "../state/layout"
  * Root layout: one main column (header, status bar, transcript or view
  * panel, the working indicator for a running turn, pending block for other
  * sessions' asks, the permission/question prompt, the one-line yolo
- * confirmation, status line, bordered composer, footer instruction) and,
+ * confirmation, status line, the temporary command pane, bordered message
+ * composer, footer instruction) and,
  * when shown, the sidebar on the right (state/layout.ts). The full-screen
  * Provider (`/key`), Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`),
  * and Agent Models (`/agent-models`) views are drawn over both when one of
@@ -75,6 +77,7 @@ export function App() {
         <PromptDock />
         <ModeConfirm />
         <StatusLine />
+        <CommandPane />
         <Composer />
         <Footer />
       </box>

@@ -65,7 +65,7 @@ test.describe("undo and redo", () => {
     await term.waitForText("Restored · 1 file restored")
     await term.waitForText("Wrote the notes.")
     await expect.poll(() => term.find("write notes")).not.toBeNull()
-    expect(await term.find("Message, /command")).not.toBeNull()
+    expect(await term.find("Message, !shell, or @file · / commands")).not.toBeNull()
     await expect.poll(() => existsSync(file)).toBe(true)
     expect(await readFile(file, "utf8")).toBe("alpha\n")
     await expect.poll(() => term.find("↶")).toBeNull()
