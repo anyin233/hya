@@ -51,14 +51,18 @@ echo "== stage only =="
 echo "== discard staged candidate =="
 "$bin" update discard --root "$updater_root" --sequence 1
 
-echo "== owner-authorized activate =="
+echo "== owner authorizes, then activate =="
+# The demo acts as the owner's supervisor (--yes); an operator runs it at a
+# terminal without --yes and confirms.
+capability="$workdir/activation.authorization.json"
+"$bin" update authorize --root "$updater_root" --sequence 1 --out "$capability" --yes
 "$bin" update apply \
   --root "$updater_root" \
   --metadata "$meta_json" \
   --package "$package_dir" \
   --platform "$platform" \
   --smoke smoke.sh \
-  --owner-authorized-activation
+  --authorization "$capability"
 
 "$bin" update status --root "$updater_root"
 echo "demo ok under $updater_root"

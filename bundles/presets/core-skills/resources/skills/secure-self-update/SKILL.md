@@ -31,7 +31,7 @@ user is comparing break-glass recovery.
 1. Ensure `trust_roots.json` exists under the updater root.
 2. Obtain signed `release.metadata.json` and a local package directory of artifacts.
 3. `hya update apply --root … --metadata … --package … --platform … [--smoke smoke.sh]` for stage-only.
-4. The trusted owner calls `UpdaterOwner::authorize` for the candidate and expected generation, writes the capability JSON, then re-runs with `--authorization capability.json`.
+4. The owner (never the agent) runs `hya update authorize --root … --sequence N --out capability.json` at a terminal and confirms; then `apply … --authorization capability.json` activates. Do not pass `--yes` on the owner's behalf.
 5. On failed smoke before activation: `hya update discard --root … --sequence N`.
 6. On crash mid-update: `hya update recover --root …` then `status`.
 

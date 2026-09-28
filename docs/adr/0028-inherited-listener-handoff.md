@@ -117,7 +117,10 @@ binary; it passes the same gate.
 **Generation pinning.** A daemon (and every successor) copies its executable
 and the native tool libraries it loaded into `<db>.server.gen/<pid>/`, in the
 layout the loaders resolve from, and removes the copy on exit; copies of dead
-pids are swept. The running file paths cannot serve as the fallback because a
+pids are swept. A Cargo-layout build also copies the in-tree first-party
+bundle sources it loaded to `<pin>/first-party/`; the rollback successor gets
+`HYA_FIRST_PARTY_SOURCE_ROOT=<pin>/first-party` (every other successor has the
+variable removed), which `first_party_source_root()` honors. The running file paths cannot serve as the fallback because a
 rebuild or update replaces them in place.
 
 **Rollback.** When the successor records `failed`, exits, or is not ready

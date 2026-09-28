@@ -1,6 +1,6 @@
 //! `hya update` command surface.
 use crate::{
-    ApplyOptions, ReleaseMetadata, TrustRoot, UPDATER_PACKAGE_VERSION, apply_update,
+    ApplyOptions, ReleaseMetadata, TrustRoot, UPDATER_PACKAGE_VERSION, UpdaterOwner, apply_update,
     discard_staged_release, layout, load_trust_roots, read_selector, recover_activation,
     write_trust_roots,
 };
@@ -50,6 +50,23 @@ pub enum UpdateCommand {
         /// Command argument `trust_roots`.
         #[arg(long)]
         trust_roots: Option<PathBuf>,
+    },
+    /// Owner only: authorize activating release `sequence` over the active
+    /// generation and write the capability `apply --authorization` needs.
+    /// Asks for confirmation at a terminal; unattended it requires `--yes`.
+    Authorize {
+        /// Updater root.
+        #[arg(long)]
+        root: PathBuf,
+        /// Candidate release sequence the capability is bound to.
+        #[arg(long)]
+        sequence: u64,
+        /// Where to write the capability JSON.
+        #[arg(long)]
+        out: PathBuf,
+        /// Skip the confirmation (the caller is the owner's supervisor).
+        #[arg(long)]
+        yes: bool,
     },
     /// Remove a staged, unaccepted release.
     Discard {
@@ -157,6 +174,28 @@ pub fn run(command: UpdateCommand, out: &mut dyn Write) -> Result<(), String> {
             });
             lines
         }
+        UpdateCommand::Authorize {
+            root,
+            sequence,
+            out: path,
+            yes,
+        } => {
+            let generation = read_selector(&root).map_err(|e| e.to_string())?.generation;
+            if !yes {
+                confirm_authorization(&root, sequence, generation)?;
+            }
+            let owner = UpdaterOwner::acquire(&root).map_err(|e| e.to_string())?;
+            let authorization = owner
+                .authorize(&root, sequence, generation)
+                .map_err(|e| e.to_string())?;
+            owner
+                .write_authorization(&path, &authorization)
+                .map_err(|e| e.to_string())?;
+            vec![format!(
+                "authorized sequence={sequence} generation={generation} capability={}",
+                path.display()
+            )]
+        }
         UpdateCommand::Discard { root, sequence } => {
             discard_staged_release(&root, sequence).map_err(|e| e.to_string())?;
             vec![format!("discarded sequence={sequence}")]
@@ -175,6 +214,37 @@ pub fn run(command: UpdateCommand, out: &mut dyn Write) -> Result<(), String> {
     }
     Ok(())
 }
+/// The owner's explicit consent at a terminal. Unattended callers (no
+/// terminal on stdin) must pass `--yes`: authorization is an owner decision,
+/// never a side effect of a script that happened to run.
+fn confirm_authorization(
+    root: &std::path::Path,
+    sequence: u64,
+    generation: u64,
+) -> Result<(), String> {
+    use std::io::{BufRead as _, IsTerminal as _};
+    if !std::io::stdin().is_terminal() {
+        return Err(
+            "authorize is an owner decision: run it at a terminal, or pass --yes from the owner's supervisor"
+                .to_string(),
+        );
+    }
+    eprint!(
+        "Authorize activating release sequence {sequence} over generation {generation} in {}? [y/N] ",
+        root.display()
+    );
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| format!("read the confirmation: {e}"))?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        Ok(())
+    } else {
+        Err("authorization cancelled".to_string())
+    }
+}
+
 fn parse_trust_root(entry: &str) -> Result<TrustRoot, String> {
     let (key_id, hex) = entry
         .split_once('=')

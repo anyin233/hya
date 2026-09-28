@@ -1,13 +1,13 @@
-# 0.43.16
+# 0.43.17
 
-## Bundles prove themselves before install and prove activation after it
+## Self-update: owner authorization CLI, first-party rollback, attributed bundle errors
 
-- Every bundle kind may declare its own self-check in the manifest: `check: { command: [argv…], timeout_secs: 1–600 }` (default 120). `hya bundle verify` and `hya bundle install` run it in a private copy of the package sources (cwd and `HYA_BUNDLE_ROOT`, plus `HYA_BUNDLE_ID`, `HYA_BUNDLE_VERSION`); a failure, timeout, or spawn error refuses the command with the output tail and writes nothing. Without a declaration they print `self-check: none declared`.
-- New rpc `Catalog.RefreshBundles` (`POST /v1/bundles:refresh`, body `{directory}`) refreshes the installed-bundle catalog and the directory's Project overlay now and returns `{generation, bundles: [{id, version, preparedDigest, scope}], errors: [{bundleId, message}], scope}`. A generation that fails to prepare keeps the previous one and is reported in `errors`; `catalog.updated` fires when a new generation is published. 18 services / 103 rpcs.
-- `hya bundle install` (global `--db`, default the durable database) asks the running backend to refresh and requires the installed bundle at its prepared digest to be published: `activation: active in the backend (pid N); the next turn uses it`. Otherwise it exits 1 with `installed but not activated: …` while the backend keeps serving its previous bundles. A project install outside a registered Project says that no session loads it; without a running backend it loads when one starts.
+- New `hya update authorize --root DIR --sequence N --out FILE [--yes]`: the owner binds release `N` to the active generation and writes the capability `hya update apply --authorization FILE` activates. It asks for confirmation at a terminal and refuses without one unless `--yes`. The self-update demo (`docs/examples/self-update/run-demo.sh`) activates through it again (it still used the removed `--owner-authorized-activation`).
+- Restart rollback in a source checkout now also restores the first-party bundles: the running build copies the in-tree first-party sources it loaded to `<db>.server.gen/<pid>/first-party/`, and the rollback successor loads them through the new `HYA_FIRST_PARTY_SOURCE_ROOT` (ordinary successors never inherit it).
+- `Catalog.RefreshBundles` names the bundle behind a runtime failure (`errors[].bundleId`), and `hya bundle install` prints it: `installed but not activated; … \n  acme/dead-process: start bundle process: …`. Failed turns keep their existing error codes.
 
-```yaml
-check:
-  command: [bun, test]
-  timeout_secs: 120
+```sh
+hya update authorize --root /var/lib/hya/updater --sequence 42 --out ./activation.authorization.json
+hya update apply --root /var/lib/hya/updater --metadata release.metadata.json \
+  --package ./package-dir --platform x86_64-unknown-linux-gnu --authorization ./activation.authorization.json
 ```

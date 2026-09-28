@@ -980,8 +980,12 @@ start is rolled back instead of taking the backend down
    place. If the successor fails, the old generation starts the pinned build
    over the same listener and lock, and `status` reports
    `restart  failed and rolled back to the previous build: <error>`.
-   In a source checkout, first-party bundles load from the in-tree sources,
-   which are not pinned. The database stays readable by the previous build
+   In a source checkout the build also loaded the in-tree first-party bundle
+   sources (`bundles/presets/*`, `bundles/first-party/*`); they are copied to
+   `<pin>/first-party/` (without `target/`, `node_modules/`, `.git/`) and the
+   rollback runs with `HYA_FIRST_PARTY_SOURCE_ROOT` pointing there, so edited
+   first-party sources roll back too. An ordinary successor never inherits
+   that variable. The database stays readable by the previous build
    because a build tolerates migrations it does not know (migrations are
    additive only).
 
@@ -1194,6 +1198,7 @@ providers, plugins, MCP, or session store are loaded. Global flags such as
 | `hya update status --root DIR` | Show selector, accepted floor, and layout paths. |
 | `hya update recover --root DIR` | Recover interrupted prepare/commit journal state. |
 | `hya update apply --root DIR --metadata FILE --package DIR --platform TRIPLE [--smoke CMD] [--trust-roots FILE] [--authorization FILE]` | Verify, stage, optionally smoke, and activate only with an owner-issued capability (`--authorization`). |
+| `hya update authorize --root DIR --sequence N --out FILE [--yes]` | Owner only: bind release `N` to the active generation and write the capability `apply --authorization` needs. Asks `Authorize activating release sequence N over generation G …? [y/N]` at a terminal; without a terminal it refuses unless `--yes`. Prints `authorized sequence=N generation=G capability=FILE`. |
 | `hya update discard --root DIR --sequence N` | Discard a staged-but-not-accepted candidate. |
 | `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json` (operator only). |
 
@@ -1208,6 +1213,7 @@ hya update apply \
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh
 # activation only with an owner-issued capability (see self-update.md):
+hya update authorize --root /var/lib/hya/updater --sequence 42 --out ./activation.authorization.json
 hya update apply ... --authorization ./activation.authorization.json
 # optional trust-roots override (default: <root>/trust_roots.json):
 hya update apply ... --trust-roots /secure/media/trust_roots.json

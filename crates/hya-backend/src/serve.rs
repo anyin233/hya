@@ -1096,6 +1096,7 @@ pub(crate) async fn serve_until(
                         db_lock::read_discovery(&paths.discovery)
                             .map(|discovery| discovery.started_at)
                     }),
+                    first_party_root: None,
                 };
                 let child = match daemon::spawn_handoff(
                     &successor_spec,
@@ -1227,7 +1228,15 @@ pub(crate) async fn serve_until(
             {
                 eprintln!("hya: could not restore the owner pid before the rollback: {error}");
             }
-            match spawn_rollback(journal, spec, &rollback_relay, fds, pinned.exe(), &failure) {
+            match spawn_rollback(
+                journal,
+                spec,
+                &rollback_relay,
+                fds,
+                pinned.exe(),
+                pinned.first_party_root(),
+                &failure,
+            ) {
                 Ok((fallback, token)) => {
                     eprintln!(
                         "hya: restart failed ({failure}); rolling back to {} (pid {fallback})",
@@ -1444,6 +1453,7 @@ fn spawn_rollback(
     relay: &RelayFlags,
     fds: &HandoffFds,
     pinned: &std::path::Path,
+    pinned_first_party: Option<&std::path::Path>,
     failure: &str,
 ) -> anyhow::Result<(u32, String)> {
     let me = std::process::id();
@@ -1483,6 +1493,7 @@ fn spawn_rollback(
         started_at: db_lock::paths(&spec.db).and_then(|paths| {
             db_lock::read_discovery(&paths.discovery).map(|discovery| discovery.started_at)
         }),
+        first_party_root: pinned_first_party.map(std::path::Path::to_path_buf),
     };
     let child = daemon::spawn_handoff(
         &fallback,

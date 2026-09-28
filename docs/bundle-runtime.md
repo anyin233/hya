@@ -57,7 +57,7 @@ A bundle update goes live in four steps, each of which can refuse it:
 | request `directory` | string | Scope: its Project's bundles are refreshed too; empty for global. |
 | `generation` | uint64 | Runtime generation now bound for the scope. |
 | `bundles[]` | `{id, version, preparedDigest, scope}` | Every published bundle; `scope` is `user` (registry, first-party included) or `project`. |
-| `errors[]` | `{bundleId, message}` | Refresh failures, each of which kept the previous generation; `bundleId` is empty when not attributable. |
+| `errors[]` | `{bundleId, message}` | Refresh failures, each of which kept the previous generation. `bundleId` names the bundle whose runtime could not be prepared (process start, declarations, configuration); it is empty for failures that belong to no single bundle (registry or Project scan). `install` prints them as `  <bundleId>: <message>`. |
 | `scope` | string | `global`, `directory` (not in a registered Project), or `project`. |
 
 `catalog.updated` is emitted when the refresh published a new generation.

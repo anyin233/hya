@@ -369,3 +369,72 @@ fn remote_package_scheme_is_rejected() {
         .expect_err("network schemes stay outside TCB");
     assert!(matches!(err, UpdaterError::InvalidMetadata(_)));
 }
+
+/// `hya update authorize` is the owner's CLI for `UpdaterOwner::authorize`:
+/// it binds the candidate sequence to the active generation, writes the
+/// capability file `apply --authorization` consumes, and refuses to run
+/// unattended without `--yes`.
+#[test]
+fn cli_authorize_writes_a_capability_that_activates_the_candidate() {
+    use std::io::IsTerminal as _;
+    let root = tempdir("cli-authorize");
+    let package = tempdir("cli-authorize-package");
+    let signing = SigningKey::from_bytes(&[5u8; 32]);
+    let bytes = b"payload-v2";
+    std::fs::write(package.join("hya"), bytes).unwrap();
+    let (metadata, trust) = signed_release(&signing, 2, "hya", bytes);
+    write_trust_roots(&layout(&root).trust_roots, &[trust]).unwrap();
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
+    activate(&root, 1, 0);
+    let generation = read_selector(&root).unwrap().generation;
+    let capability = package.join("activation.authorization.json");
+
+    if !std::io::stdin().is_terminal() {
+        let refused = hya_updater::cli::run(
+            hya_updater::cli::UpdateCommand::Authorize {
+                root: root.clone(),
+                sequence: 2,
+                out: capability.clone(),
+                yes: false,
+            },
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(refused.contains("--yes"), "{refused}");
+        assert!(!capability.exists());
+    }
+
+    let mut out = Vec::new();
+    hya_updater::cli::run(
+        hya_updater::cli::UpdateCommand::Authorize {
+            root: root.clone(),
+            sequence: 2,
+            out: capability.clone(),
+            yes: true,
+        },
+        &mut out,
+    )
+    .unwrap();
+    let printed = String::from_utf8(out).unwrap();
+    assert!(
+        printed.contains(&format!("authorized sequence=2 generation={generation}")),
+        "{printed}"
+    );
+    let authorization: hya_updater::ActivationAuthorization =
+        serde_json::from_str(&std::fs::read_to_string(&capability).unwrap()).unwrap();
+    let activated = apply_update(ApplyOptions {
+        updater_root: &root,
+        metadata: &metadata,
+        package_source: package.to_str().unwrap(),
+        trust_roots: None,
+        host_platform: "x86_64-unknown-linux-gnu",
+        now_unix: 100,
+        smoke_command: None,
+        smoke_args: &[],
+        activation: Some(&authorization),
+    })
+    .unwrap();
+    assert_eq!(activated.activated.unwrap().current_sequence, 2);
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&package).ok();
+}
