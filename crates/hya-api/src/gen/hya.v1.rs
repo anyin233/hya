@@ -1131,6 +1131,49 @@ pub struct RefreshProviderRequest {
     pub provider_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RefreshBundlesRequest {
+    /// Directory scope: its Project's bundles are refreshed too; empty: global.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RefreshBundlesResponse {
+    /// Runtime configuration generation now bound for the scope.
+    #[prost(uint64, tag = "1")]
+    pub generation: u64,
+    /// Every bundle published for the scope after the refresh.
+    #[prost(message, repeated, tag = "2")]
+    pub bundles: ::prost::alloc::vec::Vec<RefreshedBundle>,
+    /// Refresh failures; each kept the previous generation published.
+    #[prost(message, repeated, tag = "3")]
+    pub errors: ::prost::alloc::vec::Vec<BundleRefreshError>,
+    /// `global`, `directory` (not inside a registered Project: no project
+    /// bundles load), or `project`.
+    #[prost(string, tag = "4")]
+    pub scope: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RefreshedBundle {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub version: ::prost::alloc::string::String,
+    /// Prepared bundle digest (`hya bundle info` shows the same value).
+    #[prost(string, tag = "3")]
+    pub prepared_digest: ::prost::alloc::string::String,
+    /// `user` (installed registry, first-party included) or `project`.
+    #[prost(string, tag = "4")]
+    pub scope: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BundleRefreshError {
+    /// Bundle the failure names; empty when the refresh cannot attribute it.
+    #[prost(string, tag = "1")]
+    pub bundle_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetProviderModelRequest {
     /// Directory context (unused; providers are process-wide).
     #[prost(string, tag = "1")]
@@ -1694,6 +1737,36 @@ pub mod catalog_client {
                 .insert(GrpcMethod::new("hya.v1.Catalog", "RefreshProvider"));
             self.inner.unary(req, path, codec).await
         }
+        /// Refresh the installed-bundle catalog and the directory's Project
+        /// overlay now instead of at the next bind, and report what is published.
+        /// A generation that fails to prepare (for example a bundle process that
+        /// does not start) keeps the previous one and is reported in `errors`.
+        ///
+        /// hya.http: POST /v1/bundles:refresh
+        pub async fn refresh_bundles(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RefreshBundlesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RefreshBundlesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/RefreshBundles",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "RefreshBundles"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Write one model's entry (with its metadata overrides) into the
         /// provider's `models:` in `config.yaml` and apply it live. The model id
         /// travels in the body because ids may contain `/` or `:`.
@@ -1953,6 +2026,19 @@ pub mod catalog_server {
             &self,
             request: tonic::Request<super::RefreshProviderRequest>,
         ) -> std::result::Result<tonic::Response<super::ProviderUpdate>, tonic::Status>;
+        /// Refresh the installed-bundle catalog and the directory's Project
+        /// overlay now instead of at the next bind, and report what is published.
+        /// A generation that fails to prepare (for example a bundle process that
+        /// does not start) keeps the previous one and is reported in `errors`.
+        ///
+        /// hya.http: POST /v1/bundles:refresh
+        async fn refresh_bundles(
+            &self,
+            request: tonic::Request<super::RefreshBundlesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RefreshBundlesResponse>,
+            tonic::Status,
+        >;
         /// Write one model's entry (with its metadata overrides) into the
         /// provider's `models:` in `config.yaml` and apply it live. The model id
         /// travels in the body because ids may contain `/` or `:`.
@@ -2365,6 +2451,51 @@ pub mod catalog_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RefreshProviderSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/RefreshBundles" => {
+                    #[allow(non_camel_case_types)]
+                    struct RefreshBundlesSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::RefreshBundlesRequest>
+                    for RefreshBundlesSvc<T> {
+                        type Response = super::RefreshBundlesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RefreshBundlesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::refresh_bundles(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RefreshBundlesSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -226,10 +226,10 @@ or removed.
 
 | Command | What it does |
 | --- | --- |
-| `hya bundle install [--user\|--project] [-y] [--overwrite] <PACKAGE>` | Verify a `.hyabundle` and install it into the scope. Asks for confirmation unless `-y`. |
+| `hya bundle install [--user\|--project] [-y] [--overwrite] <PACKAGE>` | Verify a `.hyabundle`, run its declared self-check, and install it into the scope. Asks for confirmation unless `-y`. Then, if a backend runs for `--db`, prove the bundle is active there ([Self-proof and activation](bundle-runtime.md#self-proof-and-activation)); exit 1 when it is not. |
 | `hya bundle install [--user\|--project] [-y] [--overwrite] --claude <SOURCE>` | Translate a Claude Code plugin and install it the same way. |
 | `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Remove a bundle from the scope. Asks for confirmation unless `-y`. Alias: `uninstall`. |
-| `hya bundle verify [--user\|--project] [--overwrite] <PACKAGE>` | Run every install check against the scope and report what `install` would do. Writes nothing. |
+| `hya bundle verify [--user\|--project] [--overwrite] <PACKAGE>` | Run every install check, including the bundle's declared self-check, against the scope and report what `install` would do. Writes nothing. |
 | `hya bundle list [--user\|--project]` | List bundles. All scopes by default; a flag narrows to one scope. |
 | `hya bundle info [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show metadata of a bundle by id (searching every scope unless narrowed) or of a package file. Declarations print one line each: `schema=…`, `process=<kind> command=…`, and `api=<METHOD> <scope> <path> id=<id>` (plus ` request_schema=<file>`, ` response_schema=<file>`, and ` description=…` when declared) for every [API endpoint](agent-bundle-authoring.md#api-endpoints-apis), for example `api=GET session /usage id=usage description=Per-model token usage of the session tree`. |
 | `hya bundle info -f <PACKAGE>` | Show metadata of a package file. |
@@ -237,7 +237,7 @@ or removed.
 | `hya bundle schema [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show the URI-scheme extensions one bundle declares. |
 
 ```sh
-hya bundle verify example.hyabundle            # check only; nothing installed
+hya bundle verify example.hyabundle            # check only (incl. its self-check); nothing installed
 hya bundle install example.hyabundle           # user scope, asks [y/N]
 hya bundle install --project -y example.hyabundle   # into ./.hya/bundles, no prompt
 hya bundle list --project

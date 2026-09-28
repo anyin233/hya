@@ -21,6 +21,47 @@ The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by
 declaring a library resource.
 
+## Self-proof and activation
+
+A bundle update goes live in four steps, each of which can refuse it:
+
+1. **Self-check.** `hya bundle verify` and `hya bundle install` run the
+   manifest's `check` argv in a copy of the package sources
+   ([Source self-check](agent-bundle-authoring.md#source-self-check)); a
+   failure writes nothing.
+2. **Install.** The user registry row or the project `.hya/bundles` directory
+   is written.
+3. **Activation proof.** When a backend runs for the database (`--db`, default
+   the durable `sessions.db`), `install` calls `Catalog.RefreshBundles` so the
+   backend prepares the new generation now, and requires the installed id at
+   its prepared digest to be published: `activation: active in the backend
+   (pid N); the next turn uses it`. A generation that fails to prepare (a
+   process that does not start, tools that do not match the manifest) keeps
+   the previous generation serving and `install` exits 1 with
+   `installed but not activated; the backend keeps the previous bundles: …`
+   (the install stays written; fix and install again). A project install
+   outside a registered Project is not loaded by any session and says so.
+   Without a running backend: `activation: no backend runs for <db>; it loads
+   when one starts`.
+4. **Next turn.** Root turns bind the refreshed generation at admission and
+   at every round boundary. Subagent and Workflow member activations keep the
+   snapshot they were bound with until they end. First-party native tool
+   libraries are loaded once per process: changing them needs
+   `hya serve restart` ([cli.md](cli.md#self-proof-and-rollback)).
+
+`Catalog.RefreshBundles` (`POST /v1/bundles:refresh`, gRPC
+`hya.v1.Catalog/RefreshBundles`):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| request `directory` | string | Scope: its Project's bundles are refreshed too; empty for global. |
+| `generation` | uint64 | Runtime generation now bound for the scope. |
+| `bundles[]` | `{id, version, preparedDigest, scope}` | Every published bundle; `scope` is `user` (registry, first-party included) or `project`. |
+| `errors[]` | `{bundleId, message}` | Refresh failures, each of which kept the previous generation; `bundleId` is empty when not attributable. |
+| `scope` | string | `global`, `directory` (not in a registered Project), or `project`. |
+
+`catalog.updated` is emitted when the refresh published a new generation.
+
 ## First-party bundles
 
 Hya's own tools, agents, Skills, commands, channel policy and workflows are

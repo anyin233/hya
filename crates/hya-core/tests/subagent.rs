@@ -466,6 +466,7 @@ const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 
 fn sidecar_permission_bundle() -> PreparedAgentBundle {
     PreparedAgentBundle {
+        check: None,
         format_version: 2,
         identity: BundleIdentity {
             id: "hya/sidecar-permission".to_string(),

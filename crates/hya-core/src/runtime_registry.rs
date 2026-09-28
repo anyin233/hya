@@ -5010,6 +5010,7 @@ agent:
         skills: Vec<PreparedResource>,
     ) -> PreparedAgentBundle {
         PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),

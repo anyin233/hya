@@ -25,6 +25,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
         .iter()
         .filter(|(stable_id, _, _)| !hya_core::is_builtin_id(stable_id))
         .map(|(stable_id, role, can_spawn)| PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: format!("hya/test-{stable_id}"),

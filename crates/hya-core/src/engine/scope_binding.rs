@@ -184,6 +184,40 @@ impl SessionEngine {
         self.bind_scope_runtime_for(scope, workdir, None).await
     }
 
+    /// Refresh the installed-bundle base and `scope`'s overlay now and bind
+    /// the result, reporting instead of propagating a refresh failure: a
+    /// generation that fails to prepare (for example a bundle process that
+    /// does not start) leaves the previous generation published, and
+    /// `error` says why. `changed` is whether either refresh published.
+    ///
+    /// # Errors
+    /// The bind of the (new or retained) generation fails.
+    pub async fn refresh_bundles(
+        &self,
+        scope: &CatalogScope,
+        workdir: &Path,
+    ) -> Result<BundleRefresh, CoreError> {
+        let mut changed = false;
+        let mut errors = Vec::new();
+        if let Some(refresh) = &self.catalog_refresh {
+            match refresh.refresh_if_changed(self.runtime.as_ref()).await {
+                Ok(published) => changed |= published,
+                Err(error) => errors.push(error),
+            }
+            match refresh.refresh_scope(self.runtime.as_ref(), scope).await {
+                Ok(published) => changed |= published,
+                Err(error) => errors.push(error),
+            }
+        }
+        let binding = self.bind_scope_unrefreshed(scope, workdir)?;
+        self.follow_scope_session_hooks(&binding, None).await;
+        Ok(BundleRefresh {
+            binding,
+            changed,
+            errors,
+        })
+    }
+
     /// [`Self::bind_scope_runtime`] on behalf of session `own`: after the
     /// bind, `own`'s captured hook chain follows the new binding and other
     /// sessions of the scope release retired processes
@@ -381,4 +415,15 @@ fn session_workdir(session: SessionId, projection: &Projection) -> Result<PathBu
         .as_deref()
         .map(PathBuf::from)
         .ok_or_else(|| CoreError::Invalid(format!("session has no workdir: {session}")))
+}
+
+/// The outcome of [`SessionEngine::refresh_bundles`].
+pub struct BundleRefresh {
+    /// The binding of the scope after the refresh (the previous generation
+    /// when the refresh failed).
+    pub binding: TurnBinding,
+    /// Whether the refresh published a new base or scope generation.
+    pub changed: bool,
+    /// Refresh failures; each kept the previous generation published.
+    pub errors: Vec<CoreError>,
 }

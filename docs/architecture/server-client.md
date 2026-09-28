@@ -52,7 +52,7 @@ git) lives under `hya_server::support`.
 
 ## The v1 surface
 
-Eighteen services, 102 rpcs: AgentModels (durable per-agent model
+Eighteen services, 103 rpcs: AgentModels (durable per-agent model
 preferences, per-agent default efforts, and per-model effort preferences), Process (health/location/config/dispose/
 upgrade/bootstrap), Catalog (agents/models/providers/commands/skills/
 tools/permission modes, plus provider upsert/refresh/model overrides/model

@@ -45,6 +45,13 @@ service Catalog {
   //
   // hya.http: POST /v1/providers/{provider_id}/refresh
   rpc RefreshProvider(RefreshProviderRequest) returns (ProviderUpdate);
+  // Refresh the installed-bundle catalog and the directory's Project
+  // overlay now instead of at the next bind, and report what is published.
+  // A generation that fails to prepare (for example a bundle process that
+  // does not start) keeps the previous one and is reported in `errors`.
+  //
+  // hya.http: POST /v1/bundles:refresh
+  rpc RefreshBundles(RefreshBundlesRequest) returns (RefreshBundlesResponse);
 
   // Write one model's entry (with its metadata overrides) into the
   // provider's `models:` in `config.yaml` and apply it live. The model id
@@ -283,6 +290,38 @@ message RefreshProviderRequest {
   string directory = 1;
   // Configured provider id.
   string provider_id = 2;
+}
+
+message RefreshBundlesRequest {
+  // Directory scope: its Project's bundles are refreshed too; empty: global.
+  string directory = 1;
+}
+
+message RefreshBundlesResponse {
+  // Runtime configuration generation now bound for the scope.
+  uint64 generation = 1;
+  // Every bundle published for the scope after the refresh.
+  repeated RefreshedBundle bundles = 2;
+  // Refresh failures; each kept the previous generation published.
+  repeated BundleRefreshError errors = 3;
+  // `global`, `directory` (not inside a registered Project: no project
+  // bundles load), or `project`.
+  string scope = 4;
+}
+
+message RefreshedBundle {
+  string id = 1;
+  string version = 2;
+  // Prepared bundle digest (`hya bundle info` shows the same value).
+  string prepared_digest = 3;
+  // `user` (installed registry, first-party included) or `project`.
+  string scope = 4;
+}
+
+message BundleRefreshError {
+  // Bundle the failure names; empty when the refresh cannot attribute it.
+  string bundle_id = 1;
+  string message = 2;
 }
 
 message SetProviderModelRequest {

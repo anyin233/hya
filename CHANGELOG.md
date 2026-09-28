@@ -1,13 +1,13 @@
-# 0.43.15
+# 0.43.16
 
-## Restart proves the new build first and rolls back a build that fails to start
+## Bundles prove themselves before install and prove activation after it
 
-- New `hya serve check [--json]`: composes the complete runtime a daemon start would (configuration without the offline fallback, providers, bundles, native tool libraries, plugins, startup recovery) against a private `VACUUM INTO` snapshot of `--db`. It binds no port and takes no lock of the live database, so it runs safely beside a running daemon.
-- `hya serve restart` now runs the successor build's `serve check --db <db>` and every new `--verify <cmd>` (`sh -c`, current directory) before it touches the running daemon; a failure prints the output tail and leaves the daemon serving. `restart --json` reports `check: {ok, exe, version, verified}`. New `--exe <path>` restarts into a build other than the invoking one, through the same gate.
-- Rollback: every daemon pins the build it runs (executable plus loaded native tool libraries, and the installed `bundles/*.hyabundle`) under `<db>.server.gen/<pid>/`. A successor that records `failed`, exits, or is not ready within 90 s is killed and replaced by the pinned build over the same listener and lock; the old generation parks only if that also fails. `hya serve status` reports `lastRestart: {rolledBack, error}`.
-- A build now opens a database migrated by a newer build (unknown applied migrations are tolerated; known checksums must still match), so a rollback can serve it. Migrations must stay additive.
+- Every bundle kind may declare its own self-check in the manifest: `check: { command: [argv…], timeout_secs: 1–600 }` (default 120). `hya bundle verify` and `hya bundle install` run it in a private copy of the package sources (cwd and `HYA_BUNDLE_ROOT`, plus `HYA_BUNDLE_ID`, `HYA_BUNDLE_VERSION`); a failure, timeout, or spawn error refuses the command with the output tail and writes nothing. Without a declaration they print `self-check: none declared`.
+- New rpc `Catalog.RefreshBundles` (`POST /v1/bundles:refresh`, body `{directory}`) refreshes the installed-bundle catalog and the directory's Project overlay now and returns `{generation, bundles: [{id, version, preparedDigest, scope}], errors: [{bundleId, message}], scope}`. A generation that fails to prepare keeps the previous one and is reported in `errors`; `catalog.updated` fires when a new generation is published. 18 services / 103 rpcs.
+- `hya bundle install` (global `--db`, default the durable database) asks the running backend to refresh and requires the installed bundle at its prepared digest to be published: `activation: active in the backend (pid N); the next turn uses it`. Otherwise it exits 1 with `installed but not activated: …` while the backend keeps serving its previous bundles. A project install outside a registered Project says that no session loads it; without a running backend it loads when one starts.
 
-```sh
-cargo build -p hya-backend --bin hya
-./target/debug/hya serve restart --verify 'cargo test -p hya-core'
+```yaml
+check:
+  command: [bun, test]
+  timeout_secs: 120
 ```

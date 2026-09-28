@@ -1109,7 +1109,9 @@ async fn run(
         Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
-        Some(Command::Bundle { command }) => bundle_cmd::run(command).await,
+        Some(Command::Bundle { command }) => {
+            bundle_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
+        }
         Some(Command::Workflow { command }) => {
             workflow_cmd::run(command, model, &db, yolo, pure).await
         }
