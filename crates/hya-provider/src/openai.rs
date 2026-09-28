@@ -17,12 +17,20 @@ pub use responses::{
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
 };
 
+const CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
+
 /// OpenAI Chat Completions request encoder + SSE decoder factory.
 pub struct OpenAiChatProtocol;
 
 impl Protocol for OpenAiChatProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         let mut messages = Vec::new();
+        let deepseek = req
+            .model
+            .as_str()
+            .rsplit('/')
+            .next()
+            .is_some_and(|model| model.starts_with("deepseek-"));
         if let Some(system) = &req.system {
             messages.push(json!({"role": "system", "content": system}));
         }
@@ -37,7 +45,7 @@ impl Protocol for OpenAiChatProtocol {
                         "content": user_content(parts)?,
                     }));
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts)?,
+                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts, deepseek)?,
             }
         }
         let tools: Vec<Value> = req
@@ -123,20 +131,44 @@ fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
 // becomes `assistant(content, tool_calls)` followed by its `role:tool` results, and
 // any trailing text becomes a final tool-free assistant message. This keeps tool
 // results paired with their calls (OpenAI requires it) without scrambling order.
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
+fn emit_assistant(
+    out: &mut Vec<Value>,
+    parts: &[Part],
+    requires_reasoning_content: bool,
+) -> Result<(), ProviderError> {
     let mut text = String::new();
+    let mut reasoning = String::new();
     let mut tools: Vec<&Part> = Vec::new();
     for part in parts {
         match part {
             Part::Text { text: t, .. } => {
                 if !tools.is_empty() {
-                    flush_cluster(out, &text, &tools);
+                    flush_cluster(out, &text, &reasoning, &tools, requires_reasoning_content);
                     text.clear();
+                    reasoning.clear();
                     tools.clear();
                 }
                 text.push_str(t);
             }
             Part::Tool { .. } => tools.push(part),
+            Part::Reasoning {
+                text: part_text,
+                provider_data,
+                ..
+            } if provider_data
+                .as_ref()
+                .and_then(|value| value.get(CHAT_REASONING_MARKER))
+                .and_then(Value::as_bool)
+                == Some(true) =>
+            {
+                if !tools.is_empty() {
+                    flush_cluster(out, &text, &reasoning, &tools, requires_reasoning_content);
+                    text.clear();
+                    reasoning.clear();
+                    tools.clear();
+                }
+                reasoning.push_str(part_text);
+            }
             Part::Reasoning { .. } => {}
             Part::Media { media_type, .. } => {
                 return Err(ProviderError::Incompatible(format!(
@@ -146,16 +178,26 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
         }
     }
     if tools.is_empty() {
-        if !text.is_empty() {
-            out.push(json!({"role": "assistant", "content": text}));
+        if !text.is_empty() || !reasoning.is_empty() {
+            let mut message = json!({"role": "assistant", "content": text});
+            if requires_reasoning_content || !reasoning.is_empty() {
+                message["reasoning_content"] = json!(reasoning);
+            }
+            out.push(message);
         }
     } else {
-        flush_cluster(out, &text, &tools);
+        flush_cluster(out, &text, &reasoning, &tools, requires_reasoning_content);
     }
     Ok(())
 }
 
-fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
+fn flush_cluster(
+    out: &mut Vec<Value>,
+    text: &str,
+    reasoning: &str,
+    tools: &[&Part],
+    requires_reasoning_content: bool,
+) {
     let tool_calls: Vec<Value> = tools
         .iter()
         .filter_map(|&p| {
@@ -181,12 +223,16 @@ fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
             }))
         })
         .collect();
-    let content = if text.is_empty() {
+    let content = if text.is_empty() && reasoning.is_empty() && !requires_reasoning_content {
         Value::Null
     } else {
         json!(text)
     };
-    out.push(json!({"role": "assistant", "content": content, "tool_calls": tool_calls}));
+    let mut message = json!({"role": "assistant", "content": content, "tool_calls": tool_calls});
+    if requires_reasoning_content || !reasoning.is_empty() {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    out.push(message);
     for &p in tools {
         if let Part::Tool { call_id, state, .. } = p {
             let (result, _is_error) = tool_result(state);

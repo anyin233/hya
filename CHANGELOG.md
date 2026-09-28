@@ -1,8 +1,8 @@
-# 0.37.12
+# 0.37.13
 
-## Restore pending tool approvals
+## Continue DeepSeek tool turns
 
-The default interactions listing now includes pending permissions and questions.
-OpenTUI users can see the command awaiting approval, respond with `/approve <id>`
-or `/deny <id>`, and let the agent continue after the tool call. Explicit type
-filters still select only the requested interaction kind.
+OpenAI Chat streaming now preserves DeepSeek thinking content and sends it back
+with assistant history after a tool call. Durable turn replay also keeps
+assistant text before its tool calls. Together, these changes let a DeepSeek
+turn continue after the user approves a pending tool request.
