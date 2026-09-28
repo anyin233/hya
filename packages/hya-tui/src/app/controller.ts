@@ -99,7 +99,6 @@ import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
-import { defaultModelRef } from "../state/providers"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
@@ -801,12 +800,12 @@ export function createController({ client, store, directory, remote: startedRemo
       projectView.open()
       throw new NoProjectError()
     }
-    const { agents } = store.state
-    // A `/model`/`/agent` choice made before any session existed (state/picker.ts, C11/C12) applies to
-    // the next `CreateSession` the same way an explicit argument would.
-    const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
-    const model = modelArg || defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined
-    if (!model) throw new Error("No model is available; configure a provider on the backend")
+    // Leave agent/model empty unless the user explicitly chose one. The server then
+    // resolves config.default_agent and that agent's configured model. This keeps a
+    // hot `/agent` switch local to the current session and restores the configured
+    // default agent on the next startup.
+    const agent = agentArg ?? store.state.pendingAgent ?? ""
+    const model = modelArg || store.state.pendingModel || ""
     // Ephemeral: dropped by the daemon while unused once nobody watches it (app/sessionKeeper.ts).
     const session = await client.createSession(agent, model, placement, { ephemeral: true })
     keeper.created(session.id)

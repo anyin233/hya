@@ -155,6 +155,15 @@ session's `agent`/`model` fields. Durable per-Agent model preferences are read
 and written through the v1 `AgentModels` service (`/v1/agent-models`), backed
 by the preference files above and `PersistentAgentModelControl`.
 
+
+The interactive TUI follows the same precedence. A new session created without an
+explicit `/agent` or model sends empty selection fields so the backend applies
+`default_agent` and `agents.<id>.model`; changing `/agent <id>` affects only the
+current Session. Therefore a later hya startup returns to the configured default
+agent. `/model provider/model` saves that model for the active Agent, and
+`/model provider/model#high` saves both the model and the Agent's `reasoning:`
+effort. The save is performed through `/v1/agent-models` before the TUI refreshes
+its catalog, so the choice is available after restart and to other clients.
 The default durable database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
 explicit `--db <PATH>` has an independent preference set. In-memory execution
