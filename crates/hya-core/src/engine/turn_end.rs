@@ -23,6 +23,13 @@ use crate::error::CoreError;
 /// before closing whatever is still open itself.
 pub const DRAIN_DEADLINE: Duration = Duration::from_secs(5);
 
+/// Text recorded on the tool parts a handoff checkpoint closed while they
+/// were still open (an in-flight `task` call, a straddling member row). The
+/// model of the successor's resumed turn reads this: the call was not denied,
+/// the runtime restarted under it, and it decides whether to redo it.
+pub(crate) const HANDOFF_REASON: &str =
+    "handed off: the runtime restarted before this tool call finished";
+
 /// Result of [`SessionEngine::drain_turns`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TurnDrainReport {
@@ -197,6 +204,18 @@ impl SessionEngine {
     /// and waits up to `deadline` for them to end. A turn still running at the
     /// deadline has its open messages closed here instead.
     pub async fn drain_turns(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport {
+        self.drain_with_straggler_reason(cause, deadline, "stopped: the drain deadline passed")
+            .await
+    }
+
+    /// Shared drain body: cancel every active turn with `cause`, wait up to
+    /// `deadline`, close stragglers with `reason` text.
+    async fn drain_with_straggler_reason(
+        &self,
+        cause: FinishCause,
+        deadline: Duration,
+        straggler_reason: &str,
+    ) -> TurnDrainReport {
         let mut cancelled = self.turn_gate.begin_drain(cause);
         // Turns an earlier `begin_drain` already cancelled are still ours.
         for session in self.turn_gate.active_sessions() {
@@ -216,7 +235,7 @@ impl SessionEngine {
         for session in &report.stragglers {
             if let Ok(envelopes) = self
                 .store
-                .close_open_turns(*session, cause, "stopped: the drain deadline passed")
+                .close_open_turns(*session, cause, straggler_reason)
                 .await
             {
                 for envelope in envelopes {
@@ -252,15 +271,19 @@ impl SessionEngine {
         if entry.finish.is_some() {
             return Ok(());
         }
-        let (reason, code) = match finish {
-            FinishReason::Error => (
-                "the turn failed before this tool call finished",
-                "TURN_FAILED",
-            ),
-            _ => (
-                "cancelled: the turn stopped before this tool call finished",
-                "CANCELLED",
-            ),
+        let (reason, code) = if cause == Some(FinishCause::Handoff) {
+            (HANDOFF_REASON, "HANDOFF")
+        } else {
+            match finish {
+                FinishReason::Error => (
+                    "the turn failed before this tool call finished",
+                    "TURN_FAILED",
+                ),
+                _ => (
+                    "cancelled: the turn stopped before this tool call finished",
+                    "CANCELLED",
+                ),
+            }
         };
         let open_parts: Vec<_> = entry
             .parts

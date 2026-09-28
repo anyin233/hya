@@ -184,6 +184,30 @@ test("after `serverStopping {restart}` the TUI waits for the next server and att
   expect(h.statuses.at(-1)).toBe("Server moved · now pid 22")
   expect(h.reconnector.stopped()).toBe(false)
 })
+test("restart ignores stale discovery until a different generation appears", async () => {
+  const found: Array<ServerSwitch | undefined> = [
+    { url: "http://127.0.0.1:1", pid: 10, generation: "10:1", started: false },
+    { url: "http://127.0.0.1:1", pid: 11, generation: "11:2", started: false },
+  ]
+  const switched: ServerSwitch[] = []
+  let current = "10:1"
+  const reconnector = createReconnector({
+    url: () => "http://127.0.0.1:1",
+    generation: () => current,
+    probe: async () => { throw new Error("restart must not probe the old generation") },
+    reconnect: async () => { throw new Error("restart must not start a daemon") },
+    find: async () => found.shift(),
+    switchTo: async (next) => { switched.push(next); current = next.generation! },
+    status: () => undefined,
+    sleep: async () => undefined,
+    now: (() => { let tick = 0; return () => tick++ })(),
+    restartWaitMs: 10,
+  })
+  reconnector.stopping("http://127.0.0.1:1", "restart")
+  await reconnector.lost()
+  expect(switched).toHaveLength(1)
+  expect(switched[0]?.generation).toBe("11:2")
+})
 
 test("a restart that never brings a server back ends stopped after about 60 s", async () => {
   const h = harness([false, false], async () => started)

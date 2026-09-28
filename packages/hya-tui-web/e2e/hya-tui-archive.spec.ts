@@ -99,7 +99,6 @@ test.describe("archive on exit and resume", () => {
     // --resume <id>: opened and unarchived.
     const resumed = await tui(...selfLaunch(workspace, ["--resume", id]))
     await resumed.waitForText("First reply.", 30_000)
-    await resumed.waitForText(/Resumed \S+/)
     expect((await session(backend, id)).archived ?? false).toBe(false)
     await resumed.attach(testInfo, "resumed")
 

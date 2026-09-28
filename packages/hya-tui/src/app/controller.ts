@@ -1250,6 +1250,15 @@ export function createController({ client, store, directory, remote: startedRemo
   async function switchServer(next: ServerSwitch): Promise<void> {
     client.setBaseUrl(next.url)
     store.setServerUrl(next.url)
+    const backend = store.state.backend
+    if (backend) {
+      store.setBackend({
+        ...backend,
+        pid: next.pid,
+        ...(next.version ? { version: next.version } : {}),
+        ...(next.startedAt !== undefined ? { startedAt: next.startedAt } : {}),
+      })
+    }
     try {
       store.applyBootstrap(await client.bootstrap())
     } catch {
@@ -1272,7 +1281,12 @@ export function createController({ client, store, directory, remote: startedRemo
 
   const reconnector = reconnect
     ? createReconnector({
-      url: () => client.baseUrl, probe, reconnect, switchTo: switchServer, status,
+      url: () => client.baseUrl,
+      generation: () => {
+        const backend = store.state.backend
+        return backend?.pid !== undefined && backend.startedAt !== undefined ? `${backend.pid}:${backend.startedAt}` : undefined
+      },
+      probe, reconnect, switchTo: switchServer, status,
       ...(find ? { find } : {}),
       onStopped: (stopped) => { store.setBackendStopped(stopped); if (stopped) store.setConnected(false) },
     })

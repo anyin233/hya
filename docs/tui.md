@@ -309,6 +309,13 @@ can be found or started after a crash, the status line says `Server lost:
 stream was down at the moment of a stop never gets the reason and treats the
 stop as a crash. A TUI with a fixed `--server` and no `--db` never moves; it
 keeps retrying that URL.
+During a provider round, assistant deltas with `seq == 0` are live-only and
+process-local. A restart may lose those in-flight deltas, and reconnect does
+not retry a provider round or repeat its tool/file side effects. The durable
+transcript and terminal round events are authoritative; after moving to a
+successor the TUI re-reads messages and folds only durable replay plus new live
+frames. A `resync` frame means the stream gap itself is not replayed: the TUI
+re-reads the projection (or replays `ListEvents` from the last durable seq).
 
 ### Remote backends (`/connect-remote`)
 

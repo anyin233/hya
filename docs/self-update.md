@@ -1,4 +1,4 @@
-# Secure self-update (0.34.13)
+# Secure self-update (0.43.4)
 
 The `hya-updater` crate is the independent update trust boundary. It does
 **not** depend on `hya-core`, plugins, MCP, bundles, app config, or session
@@ -6,10 +6,17 @@ storage. Its command surface is `hya update …` on the unified `hya` executable
 (the standalone `hya-updater` binary was removed in 0.38.0); `hya` dispatches
 `update` before composing any runtime.
 
-Production activation is **owner-gated**. A valid signature is necessary but not
-sufficient: the operator must pass `--owner-authorized-activation` (or set
-`owner_authorized` in the library API). Network download is **outside** the TCB;
-download a complete package directory first, then verify/stage/activate.
+Production activation requires an explicit capability issued by the trusted
+updater owner. The capability binds the exact candidate release sequence and
+the expected active generation; activation rejects a wrong owner token, stale
+generation, or a different signed sequence even when its release sequence is
+higher. The updater-root OS lease serializes staging, activation, recovery, and
+discard. A signature is necessary but not sufficient. Staged-only applies
+remain available. The capability is a trusted-filesystem handoff, not a
+same-UID security boundary: processes able to write the updater root are in the
+same trust domain and must be protected by host ownership/permissions.
+Network download is **outside** the TCB; download a complete package directory
+first, then verify/stage/activate.
 
 `install.sh` remains break-glass bootstrap and manual recovery.
 
@@ -20,12 +27,16 @@ download a complete package directory first, then verify/stage/activate.
   trust_roots.json      # ed25519 verifying keys (TCB)
   accepted_floor        # monotonic accepted sequence
   current               # active generation selector
-  activation.journal    # prepare/commit/abort records
-  releases/<sequence>/  # immutable staged artifacts
-```
+  generation            # durable monotonic active-generation fence
+  authorization.json    # latest trusted owner-issued capability (CAS record)
+  updater.lock          # OS-backed updater-root lease (flock on Unix)
+  activation.journal    # prepare/commit/abort + owner token/generation
 
 Control files must never live under `releases/`. Session databases and secrets
-must not appear under the updater root.
+must not appear under the updater root. The trusted owner obtains an
+`UpdaterOwner`, binds a candidate and expected generation with `authorize`, and
+writes the capability JSON with `write_authorization`. Same-UID processes that
+can write this root share the trust boundary; the capability is not a sandbox.
 
 ## CLI
 
@@ -53,24 +64,24 @@ Commands:
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh
 
-# Owner-authorized activation (advances selector + accepted floor)
+# The owner may release its lease after writing the capability; the updater
+# validates supplied JSON against root/authorization.json before activation.
 ./target/debug/hya update apply \
   --root /var/lib/hya/updater \
   --metadata ./release.metadata.json \
   --package ./package-dir \
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh \
-  --owner-authorized-activation
+  --authorization ./activation.authorization.json
 
-# Optional: verify against trust roots outside <root>/trust_roots.json
-# (e.g. read-only media or a staged key set during rotation)
+# Optional external trust roots remain compatible with the same handoff.
 ./target/debug/hya update apply \
   --root /var/lib/hya/updater \
   --metadata ./release.metadata.json \
   --package ./package-dir \
   --platform x86_64-unknown-linux-gnu \
   --trust-roots /secure/media/trust_roots.json \
-  --owner-authorized-activation
+  --authorization ./activation.authorization.json
 
 # Discard a staged-but-not-accepted candidate
 ./target/debug/hya update discard --root /var/lib/hya/updater --sequence 42
@@ -139,8 +150,7 @@ Before signing or verifying the canonical payload
 | `--metadata` | Path to signed release metadata JSON. |
 | `--package` | Local package directory (or `file://` URL) with named artifacts. |
 | `--platform` | Host platform triple; must match `metadata.platform`. |
-| `--smoke` | Optional relative smoke command under the staged release. |
-| `--owner-authorized-activation` | Required to advance the selector and accepted floor. |
+| `--authorization <PATH>` | Owner capability JSON bound to exact candidate sequence and expected active generation. Omit for stage-only. |
 | `--trust-roots <PATH>` | Override path to `trust_roots.json` (default: `<root>/trust_roots.json`). Use when keys live on separate/read-only media or when verifying against a staged key set during rotation. |
 
 ### Verification gate chain (`apply`)

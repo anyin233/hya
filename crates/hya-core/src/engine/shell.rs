@@ -416,15 +416,20 @@ impl SessionEngine {
                 }
                 // Outermost: the user's own command never asks (Deny still wins).
                 let permission = permission.prepend_interceptor(Arc::new(UserShellApproval));
-                match authorize_tool_call(
-                    &resolved,
-                    &input,
-                    permission,
-                    shell_part.message,
-                    shell_part.call,
-                )
-                .await
-                {
+                // The ask a restart handoff must not strand: mark the decision
+                // in flight for the authorize await only.
+                let authorized = {
+                    let _pending_ask = self.pending_ask_guard(session);
+                    authorize_tool_call(
+                        &resolved,
+                        &input,
+                        permission,
+                        shell_part.message,
+                        shell_part.call,
+                    )
+                    .await
+                };
+                match authorized {
                     Ok(permission) => {
                         let channel_policy = crate::ChannelPolicy::from_binding(binding)?
                             .snapshot_for(agent.name.as_str());
