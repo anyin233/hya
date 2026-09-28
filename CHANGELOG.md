@@ -1,7 +1,7 @@
-# 0.43.6
+# 0.43.7
 
-## Separate command input
+## Editable tiled workspace
 
-- `/` opens a dedicated command pane while the message composer is empty; Ctrl+X then `/` opens it without losing a message draft.
-- Command suggestions, argument completion, and command history now live in that pane. Esc returns to the previous input, and slash characters inside a message remain literal.
-- A pasted command-looking message is sent as message text; relay links in message text are still refused.
+- Split the central TUI workspace horizontally or vertically with `/layout`, then assign read-only jobs, sessions, todos, context, models, Workflows, interactions, status, or API panes beside the conversation.
+- Move pane focus with Alt+arrow keys or `/layout focus`; resize or close auxiliary panes and move the conversation by assigning it to another pane.
+- Save the versioned pane tree in TUI preferences and restore it on restart. The default single-pane screen retains its existing sidebars and message composer.

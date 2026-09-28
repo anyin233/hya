@@ -391,9 +391,9 @@ export function todosText(items: { content: string; status: string }[]): string 
 
 export function mainTitle(view: View): string { return titles[view] }
 
-export function mainContent(state: AppState): string {
+export function mainContent(state: AppState, view: View = state.view): string {
   if (!state.ready) return ""
-  switch (state.view) {
+  switch (view) {
     case "chat":
       // The transcript itself is rendered per message (components/Transcript.tsx).
       return state.messages.length || state.overlay.length || state.queued.length ? "" : "No messages yet. Type a prompt below."

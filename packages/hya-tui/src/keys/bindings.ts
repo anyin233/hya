@@ -18,6 +18,10 @@ export type KeyAction =
   | "eof"
   | "complete"
   | "openCommands"
+  | "focusPaneLeft"
+  | "focusPaneRight"
+  | "focusPaneUp"
+  | "focusPaneDown"
   | "cycleMode"
   | "refresh"
   | "toggleSidebar"
@@ -41,6 +45,8 @@ export interface KeyLike {
   name: string
   ctrl: boolean
   meta: boolean
+  /** Kitty's Option modifier; traditional terminals report Alt as `meta`. */
+  option?: boolean
   shift: boolean
   sequence: string
 }
@@ -64,6 +70,12 @@ export interface KeyBinding {
 const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.shift
 
 export const keyBindings: readonly KeyBinding[] = [
+  ...(["left", "right", "up", "down"] as const).map((direction) => ({
+    action: `focusPane${direction[0]!.toUpperCase()}${direction.slice(1)}` as KeyAction,
+    label: `Alt+${direction[0]!.toUpperCase()}${direction.slice(1)}`,
+    description: `Focus the ${direction} tiled pane`,
+    matches: (key: KeyLike) => (key.meta || key.option === true) && !key.ctrl && !key.shift && key.name === direction,
+  })),
   // The second key of a Ctrl+X chord comes first: while the chord is armed it wins over every other binding.
   {
     action: "openCommands",

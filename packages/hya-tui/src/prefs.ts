@@ -17,6 +17,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { parsePaneLayout, type PaneLayout } from "./state/panes"
 
 /** The known preference keys. Every key is optional; unset means the built-in default. */
 export interface TuiPreferences {
@@ -28,6 +29,8 @@ export interface TuiPreferences {
   notifications?: boolean
   /** Default permission mode for sessions this TUI creates; unset defaults to manual. */
   permissionMode?: string
+  /** Versioned central workspace split tree; exactly one conversation pane. */
+  paneLayout?: PaneLayout
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -37,6 +40,7 @@ const validators: Validators = {
   vim: (value): value is boolean => typeof value === "boolean",
   notifications: (value): value is boolean => typeof value === "boolean",
   permissionMode: (value): value is string => typeof value === "string" && value.trim().length > 0,
+  paneLayout: (value): value is PaneLayout => parsePaneLayout(value) !== undefined,
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */

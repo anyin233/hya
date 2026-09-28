@@ -7,6 +7,8 @@ import type { Controller } from "./controller"
 /** Imperative handles registered by mounted components (the transcript's and Diff view's scroll actions). */
 export interface UiHandles {
   transcript?: TranscriptScroller
+  /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
+  panes?: Map<string, TranscriptScroller>
   diff?: DiffScroller
   command?: CommandPaneHandle
 }
