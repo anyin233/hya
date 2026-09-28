@@ -1358,10 +1358,7 @@ impl SessionEngine {
                 .tokens_in_use(&messages, usage_reporting);
             let mut tokens = initial_count.tokens;
             let token_source = initial_count.source;
-            let over_threshold = |tokens: usize, messages: &[_]| {
-                crate::compaction::foldable_range(messages, fold_config.keep_recent).is_some()
-                    && tokens > resolved_threshold
-            };
+            let over_threshold = |tokens: usize| tokens > resolved_threshold;
 
             // Reduction ladder: the five built-in mechanisms (oh-my-pi parity),
             // walked in the configured order — `compaction.method_order`. The
@@ -1383,7 +1380,7 @@ impl SessionEngine {
             // trigger is Overflow: the request cannot go out un-compacted, so
             // `resolve_compaction_decision` demotes any Skip to a warning and
             // a Replace only rewrites the summarizer instructions below.
-            let summarizer_instructions = if over_threshold(tokens, &messages) {
+            let summarizer_instructions = if over_threshold(tokens) {
                 match self.active_hook_dispatcher(session) {
                     Some(hooks) => {
                         let decision = hooks
@@ -1412,8 +1409,16 @@ impl SessionEngine {
             let mut committed_summary_tokens: Option<usize> = None;
 
             for rung in self.compaction.method_order {
-                if !over_threshold(tokens, &messages) {
+                if !over_threshold(tokens) {
                     break;
+                }
+                if matches!(rung, crate::compaction::CompactionRung::SpillToolOutputs)
+                    && !crate::compaction::has_spillable_tool_output(
+                        &messages,
+                        fold_config.keep_recent,
+                    )
+                {
+                    continue;
                 }
                 // Snapshot what tripped the threshold before this rung edits the
                 // transcript, so each record explains why that rung ran.

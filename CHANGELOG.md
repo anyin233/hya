@@ -1,8 +1,7 @@
-# 0.43.9
+# 0.43.10
 
-## A provider stream that drops mid-round is retried instead of ending the turn
+## Compaction works inside one long turn
 
-- When a provider stream fails after it started (for example `Transport error: error decoding response body` after minutes of thinking) and the failed attempt produced no text and no tool call, the engine now retries that round up to 2 more times (backoff about 1 s, then 2 s; cancellation during the wait stops the turn at once). Previously the whole turn ended with an error and needed a manual "continue".
-- Retried errors: transport failures, HTTP 429/5xx, and truncated-body decode errors. Rounds that already produced text or a tool call, cancellations, and store or tool errors are never retried.
-- Each failed attempt is recorded as its own step (`StepStarted` then `StepFinished { finish: error }`); its partial reasoning stays in the transcript. Once the retries are used up, the turn ends with the original error as before.
-- Engine-level round retries are separate from the provider's own zero-event request replay, which still applies before any event arrives.
+- A long agentic turn is a single assistant message. Every compaction rung used to require a foldable range of whole messages outside `keep_recent`, so a turn with hundreds of tool rounds never compacted, not even by moving old tool outputs out of the request.
+- The `shake` rung (`SpillToolOutputs`) now also works per tool step: once the request is over the threshold it moves completed tool outputs older than the most recent `keep_recent` tool steps to artifacts, including steps inside the running assistant message, in addition to outputs outside the last `keep_recent` messages as before. The transcript keeps `[tool output moved to artifact://…]` handles; `read` still resolves them to the full bytes.
+- The summarizing and folding rungs still require a foldable message range; each rung now checks its own precondition.
