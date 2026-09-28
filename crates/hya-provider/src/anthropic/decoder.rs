@@ -3,13 +3,14 @@ use std::collections::BTreeMap;
 use hya_proto::{
     Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{Decoder, ProviderError, ReasoningEffort};
 
 enum BlockKind {
     Text,
     Reasoning,
+    RedactedReasoning,
     Tool,
 }
 
@@ -19,6 +20,8 @@ struct Block {
     call: ToolCallId,
     name: String,
     args: String,
+    signature: Option<String>,
+    redacted_data: Option<String>,
 }
 
 /// Stateful decoder for Anthropic Messages SSE events into canonical `Event`s.
@@ -101,7 +104,6 @@ impl Decoder for AnthropicDecoder {
         let value: Value = serde_json::from_str(data)?;
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
-
         match value.get("type").and_then(Value::as_str) {
             Some("message_start") => {
                 if let Some(usage) = value.pointer("/message/usage") {
@@ -111,7 +113,8 @@ impl Decoder for AnthropicDecoder {
             Some("content_block_start") => {
                 let index = value.get("index").and_then(Value::as_u64).unwrap_or(0);
                 let cb = value.get("content_block");
-                match cb.and_then(|c| c.get("type")).and_then(Value::as_str) {
+                let kind = cb.and_then(|c| c.get("type")).and_then(Value::as_str);
+                match kind {
                     Some("text") => {
                         let part = PartId::new();
                         self.blocks.insert(
@@ -122,6 +125,8 @@ impl Decoder for AnthropicDecoder {
                                 call: ToolCallId::new(),
                                 name: String::new(),
                                 args: String::new(),
+                                signature: None,
+                                redacted_data: None,
                             },
                         );
                         out.push(Event::TextStart {
@@ -140,6 +145,35 @@ impl Decoder for AnthropicDecoder {
                                 call: ToolCallId::new(),
                                 name: String::new(),
                                 args: String::new(),
+                                signature: None,
+                                redacted_data: None,
+                            },
+                        );
+                        out.push(Event::ReasoningStart {
+                            session,
+                            message,
+                            part,
+                            reason: self
+                                .reasoning_effort
+                                .map(|effort| effort.as_str().to_string()),
+                        });
+                    }
+                    Some("redacted_thinking") => {
+                        let part = PartId::new();
+                        let data = cb
+                            .and_then(|c| c.get("data"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        self.blocks.insert(
+                            index,
+                            Block {
+                                kind: BlockKind::RedactedReasoning,
+                                part,
+                                call: ToolCallId::new(),
+                                name: String::new(),
+                                args: String::new(),
+                                signature: None,
+                                redacted_data: data,
                             },
                         );
                         out.push(Event::ReasoningStart {
@@ -167,6 +201,8 @@ impl Decoder for AnthropicDecoder {
                                 call,
                                 name: name.clone(),
                                 args: String::new(),
+                                signature: None,
+                                redacted_data: None,
                             },
                         );
                         out.push(Event::ToolInputStart {
@@ -210,6 +246,12 @@ impl Decoder for AnthropicDecoder {
                                 });
                             }
                         }
+                        Some("signature_delta") => {
+                            block.signature = delta
+                                .and_then(|d| d.get("signature"))
+                                .and_then(Value::as_str)
+                                .map(str::to_owned);
+                        }
                         Some("input_json_delta") => {
                             if let Some(pj) = delta
                                 .and_then(|d| d.get("partial_json"))
@@ -243,7 +285,18 @@ impl Decoder for AnthropicDecoder {
                             session,
                             message,
                             part: block.part,
-                            provider_data: None,
+                            provider_data: block.signature.as_ref().map(
+                                |signature| json!({"type": "thinking", "signature": signature}),
+                            ),
+                        }),
+                        BlockKind::RedactedReasoning => out.push(Event::ReasoningEnd {
+                            session,
+                            message,
+                            part: block.part,
+                            provider_data: block
+                                .redacted_data
+                                .as_ref()
+                                .map(|data| json!({"type": "redacted_thinking", "data": data})),
                         }),
                         BlockKind::Tool => {}
                     }
@@ -257,25 +310,16 @@ impl Decoder for AnthropicDecoder {
                     self.record_usage(usage);
                 }
             }
-            Some("message_stop") => {
-                out.extend(self.close());
-            }
+            Some("message_stop") => out.extend(self.close()),
             _ => {}
         }
         Ok(out)
     }
-
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
         Ok(self.close())
     }
 }
 
-/// Normalize Anthropic usage to the [`TokenUsage`] invariant.
-///
-/// `input_tokens` already excludes cache reads and cache writes, and
-/// `output_tokens` already includes thinking. Anthropic does not report the
-/// thinking share of the output, so the split is marked unknown rather than
-/// estimated.
 fn anthropic_usage(usage: &Value) -> TokenUsage {
     TokenUsage {
         input: usage

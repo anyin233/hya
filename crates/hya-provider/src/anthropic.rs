@@ -29,12 +29,19 @@ impl Protocol for AnthropicMessagesProtocol {
         output_limit: Option<u32>,
     ) -> Result<Value, ProviderError> {
         let mut messages: Vec<Value> = Vec::new();
-        for m in &req.messages {
+        let replay_after = req.messages.iter().rposition(|message| matches!(message, Message::User { parts, .. } if parts.iter().any(|part| matches!(part, Part::Text { text, .. } if !text.is_empty()))));
+        let last_message = req.messages.len().checked_sub(1);
+        for (message_index, m) in req.messages.iter().enumerate() {
             match m {
                 Message::User { parts, .. } => {
-                    push_coalesced(&mut messages, "user", user_content(parts)?);
+                    push_coalesced(&mut messages, "user", user_content(parts)?)
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts)?,
+                Message::Assistant { parts, .. } => emit_assistant(
+                    &mut messages,
+                    parts,
+                    replay_after.is_some_and(|index| message_index > index),
+                    Some(message_index) == last_message,
+                )?,
                 // Mid-conversation system text is where compaction summaries
                 // live. The Messages API has no system role inside `messages`,
                 // and folding it into the top-level `system` field would
@@ -182,24 +189,69 @@ fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
     }
 }
 
-// Anthropic puts tool_use blocks in the assistant message and the matching
-// tool_result blocks in the FOLLOWING user message. Segment each `[text?, tool+]`
-// cluster into that pair; trailing text becomes a final assistant text message.
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
+// Anthropic pairs each `[reasoning*, text?, tool_use+]` assistant cluster with
+// following user tool results. Replay reasoning only after the latest user
+// message containing text, preserving provider signatures or redacted data.
+fn emit_assistant(
+    out: &mut Vec<Value>,
+    parts: &[Part],
+    replay_reasoning: bool,
+    is_final_message: bool,
+) -> Result<(), ProviderError> {
+    let mut clusters: Vec<(Vec<Value>, String, Vec<&Part>)> = Vec::new();
+    let mut reasoning = Vec::new();
     let mut text = String::new();
-    let mut tools: Vec<&Part> = Vec::new();
+    let mut tools = Vec::new();
     for part in parts {
         match part {
+            Part::Reasoning {
+                text: reasoning_text,
+                provider_data,
+                ..
+            } => {
+                if !tools.is_empty() {
+                    clusters.push((
+                        std::mem::take(&mut reasoning),
+                        std::mem::take(&mut text),
+                        std::mem::take(&mut tools),
+                    ));
+                }
+                if replay_reasoning {
+                    if let Some(data) = provider_data {
+                        match (
+                            data.get("type").and_then(Value::as_str),
+                            data.get("signature").and_then(Value::as_str),
+                            data.get("data").and_then(Value::as_str),
+                        ) {
+                            (Some("thinking"), Some(signature), _) => {
+                                reasoning.push(json!({
+                                    "type": "thinking",
+                                    "thinking": reasoning_text,
+                                    "signature": signature,
+                                }));
+                            }
+                            (Some("redacted_thinking"), _, Some(data)) => {
+                                reasoning.push(json!({
+                                    "type": "redacted_thinking",
+                                    "data": data,
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             Part::Text { text: t, .. } => {
                 if !tools.is_empty() {
-                    flush_cluster(out, &text, &tools);
-                    text.clear();
-                    tools.clear();
+                    clusters.push((
+                        std::mem::take(&mut reasoning),
+                        std::mem::take(&mut text),
+                        std::mem::take(&mut tools),
+                    ));
                 }
                 text.push_str(t);
             }
             Part::Tool { .. } => tools.push(part),
-            Part::Reasoning { .. } => {}
             Part::Media { media_type, .. } => {
                 return Err(ProviderError::Incompatible(format!(
                     "Anthropic messages does not support assistant media type {media_type}"
@@ -207,20 +259,40 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
             }
         }
     }
-    if tools.is_empty() {
-        if !text.is_empty() {
-            push_coalesced(out, "assistant", json!([{"type": "text", "text": text}]));
+    clusters.push((reasoning, text, tools));
+    // Legacy final text after tools would be an Anthropic assistant prefill;
+    // retain it before that step's tool_use blocks instead.
+    if is_final_message && clusters.len() > 1 {
+        let last = clusters.len() - 1;
+        if clusters[last].2.is_empty()
+            && !clusters[last].1.is_empty()
+            && !clusters[last - 1].2.is_empty()
+        {
+            if let Some((_, trailing, _)) = clusters.pop() {
+                clusters[last - 1].1.push_str(&trailing);
+            }
         }
-    } else {
-        flush_cluster(out, &text, &tools);
+    }
+    for (reasoning, text, tools) in clusters {
+        if tools.is_empty() {
+            let mut content = reasoning;
+            if !text.is_empty() {
+                content.push(json!({"type":"text","text":text}));
+            }
+            if !content.is_empty() {
+                push_coalesced(out, "assistant", Value::Array(content));
+            }
+        } else {
+            flush_cluster(out, &reasoning, &text, &tools);
+        }
     }
     Ok(())
 }
 
-fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
-    let mut content: Vec<Value> = Vec::new();
+fn flush_cluster(out: &mut Vec<Value>, reasoning: &[Value], text: &str, tools: &[&Part]) {
+    let mut content = reasoning.to_vec();
     if !text.is_empty() {
-        content.push(json!({"type": "text", "text": text}));
+        content.push(json!({"type":"text","text":text}));
     }
     for &p in tools {
         if let Part::Tool {
@@ -231,34 +303,10 @@ fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
         } = p
         {
             let input = tool_input(state);
-            let input_obj = if input.is_null() {
-                json!({})
-            } else {
-                input.clone()
-            };
-            content.push(json!({
-                "type": "tool_use",
-                "id": call_id.to_string(),
-                "name": name.as_str(),
-                "input": input_obj,
-            }));
+            content.push(json!({"type":"tool_use","id":call_id.to_string(),"name":name.as_str(),"input":if input.is_null(){json!({})}else{input.clone()}}));
         }
     }
     push_coalesced(out, "assistant", Value::Array(content));
-    let results: Vec<Value> = tools
-        .iter()
-        .filter_map(|&p| {
-            let Part::Tool { call_id, state, .. } = p else {
-                return None;
-            };
-            let (result, is_error) = tool_result(state);
-            Some(json!({
-                "type": "tool_result",
-                "tool_use_id": call_id.to_string(),
-                "content": result,
-                "is_error": is_error,
-            }))
-        })
-        .collect();
+    let results: Vec<Value>=tools.iter().filter_map(|&p| { let Part::Tool { call_id,state,..}=p else{return None}; let (result,is_error)=tool_result(state); Some(json!({"type":"tool_result","tool_use_id":call_id.to_string(),"content":result,"is_error":is_error})) }).collect();
     push_coalesced(out, "user", Value::Array(results));
 }

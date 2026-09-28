@@ -554,6 +554,17 @@ Assistant `Part::Media` entries are ignored on encode (not forwarded).
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
 stream events into the same hya event variants.
 
+Anthropic thinking blocks are preserved for replay through the canonical
+`Part::Reasoning.provider_data` envelope. A signed block stores
+`{"type":"thinking","signature":"..."}` at `ReasoningEnd`; a redacted block
+stores `{"type":"redacted_thinking","data":"..."}` and emits no readable
+reasoning delta. During encoding, only reasoning after the latest user message
+containing text is replayed, and only these envelopes are accepted. Replayed
+thinking blocks precede text and `tool_use` blocks in each assistant cluster.
+Legacy histories that place final text after tool calls fold that text back before
+the tool calls in the final assistant cluster to avoid Anthropic treating the
+request as an assistant prefill.
+
 ## Google Protocol
 
 [`google.rs`](../../crates/hya-provider/src/google.rs) encodes requests for
