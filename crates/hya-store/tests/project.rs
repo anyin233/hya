@@ -696,6 +696,7 @@ fn files_changed(session: SessionId, path: &str, before: FileState) -> Event {
         files: vec![FileChange {
             path: path.to_string(),
             before,
+            observed: false,
         }],
     }
 }

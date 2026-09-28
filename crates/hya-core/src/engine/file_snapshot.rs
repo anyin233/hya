@@ -498,7 +498,7 @@ impl SessionEngine {
         call: ToolCallId,
         capture: FileCapture,
     ) -> Result<(), CoreError> {
-        let changed = match capture {
+        let (changed, observed) = match capture {
             FileCapture::None => return Ok(()),
             FileCapture::Paths(paths) => {
                 let mut changed = Vec::new();
@@ -507,9 +507,9 @@ impl SessionEngine {
                         changed.push((path, prior));
                     }
                 }
-                changed
+                (changed, false)
             }
-            FileCapture::Git(capture) => capture.after().await,
+            FileCapture::Git(capture) => (capture.after().await, true),
         };
         if changed.is_empty() {
             return Ok(());
@@ -528,6 +528,7 @@ impl SessionEngine {
             files.push(FileChange {
                 path: path.to_string_lossy().into_owned(),
                 before,
+                observed,
             });
         }
         self.emit_for_actor(
