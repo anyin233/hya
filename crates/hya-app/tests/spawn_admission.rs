@@ -2058,6 +2058,7 @@ const ROOT_ONLY_SPAWN_TARGET: &str = "root-only-helper";
 fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
     let bundle = |stable_id: &str, role: AgentRole, prompt: &str, can_spawn: &[&str]| {
         PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: format!("hya/nested-root-divergence-{stable_id}"),
@@ -2362,6 +2363,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         .into_iter()
         .map(|(stable_id, role, can_spawn)| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                check: None,
                 format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/missing-root-def-{stable_id}"),

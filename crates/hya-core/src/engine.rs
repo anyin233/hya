@@ -137,7 +137,7 @@ pub use file_snapshot::{MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SE
 pub use fork::{ForkAt, ForkError, fork_cut};
 pub use restart::HandoffReadiness;
 pub use revert::{RevertError, RevertOutcome, RevertTarget};
-pub use scope_binding::CatalogScopeCacheConfig;
+pub use scope_binding::{BundleRefresh, CatalogScopeCacheConfig};
 pub use turn::advertise_tool;
 pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};

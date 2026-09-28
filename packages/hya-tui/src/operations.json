@@ -96,6 +96,12 @@
     "streaming": false
   },
   {
+    "method": "POST",
+    "path": "/v1/bundles:refresh",
+    "operationId": "Catalog.RefreshBundles",
+    "streaming": false
+  },
+  {
     "method": "GET",
     "path": "/v1/commands",
     "operationId": "Catalog.ListCommands",

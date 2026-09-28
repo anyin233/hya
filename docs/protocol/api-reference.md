@@ -170,6 +170,7 @@ rebuilds that provider's route and the catalog, and emits
 | `GetProvider` | `GET /v1/providers/{provider_id}` | `hya.v1.Catalog.GetProvider` | `GetProviderRequest` | `ProviderInfo` |
 | `UpsertProvider` | `PUT /v1/providers/{provider_id}` | `hya.v1.Catalog.UpsertProvider` | `UpsertProviderRequest` | `ProviderUpdate` |
 | `RefreshProvider` | `POST /v1/providers/{provider_id}/refresh` | `hya.v1.Catalog.RefreshProvider` | `RefreshProviderRequest` | `ProviderUpdate` |
+| `RefreshBundles` | `POST /v1/bundles:refresh` | `hya.v1.Catalog.RefreshBundles` | `RefreshBundlesRequest` | `RefreshBundlesResponse` |
 | `SetProviderModel` | `PUT /v1/providers/{provider_id}/models` | `hya.v1.Catalog.SetProviderModel` | `SetProviderModelRequest` | `ProviderUpdate` |
 | `RemoveProviderModel` | `DELETE /v1/providers/{provider_id}/models` | `hya.v1.Catalog.RemoveProviderModel` | `RemoveProviderModelRequest` | `ProviderUpdate` |
 | `TestProviderModel` | `POST /v1/providers/{provider_id}/test` | `hya.v1.Catalog.TestProviderModel` | `TestProviderModelRequest` | `TestProviderModelResponse` |
@@ -210,6 +211,14 @@ reports it.
 
 Re-read the provider's config entry and key, fetch its remote model
 list into the model cache, and apply it live.
+
+
+### `Catalog.RefreshBundles`
+
+Refresh the installed-bundle catalog and the directory's Project
+overlay now instead of at the next bind, and report what is published.
+A generation that fails to prepare (for example a bundle process that
+does not start) keeps the previous one and is reported in `errors`.
 
 
 ### `Catalog.SetProviderModel`
@@ -1283,6 +1292,41 @@ Provider detail with its model rows.
 |---|---|---|
 | `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
 | `provider_id` (2) | `string` | Configured provider id. |
+
+### `RefreshBundlesRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope: its Project's bundles are refreshed too; empty: global. |
+
+### `RefreshBundlesResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `generation` (1) | `uint64` | Runtime configuration generation now bound for the scope. |
+| `bundles` (2) | `repeated RefreshedBundle` | Every bundle published for the scope after the refresh. |
+| `errors` (3) | `repeated BundleRefreshError` | Refresh failures; each kept the previous generation published. |
+| `scope` (4) | `string` | `global`, `directory` (not inside a registered Project: no project bundles load), or `project`. |
+
+### `RefreshedBundle`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` |  |
+| `version` (2) | `string` |  |
+| `prepared_digest` (3) | `string` | Prepared bundle digest (`hya bundle info` shows the same value). |
+| `scope` (4) | `string` | `user` (installed registry, first-party included) or `project`. |
+
+### `BundleRefreshError`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle_id` (1) | `string` | Bundle the failure names; empty when the refresh cannot attribute it. |
+| `message` (2) | `string` |  |
 
 ### `SetProviderModelRequest`
 

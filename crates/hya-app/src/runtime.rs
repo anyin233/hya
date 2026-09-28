@@ -5339,6 +5339,7 @@ You are the installed resident agent.
             .iter()
             .map(|stable_id| {
                 PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                    check: None,
                     format_version: 2,
                     identity: BundleIdentity {
                         id: format!("hya/recovery-resolution-{stable_id}"),
@@ -5510,6 +5511,7 @@ You are the installed resident agent.
                 hook_refs: Vec::new(),
             };
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                check: None,
                 format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/spawn-model-precedence-{stable_id}"),
@@ -8432,6 +8434,7 @@ for line in sys.stdin:
         let mut resource_view = ResourceView::default();
         resource_view.allow.push("echo".to_string());
         PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
@@ -8534,6 +8537,7 @@ for line in sys.stdin:
         let beta_hook = materialized_resource(marker, "hook", "tool.execute.before", beta_path);
         let beta_extension = materialized_resource(marker, "extension", "beta", beta_path);
         PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),

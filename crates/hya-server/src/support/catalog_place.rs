@@ -101,6 +101,18 @@ impl CatalogPlace {
         dirs
     }
 
+    /// Refresh the bundle catalogs of this place now and bind the result,
+    /// reporting refresh failures instead of failing
+    /// ([`hya_core::SessionEngine::refresh_bundles`]).
+    pub(crate) async fn refresh_bundles(
+        &self,
+        st: &ServerState,
+    ) -> Result<hya_core::BundleRefresh, CoreError> {
+        st.engine
+            .refresh_bundles(&self.scope, self.workdir().unwrap_or(Path::new("")))
+            .await
+    }
+
     /// Bind the runtime of this place (agents, the scope's bundle overlay).
     pub(crate) async fn bind(&self, st: &ServerState) -> Result<TurnBinding, CoreError> {
         st.engine

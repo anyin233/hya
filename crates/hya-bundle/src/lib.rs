@@ -28,7 +28,7 @@ pub use model::{
     PreparedAgentSetBundle, PreparedApi, PreparedBundleApis, PreparedBundleIndex,
     PreparedBundleKind, PreparedBundlePermissionModes, PreparedBundleProcess,
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedInstallableBundle, PreparedPermissionMode, PreparedPluginBundle,
+    PreparedCheck, PreparedInstallableBundle, PreparedPermissionMode, PreparedPluginBundle,
     PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema,
     PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
 };

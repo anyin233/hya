@@ -177,6 +177,17 @@
         "x-hya-any-method": true
       }
     },
+    "/v1/bundles:refresh": {
+      "post": {
+        "operationId": "Catalog.RefreshBundles",
+        "summary": "Refresh the installed-bundle catalog and the directory's Project",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.RefreshBundles",
+        "x-server-streaming": false
+      }
+    },
     "/v1/commands": {
       "get": {
         "operationId": "Catalog.ListCommands",
@@ -1870,6 +1881,70 @@
             "type": "string"
           },
           "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshBundlesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshBundlesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bundles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RefreshedBundle"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleRefreshError"
+            }
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshedBundle": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "prepared_digest": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "BundleRefreshError": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "bundle_id": {
+            "type": "string"
+          },
+          "message": {
             "type": "string"
           }
         }

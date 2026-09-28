@@ -472,6 +472,13 @@ impl pb::catalog_server::Catalog for V1Grpc {
             .await?,
         )
     }
+    async fn refresh_bundles(
+        &self,
+        request: GrpcRequest<pb::RefreshBundlesRequest>,
+    ) -> Result<GrpcResponse<pb::RefreshBundlesResponse>, Status> {
+        let (ctx, inner) = split(request);
+        into_response(self.post(&ctx, "/v1/bundles:refresh", &inner).await?)
+    }
 
     async fn set_provider_model(
         &self,

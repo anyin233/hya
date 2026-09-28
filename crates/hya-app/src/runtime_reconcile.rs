@@ -1856,6 +1856,7 @@ mod tests {
             hook_refs: Vec::new(),
         };
         let bundle = PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),

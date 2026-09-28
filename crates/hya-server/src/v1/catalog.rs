@@ -20,6 +20,7 @@ pub(crate) fn router() -> Router<ServerState> {
     Router::new()
         .route("/v1/agents", get(list_agents))
         .route("/v1/models", get(list_models))
+        .route("/v1/bundles:refresh", post(refresh_bundles))
         .route("/v1/providers", get(list_providers))
         .route(
             "/v1/providers/:provider_id",
@@ -45,6 +46,60 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/runtime/schemas", get(list_runtime_schemas))
         .route("/v1/permissions/rules", get(list_saved_rules))
         .route("/v1/permissions/rules/:rule", delete(delete_saved_rule))
+}
+
+/// `RefreshBundles`: refresh the installed-bundle base and the directory's
+/// scope overlay now (instead of at the next bind) and report what is
+/// published. A generation that failed to prepare keeps the previous one;
+/// its failure is an `errors` entry, not an rpc error.
+async fn refresh_bundles(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::RefreshBundlesRequest>,
+) -> Result<Json<pb::RefreshBundlesResponse>, V1Error> {
+    let place = catalog_scope(&st, &request.directory).await?;
+    let refreshed = place.refresh_bundles(&st).await?;
+    let binding = &refreshed.binding;
+    let project = binding.project_bundle_dirs();
+    let bundles = binding
+        .bundle_catalog()
+        .bundles()
+        .iter()
+        .map(|bundle| {
+            let identity = bundle.identity();
+            pb::RefreshedBundle {
+                id: identity.id.clone(),
+                version: identity.version.clone(),
+                prepared_digest: bundle.digest().to_string(),
+                scope: if project.contains_key(&identity.id) {
+                    "project"
+                } else {
+                    "user"
+                }
+                .to_string(),
+            }
+        })
+        .collect();
+    if refreshed.changed {
+        super::providers::notify_catalog_updated(&st);
+    }
+    Ok(Json(pb::RefreshBundlesResponse {
+        scope: match place.scope() {
+            hya_core::CatalogScope::Global => "global",
+            hya_core::CatalogScope::Directory(_) => "directory",
+            hya_core::CatalogScope::Project { .. } => "project",
+        }
+        .to_string(),
+        generation: binding.generation().get(),
+        bundles,
+        errors: refreshed
+            .errors
+            .iter()
+            .map(|error| pb::BundleRefreshError {
+                bundle_id: String::new(),
+                message: format!("{error:#}"),
+            })
+            .collect(),
+    }))
 }
 
 async fn list_agents(
