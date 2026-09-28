@@ -171,6 +171,7 @@ export async function run(options: Options): Promise<void> {
         }
       : {}),
     preferencesPath: prefsPath,
+    preferredPermissionMode: loaded.preferences.permissionMode,
     // The renderer exists once the first frame is due; these run on user actions after that.
     terminal: {
       copy: (text) => renderer?.copyToClipboardOSC52(text) ?? false,

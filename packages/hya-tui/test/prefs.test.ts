@@ -81,3 +81,14 @@ test("vim is a boolean preference; another type is ignored", () => {
   savePreferences(path, { vim: false })
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ vim: false })
 })
+
+test("permissionMode is a nonempty string and is saved alongside other preferences", () => {
+  const path = join(temp(), "tui.json")
+  writeFileSync(path, JSON.stringify({ permissionMode: " ", theme: "light" }))
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light" })
+  writeFileSync(path, JSON.stringify({ permissionMode: false }))
+  expect(loadPreferences(path).preferences).toEqual({})
+  savePreferences(path, { permissionMode: "yolo" })
+  savePreferences(path, { theme: "hya" })
+  expect(loadPreferences(path).preferences).toEqual({ theme: "hya", permissionMode: "yolo" })
+})
