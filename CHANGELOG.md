@@ -1,7 +1,6 @@
-# 0.43.4
+# 0.43.5
 
-## Reopen chats with waiting requests
+## Keep streamed headings styled
 
-- A plain local TUI launch reopens the active Project's latest saved chat, including chats archived on exit. A waiting permission or question takes priority over a newer chat, and the transcript is restored immediately.
-- The `/sessions` picker includes archived chats by default. Ctrl+A toggles their visibility.
-- Pending requests in other chats show F4 as the direct route to the conversation and its numbered approval choices, even when the chat is archived or absent from the sidebar.
+- Assistant Markdown headings no longer flash literal `#` markers or lose their accent color while text chunks arrive.
+- Marker-only heading chunks wait for title text; `#` lines inside fenced code blocks continue to render as code.
