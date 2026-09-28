@@ -239,6 +239,13 @@ impl AppState {
             .await
     }
 
+    /// Number of process-local permission and question requests still awaiting
+    /// a client reply. Restart handoff waits for this to reach zero because
+    /// their oneshot replies cannot cross a process boundary.
+    pub(crate) async fn pending_interactions(&self) -> usize {
+        self.permission_requests.list().await.len() + self.question_requests.list().await.len()
+    }
+
     /// Attach the user-question receiver and start the pending-question bridge.
     #[must_use]
     pub fn with_question_requests(mut self, rx: mpsc::UnboundedReceiver<QuestionRequest>) -> Self {

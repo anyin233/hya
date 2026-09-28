@@ -42,8 +42,8 @@ pub use event::{
 };
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
-    OperationId, OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId,
-    TeamRunId, ToolCallId, WorkflowRunId,
+    OperationId, OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, ResumeId,
+    SessionId, TeamRunId, ToolCallId, WorkflowRunId,
 };
 pub use mail::{
     CHANNEL_RANDOM_LEN, ChannelKind, MailEndpoint, MailKind, is_minted_channel_id, mint_channel_id,

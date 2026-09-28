@@ -17,10 +17,12 @@
 //! Each active turn also carries an engine-owned cancellation token and an
 //! optional [`FinishCause`]. [`TurnGate::cancel`] stops one session's turn
 //! with a cause (a user abort); [`TurnGate::begin_drain`] stops every active
-//! turn in every session and refuses new claims (graceful process stop). The
+//! turn in every session and refuses new claims (graceful process stop);
+//! [`TurnGate::begin_quiesce`] refuses new claims without cancelling anything
+//! (a restart handoff waits for active turns to reach their natural end). The
 //! turn records the cause on its closing `MessageFinished`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
@@ -69,6 +71,13 @@ struct GateState {
     active: HashMap<SessionId, ActiveTurn>,
     /// Set once a drain began: every new claim is refused.
     draining: Option<FinishCause>,
+    /// Set once a restart-handoff quiesce began: new claims are refused but
+    /// active turns are never cancelled — they run to their natural end, the
+    /// safe boundary the handoff waits for.
+    holding: bool,
+    /// Sessions present when the handoff quiesce began, retained until its
+    /// outcome is reported.
+    handoff_started: HashSet<SessionId>,
 }
 
 /// Per-engine registry of the one active turn per session.
@@ -89,13 +98,14 @@ impl TurnGate {
     }
 
     /// Claim `session` now, or report that its turn is already active.
-    /// A draining gate refuses every claim with [`CoreError::Cancelled`].
+    /// A draining or quiesced gate refuses every claim with
+    /// [`CoreError::Cancelled`].
     pub(crate) fn try_acquire(
         self: &Arc<Self>,
         session: SessionId,
     ) -> Result<TurnLease, CoreError> {
         let mut state = self.state();
-        if state.draining.is_some() {
+        if state.draining.is_some() || state.holding {
             return Err(CoreError::Cancelled);
         }
         if state.active.contains_key(&session) {
@@ -205,9 +215,59 @@ impl TurnGate {
         sessions
     }
 
+    /// Start a restart-handoff quiesce: refuse every new claim but cancel
+    /// nothing — active turns run to their natural end. Returns the sessions
+    /// currently holding a turn.
+    pub(crate) fn begin_quiesce(&self) -> Vec<SessionId> {
+        let sessions = {
+            let mut state = self.state();
+            state.holding = true;
+            let sessions: Vec<_> = state.active.keys().copied().collect();
+            state.handoff_started.extend(sessions.iter().copied());
+            sessions
+        };
+        self.released.notify_waiters();
+        sessions
+    }
+    pub(crate) fn handoff_started(&self) -> Vec<SessionId> {
+        self.state().handoff_started.iter().copied().collect()
+    }
+
+    pub(crate) fn clear_handoff_started(&self) {
+        self.state().handoff_started.clear();
+    }
+
+    /// Whether a restart-handoff quiesce has begun (new turns are refused).
+    pub(crate) fn quiescing(&self) -> bool {
+        self.state().holding
+    }
+
+    /// Reopen admission after an aborted restart handoff: new claims are
+    /// accepted again and queued claims re-check. `false` (no-op) when a
+    /// drain owns the gate — a shutdown always wins over a quiesce.
+    pub(crate) fn lift_quiesce(&self) -> bool {
+        if self.state().draining.is_some() {
+            return false;
+        }
+        self.state().holding = false;
+        // Unpark every queued claim so it re-checks and proceeds.
+        self.released.notify_waiters();
+        true
+    }
+
     /// Whether a drain has begun.
     pub(crate) fn draining(&self) -> Option<FinishCause> {
         self.state().draining
+    }
+
+    /// Reopen admission after a handoff drain. A real successor has a fresh
+    /// gate; this also makes in-process recovery tests model that boundary.
+    pub(crate) fn clear_handoff_drain(&self) {
+        let mut state = self.state();
+        if state.draining == Some(FinishCause::Handoff) {
+            state.draining = None;
+            self.released.notify_waiters();
+        }
     }
 
     /// Wait until no session holds a turn, up to `deadline`. `true` when the

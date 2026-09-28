@@ -1,6 +1,10 @@
-# 0.43.2
+# 0.43.3
 
-## Supervisor-owned listener handoff
+## Successor daemon restart handoff
 
-- `hya serve --listen-fd <FD>` now adopts an already-open Unix TCP listener for foreground server startup without rebinding the port.
-- The handoff is fail-closed, sets close-on-exec, and is documented as the foundation for a later successor-process restart protocol; it does not migrate live streams or application state.
+- `hya serve restart` now transfers the listening socket and database lock to a
+  healthy successor generation without rebinding the port.
+- Active root turns receive a durable handoff boundary and resume exactly once
+  after successor bootstrap; client streams reconnect and reload durable state.
+- Added quiescence, pending-interaction lifecycle handling, and fallback
+  recovery documentation for restart failures.

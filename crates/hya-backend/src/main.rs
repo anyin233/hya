@@ -945,17 +945,22 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let inherited_listener = serve::capture_cli_listener(&cli)?;
+    let inherited_lock = serve::capture_cli_lock(&cli)?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("build the Tokio runtime")?
-        .block_on(run(cli, inherited_listener))
+        .block_on(run(cli, inherited_listener, inherited_lock))
 }
 
 /// The async body of `hya` (the former `#[tokio::main]` `main`); `main`
 /// builds the runtime itself so the supervisor listener can be captured
 /// before it exists.
-async fn run(cli: Cli, inherited_listener: Option<std::net::TcpListener>) -> anyhow::Result<()> {
+async fn run(
+    cli: Cli,
+    inherited_listener: Option<std::net::TcpListener>,
+    inherited_lock: Option<serve::InheritedLock>,
+) -> anyhow::Result<()> {
     let web_port = cli_args::bare_web_port(&cli)?;
     let backend = cli_args::bare_backend(&cli)?;
     let resume = cli_args::bare_resume(&cli)?;
@@ -1084,6 +1089,7 @@ async fn run(cli: Cli, inherited_listener: Option<std::net::TcpListener>) -> any
             serve::cmd_serve(
                 cli_args::serve_bind(bind, hostname, port, mdns),
                 inherited_listener,
+                inherited_lock,
                 command_db.unwrap_or_else(|| db.clone()),
                 model,
                 yolo,

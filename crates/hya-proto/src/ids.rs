@@ -404,6 +404,11 @@ impl std::fmt::Display for OperationId {
 
 uuid_id!(TeamRunId, "team", "Team-run identity (`team_` + UUIDv7).");
 uuid_id!(
+    ResumeId,
+    "resume",
+    "Pending handoff resume id (`resume_` + UUIDv7)."
+);
+uuid_id!(
     WorkflowRunId,
     "wfrun",
     "Durable Workflow run identity (`wfrun_` + UUIDv7)."

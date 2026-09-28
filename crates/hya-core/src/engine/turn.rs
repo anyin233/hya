@@ -562,6 +562,24 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
             .await
     }
+
+    /// Drive a handoff continuation under the turn claim the resume driver
+    /// already reserved. Reserving the lease before the resume tail check is
+    /// what keeps a second discovery pass from queueing a duplicate
+    /// continuation behind the first; the reservation moves into the turn
+    /// here and is released when the continuation ends.
+    pub(crate) async fn run_handoff_continuation(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        lease: TurnLease,
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        let request = TurnRequestContext::new(CancellationToken::new(), &[], guidance, None, None)
+            .with_lease(lease);
+        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
+            .await
+    }
     pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,
@@ -1226,6 +1244,41 @@ impl SessionEngine {
                 )
                 .await?;
                 return Ok(FinishReason::Cancelled);
+            }
+            // Restart-handoff boundary check. This is the one safe point to
+            // hand a turn to a successor: the previous round's provider stream
+            // and tool calls are fully durable here and the next model call has
+            // not started, so nothing mid-flight is cancelled and no side
+            // effect is ever replayed. A quiesced gate reaches this check on
+            // every activation's next round:
+            //   * a Root turn checkpoints atomically (close the open assistant
+            //     message with `cause: handoff` and queue the pending-resume
+            //     row in one store transaction) and ends — the successor
+            //     continues the session without a new prompt. The store refuses
+            //     the checkpoint while a tool part is still open, so the turn
+            //     keeps running and the handoff aborts rather than erroring a
+            //     live call away;
+            //   * a Bound/Resolved member turn is NOT a boundary at all: it
+            //     keeps running to its natural end. Ending it here would drop
+            //     its episode mid-flight and claim the parent re-drives it — a
+            //     resident's parent never does, so the child work would be
+            //     lost. While it runs it holds its lease: a handoff whose
+            //     deadline passes with members still working is rejected, and
+            //     one that succeeds finds the member idle, whose durable claim
+            //     the successor's resident recovery revives;
+            //   * a Workflow-routed turn is equally not a boundary — it keeps
+            //     running and the restart aborts at the deadline instead.
+            // A failed checkpoint is equally not a boundary: the turn keeps
+            // running and the handoff aborts rather than silently dropping it.
+            if workflow_route.is_none() && apply_default_overlays && self.turn_gate.quiescing() {
+                match self.checkpoint_turn_for_handoff(session).await {
+                    Ok(()) => return Ok(FinishReason::Cancelled),
+                    Err(error) => tracing::warn!(
+                        session = %session,
+                        %error,
+                        "handoff checkpoint failed; this turn keeps running and the restart will abort"
+                    ),
+                }
             }
 
             let mut projection = self.store.read_projection(session).await?;
@@ -1936,11 +1989,14 @@ impl SessionEngine {
                                 )),
                             ));
                         }
-                        let result = match authorize_tool_call(
-                            &resolved, &tc.input, permission, message, tc.call,
-                        )
-                        .await
-                        {
+                        // The ask a restart handoff must not strand: mark the
+                        // decision in flight for the authorize await only.
+                        let authorized = {
+                            let _pending_ask = self.pending_ask_guard(session);
+                            authorize_tool_call(&resolved, &tc.input, permission, message, tc.call)
+                                .await
+                        };
+                        let result = match authorized {
                             Ok(permission) => {
                                 let channel_policy = crate::ChannelPolicy::from_binding(binding)?
                                     .snapshot_for(live_agent.name.as_str());

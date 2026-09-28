@@ -19,6 +19,7 @@
 
 use std::fs::OpenOptions;
 use std::io::Write as _;
+use std::os::unix::io::RawFd;
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -54,7 +55,9 @@ pub(crate) struct DaemonSpec {
     /// `--allow-host` names the daemon accepts besides loopback (Host
     /// allowlist; docs/cli.md "Allowed Host names").
     pub(crate) allow_hosts: Vec<String>,
-    /// The `hya` binary to run (`std::env::current_exe()`).
+    /// The `hya` binary to run (`std::env::current_exe()`). For a handoff
+    /// successor this is the journal's recorded executable — the invoking
+    /// restart CLI's `current_exe`, validated before the spawn.
     pub(crate) exe: PathBuf,
 }
 
@@ -70,7 +73,9 @@ pub(crate) fn log_path(db: &str) -> Option<PathBuf> {
     db_lock::paths(db).map(|paths| paths.log)
 }
 
-fn process_alive(pid: u32) -> bool {
+/// Whether a process with this pid exists (signal 0). Shared with the
+/// handoff watchers (the successor watches its predecessor's pid).
+pub(crate) fn process_alive(pid: u32) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return false;
     };
@@ -284,6 +289,211 @@ fn spawn(spec: &DaemonSpec, relay: &RelayFlags, log: &std::path::Path) -> anyhow
         .with_context(|| format!("start {} serve", spec.exe.display()))
 }
 
+/// The staged descriptors and inherited state the old generation hands to
+/// its successor on the command line: the listening socket, the held
+/// `<db>.lock` flock, the optional extra gRPC listener, the handoff journal,
+/// and the predecessor's status timestamp. Every descriptor is a staged
+/// duplicate that keeps close-on-exec in the old generation (see
+/// `db_lock::DbLock::duplicate_for_handoff` and serve.rs's
+/// `stage_for_handoff`);
+/// [`spawn_handoff`] clears the flag in the successor's `pre_exec`, so the
+/// numbers are inheritable only across that one exec — they never leak into
+/// other children of the daemon (tools, shells, bundles).
+pub(crate) struct SuccessorSpawn {
+    pub(crate) journal: PathBuf,
+    pub(crate) listener_fd: RawFd,
+    pub(crate) lock_fd: RawFd,
+    pub(crate) extra_fd: Option<RawFd>,
+    /// `--inherit-status`: the old generation's discovery `startedAt` (unix
+    /// ms); the successor republishes it so status and uptime survive.
+    pub(crate) started_at: Option<u64>,
+}
+
+/// The successor executable recorded in the handoff journal must exist, be a
+/// regular file, and be executable. A missing or unusable one fails the
+/// handoff with this error — never a fallback to the old generation's own
+/// (possibly outdated) binary.
+pub(crate) fn validate_successor_exe(exe: &std::path::Path) -> anyhow::Result<()> {
+    let meta = std::fs::metadata(exe)
+        .with_context(|| format!("the successor executable {} is missing", exe.display()))?;
+    anyhow::ensure!(
+        meta.is_file(),
+        "the successor executable {} is not a regular file",
+        exe.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        anyhow::ensure!(
+            meta.permissions().mode() & 0o111 != 0,
+            "the successor executable {} is not executable",
+            exe.display()
+        );
+    }
+    Ok(())
+}
+
+/// The journal's relay record of resolved restart flags (public values only;
+/// never the link or any key).
+pub(crate) fn relay_spec(flags: &RelayFlags) -> Option<db_lock::DiscoveredRelay> {
+    let relay = flags.relay.as_ref()?;
+    Some(db_lock::DiscoveredRelay {
+        proxy_url: relay.clone(),
+        transport: flags
+            .relay_transport
+            .clone()
+            .unwrap_or_else(|| "auto".to_owned()),
+        ca: flags.relay_ca.clone(),
+        ephemeral: flags.relay_ephemeral,
+        heartbeat_secs: flags.relay_heartbeat,
+    })
+}
+
+/// The relay flags a successor joins with, from the journal's record.
+pub(crate) fn relay_flags_of(record: &db_lock::DiscoveredRelay) -> RelayFlags {
+    RelayFlags {
+        relay: Some(record.proxy_url.clone()),
+        relay_transport: Some(record.transport.clone()),
+        relay_ca: record.ca.clone(),
+        relay_ephemeral: record.ephemeral,
+        relay_heartbeat: record.heartbeat_secs,
+        relay_quiet_link: false,
+    }
+}
+
+/// The successor command for one handoff: the old generation's own
+/// composition inputs (`spec`; `exe` is the journal's validated successor
+/// executable), the journal's successor overrides (`model`, `allow_hosts`,
+/// `relay`), and the staged descriptors as hidden flags.
+fn successor_command(
+    spec: &DaemonSpec,
+    relay: &RelayFlags,
+    handoff: &SuccessorSpawn,
+    dir: &std::path::Path,
+) -> Command {
+    let mut command = Command::new(&spec.exe);
+    command
+        .args([
+            "serve",
+            "--listen-fd",
+            &handoff.listener_fd.to_string(),
+            "--lock-fd",
+            &handoff.lock_fd.to_string(),
+            "--handoff-journal",
+            &handoff.journal.to_string_lossy(),
+        ])
+        .current_dir(dir);
+    if let Some(fd) = handoff.extra_fd {
+        command.args(["--grpc-listen-fd", &fd.to_string()]);
+    }
+    if let Some(ms) = handoff.started_at {
+        command.args(["--inherit-status", &ms.to_string()]);
+    }
+    command.args(["--db", &spec.db]);
+    if let Some(model) = &spec.model {
+        command.args(["--model", model]);
+    }
+    if spec.yolo {
+        command.arg("--yolo");
+    }
+    if spec.pure {
+        command.arg("--pure");
+    }
+    for host in &spec.allow_hosts {
+        command.args(["--allow-host", host]);
+    }
+    // The daemon never inherits a relay link or a bridge token of the
+    // generation that spawns it.
+    command
+        .env_remove(crate::bridge::LINK_ENV)
+        .env_remove(crate::bridge::TOKEN_ENV);
+    if let Some(url) = &relay.relay {
+        command.args(["--relay", url]);
+        if let Some(transport) = &relay.relay_transport {
+            command.args(["--relay-transport", transport]);
+        }
+        if let Some(ca) = &relay.relay_ca {
+            command.arg("--relay-ca").arg(ca);
+        }
+        if relay.relay_ephemeral {
+            command.arg("--relay-ephemeral");
+        }
+        // The daemon's output is its log file: the link must not land there.
+        command.arg("--relay-quiet-link");
+    }
+    if let Some(seconds) = relay.relay_heartbeat {
+        command.args(["--relay-heartbeat", &seconds.to_string()]);
+    }
+    command
+}
+
+/// Spawn the successor with the listening socket, the backend flock, and the
+/// optional extra gRPC listener inherited. The descriptors are staged
+/// duplicates (close-on-exec set in this process); the `pre_exec` below
+/// clears close-on-exec on exactly the handed numbers inside the forked
+/// child, so they survive this one exec and nothing else ever sees them.
+/// The staged duplicates stay open in the old generation until it finishes
+/// the takeover — the successor's health wait and any park keep the flock
+/// and the listening socket alive even if the successor dies. The successor
+/// runs detached like any daemon ([`spawn`]), its output in the same log.
+pub(crate) fn spawn_handoff(
+    spec: &DaemonSpec,
+    relay: &RelayFlags,
+    handoff: &SuccessorSpawn,
+    log: &std::path::Path,
+) -> anyhow::Result<Child> {
+    if std::fs::metadata(log).is_ok_and(|meta| meta.len() > LOG_ROTATE_BYTES) {
+        let mut rotated = log.as_os_str().to_owned();
+        rotated.push(".1");
+        let _ = std::fs::rename(log, rotated);
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .with_context(|| format!("open the daemon log {}", log.display()))?;
+    let _ = writeln!(
+        file,
+        "--- hya {} successor start by pid {} at {} ms (db {})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id(),
+        unix_ms(),
+        spec.db
+    );
+    let mut command =
+        successor_command(spec, relay, handoff, &daemon_dir(std::env::var_os("HOME")));
+    command
+        .stdin(Stdio::null())
+        .stdout(file.try_clone().context("share the daemon log")?)
+        .stderr(file);
+    let mut staged = vec![handoff.listener_fd, handoff.lock_fd];
+    staged.extend(handoff.extra_fd);
+    // SAFETY: between `fork` and `exec` only async-signal-safe syscalls run:
+    // `setsid` detaches the successor from this (dying) generation's session,
+    // and `fcntl` clears close-on-exec on exactly the staged descriptors, the
+    // single moment they are inheritable. A failure here fails the spawn; the
+    // descriptors in this process keep their flags (the copy is per child).
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            for fd in staged.iter().copied() {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    command
+        .spawn()
+        .with_context(|| format!("start successor {}", spec.exe.display()))
+}
 /// The last lines of the daemon log, for an error message.
 fn log_tail(log: &std::path::Path) -> String {
     let Ok(text) = std::fs::read_to_string(log) else {
@@ -341,10 +551,12 @@ pub(crate) async fn stop(
         );
     };
     let raw = i32::try_from(pid).context("pid out of range")?;
-    if let Err(error) = db_lock::request_stop(&busy.paths, pid, reason) {
-        // Still stop it: its clients then see a plain `signal`, which they
-        // treat like `stop` (they do not start the next server).
-        eprintln!("hya: could not record the stop reason ({error}); stopping anyway");
+    // Best effort: a full/read-only stop journal must not prevent the signal,
+    // especially when --force is the operator's recovery path.
+    if let Err(error) = db_lock::request_stop(&busy.paths, pid, reason, false) {
+        eprintln!(
+            "hya: could not record the stop request for pid {pid}; signalling anyway: {error}"
+        );
     }
     // SAFETY: `kill` has no memory-safety preconditions.
     unsafe {
@@ -367,6 +579,158 @@ pub(crate) async fn stop(
         return Ok(Stopped::Stopped { pid, killed: true });
     }
     anyhow::bail!("hya server pid {pid} still holds {db} after SIGKILL")
+}
+
+/// What one `hya serve restart` handoff attempt decided.
+pub(crate) enum HandoffRestart {
+    /// The old generation acknowledged the handoff (`queued`) and owns the
+    /// rest: it closes its turns at their durable boundaries, spawns the
+    /// successor (the journal's recorded executable), releases the runtime,
+    /// and waits for the successor's health — parking with the lock and the
+    /// listener if the successor never proves healthy. The restart command
+    /// returns here; the URL is the one the successor keeps.
+    Queued(Discovery),
+    /// There was nothing to hand off (no holder, or a holder that does not
+    /// serve yet): the caller goes to the plain stop/start path quietly.
+    NotApplicable,
+}
+
+/// Longest wait for the old generation's `queued` acknowledgement. A
+/// pre-handoff daemon (another hya version) never writes it.
+const HANDOFF_ACK_WAIT: Duration = Duration::from_secs(10);
+
+/// One restart attempt through the handoff protocol: record `requested`
+/// (with the successor spec, including the executable this restart command
+/// was invoked with), ask the holder with a `mode: "handoff"` stop request,
+/// SIGTERM, and wait for its `queued` acknowledgement — the point at which
+/// this command returns. The old generation does the rest on its own: it
+/// closes its turns at their handoff boundaries, spawns the successor with
+/// inherited descriptors, releases the runtime, and waits for the
+/// successor's health (parking as the owner if the successor fails). The
+/// lock and the listener never change hands on this path — they are
+/// inherited — so every failure is an explicit error; the caller never
+/// falls back to a destructive stop-then-start on its own.
+pub(crate) async fn restart_by_handoff(
+    db: &str,
+    spec: &DaemonSpec,
+    relay: &RelayFlags,
+) -> anyhow::Result<HandoffRestart> {
+    let not_applicable = || Ok::<HandoffRestart, anyhow::Error>(HandoffRestart::NotApplicable);
+    let Some(paths) = db_lock::paths(db) else {
+        return not_applicable();
+    };
+    let Some(busy) = db_lock::holder(db).context("check the database lock")? else {
+        return not_applicable();
+    };
+    let Some(old) = busy.discovery.clone() else {
+        return not_applicable();
+    };
+    let old_pid = busy.holder_pid.unwrap_or(old.pid);
+    let journal = paths.handoff.clone();
+    // One handoff at a time. The CLI returns at `queued`, so its requester
+    // normally vanishes while the daemon-side transition is still active.
+    // Treat a live lock holder as the authoritative in-flight marker; only
+    // recover a journal after both holder and requester vanish.
+    if let Some(state) = db_lock::read_handoff(&journal)
+        && matches!(
+            state.stage(),
+            db_lock::HandoffStage::Requested
+                | db_lock::HandoffStage::Queued
+                | db_lock::HandoffStage::Released
+                | db_lock::HandoffStage::Ready
+        )
+    {
+        let requester_alive = state
+            .stage_pid(db_lock::HandoffStage::Requested)
+            .is_some_and(|pid| pid != std::process::id() && process_alive(pid));
+        let holder_alive = process_alive(old_pid);
+        if requester_alive || holder_alive {
+            anyhow::bail!(
+                "a restart handoff is already in progress (journal {}, stage {:?}); \
+                 wait for it to finish",
+                journal.display(),
+                state.stage()
+            );
+        }
+    }
+    // The successor runs the binary this restart command was invoked with
+    // (its own `current_exe`), not the old daemon's: a restart right after
+    // an update must bring up the new version. Validated here and again by
+    // the old generation before it spawns.
+    validate_successor_exe(&spec.exe)?;
+    db_lock::write_handoff_stage(
+        &journal,
+        db_lock::HandoffStage::Requested,
+        std::process::id(),
+        Some(&db_lock::HandoffSpec {
+            model: spec.model.clone(),
+            allow_hosts: spec.allow_hosts.clone(),
+            relay: relay_spec(relay),
+            exe: Some(spec.exe.clone()),
+        }),
+        None,
+    )
+    .with_context(|| format!("record the handoff journal {}", journal.display()))?;
+    // The stop request must be in place before the signal: the daemon reads
+    // it when SIGTERM arrives. A failed write aborts before the signal —
+    // a plain-signal restart would drain the server without any handoff.
+    db_lock::request_stop(&paths, old_pid, hya_server::ShutdownReason::Restart, true)
+        .with_context(|| {
+            format!(
+                "record the restart request for pid {old_pid}; the running daemon was not signalled"
+            )
+        })?;
+    // SAFETY: `kill` has no memory-safety preconditions.
+    unsafe {
+        libc::kill(
+            i32::try_from(old_pid).context("pid out of range")?,
+            libc::SIGTERM,
+        );
+    }
+    let state = db_lock::wait_handoff(&journal, db_lock::HandoffStage::Queued, HANDOFF_ACK_WAIT)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the running daemon (pid {old_pid}) did not acknowledge the handoff within \
+                 {} s; it predates the handoff protocol or was lost. Replace it explicitly: \
+                 `hya serve stop` and start again",
+                HANDOFF_ACK_WAIT.as_secs()
+            )
+        })?;
+    if state.stage() == db_lock::HandoffStage::Failed {
+        anyhow::bail!(
+            "the running daemon rejected the handoff restart: {}",
+            state.error.as_deref().unwrap_or("no reason given")
+        );
+    }
+    Ok(HandoffRestart::Queued(old))
+}
+
+/// The JSON `hya serve restart --json` prints once the running daemon
+/// acknowledged the handoff (`queued`): `url` is the one the successor
+/// keeps, `startedAt` is inherited by it unchanged, and `pid` is the
+/// generation that acknowledged (the successor's own pid is a matter for
+/// `hya serve status`).
+pub(crate) fn queued_json(found: &Discovery, db: &str) -> serde_json::Value {
+    serde_json::json!({
+        "url": found.url,
+        "pid": found.pid,
+        "version": found.version,
+        "startedAt": found.started_at,
+        "db": db,
+        "log": log_path(db).map(|path| path.to_string_lossy().into_owned()),
+        "started": false,
+        "queued": true,
+    })
+}
+
+/// The human line `hya serve restart` prints at the `queued` ack.
+pub(crate) fn queued_line(found: &Discovery, db: &str) -> String {
+    format!(
+        "restart queued: hya server pid {} at {} is handing off to a new generation \
+         (same URL, db {}); `hya serve status` shows the successor",
+        found.pid, found.url, db
+    )
 }
 
 /// Poll until nothing holds `db`'s lock; `false` on timeout.
