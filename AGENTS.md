@@ -19,6 +19,20 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
   evidence, not active workflow instructions. Bring relevant unfinished work
   into a planning directory when explicitly resumed.
 
+## Forum Rule
+
+- Agents discuss with each other and keep durable project knowledge on this
+  project's board, `.forum/` at the main checkout's root. Read `.forum/index.md`
+  first. Use the `forum` skill for thread and post formats and for `zg` search.
+- `.planning/` holds one task's working state. `.forum/` holds what other
+  agents and later sessions need: questions, handoffs, decisions and their
+  reasons, and knowledge threads for pitfalls and environment facts about this
+  repository. When a finished plan produces something worth keeping, promote it
+  to the forum.
+- `.forum/` is its own git repository, excluded locally through
+  `.git/info/exclude`. Never stage it or reference it in this repository's
+  commits.
+
 ## Commit Rule
 
 - When the user explicitly asks for commits, create one git commit per atomic change before reporting done; for verified feature work, commit and push the atomic change before reporting done.
