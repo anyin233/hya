@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
@@ -33,7 +33,7 @@ use crate::{
 };
 
 const MAX_REQUEST_ATTEMPTS: usize = 3;
-const BASE_RETRY_DELAY: Duration = Duration::from_millis(100);
+const BASE_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -689,6 +689,7 @@ impl RouteCore {
         max_attempts: usize,
     ) -> Result<(reqwest::Response, usize), ProviderError> {
         let max_attempts = max_attempts.max(1);
+        let started = Instant::now();
         // Auth-recovery level: the forced-refresh retry fires at most once per
         // request and always occupies one of the attempt slots below — it never
         // extends the budget, so broken credentials cannot degrade into a
@@ -750,6 +751,28 @@ impl RouteCore {
                 )),
             };
             if attempt + 1 == max_attempts || !error.is_retryable_before_stream() {
+                let attempts = attempt + 1;
+                if attempts > 1 && error.is_retryable_before_stream() {
+                    let detail = format!(
+                        "after {attempts} attempts over {:.1}s",
+                        started.elapsed().as_secs_f64()
+                    );
+                    return Err(match error {
+                        ProviderError::HttpStatus {
+                            status,
+                            message,
+                            retry_after,
+                        } => ProviderError::HttpStatus {
+                            status,
+                            message: format!("{detail}: {message}"),
+                            retry_after,
+                        },
+                        ProviderError::Transport(message) => {
+                            ProviderError::Transport(format!("{detail}: {message}"))
+                        }
+                        other => other,
+                    });
+                }
                 return Err(error);
             }
             sleep(retry_delay(&error, attempt, &self.retry)).await;
