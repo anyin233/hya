@@ -1758,71 +1758,110 @@ impl SessionEngine {
                 (Some(gov), false) => gov.acquire_reserved_stream().await,
                 (None, _) => None,
             };
-            self.validate_actor_claim(actor_claim).await?;
-            let (stream, served_model) = if let Some(route) = workflow_route {
+            let mut round_retries = 0;
+            let stream_round = loop {
+                self.validate_actor_claim(actor_claim).await?;
+                let (stream, served_model) = if let Some(route) = workflow_route {
+                    match self
+                        .stream_with_workflow_route(request.clone(), session, message, route)
+                        .await
+                    {
+                        Ok(opened) => opened,
+                        Err(error) => {
+                            if let Some(route) = workflow_route {
+                                route
+                                    .finalize(Some(workflow_provider_failure_class(&error)))
+                                    .await?;
+                            }
+                            return Err(error.into());
+                        }
+                    }
+                } else {
+                    self.stream_with_model_fallback(
+                        request.clone(),
+                        session,
+                        message,
+                        RequestLineage {
+                            agent: stable_id.as_str(),
+                            root_session_cache: &mut root_session_cache,
+                        },
+                    )
+                    .await?
+                };
+                let step = rounds + round_retries;
+                self.emit_for_actor(
+                    actor_claim,
+                    session,
+                    Event::StepStarted {
+                        session,
+                        message,
+                        step,
+                    },
+                )
+                .await?;
                 match self
-                    .stream_with_workflow_route(request, session, message, route)
+                    .collect_stream_round(
+                        session,
+                        message,
+                        stream,
+                        actor_claim,
+                        RoundAttribution {
+                            step,
+                            model: served_model,
+                        },
+                    )
                     .await
                 {
-                    Ok(opened) => opened,
-                    Err(error) => {
-                        route
-                            .finalize(Some(workflow_provider_failure_class(&error)))
-                            .await?;
-                        return Err(error.into());
+                    Ok(stream_round) => {
+                        if let Some(route) = workflow_route {
+                            route.finalize(None).await?;
+                        }
+                        break stream_round;
                     }
-                }
-            } else {
-                self.stream_with_model_fallback(
-                    request,
-                    session,
-                    message,
-                    RequestLineage {
-                        agent: stable_id.as_str(),
-                        root_session_cache: &mut root_session_cache,
-                    },
-                )
-                .await?
-            };
-            let step = rounds;
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::StepStarted {
-                    session,
-                    message,
-                    step,
-                },
-            )
-            .await?;
-            let stream_round = match self
-                .collect_stream_round(
-                    session,
-                    message,
-                    stream,
-                    actor_claim,
-                    RoundAttribution {
-                        step,
-                        model: served_model,
-                    },
-                )
-                .await
-            {
-                Ok(stream_round) => {
-                    if let Some(route) = workflow_route {
-                        route.finalize(None).await?;
+                    Err(failure) => {
+                        self.emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::StepFinished {
+                                session,
+                                message,
+                                step,
+                                finish: FinishReason::Error,
+                            },
+                        )
+                        .await?;
+                        let retryable = round_retries < MAX_ROUND_RETRIES
+                            && !failure.saw_tool_call
+                            && !failure.saw_text
+                            && is_retryable_round_error(&failure.error);
+                        if !retryable {
+                            if let Some(route) = workflow_route {
+                                route
+                                    .finalize(Some(workflow_failure_class(&failure.error, cancel)))
+                                    .await?;
+                            }
+                            return Err(failure.error);
+                        }
+                        round_retries += 1;
+                        tracing::warn!(
+                            %session,
+                            retry = round_retries,
+                            "provider round failed before text or tool output; retrying"
+                        );
+                        let delay = std::time::Duration::from_secs(1 << (round_retries - 1))
+                            + std::time::Duration::from_millis(50 * u64::from(round_retries));
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => return Err(CoreError::Cancelled),
+                            () = tokio::time::sleep(delay) => {}
+                        }
                     }
-                    stream_round
-                }
-                Err(error) => {
-                    if let Some(route) = workflow_route {
-                        route
-                            .finalize(Some(workflow_failure_class(&error, cancel)))
-                            .await?;
-                    }
-                    return Err(error);
                 }
             };
+            // Failed attempts consume step numbers so subsequent tool rounds do
+            // not reuse a step already recorded in the event log; `rounds` is
+            // now the step of the attempt that succeeded.
+            rounds += round_retries;
             if let Some(tokens) = stream_round.tokens {
                 total_tokens
                     .get_or_insert_with(TokenUsage::default)
@@ -1834,7 +1873,7 @@ impl SessionEngine {
                 Event::StepFinished {
                     session,
                     message,
-                    step,
+                    step: rounds,
                     finish: stream_round.finish,
                 },
             )
@@ -2183,6 +2222,29 @@ impl SessionEngine {
 
             rounds += 1;
         }
+    }
+}
+
+/// Maximum additional provider opens for one engine round.
+const MAX_ROUND_RETRIES: u32 = 2;
+
+/// Mid-stream retries are limited to link failures that are safe to replay before
+/// any assistant text or tool request was delivered. Decode is deliberately
+/// narrow: only the known truncated response-body diagnostics are included.
+fn is_retryable_round_error(error: &CoreError) -> bool {
+    let CoreError::Provider(error) = error else {
+        return false;
+    };
+    match error.as_ref() {
+        ProviderError::Transport(_) => true,
+        ProviderError::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
+        ProviderError::Decode(message) => {
+            let message = message.to_ascii_lowercase();
+            message == "error decoding response body"
+                || message.contains("unexpected eof")
+                || message.contains("unexpected end of file")
+        }
+        _ => false,
     }
 }
 

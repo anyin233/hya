@@ -405,6 +405,19 @@ If a provider round produces tool calls, the engine starts another round with
 the updated projection. The turn continues until the provider finishes,
 cancellation is observed, or execution returns an error.
 
+### Provider round retry
+
+If a provider stream fails after opening but before any text part or tool call,
+the engine may retry that round up to **two** times. Eligible failures are
+transport failures, HTTP 429/5xx failures, and decode failures whose diagnostic
+is exactly `error decoding response body`, `unexpected eof`, or `unexpected end
+of file`. Each failed attempt appends `StepFinished { finish: error }`; the
+engine waits approximately 1s then 2s (with a small jitter) before opening a
+fresh stream and emitting the next `StepStarted`. Cancellation is observed
+during the wait. Text, tool calls, cancellation, actor-claim loss, store/tool
+errors, and any other decode/HTTP errors are never retried. Exhausting the
+budget follows the normal terminal error path.
+
 > **Stream permit lifetime (deadlock invariant)**  
 > The governor stream permit is held **only** around provider streaming and is
 > dropped **before** tool execution. A member blocked inside the `task` tool

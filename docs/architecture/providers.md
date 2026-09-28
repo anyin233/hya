@@ -231,6 +231,17 @@ once a provider returns an event stream, model selection is final. A mid-stream
 SSE error is delivered once to the turn, unchanged, and is never retried,
 replayed, or failed over onto another model.
 
+### Provider-level replay versus engine round retry
+
+Provider HTTP retry is a zero-event replay: before the caller receives an event,
+the provider may reopen a request for transient transport or HTTP 429/5xx
+failures. Once an event stream has delivered an event, that no-replay boundary
+protects against duplicated output and tool side effects. The engine has a
+separate, bounded round retry for a stream that fails before any text or tool
+call: it records the failed step, then opens a fresh stream for the same round
+with the next step number. See the runtime retry policy for the exact decode
+diagnostics and cancellation behavior.
+
 ## HTTP Provider
 
 [`http.rs`](../../crates/hya-provider/src/http.rs) is the shared live-provider

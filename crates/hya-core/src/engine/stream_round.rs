@@ -12,6 +12,22 @@ use super::SessionEngine;
 use super::text_complete::TextPartAccumulator;
 use crate::error::CoreError;
 
+pub(super) struct RoundFailure {
+    pub(super) error: CoreError,
+    pub(super) saw_tool_call: bool,
+    pub(super) saw_text: bool,
+}
+
+impl From<CoreError> for RoundFailure {
+    fn from(error: CoreError) -> Self {
+        Self {
+            error,
+            saw_tool_call: false,
+            saw_text: false,
+        }
+    }
+}
+
 pub(super) struct StreamRound {
     pub(super) tool_calls: Vec<ToolCallReq>,
     pub(super) finish: FinishReason,
@@ -45,7 +61,7 @@ impl SessionEngine {
         stream: EventStream,
         actor_claim: Option<&ActorClaim>,
         attribution: RoundAttribution,
-    ) -> Result<StreamRound, CoreError> {
+    ) -> Result<StreamRound, RoundFailure> {
         let mut tokens = None;
         let collected = self
             .drain_stream_round(session, message, stream, actor_claim, &mut tokens)
@@ -66,14 +82,18 @@ impl SessionEngine {
                 )
                 .await;
             match (&collected, record) {
-                (Ok(_), Err(error)) => return Err(error),
+                (Ok(_), Err(error)) => return Err(error.into()),
                 (Err(_), Err(error)) => {
                     tracing::warn!(%session, "usage record for a failed round was not appended: {error:#}");
                 }
                 (_, Ok(())) => {}
             }
         }
-        let (tool_calls, finish) = collected?;
+        let (tool_calls, finish) = collected.map_err(|failure| RoundFailure {
+            error: failure.error,
+            saw_tool_call: failure.saw_tool_call,
+            saw_text: failure.saw_text,
+        })?;
         Ok(StreamRound {
             tool_calls,
             finish,
@@ -88,37 +108,58 @@ impl SessionEngine {
         mut stream: EventStream,
         actor_claim: Option<&ActorClaim>,
         tokens: &mut Option<TokenUsage>,
-    ) -> Result<(Vec<ToolCallReq>, FinishReason), CoreError> {
+    ) -> Result<(Vec<ToolCallReq>, FinishReason), RoundFailure> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
         let mut reasoning_parts: HashMap<PartId, String> = HashMap::new();
         let mut active_text_part = None;
         let mut finish = FinishReason::Stop;
+        let mut saw_text = false;
         while let Some(item) = stream.next().await {
-            self.validate_actor_claim(actor_claim).await?;
+            if let Err(error) = self.validate_actor_claim(actor_claim).await {
+                return Err(RoundFailure {
+                    error,
+                    saw_tool_call: !tool_calls.is_empty(),
+                    saw_text,
+                });
+            }
             let event = match item {
                 Ok(event) => event,
                 Err(error) => {
                     if let Some(part) = active_text_part
                         && let Some(text) = text_parts.text(part)
+                        && let Err(error) = self
+                            .persist_text_part(actor_claim, session, message, part, text)
+                            .await
                     {
-                        self.persist_text_part(actor_claim, session, message, part, text)
-                            .await?;
+                        return Err(RoundFailure {
+                            error,
+                            saw_tool_call: !tool_calls.is_empty(),
+                            saw_text,
+                        });
                     }
                     for (part, text) in reasoning_parts {
-                        self.persist_reasoning_part(
-                            actor_claim,
-                            session,
-                            message,
-                            part,
-                            text,
-                            None,
-                        )
-                        .await?;
+                        if let Err(error) = self
+                            .persist_reasoning_part(actor_claim, session, message, part, text, None)
+                            .await
+                        {
+                            return Err(RoundFailure {
+                                error,
+                                saw_tool_call: !tool_calls.is_empty(),
+                                saw_text,
+                            });
+                        }
                     }
-                    return Err(error.into());
+                    return Err(RoundFailure {
+                        error: error.into(),
+                        saw_tool_call: !tool_calls.is_empty(),
+                        saw_text,
+                    });
                 }
             };
+            if matches!(&event, Event::TextStart { .. } | Event::TextDelta { .. }) {
+                saw_text = true;
+            }
             if let Event::ToolCallRequested {
                 part,
                 call,
