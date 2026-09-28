@@ -88,7 +88,7 @@ database and so the same daemon and sessions as bare `hya` and a terminal TUI
 in the same directory:
 
 ```sh
-HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts -- \
+HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --shift-enter-lf -- \
   bun packages/hya-tui/src/main.ts --dir "$PWD" --web-tab
 ```
 
@@ -100,7 +100,7 @@ the tab's process and leave the tab showing `[process exited]`).
 Or against a backend you run yourself (`hya serve --bind 127.0.0.1:8080`):
 
 ```sh
-bun packages/hya-tui-web/src/main.ts -- \
+bun packages/hya-tui-web/src/main.ts --shift-enter-lf -- \
   bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD" --web-tab
 ```
 
@@ -118,11 +118,10 @@ process SIGHUP, SIGKILLs the process group of any still running after 3 s,
 waits for all of them, lets each open tab receive its exit frame, then
 closes the listener and exits 0. No tab process outlives the host.
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
 | `--host ADDR` | `127.0.0.1` | Bind address. The host spawns processes for any same-origin client, so bind only loopback unless it runs behind an authenticating proxy. |
 | `--port N` | `7681` | Bind port; `0` picks a free port. |
 | `--cwd DIR` | current directory | Working directory of the spawned command. |
+| `--shift-enter-lf` | off | Translate browser Shift+Enter to LF for programs whose input editor treats LF as newline. |
 | `-- <command...>` | required | argv spawned for every connection. |
 
 Page query parameters: `font` (CSS font family) and `fontSize` (pixels).
@@ -255,15 +254,14 @@ test("echoes a prompt", async ({ tui }) => {
 ```
 
 **What xterm.js sends.** Keys reach the program as xterm.js 6.0 encodes
-them, and xterm.js does not implement the kitty keyboard protocol or
-modifyOtherKeys. So `press("Shift+Enter")` sends a plain CR, the same as
-Enter; `press("Alt+Enter")` sends ESC CR; `press("Control+j")` sends LF;
+them. xterm.js does not implement the kitty keyboard protocol or
+modifyOtherKeys, so a host started with `--shift-enter-lf` translates
+`press("Shift+Enter")` to LF before forwarding it to the PTY. Plain Enter sends
+CR; `press("Alt+Enter")` sends ESC CR; `press("Control+j")` sends LF;
 `press("Shift+Tab")` sends CSI Z (`ESC [ Z`) — xterm.js keeps the key, the
 browser does not move focus — which OpenTUI reports as a shifted `tab`.
 After `press("Escape")`, wait for its effect before the next key: a lone ESC
-followed at once by another key can be read as Alt+that key. A
-program that needs a distinct "newline" key in the browser must accept LF or
-ESC CR (the hya TUI does; see [tui.md](tui.md#composer)). To paste, call
+followed at once by another key can be read as Alt+that key. To paste, call
 `page.evaluate(() => window.hyaTerm.term.paste(text))`: xterm.js turns line
 feeds into CRs and wraps the text in bracketed-paste markers when the program
 enabled mode 2004 (OpenTUI does). `type()` types key by key and is not a paste.

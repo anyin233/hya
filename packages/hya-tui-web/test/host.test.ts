@@ -35,6 +35,14 @@ describe("tui-web host", () => {
     expect(await response.text()).toContain("<div id=\"terminal\"")
   })
 
+  test("reports the generic Shift+Enter input mode only when enabled", async () => {
+    host = startHost({ command: ["sh", "-c", "true"], port: 0 })
+    expect(await (await fetch(`${host.url}input-config`)).json()).toEqual({ shiftEnterLf: false })
+    await host.stop()
+    host = startHost({ command: ["sh", "-c", "true"], port: 0, shiftEnterLf: true })
+    expect(await (await fetch(`${host.url}input-config`)).json()).toEqual({ shiftEnterLf: true })
+  })
+
   test("runs the command on a real PTY sized by the client and reports its exit code", async () => {
     host = startHost({ command: ["sh", "-c", "test -t 0 && echo tty; stty size; exit 3"], port: 0 })
     const ws = new WebSocket(`${host.url.replace("http", "ws")}pty?cols=91&rows=17`)

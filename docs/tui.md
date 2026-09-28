@@ -527,7 +527,7 @@ A second, narrower sidebar on the left lists every Project live
 | Input | Effect |
 | --- | --- |
 | Plain text + Enter | Admit a prompt in the current session; create one if needed. |
-| Ctrl+J, Alt+Enter, Shift+Enter | Insert a newline instead of sending (Shift+Enter only where the terminal reports it; see [Composer](#composer)). |
+| Ctrl+J, Alt+Enter, Shift+Enter | Insert a newline instead of sending. Shift+Enter works in the WebUI and terminals that report the modifier; see [Composer](#composer). |
 | Up / Down | On the input's first / last line: the previous / next submitted input. |
 | `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
@@ -643,11 +643,9 @@ input's `composerKeyBindings` in `src/keys/bindings.ts`, the `/sessions`
 picker's row actions, the Provider View's `providerKeyRows` in
 `src/state/providers.ts`) and the merged command list, so the overlay cannot
 list a key the TUI does not have or miss one it does; the prompt and picker
-keys come from `src/commands/help.ts` next to those state machines. Keys
-that only a real terminal can send are marked: Shift+Enter reads
-`terminal only` because xterm.js (the WebUI) and terminals without the
-kitty keyboard protocol or modifyOtherKeys send a plain Enter for it — use
-Ctrl+J or Alt+Enter there.
+keys come from `src/commands/help.ts` next to those state machines.
+Shift+Enter is available in the WebUI and terminals that report it separately
+from Enter. Ctrl+J and Alt+Enter remain newline alternatives.
 
 When the TUI cannot reach its backend, the main panel shows the same key
 list as plain text instead.
@@ -1205,12 +1203,15 @@ built-in `<textarea>`). It keeps the keyboard focus. Its placeholder is
 `Message, /command, !shell, or @file`.
 
 **Writing.** Enter sends the whole input: a prompt, a `/command`, or a
-`!command`. Ctrl+J inserts a newline in every terminal and in the WebUI;
-Alt+Enter does too. Shift+Enter inserts a newline only in terminals that
-report it as a separate key (the kitty keyboard protocol, which OpenTUI
-requests at startup, or modifyOtherKeys). xterm.js, and so the
-WebUI, sends a plain Enter for Shift+Enter, so there it sends the input. A
+`!command`. Ctrl+J, Shift+Enter, and Alt+Enter insert a newline instead of
+sending. The WebUI translates Shift+Enter to the same LF sequence used by
+Ctrl+J because xterm.js otherwise reports Shift+Enter as plain Enter. A
 bracketed paste inserts its text, line breaks included, and never sends it.
+In a native terminal, Shift+Enter requires kitty keyboard protocol or
+modifyOtherKeys support; a terminal that sends the same CR for Enter and
+Shift+Enter cannot distinguish them. Use Ctrl+J or Alt+Enter there.
+For example, type `first line`, press Shift+Enter, type `second line`, then
+press Enter to submit one prompt containing `first line\nsecond line`.
 The box grows with its content up to 8 rows (wrapped lines count), then
 scrolls. Newlines stay in the prompt text, so the transcript shows the lines
 as typed. Editing keys: Left/Right, Up/Down between lines, Home/End to the

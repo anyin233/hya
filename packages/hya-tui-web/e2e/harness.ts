@@ -24,6 +24,8 @@ export type Cell = {
 export type LaunchOptions = {
   cwd?: string
   env?: Record<string, string>
+  /** Browser host flags, before the fixed command separator. */
+  hostArgs?: string[]
   /** Browser viewport in CSS pixels (default: the project viewport). */
   viewport?: { width: number; height: number }
 }
@@ -130,7 +132,7 @@ export class Tui {
 }
 
 function startHost(command: string[], options: LaunchOptions): Promise<{ child: ChildProcess; url: string }> {
-  const args = ["src/main.ts", "--port", "0", ...(options.cwd ? ["--cwd", options.cwd] : []), "--", ...command]
+  const args = ["src/main.ts", "--port", "0", ...(options.cwd ? ["--cwd", options.cwd] : []), ...(options.hostArgs ?? []), "--", ...command]
   const child = spawn("bun", args, { cwd: packageDir, env: { ...process.env, ...options.env }, stdio: ["ignore", "pipe", "pipe"] })
   return new Promise((resolve, reject) => {
     let output = ""

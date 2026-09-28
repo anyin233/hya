@@ -201,11 +201,10 @@ export interface ComposerKeyBinding {
 
 /**
  * Overrides for OpenTUI's default textarea bindings (merged by key). Enter
- * submits. Ctrl+J (a line feed) inserts a newline in every terminal and in
- * the browser; Shift+Enter only where the terminal reports it (kitty
- * keyboard protocol or modifyOtherKeys; xterm.js sends a plain CR for it, so
- * the WebUI treats it as Enter); Alt+Enter (ESC CR) works in xterm.js too.
- * Home/End move to the start/end of the current (wrapped) line and stay there.
+ * submits. Ctrl+J (a line feed), Shift+Enter, and Alt+Enter insert a newline.
+ * The WebUI translates Shift+Enter to a line feed because xterm.js otherwise
+ * reports it as a plain Enter. Home/End move to the start/end of the current
+ * (wrapped) line and stay there.
  */
 export const composerKeyBindings: readonly ComposerKeyBinding[] = [
   { name: "return", action: "submit" },
