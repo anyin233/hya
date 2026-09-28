@@ -54,7 +54,14 @@ async fn list_interactions(
                     .map(|id| id.to_string())
                     .unwrap_or_default(),
                 r#type: pb::InteractionType::Permission as i32,
-                title: format!("{} {}", field(&entry, "action"), field(&entry, "resource")),
+                title: format!(
+                    "{} {}",
+                    field(&entry, "action"),
+                    entry
+                        .pointer("/resources/0")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                ),
                 detail: String::new(),
                 options: Vec::new(),
                 payload: None,
@@ -91,7 +98,7 @@ async fn list_interactions(
 }
 
 fn matches_type(want: Option<pb::InteractionType>, kind: pb::InteractionType) -> bool {
-    want.is_none_or(|want| want == kind)
+    want.is_none_or(|want| want == pb::InteractionType::Unspecified || want == kind)
 }
 
 async fn respond_interaction(

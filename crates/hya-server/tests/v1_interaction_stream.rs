@@ -91,6 +91,94 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
     )
 }
 
+#[tokio::test]
+async fn shell_turn_exposes_its_permission_request_and_resumes_after_reply() {
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (permission, asks) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.expect("store");
+    let engine = SessionEngine::new(
+        store,
+        providers,
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    );
+    let state = AppState::new(
+        Arc::new(engine),
+        Arc::new(AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            system_prompt: "x".to_string(),
+            workdir: std::env::temp_dir(),
+            reasoning: None,
+        }),
+    )
+    .with_permission_requests(asks);
+    let app = router(state);
+    let (status, created) = respond(
+        &app,
+        "/v1/sessions",
+        json!({
+            "agent": "build",
+            "model": "fake",
+            "workdir": std::env::temp_dir().to_string_lossy(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let session = created["session"]["id"].as_str().expect("session id");
+    let turn_app = app.clone();
+    let turn_uri = format!("/v1/sessions/{session}/turns");
+    let turn = tokio::spawn(async move {
+        respond(&turn_app, &turn_uri, json!({"shell": {"command": "pwd"}})).await
+    });
+
+    let pending = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (_, body) = get_json(&app, "/v1/interactions").await;
+            if let Some(item) = body["interactions"][0].as_object() {
+                break Value::Object(item.clone());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("shell turn must publish a pending permission request");
+    assert_eq!(pending["type"], json!("INTERACTION_TYPE_PERMISSION"));
+    assert!(
+        pending["title"]
+            .as_str()
+            .is_some_and(|title| title.contains("pwd")),
+        "permission title must include the command: {pending}"
+    );
+    let pending_id = pending["id"].as_str().expect("permission id");
+    let (status, permissions) =
+        get_json(&app, "/v1/interactions?type=INTERACTION_TYPE_PERMISSION").await;
+    assert_eq!(status, StatusCode::OK, "{permissions}");
+    assert_eq!(permissions["interactions"][0]["id"], json!(pending_id));
+    let (status, questions) =
+        get_json(&app, "/v1/interactions?type=INTERACTION_TYPE_QUESTION").await;
+    assert_eq!(status, StatusCode::OK, "{questions}");
+    assert!(
+        questions["interactions"]
+            .as_array()
+            .is_none_or(Vec::is_empty)
+    );
+    let (status, reply) = respond(
+        &app,
+        &format!("/v1/interactions/{pending_id}/respond"),
+        json!({"permission": {"allowed": true, "persist": false}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let (status, result) = tokio::time::timeout(Duration::from_secs(2), turn)
+        .await
+        .expect("shell turn must complete after permission")
+        .expect("turn task");
+    assert_eq!(status, StatusCode::OK, "{result}");
+}
+
 /// Collect SSE frames until `predicate` matches or the deadline passes.
 async fn frames_until(
     app: &axum::Router,

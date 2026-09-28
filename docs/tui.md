@@ -68,6 +68,14 @@ The row disappears when the backend reports the turn finished, failed, or was
 cancelled, or when you switch sessions. Failures display the backend's error
 message in the status row.
 
+Tool calls that require permission pause until you answer them. The Pending
+panel and `/interactions` show the action and requested command; use the ID
+shown there with `/approve <id>` or `/deny <id>`. For example, after asking
+`what is going on in this repository`, a `bash git status ...` request can
+appear. Type `/interactions`, then `/approve <id>` to let that call run once;
+the agent continues after the reply. If a backend restart interrupts a turn,
+start a new session and send the prompt again.
+
 To set a provider API key, type `/key set anthropic`, paste the key into the
 concealed prompt, and press Enter. The prompt draws bullets only and clears its
 buffer after submission; Esc cancels. `/keys` lists saved provider IDs, and
@@ -193,7 +201,7 @@ maps each binding to the `Service.Method` in the
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `CancelTurnResponse` |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync` |
 | `GET /v1/sessions/{id}/events?sinceSeq=N` | No body | `ListEventsResponse` on stream resync |
-| `GET /v1/interactions` | No body | `ListInteractionsResponse.interactions: Interaction[]` |
+| `GET /v1/interactions` | No body; optional `type=INTERACTION_TYPE_PERMISSION` or `type=INTERACTION_TYPE_QUESTION` query filter. An omitted or `INTERACTION_TYPE_UNSPECIFIED` type returns both. | `ListInteractionsResponse.interactions: Interaction[]` (`id`, `session`, `type`, `title`, `detail`, `options`). Permission titles include the action and command/resource. |
 | `POST /v1/interactions/{id}/respond` | `{permission: {allowed: boolean, persist: false}}` or `{question: {answer: string}}` | `RespondInteractionResponse.applied` |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |

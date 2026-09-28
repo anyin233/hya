@@ -61,6 +61,19 @@ Semantics highlights:
   falling back to the literal slash for unknown commands. The bootstrap
   catalog snapshot stays stale until the next bootstrap, but command-time
   expansion picks up newly written sources.
+- **Pending tool permission**: a turn that requests an unapproved tool waits
+  for an interaction reply. `GET /v1/interactions` and gRPC
+  `Interactions.ListInteractions` return both permission and question entries
+  when `ListInteractionsRequest.type` is omitted or
+  `INTERACTION_TYPE_UNSPECIFIED`; `INTERACTION_TYPE_PERMISSION` and
+  `INTERACTION_TYPE_QUESTION` filter to one kind. Each permission `Interaction`
+  includes `id`, `session`, `type`, and a `title` containing its action and
+  command/resource. `POST /v1/interactions/{id}/respond` (gRPC
+  `Interactions.RespondInteraction`) accepts
+  `{ "permission": { "allowed": boolean, "persist": boolean } }` and returns
+  `{ "applied": boolean }`. For example, list interactions after a Bash call,
+  then approve its ID with `allowed: true, persist: false` to resume that call
+  once. The OpenTUI exposes this through `/interactions` and `/approve <id>`.
 
 ## Status codes
 
