@@ -496,18 +496,20 @@ form appends `[effort: <level>]`.
 }
 ```
 
-Only `command` is required. The default timeout is 300 seconds; `timeout: 0`
-disables the deadline, and other finite values clamp to 1..=3600 seconds with a
-clamp notice. `cwd` is checked against the existing lexical workdir policy.
-Command permission is checked before process creation. Timeout and cancellation
-terminate and reap the complete process group. Non-PTY stdout/stderr are
-captured concurrently in arrival order; PTY mode uses a real PTY and keeps
-observing the deadline/cancellation after leader exit while descendants retain
-the slave. Inline output is capped at 50 KiB after timeout/clamp notices are
-added. A truncated result points to the complete raw stream in a private
-mode-0600 hya artifact; an armed owner removes partial/unpublished artifacts on
-every other exit. Nonzero exits and timeouts are completed structured results
-with status metadata, while explicit cancellation is typed `cancelled`.
+Only `command` is required. The `timeout` value is in seconds: the default is
+300, `timeout: 0` disables the deadline, and other finite values clamp to
+1..=3600 seconds with a clamp notice. `cwd` is checked against the existing
+lexical workdir policy. Command permission is checked before process creation.
+Timeout and cancellation terminate and reap the complete process group.
+Non-PTY stdout/stderr are captured concurrently in arrival order; PTY mode uses
+a real PTY and keeps observing the deadline/cancellation after leader exit while
+descendants retain the slave. Inline output is capped at 50 KiB after
+timeout/clamp notices are added. A truncated result points to the complete raw
+stream in a private mode-0600 hya artifact; its inline preview retains a short
+head and long tail with an omission marker naming the artifact, so final failure
+summaries remain visible. Nonzero exits add a model-visible exit-code notice in
+the output (zero exits do not); timeouts are completed structured results with
+status metadata, while explicit cancellation is typed `cancelled`.
 Environment values are never echoed in titles, output, diagnostics, metadata,
 or any client surface.
 
@@ -798,9 +800,9 @@ construct or pass `literal: true` instead. Its closed schema requires
 values over 5 become 5. The result says so at the end of its summary line and
 as the first `metadata.warnings` entry, for example `3 matches in 1 file.
 (context clamped to 5: requested 8, allowed 0–5)`.
+The `glob` value is a file-path filter. When it contains no glob metacharacters and names an existing directory relative to the search root, it matches files anywhere under that directory (equivalent to `<directory>/**`); a literal file path continues to match that file.
 
 ```json
-The `glob` value is a file-path filter. When it contains no glob metacharacters and names an existing directory relative to the search root, it matches files anywhere under that directory (equivalent to `<directory>/**`); a literal file path continues to match that file.
 {
   "pattern": "TODO|FIXME",
   "path": "src",
