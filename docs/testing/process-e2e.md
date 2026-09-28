@@ -13,7 +13,7 @@ the same API real frontends consume.
 | `src/backend.rs` | Temp dirs, `config.yaml`, MCP/skill/bundle fixtures, spawn `hya serve` on `127.0.0.1:0` |
 | `src/fake_llm.rs` | Queue of `ScriptStep::Text` / `ToolCalls` over SSE `/v1/chat/completions` |
 | `src/scenario.rs` | `E2eEnv` / `E2eEnvBuilder`, HTTP helpers, permission/question auto-reply, tree helpers |
-| `tests/p01_*.rs` … `p20_*.rs` | One scenario family per file (`p01`–`p20`, including `p12_context_api` through `p20_model_catalog_discovery`); run alone with `cargo test -p hya-e2e --test pNN_…` (two digits, e.g. `p20_model_catalog_discovery`) |
+| `tests/p01_*.rs` … `p20_*.rs` | One scenario family per file (`p01`–`p20`, including `p12_context_api` through `p20_model_catalog_discovery`); all files are modules of the single `tests/main.rs` binary `hya_e2e_it`, so run one family with a module filter: `cargo test -p hya-e2e --test hya_e2e_it pNN_…:: -- --test-threads=1` (two digits, e.g. `p20_model_catalog_discovery::`) |
 | `matrix.toml` | Machine-readable PR-matrix registry (IDs → paths) |
 
 ## Building an environment
@@ -154,7 +154,7 @@ Harness pieces the relay file uses:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e --test p38_relay -- --test-threads=1
+cargo test -p hya-e2e --test hya_e2e_it p38_relay:: -- --test-threads=1
 ```
 
 The three scenarios take about a second together. Real intermediaries (nginx,
@@ -199,8 +199,8 @@ Install requires a path ending in `.hyabundle` — use
 ```sh
 cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
-cargo test -p hya-e2e --test p03_permissions -- --nocapture
-cargo test -p hya-e2e --test p38_relay -- --test-threads=1
+cargo test -p hya-e2e --test hya_e2e_it p03_permissions:: -- --test-threads=1 --nocapture
+cargo test -p hya-e2e --test hya_e2e_it p38_relay:: -- --test-threads=1
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 

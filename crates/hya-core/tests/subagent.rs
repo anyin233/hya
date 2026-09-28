@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod support;
+use crate::support;
 
 use async_trait::async_trait;
 use futures::{FutureExt as _, stream};

@@ -61,7 +61,7 @@
 - A `TaskTool` integration test must capture the batch request at `SpawnerPlane`
   and assert every member ID is `None`.
 - Keep coverage for valid and malformed single-mode resume IDs.
-- Run `cargo test -p hya-tool --test task` after changing this contract.
+- Run `cargo test -p hya-tool --test hya_tool_it task::` after changing this contract.
 
 ### 7. Wrong vs Correct
 

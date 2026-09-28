@@ -4,8 +4,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-#[path = "support/event_script.rs"]
-mod event_script;
+use crate::event_script;
 
 use hya_proto::{
     AgentName, Envelope, Event, EventSeq, OwnerRunId, PROJECTION_REDUCER_VERSION, Projection,

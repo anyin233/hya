@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [lints]
 workspace = true
@@ -30,3 +31,15 @@ hya-todo-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
+
+[[test]]
+name = "hya_tool_it"
+path = "tests/main.rs"
+
+[[test]]
+name = "skill"
+path = "tests/skill.rs"
+
+[[test]]
+name = "skill_catalog"
+path = "tests/skill_catalog.rs"

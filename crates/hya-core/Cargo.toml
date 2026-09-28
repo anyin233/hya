@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [lints]
 workspace = true
@@ -37,3 +38,15 @@ hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
 sqlx = { workspace = true }
+
+[[test]]
+name = "hya_core_it"
+path = "tests/main.rs"
+
+[[test]]
+name = "root_turn_bundle_precedence"
+path = "tests/root_turn_bundle_precedence.rs"
+
+[[test]]
+name = "workdir"
+path = "tests/workdir.rs"

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Independent release metadata verifier and update TCB (no runtime/plugin/MCP/bundle deps)"
+autotests = false
 
 [lints]
 workspace = true
@@ -19,3 +20,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
+
+[[test]]
+name = "hya_updater_it"
+path = "tests/main.rs"

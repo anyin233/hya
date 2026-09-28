@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [lints]
 workspace = true
@@ -48,3 +49,11 @@ tower = { workspace = true }
 http-body-util = "0.1"
 hyper = { workspace = true, features = ["client"] }
 tokio-tungstenite = { workspace = true }
+
+[[test]]
+name = "hya_server_it"
+path = "tests/main.rs"
+
+[[test]]
+name = "v1_no_process_cwd"
+path = "tests/v1_no_process_cwd.rs"

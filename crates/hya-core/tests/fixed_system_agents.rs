@@ -7,7 +7,7 @@
 //! prompts are fixed. They are not agent spawn: ordinary can_spawn/roster must
 //! never list them, and their prompts must beat any root or hardcoded prompt.
 
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 

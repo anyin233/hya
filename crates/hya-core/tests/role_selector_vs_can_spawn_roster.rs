@@ -2,7 +2,7 @@
 
 //! Role controls selector mode only; the ordinary roster is the caller's scope.
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 

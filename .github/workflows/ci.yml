@@ -46,6 +46,11 @@ jobs:
       - name: matrix registry check
         if: ${{ !cancelled() }}
         run: cargo run -p xtask -- matrix-check
+      # Fails if a tests/*.rs file is neither a test target nor a module of the
+      # crate's tests/main.rs, so it would never be compiled or run.
+      - name: test layout check
+        if: ${{ !cancelled() }}
+        run: cargo run -p xtask -- test-layout
       # --all-targets type-checks every lib, bin, test, and example, so a
       # separate `cargo build --workspace` adds nothing here.
       - name: clippy

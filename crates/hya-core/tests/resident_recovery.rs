@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::path::Path;
 use std::sync::Arc;

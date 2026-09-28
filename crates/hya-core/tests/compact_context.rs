@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 

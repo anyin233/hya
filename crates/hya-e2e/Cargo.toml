@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 description = "Process-level agent E2E harness: real hya + scripted FakeLlm"
 publish = false
+autotests = false
 
 [lints]
 workspace = true
@@ -34,3 +35,7 @@ base64 = { workspace = true }
 futures = { workspace = true }
 rcgen = { workspace = true }
 tokio-tungstenite = { workspace = true }
+
+[[test]]
+name = "hya_e2e_it"
+path = "tests/main.rs"

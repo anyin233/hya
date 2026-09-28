@@ -767,7 +767,7 @@ fn private_v1_ciphertext_digest_mismatch_is_rejected() {
 /// Regenerate them from this manifest after any manifest-format change:
 ///
 /// ```sh
-/// cargo test -p hya-bundle --test package_inspection -- --ignored regenerate
+/// cargo test -p hya-bundle --test hya_bundle_it -- --ignored package_inspection::regenerate
 /// ```
 const FIXTURE_MANIFEST: &[u8] = br#"---
 kind: AgentBundle

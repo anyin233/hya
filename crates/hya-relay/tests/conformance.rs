@@ -17,7 +17,7 @@
 //! | (h) | rewrites Host / `:authority` | Cloudflare Tunnel, Caddy, `tailscale serve` |
 //! | (i) | none, `hya+insecure://` | tailnet |
 
-mod support;
+use crate::support;
 
 use std::sync::atomic::Ordering;
 use std::time::Duration;

@@ -1,9 +1,9 @@
-# 0.43.3
+# 0.43.4
 
-## Thinking-effort repair
+## Smaller development builds
 
-- Removed the implicit fallback that pinned a model's maximum thinking effort when none was chosen; an unspecified effort now sends no effort field, so the upstream provider default applies — unspecified means default, not disabled.
-- Explicit effort selections are still honored as-is, including a default declared in the model catalog.
-- The TUI `/effort` screen now shows the efforts available for the current model and saves a per-model effort preference.
-- The existing `model#variant` route (for example `model#high`) still selects an effort directly.
-- The model catalog now carries per-model effort menu and default metadata.
+- The dev profile is now committed in `Cargo.toml`: workspace crates build with line tables only, third-party crates without debug info, `split-debuginfo = "off"` (no per-codegen-unit `.o` files kept beside macOS binaries), and incremental compilation off. Every worktree and CI now compile with the same flags. A full `cargo test --workspace --exclude hya-e2e` build now takes 3.6 GiB in `target/debug/deps` and 4 GiB in `target/` overall; the previous layout used about 11 GiB per build set, plus incremental caches. An existing `target/debug/incremental` is no longer used and can be deleted once.
+- Integration tests compile into one test binary per crate (`<crate>_it`, rooted at `tests/main.rs`) instead of one binary per file: 296 integration-test executables became 25 (15 merged binaries, 7 standalone files, and 3 crates that have a single test file). The test files stay in place. Files that change process-global state (environment variables, the working directory) keep their own binaries. Run one file with a module filter, e.g. `cargo test -p hya-core --test hya_core_it subagent::`.
+- New `cargo run -p xtask -- test-layout`, also run in CI, fails when a `tests/*.rs` file is neither a test target nor a module of one.
+- New `cargo run -p xtask -- target-gc [--keep N] [--dry-run]` deletes superseded workspace build artifacts: all but the newest unit per workspace target and artifact kind, every unit of a target the workspace no longer declares, and their fingerprints. It keeps third-party artifacts and waits for a running cargo build to finish.
+- `docs/development.md` now asks for one target directory per worktree. A shared `CARGO_TARGET_DIR` serializes builds, confuses `target-gc`, and lets one worktree overwrite another's native tool-bundle libraries.

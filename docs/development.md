@@ -50,6 +50,74 @@ For docs-only changes, at least run a local Markdown link check and a scan for
 accidental references to repository-private process notes that do not belong in
 project docs.
 
+### Build artifacts and parallel worktrees
+
+Debug build output is dominated by test executables: each one statically links
+the whole stack, and Cargo never deletes an artifact a newer build replaces.
+Four rules keep `target/` small enough to run several worktrees at once.
+
+**One dev profile for everyone.** `[profile.dev]` in the root `Cargo.toml` sets
+`debug = "line-tables-only"`, `split-debuginfo = "off"`, and
+`incremental = false` for workspace crates, and `debug = false` for third-party
+crates (`[profile.dev.package."*"]`). Do not re-set `rustflags`, `debuginfo`,
+or `split-debuginfo` in a machine-local `.cargo/config.toml`: differing flags
+between worktrees produce a second copy of every artifact. On macOS
+`split-debuginfo = "off"` drops line numbers from backtraces (panic messages
+keep file:line); for a debugging session use
+`CARGO_PROFILE_DEV_SPLIT_DEBUGINFO=unpacked cargo test …`. For a tight
+edit-compile loop on one crate, `CARGO_INCREMENTAL=1` turns incremental
+compilation back on.
+
+**One integration-test binary per crate.** A crate with more than one
+`tests/*.rs` file sets `autotests = false` and declares
+`[[test]] name = "<crate>_it", path = "tests/main.rs"`. The files stay where
+they are; `tests/main.rs` declares each as a module (`mod subagent;`), and shared
+helpers (`tests/support/`) are declared once there and imported with
+`use crate::support;`. A file that mutates process-global state (environment
+variables, the working directory) must not share a process with other tests:
+it stays its own `[[test]]` target (for example `hya-core`'s `workdir`).
+
+- Adding a test file: create `tests/foo.rs` and add `mod foo;` to the crate's
+  `tests/main.rs` (or a `[[test]]` entry when it mutates global state).
+- Running one file: filter by module, e.g.
+  `cargo test -p hya-core --test hya_core_it subagent::`.
+- `cargo run -p xtask -- test-layout` (run in CI) fails when a `tests/*.rs`
+  file is neither a test target nor a module of one, since such a file would
+  otherwise never be compiled.
+
+**Collect superseded artifacts.** `cargo run -p xtask -- target-gc` deletes,
+per workspace target and artifact kind (rlib, rmeta-only, dylib, executable),
+all but the most recently built unit, every unit of a target the workspace no
+longer declares, and their `.fingerprint` entries. Third-party artifacts are
+kept. It takes Cargo's `.cargo-lock` for each profile directory, so it waits
+for a running build instead of deleting its outputs.
+
+| Flag | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `--keep N` | integer ≥ 1 | `1` | Units kept per workspace target and kind |
+| `--dry-run` | flag | off | List what would be removed and the space it frees |
+
+It collects `target/` of the checkout it runs in, or `CARGO_TARGET_DIR`, and
+uses that checkout's `cargo metadata` to decide what is current. Run it in each
+worktree after a version bump or a branch switch:
+
+```sh
+cargo run -p xtask -- target-gc --dry-run   # inspect
+cargo run -p xtask -- target-gc             # delete
+```
+
+**One target directory per worktree.** Do not point several worktrees at one
+`CARGO_TARGET_DIR`. Cargo locks a target directory for the whole build, so a
+shared one serializes every worktree; `target-gc` would treat the other
+branches' targets as undeclared; and native tool bundles load
+`target/<profile>/deps/lib<bundle>.{dylib,so}` by a fixed, hash-less name
+beside the test executable, so one worktree's build replaces another's library
+with a different `hya-tool` ABI. The shared third-party portion of a debug
+build is under 1 GiB, so separate target directories cost little. To avoid
+recompiling third-party crates in every worktree, use a compiler cache such as
+`RUSTC_WRAPPER=sccache` (incremental compilation must be off for it to cache
+workspace crates).
+
 ### Process agent E2E (Track P)
 
 Product-path coverage lives in `crates/hya-e2e` (real `hya` + FakeLlm).

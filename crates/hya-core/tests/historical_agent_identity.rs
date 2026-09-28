@@ -9,7 +9,7 @@
 //!   the original or forked session is actually continued — never rewrite to
 //!   general/base.
 
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 

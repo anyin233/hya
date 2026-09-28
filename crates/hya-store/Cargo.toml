@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [lints]
 workspace = true
@@ -22,3 +23,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[[test]]
+name = "hya_store_it"
+path = "tests/main.rs"

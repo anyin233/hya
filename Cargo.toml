@@ -6,7 +6,7 @@ members = ["crates/*", "bundles/presets/base-tools/native", "bundles/presets/tod
 exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.43.3"
+version = "0.43.4"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -111,9 +111,25 @@ missing_docs = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
 
+# Dev/test artifacts dominate local disk use (every test binary links the whole
+# stack). Workspace crates keep only line tables; third-party crates carry no
+# debug info. `split-debuginfo = "off"` stops macOS from keeping every codegen
+# unit's `.o` beside each binary: panic messages still name file:line, but
+# macOS backtraces lose line numbers (Linux keeps them). Set
+# `CARGO_PROFILE_DEV_SPLIT_DEBUGINFO=unpacked` for a debugging session.
+# Incremental caches are off: they took more space than all of `deps/` (5.3 GiB
+# vs 3.5 GiB for a full test build), and caches of superseded builds stay. Set
+# `CARGO_INCREMENTAL=1` for a tight edit-compile loop on one crate.
+# These live here, not in a machine-local `.cargo/config.toml`, so every
+# worktree and CI compile with identical flags and can reuse artifacts.
 [profile.dev]
-# faster incremental builds during the long phased build-out
 opt-level = 0
+debug = "line-tables-only"
+split-debuginfo = "off"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 # Cold start is dominated by pre-main work (page-in, code-signature

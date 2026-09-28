@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::time::Duration;

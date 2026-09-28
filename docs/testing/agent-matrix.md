@@ -214,5 +214,5 @@ carries three, `p03` has one id and two functions.
    `crates/hya-e2e/tests/pNN_*.rs` using `E2eEnvBuilder`.
 3. Register the ID in `matrix.toml` and this page.
 4. Keep oracles honest — see [process-e2e.md](process-e2e.md#oracle-rules-do-not-weaken).
-5. Run `cargo test -p hya-e2e --test pNN_… -- --test-threads=1` then the full
+5. Run `cargo test -p hya-e2e --test hya_e2e_it pNN_…:: -- --test-threads=1` then the full
    crate suite before landing.

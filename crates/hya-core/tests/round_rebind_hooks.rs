@@ -1,7 +1,7 @@
 //! Root round rebinding refreshes the captured hook chain with the runtime generation.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

@@ -4,7 +4,7 @@
 //! (typed open errors, pinned and negotiated bindings, prefix and TLS
 //! failures).
 
-mod support;
+use crate::support;
 
 use std::time::Duration;
 

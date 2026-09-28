@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, dead_code)]
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::Path;

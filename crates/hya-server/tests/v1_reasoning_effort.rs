@@ -6,7 +6,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

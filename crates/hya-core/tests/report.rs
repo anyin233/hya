@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod support;
+use crate::support;
 
 use async_trait::async_trait;
 use futures::stream;

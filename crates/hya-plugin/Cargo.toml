@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [lints]
 workspace = true
@@ -25,3 +26,7 @@ toml = { workspace = true }
 
 [dev-dependencies]
 serde_norway = { workspace = true }
+
+[[test]]
+name = "hya_plugin_it"
+path = "tests/main.rs"

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "hya secure relay: hya.relay.v1 rendezvous protocol, transport abstraction, and relay links (no hya runtime deps)"
+autotests = false
 
 [lints]
 workspace = true
@@ -49,3 +50,7 @@ zeroize = { workspace = true }
 hyper = { workspace = true, features = ["client"] }
 rcgen = { workspace = true }
 tokio = { workspace = true }
+
+[[test]]
+name = "hya_relay_it"
+path = "tests/main.rs"

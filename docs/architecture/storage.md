@@ -440,7 +440,7 @@ The first read of a session that has no snapshot yet still folds its whole
 log once (1.1 s for a 190k-event log in a debug build). Reproduce with
 `cargo run -p xtask -- startup-bench --db <copy.db> --timeout-secs 300`
 (phase waterfall) and the ignored equivalence bench
-`HYA_PROJECTION_CACHE_DB=<db> cargo test -p hya-store --test projection_cache -- --ignored --nocapture`,
+`HYA_PROJECTION_CACHE_DB=<db> cargo test -p hya-store --test hya_store_it projection_cache:: -- --ignored --nocapture`,
 which also asserts that every session's cold, snapshot, and warm reads equal
 its full replay.
 

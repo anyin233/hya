@@ -4,8 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "../../hya-proto/tests/support/event_script.rs"]
-mod event_script;
+use crate::event_script;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -261,7 +260,7 @@ async fn with_projection_sees_the_folded_projection() {
 ///
 /// ```sh
 /// HYA_PROJECTION_CACHE_DB=/path/to/run.db \
-///   cargo test -p hya-store --test projection_cache -- --ignored --nocapture
+///   cargo test -p hya-store --test hya_store_it projection_cache:: -- --ignored --nocapture
 /// ```
 ///
 /// For every session: a cold read (full fold, snapshot written), a read from a

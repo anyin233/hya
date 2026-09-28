@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [lints]
 workspace = true
@@ -46,3 +47,15 @@ futures = { workspace = true }
 [dev-dependencies]
 http-body-util = { workspace = true }
 tower = { workspace = true }
+
+[[test]]
+name = "hya_app_it"
+path = "tests/main.rs"
+
+[[test]]
+name = "provider_control"
+path = "tests/provider_control.rs"
+
+[[test]]
+name = "provider_models_cache"
+path = "tests/provider_models_cache.rs"

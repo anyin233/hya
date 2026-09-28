@@ -5,7 +5,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-mod support;
+use crate::support;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

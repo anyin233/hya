@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+autotests = false
 
 [[bin]]
 name = "hya"
@@ -45,3 +46,7 @@ ed25519-dalek = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+
+[[test]]
+name = "hya_backend_it"
+path = "tests/main.rs"
