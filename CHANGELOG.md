@@ -1,7 +1,14 @@
-# 0.43.5
+# 0.43.6
 
-## Text parts are stored in the order the model wrote them
+## Anthropic prompt caching
 
-- Each assistant text part now becomes durable at its own `TextEnd` (after any `text_complete` rewrite), instead of after the whole provider round. Text the model wrote before a tool call is stored before that tool call, so replay, the TUI transcript, and later model requests see the real order.
-- Previously the stored order was reasoning, tools, then text; rebuilt requests placed the step's text after its tool results, and on Anthropic routes the latest step's text became a trailing assistant message that models read as a new user instruction.
-- If a provider stream fails mid-part, the text streamed so far is stored (without the `text_complete` hook) instead of being lost from replay.
+- Anthropic routes now mark up to three `cache_control: {"type": "ephemeral"}` breakpoints per request: the last system block, the last tool definition, and the last content block of the final message. Repeated tool-loop requests reuse the cached prefix instead of paying for the full prompt every step.
+- New per-provider switch `providers.<id>.prompt_cache` (boolean; default `true` for `kind: anthropic`, ignored for other kinds). Set `prompt_cache: false` for an Anthropic-compatible gateway that rejects `cache_control`.
+
+```yaml
+providers:
+  my-gateway:
+    kind: anthropic
+    base_url: https://gateway.example/v1
+    prompt_cache: false
+```

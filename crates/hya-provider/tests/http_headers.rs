@@ -1206,10 +1206,19 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
     assert!(headers.contains("anthropic-version: 2023-06-01"));
     assert!(request.raw.starts_with("POST /messages HTTP/1.1\r\n"));
     assert_eq!(body["model"], "claude-sonnet-4-20250514");
+    // Anthropic routes cache by default: the last system block, the last tool,
+    // and the last block of the final message carry ephemeral breakpoints.
     assert_eq!(
         body["messages"],
         json!([
-            {"role": "user", "content": "explain the file"}
+            {
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "explain the file",
+                    "cache_control": {"type": "ephemeral"}
+                }]
+            }
         ])
     );
     assert_eq!(
@@ -1222,12 +1231,20 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
                     "required": ["path"]
-                }
+                },
+                "cache_control": {"type": "ephemeral"}
             }
         ])
     );
     assert_eq!(body["max_tokens"], 128);
-    assert_eq!(body["system"], "be helpful");
+    assert_eq!(
+        body["system"],
+        json!([{
+            "type": "text",
+            "text": "be helpful",
+            "cache_control": {"type": "ephemeral"}
+        }])
+    );
     assert!(text_deltas.iter().any(|delta| delta == mock_text));
 }
 

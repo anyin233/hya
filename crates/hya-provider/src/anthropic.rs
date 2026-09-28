@@ -9,6 +9,46 @@ mod decoder;
 
 pub use decoder::AnthropicDecoder;
 
+const MAX_PROMPT_CACHE_BREAKPOINTS: usize = 4;
+
+/// Add Anthropic ephemeral prompt-cache breakpoints to an encoded request.
+pub(crate) fn add_prompt_cache_breakpoints(body: &mut Value) {
+    let mut remaining = MAX_PROMPT_CACHE_BREAKPOINTS;
+    if let Some(system) = body.get_mut("system") {
+        let blocks = match system.take() {
+            Value::String(text) => vec![json!({"type": "text", "text": text})],
+            Value::Array(blocks) => blocks,
+            other => vec![other],
+        };
+        let mut blocks = blocks;
+        if let Some(last) = blocks.last_mut() {
+            last["cache_control"] = json!({"type": "ephemeral"});
+            remaining -= 1;
+        }
+        *system = Value::Array(blocks);
+    }
+    if remaining > 0
+        && let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut)
+        && let Some(last) = tools.last_mut()
+    {
+        last["cache_control"] = json!({"type": "ephemeral"});
+        remaining -= 1;
+    }
+    if remaining > 0
+        && let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut)
+        && let Some(message) = messages.last_mut()
+    {
+        let mut blocks = content_blocks(message["content"].take());
+        if !blocks.is_empty() {
+            let index = blocks.len() - 1;
+            blocks[index]["cache_control"] = json!({"type": "ephemeral"});
+            message["content"] = Value::Array(blocks);
+        } else {
+            message["content"] = Value::Array(blocks);
+        }
+    }
+}
+
 /// Anthropic Messages API request encoder + stream decoder factory.
 pub struct AnthropicMessagesProtocol;
 
@@ -216,28 +256,26 @@ fn emit_assistant(
                         std::mem::take(&mut tools),
                     ));
                 }
-                if replay_reasoning {
-                    if let Some(data) = provider_data {
-                        match (
-                            data.get("type").and_then(Value::as_str),
-                            data.get("signature").and_then(Value::as_str),
-                            data.get("data").and_then(Value::as_str),
-                        ) {
-                            (Some("thinking"), Some(signature), _) => {
-                                reasoning.push(json!({
-                                    "type": "thinking",
-                                    "thinking": reasoning_text,
-                                    "signature": signature,
-                                }));
-                            }
-                            (Some("redacted_thinking"), _, Some(data)) => {
-                                reasoning.push(json!({
-                                    "type": "redacted_thinking",
-                                    "data": data,
-                                }));
-                            }
-                            _ => {}
+                if replay_reasoning && let Some(data) = provider_data {
+                    match (
+                        data.get("type").and_then(Value::as_str),
+                        data.get("signature").and_then(Value::as_str),
+                        data.get("data").and_then(Value::as_str),
+                    ) {
+                        (Some("thinking"), Some(signature), _) => {
+                            reasoning.push(json!({
+                                "type": "thinking",
+                                "thinking": reasoning_text,
+                                "signature": signature,
+                            }));
                         }
+                        (Some("redacted_thinking"), _, Some(data)) => {
+                            reasoning.push(json!({
+                                "type": "redacted_thinking",
+                                "data": data,
+                            }));
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -267,10 +305,9 @@ fn emit_assistant(
         if clusters[last].2.is_empty()
             && !clusters[last].1.is_empty()
             && !clusters[last - 1].2.is_empty()
+            && let Some((_, trailing, _)) = clusters.pop()
         {
-            if let Some((_, trailing, _)) = clusters.pop() {
-                clusters[last - 1].1.push_str(&trailing);
-            }
+            clusters[last - 1].1.push_str(&trailing);
         }
     }
     for (reasoning, text, tools) in clusters {
