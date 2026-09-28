@@ -180,6 +180,23 @@ pub fn resolved_threshold(cfg: &CompactionConfig, max_context: Option<u32>) -> u
     scaled.min(reserved).max(MIN_RESOLVED_THRESHOLD)
 }
 
+/// Return the message range eligible for folding, excluding the latest
+/// persisted compaction marker and retaining the configured recent tail.
+pub(crate) fn foldable_range(messages: &[Message], keep_recent: usize) -> Option<(usize, usize)> {
+    let start = messages
+        .iter()
+        .rposition(|message| {
+            matches!(
+                message,
+                Message::System { content, .. }
+                    if content.starts_with(hya_provider::COMPACT_CONTEXT_MARKER)
+            )
+        })
+        .map_or(0, |index| index + 1);
+    let end = messages.len().checked_sub(keep_recent)?;
+    (start < end).then_some((start, end))
+}
+
 fn message_text_len(m: &Message) -> usize {
     match m {
         Message::User { parts, .. } | Message::Assistant { parts, .. } => {
@@ -293,10 +310,10 @@ pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
     needs_compaction_at(messages, cfg, cfg.token_threshold)
 }
 
-/// Whether `messages` exceeds keep_recent and an explicit token `threshold`.
+/// Whether `messages` has a foldable prefix and exceeds an explicit token threshold.
 #[must_use]
 pub fn needs_compaction_at(messages: &[Message], cfg: &CompactionConfig, threshold: usize) -> bool {
-    messages.len() > cfg.keep_recent && tokens_in_use(messages) > threshold
+    foldable_range(messages, cfg.keep_recent).is_some() && tokens_in_use(messages) > threshold
 }
 
 /// One of the five built-in context-reduction mechanisms (oh-my-pi parity).
@@ -476,9 +493,11 @@ pub fn evict_stale_tool_outputs(
     keep_recent: usize,
     sink: Option<&dyn EvictionSink>,
 ) -> u32 {
-    let cutoff = messages.len().saturating_sub(keep_recent);
+    let Some((start, end)) = foldable_range(messages, keep_recent) else {
+        return 0;
+    };
     let mut evicted = 0;
-    for message in messages.iter_mut().take(cutoff) {
+    for message in messages.iter_mut().skip(start).take(end - start) {
         let (Message::Assistant { parts, .. } | Message::User { parts, .. }) = message else {
             continue;
         };
@@ -628,12 +647,10 @@ pub async fn fold_prefix(
     summarizer: &dyn Summarizer,
     options: SummarizeOptions,
 ) -> Result<Option<CompactionPlan>, CoreError> {
-    if messages.len() <= cfg.keep_recent {
+    let Some((start, end)) = foldable_range(messages, cfg.keep_recent) else {
         return Ok(None);
-    }
-    let split = messages.len() - cfg.keep_recent;
-    let older = &messages[..split];
-    // `needs_compaction` guarantees `split >= 1`; stay panic-free regardless.
+    };
+    let older = &messages[start..end];
     let (Some(first), Some(last)) = (older.first(), older.last()) else {
         return Ok(None);
     };
@@ -644,7 +661,7 @@ pub async fn fold_prefix(
         summary,
         from_message,
         to_message,
-        folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+        folded_count: u32::try_from(older.len()).unwrap_or(u32::MAX),
     }))
 }
 
@@ -958,12 +975,10 @@ pub async fn plan_handoff(
     summarizer: &dyn Summarizer,
     options: SummarizeOptions,
 ) -> Result<Option<CompactionPlan>, CoreError> {
-    if messages.len() <= cfg.keep_recent {
+    let Some((start, end)) = foldable_range(messages, cfg.keep_recent) else {
         return Ok(None);
-    }
-    let split = messages.len() - cfg.keep_recent;
-    // `needs_compaction` guarantees `split >= 1`; stay panic-free regardless.
-    let (Some(first), Some(last)) = (messages.first(), messages.get(split - 1)) else {
+    };
+    let (Some(first), Some(last)) = (messages.get(start), messages.get(end - 1)) else {
         return Ok(None);
     };
     let summary = summarizer
@@ -979,7 +994,7 @@ pub async fn plan_handoff(
         summary,
         from_message: first.id(),
         to_message: last.id(),
-        folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+        folded_count: u32::try_from(end - start).unwrap_or(u32::MAX),
     }))
 }
 
@@ -1000,17 +1015,20 @@ pub async fn compact_with(
     let Some(plan) = plan_compaction(&messages, cfg, summarizer, options).await? else {
         return Ok(messages);
     };
-    let split = messages.len() - cfg.keep_recent;
-    let recent = messages.split_off(split);
-    let older_count = plan.folded_count;
-    let summary = plan.summary;
-    let mut out = Vec::with_capacity(recent.len() + 1);
-    out.push(Message::System {
+    let Some((start, end)) = foldable_range(&messages, cfg.keep_recent) else {
+        return Ok(messages);
+    };
+    let recent = messages.split_off(end);
+    messages.truncate(start);
+    messages.push(Message::System {
         id: MessageId::new(),
-        content: format!("Summary of {older_count} earlier messages:\n{summary}"),
+        content: format!(
+            "Summary of {} earlier messages:\n{}",
+            plan.folded_count, plan.summary
+        ),
     });
-    out.extend(recent);
-    Ok(out)
+    messages.extend(recent);
+    Ok(messages)
 }
 
 /// Bytes of any single rendered payload the summarizer is shown.

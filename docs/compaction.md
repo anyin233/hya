@@ -116,16 +116,27 @@ The walk itself:
 4. Every reduction is persisted or request-local exactly as before: folds
    (`remote`, `soft`, `snapcompact`, `handoff`) inject behind the
    `HYA_COMPACTED_CONTEXT` marker and drop pre-marker history on later
-   requests; `shake` is request-local and never touches the event log.
+   requests. The marker is placed before the retained tail, including an
+   in-flight assistant message, so the next round sees its prior tool calls
+   and results. `shake` is request-local and never touches the event log.
+
+## In-flight turns
+
+The marker is an event-sourced transcript boundary, not merely an appended
+system message. `MessageStarted` is append-only, so the projection uses the
+`ContextCompacted` folded range to place the marker before the retained tail.
+This preserves the active assistant message across a mid-turn compaction; its
+subsequent rounds continue with the tool calls and results already produced.
+The compaction ladder excludes that marker from its foldable range, preventing
+the same compacted boundary from being summarized repeatedly.
 
 ## Thresholds
 
-The walk trips when `messages.len() > keep_recent` and occupancy exceeds
+The walk trips when the request has a foldable prefix and occupancy exceeds
 `min(window * context_fraction, window - reserve_tokens)`, floored at 1,000
-tokens. When the route advertises no window, the flat `token_threshold`
-applies. Occupancy is measured by the token-accounting mode
-(`auto` / `provider` / `estimate`). See
-[Configuration](configuration.md) for every field and its
+tokens. When the route advertises no window, the flat `token_threshold` applies.
+Occupancy is measured by the token-accounting mode (`auto` / `provider` /
+`estimate`). See [Configuration](configuration.md) for every field and its
 environment override.
 
 ## Observability

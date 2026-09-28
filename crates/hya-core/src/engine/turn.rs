@@ -1334,6 +1334,11 @@ impl SessionEngine {
             let attachments = self.attachment_data(session, &projection).await?;
             let mut messages =
                 projection_to_messages(&live_agent, &projection, &model, &attachments);
+            let mut fold_config = self.compaction;
+            if matches!(messages.last(), Some(Message::Assistant { .. })) {
+                fold_config.keep_recent = fold_config.keep_recent.saturating_add(1);
+            }
+
             // Active route for this turn. Its advertised context window scales
             // the compaction threshold, so resolve it before deciding.
             let capabilities = self.provider_router().capabilities(&model);
@@ -1354,7 +1359,8 @@ impl SessionEngine {
             let mut tokens = initial_count.tokens;
             let token_source = initial_count.source;
             let over_threshold = |tokens: usize, messages: &[_]| {
-                messages.len() > self.compaction.keep_recent && tokens > resolved_threshold
+                crate::compaction::foldable_range(messages, fold_config.keep_recent).is_some()
+                    && tokens > resolved_threshold
             };
 
             // Reduction ladder: the five built-in mechanisms (oh-my-pi parity),
@@ -1419,7 +1425,7 @@ impl SessionEngine {
                         let estimate_before = self.token_accounting.estimate(&messages);
                         let evicted = crate::compaction::evict_stale_tool_outputs(
                             &mut messages,
-                            self.compaction.keep_recent,
+                            fold_config.keep_recent,
                             Some(&spill),
                         );
                         if evicted == 0 {
@@ -1506,15 +1512,16 @@ impl SessionEngine {
                         // gate. Folds the same prefix a summary would into the
                         // dense archive, so the ladder's model-free rung works
                         // even where no summarizer is wired at all.
-                        if messages.len() <= self.compaction.keep_recent {
-                            continue;
-                        }
-                        let split = messages.len() - self.compaction.keep_recent;
-                        let (Some(from), Some(to)) = (messages.first(), messages.get(split - 1))
+                        let Some((start, end)) =
+                            crate::compaction::foldable_range(&messages, fold_config.keep_recent)
                         else {
                             continue;
                         };
-                        let archive = crate::compaction::snapcompact_archive(&messages[..split]);
+                        let (Some(from), Some(to)) = (messages.get(start), messages.get(end - 1))
+                        else {
+                            continue;
+                        };
+                        let archive = crate::compaction::snapcompact_archive(&messages[start..end]);
                         let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
                         committed_summary_tokens = Some(body.len() / 4);
                         let injected = match actor_claim {
@@ -1536,7 +1543,7 @@ impl SessionEngine {
                                 strategy: CompactionStrategy::SnapCompact,
                                 from_message: from.id(),
                                 to_message: to.id(),
-                                folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+                                folded_count: u32::try_from(end - start).unwrap_or(u32::MAX),
                                 input_tokens_est,
                                 threshold,
                             },
@@ -1569,7 +1576,7 @@ impl SessionEngine {
                         };
                         let planned = crate::compaction::plan_handoff(
                             &messages,
-                            &self.compaction,
+                            &fold_config,
                             summarizer.as_ref(),
                             options,
                         )
@@ -1640,7 +1647,7 @@ impl SessionEngine {
                         };
                         let planned = crate::compaction::fold_prefix(
                             &messages,
-                            &self.compaction,
+                            &fold_config,
                             summarizer.as_ref(),
                             options,
                         )
