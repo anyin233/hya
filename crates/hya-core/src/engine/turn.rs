@@ -911,14 +911,14 @@ impl SessionEngine {
                         biased;
                         _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
                         _ = loss_token.cancelled() => Err(CoreError::Cancelled),
-                        outcome = self.run_turn_rounds(session, message, &agent, execution) => outcome,
+                        outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
                     }
                 }
                 None => {
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
-                        outcome = self.run_turn_rounds(session, message, &agent, execution) => outcome,
+                        outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
                     }
                 }
             };
@@ -1977,6 +1977,7 @@ impl SessionEngine {
                                         .for_session(session)
                                         .with_channel_policy(channel_policy)
                                         .with_report_latch(report_latch.clone()),
+                                    project_activity: self.project_activity.for_session(session),
                                     session: Some(session),
                                     parent_session: projection.session.parent,
                                     todo: self.todo.clone(),

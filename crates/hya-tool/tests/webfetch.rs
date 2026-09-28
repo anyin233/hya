@@ -47,6 +47,7 @@ fn ctx_with(rules: Vec<Rule>) -> ToolCtx {
         workdir: PathBuf::from("."),
         roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

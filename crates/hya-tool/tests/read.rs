@@ -63,6 +63,7 @@ fn ctx_with_rules(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 
@@ -506,6 +507,7 @@ async fn read_authorizes_lexical_external_path_before_metadata_probe() {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
     let tool = ToolRegistry::builtins().get("read").unwrap();
 

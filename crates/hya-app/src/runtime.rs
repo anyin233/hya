@@ -3962,6 +3962,7 @@ flowchart TD
             roots: vec![workdir.clone()],
             workdir,
             cancel: CancellationToken::new(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
         };
         let run = tokio::spawn(async move {
             let workflow = hya_tool::ToolRegistry::builtins()
@@ -8874,6 +8875,7 @@ export default {
             workdir: PathBuf::from("."),
             roots: vec![PathBuf::from(".")],
             cancel: Default::default(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
         };
         let cancel = ctx.cancel.clone();
         let tool = BundleSidecarTool {

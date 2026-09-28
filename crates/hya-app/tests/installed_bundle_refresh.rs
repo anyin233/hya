@@ -48,6 +48,7 @@ fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
         workdir: workdir.to_path_buf(),
         roots: vec![workdir.to_path_buf()],
         cancel: tokio_util::sync::CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

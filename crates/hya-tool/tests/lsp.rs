@@ -79,6 +79,7 @@ fn ctx_with(rules: Vec<Rule>, lsp: LspPlane, workdir: PathBuf) -> ToolCtx {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

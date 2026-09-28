@@ -10,6 +10,7 @@ mod invalid;
 mod lsp;
 mod lsp_path;
 mod plan;
+mod project_activity;
 mod search_agent;
 mod skill;
 mod task;
@@ -41,13 +42,14 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     // SAFETY: the host calls this only after the ABI digest matches.
     if let Some(out) = unsafe { out.as_mut() } {
-        let tools: [Arc<dyn Tool>; 10] = [
+        let tools: [Arc<dyn Tool>; 11] = [
             Arc::new(invalid::InvalidTool),
             Arc::new(lsp::LspTool),
             Arc::new(skill::SkillTool),
             Arc::new(agents::ListAgentsTool),
             Arc::new(task::TaskTool),
             Arc::new(workflow::WorkflowTool),
+            Arc::new(project_activity::ProjectActivityTool),
             Arc::new(search_agent::SearchAgentTool),
             Arc::new(archive::ArchiveTool),
             Arc::new(plan::PlanExitTool),

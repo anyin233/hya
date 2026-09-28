@@ -34,6 +34,7 @@ advertised.
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
 | Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `wait` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, stop-and-archive a subagent, and block until subagents finish (`wait` stays advertised at every depth). The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
+| Project activity | `project_activity` | Read-only, Project-scoped view of recent sessions and newest changes per file; never exposes prompts, arguments, or contents. `busy`/`idle` is live state from this daemon. |
 | Communication | `send`, `list_channel`, `report` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, and terminal reports ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
@@ -314,6 +315,9 @@ See [subagent-orchestration.md §3.1](subagent-orchestration.md#an-accepted-repo
 of archived agents' final handoffs); lists the caller's own archived direct
 children with handle, agent type, digests, and a degraded flag. `send` to
 the returned handle to revive.
+### `project_activity`
+
+`project_activity` accepts optional `since_ms` (Unix epoch milliseconds), `limit` (default 50, capped at 200), and `include_self` (default false). It returns `sessions` with `id`, `agent`, `title`, `status`, `last_activity_ms`, `workdir`, `parent`, `lineage_root`, and a relation (`self`, `parent`, `child`, `sibling`, or `unrelated`), plus `files` with `path`, `session`, `last_changed_ms`, and `change_kind` (`created` or `changed`). A session without a Project returns an explicit empty result. Results are scoped to the caller's Project; no prompts, tool arguments, or file contents are returned. Status is daemon-local live turn state, not a durable cross-process claim.
 
 **`archive`** (extended-tools family, permission `task`; replaces `kill`,
 removed in 0.41.0): required `target`, optional `reason`.

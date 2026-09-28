@@ -42,6 +42,7 @@ fn ctx_with(mailbox: MailboxPlane, session: SessionId) -> ToolCtx {
         workdir: PathBuf::from("."),
         roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

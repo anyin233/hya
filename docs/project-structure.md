@@ -140,6 +140,7 @@ separately below):
 | `todowrite` (`todo`) | `TodoWrite` | Store the latest session todo snapshot. |
 | `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
 | `list_channel`, `search_agent` | `ReadOnly` | The caller's channels (unread counts, team status) and its archived subagents; allow without prompting under `default`. |
+| `project_activity` | `ReadOnly` | Other sessions and agents in the caller's Project (relation, busy/idle) and the newest change per file; allow without prompting under `default`. |
 | `send`, `report` | `Tool` | Channel-addressed mail (archived children revive) and a subagent's terminal report; ask under `default`. |
 | `archive` | `Task` | Stop a live subagent (cancel its turn, `cause: archived`) and archive it; mail to its handle wakes it (replaces `kill`, 0.41.0). |
 | `wait` | `ReadOnly` | Block until subagents finish their current work (and, with the channel tools, until mail arrives), bounded by a timeout. |

@@ -408,6 +408,7 @@ pub struct SessionEngine {
     spawner: BoundSpawnSender,
     workflows: BoundWorkflowSender,
     mailbox: MailboxPlane,
+    project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
@@ -472,6 +473,7 @@ impl Clone for SessionEngine {
             spawner: self.spawner.clone(),
             workflows: self.workflows.clone(),
             mailbox: self.mailbox.clone(),
+            project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
             todo: self.todo.clone(),
@@ -548,8 +550,9 @@ impl SessionEngine {
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
         let workflows = BoundWorkflowSender::disconnected();
-        let mailbox = MailboxPlane::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
+        let mailbox = MailboxPlane::disconnected();
+        let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
         let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
@@ -561,7 +564,7 @@ impl SessionEngine {
                 None,
             ))
         });
-        Self {
+        let engine = Self {
             store,
             providers: RwLock::new(providers),
             catalog: RwLock::new(catalog),
@@ -575,6 +578,7 @@ impl SessionEngine {
             spawner,
             workflows,
             mailbox,
+            project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             todo,
@@ -598,7 +602,18 @@ impl SessionEngine {
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
+        };
+        let store_for_activity = engine.store.clone();
+        let gate_for_activity = Arc::clone(&engine.turn_gate);
+        let active = Arc::new(move |session| gate_for_activity.is_active(session));
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(crate::project_activity::serve(
+                store_for_activity,
+                active,
+                activity_rx,
+            ));
         }
+        engine
     }
 
     /// Move `mcp__`-namespaced tool calls still running after `budget` to the

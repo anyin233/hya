@@ -8,7 +8,9 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use hya_proto::{AgentName, Event, ModelRef, ProjectId, SessionId, SessionKind};
+use hya_proto::{
+    AgentName, Event, FileChange, FileState, MessageId, ModelRef, ProjectId, SessionId, SessionKind,
+};
 use hya_store::{SessionStore, StoreError};
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -684,4 +686,125 @@ async fn ensure_project_for_path_concurrent_calls_produce_one_project() {
     );
     drop(store);
     remove_db(&db);
+}
+
+fn files_changed(session: SessionId, path: &str, before: FileState) -> Event {
+    Event::FilesChanged {
+        session,
+        message: MessageId::new(),
+        call: None,
+        files: vec![FileChange {
+            path: path.to_string(),
+            before,
+        }],
+    }
+}
+
+fn stored() -> FileState {
+    FileState::Stored {
+        hash: "h".into(),
+        size: 1,
+    }
+}
+
+/// Only the Project's own sessions count; each path appears once, owned by
+/// its last writer; `created` reflects the state before that last change.
+#[tokio::test]
+async fn project_activity_files_are_project_scoped_and_newest_per_path() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let first = store
+        .create_project("first", &roots(&["/first"]))
+        .await
+        .unwrap();
+    let other = store
+        .create_project("other", &roots(&["/other"]))
+        .await
+        .unwrap();
+    let a = create_session(&store, None, Some(first.id), SessionKind::Project).await;
+    let b = create_session(&store, None, Some(first.id), SessionKind::Project).await;
+    let outsider = create_session(&store, None, Some(other.id), SessionKind::Project).await;
+    let since = hya_proto::now_millis();
+    let events = [
+        (a, files_changed(a, "/first/new", FileState::Absent)),
+        (a, files_changed(a, "/first/shared", FileState::Absent)),
+        (
+            outsider,
+            files_changed(outsider, "/other/x", FileState::Absent),
+        ),
+    ];
+    for (session, event) in &events {
+        store.append_event(*session, event).await.unwrap();
+    }
+    tick().await;
+    store
+        .append_event(b, &files_changed(b, "/first/shared", stored()))
+        .await
+        .unwrap();
+
+    let rows = store
+        .project_activity_files(first.id, since, 200, None)
+        .await
+        .unwrap();
+    let summary: Vec<_> = rows
+        .iter()
+        .map(|row| (row.path.as_str(), row.session, row.created))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![("/first/shared", b, false), ("/first/new", a, true)],
+        "newest first, one row per path, last writer wins, other Project absent"
+    );
+
+    let without_b = store
+        .project_activity_files(first.id, since, 200, Some(b))
+        .await
+        .unwrap();
+    assert!(
+        without_b.iter().all(|row| row.session == a && row.created),
+        "excluding the last writer falls back to the previous writer: {without_b:?}"
+    );
+    assert_eq!(without_b.len(), 2);
+}
+
+#[tokio::test]
+async fn project_activity_honours_since_and_limit() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let project = store.create_project("p", &roots(&["/p"])).await.unwrap();
+    let a = create_session(&store, None, Some(project.id), SessionKind::Project).await;
+    let b = create_session(&store, None, Some(project.id), SessionKind::Project).await;
+    store
+        .append_event(a, &files_changed(a, "/p/one", FileState::Absent))
+        .await
+        .unwrap();
+    tick().await;
+    let cutoff = hya_proto::now_millis();
+    tick().await;
+    store
+        .append_event(b, &files_changed(b, "/p/two", FileState::Absent))
+        .await
+        .unwrap();
+
+    let recent = store
+        .project_activity_files(project.id, cutoff, 200, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+        ["/p/two"]
+    );
+    let sessions = store
+        .list_sessions_in_since(project.id, cutoff, 200, None)
+        .await
+        .unwrap();
+    assert_eq!(sessions.iter().map(|s| s.session).collect::<Vec<_>>(), [b]);
+    let all = store
+        .project_activity_files(project.id, 0, 1, None)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 1, "limit caps rows");
+    let not_b = store
+        .list_sessions_in_since(project.id, 0, 200, Some(b))
+        .await
+        .unwrap();
+    assert_eq!(not_b.iter().map(|s| s.session).collect::<Vec<_>>(), [a]);
 }
