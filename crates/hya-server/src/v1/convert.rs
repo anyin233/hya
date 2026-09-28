@@ -205,6 +205,8 @@ pub(crate) fn session_info(
             .map(ToString::to_string)
             .unwrap_or_default(),
         kind: session_kind(session.kind) as i32,
+        effective_effort: String::new(),
+        effort_source: pb::EffortSource::None as i32,
     }
 }
 

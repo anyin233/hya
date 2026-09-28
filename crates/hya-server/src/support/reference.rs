@@ -60,18 +60,17 @@ pub(crate) async fn session_agent_with_guidance(
         .clone()
         .unwrap_or_else(|| agent.name.clone());
     agent.name = active_name;
-    // A configured effort default belongs to its model, not to the server's
-    // startup choice: a switched session resolves the active model's own
-    // configured default and never inherits the startup one. Explicit
-    // `#variant` refs decide the request themselves (core resolves the
-    // suffix; an invalid one sends no effort instead of a silent default).
+    // Effort is resolved per request by the engine (`effective_effort`):
+    // suffix, Agent policy, stored preference, the active model's configured
+    // default, then the global default. A startup Agent effort belongs to the
+    // startup model, so a switched session drops it rather than carry it over.
     let active_model = projection
         .session
         .model
         .clone()
         .unwrap_or_else(|| agent.model.clone());
     if active_model != agent.model {
-        agent.reasoning = st.engine.provider_router().reasoning_default(&active_model);
+        agent.reasoning = None;
     }
     agent.model = active_model;
     let guidance = guidance_at(st, &workdir).await;

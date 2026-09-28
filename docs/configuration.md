@@ -127,8 +127,8 @@ Saving a **configured default** for an Agent creates or updates the owning
 file; it does not erase a distinct Session override. Failed saves keep the
 prior effective state and report an error. Old backends without the
 `agentModelConfiguration` capability retain their original selection behavior.
-(The interactive save flow shipped with the removed legacy TUI; a v1 rpc for
-reading/writing per-Agent preferences has not been re-added yet — see below.)
+Reading and writing per-Agent preferences over v1 uses the `AgentModels`
+service (`/v1/agent-models`).
 
 Built-in Agents use the active Hya `config.yaml` (XDG path with the existing HOME
 fallback). Bundle Agents use their bundle's `config.yml`; see
@@ -149,11 +149,9 @@ fields and file permissions. Prepared bundle content is never rewritten.
 
 `GET /v1/bootstrap` advertises the effective catalog (agents, models,
 providers) to frontends, and `PATCH /v1/sessions/{session}` switches a
-session's `agent`/`model` fields. The dedicated per-Agent model-preference
-HTTP control (`GET/PUT /tui/agent-models`) was part of the deleted Compat
-surface; the durable preference files above are still read by runtime
-composition (`PersistentAgentModelControl`), and a v1 rpc for reading/writing
-per-Agent preferences has not been re-added yet.
+session's `agent`/`model` fields. Durable per-Agent model preferences are read
+and written through the v1 `AgentModels` service (`/v1/agent-models`), backed
+by the preference files above and `PersistentAgentModelControl`.
 
 The default durable database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
@@ -260,6 +258,11 @@ is optional.
 # Row-backed process default. A stale value is ignored and the deterministic
 # first resolved row is selected instead.
 default_model: anthropic/claude-sonnet-4-6
+
+# Optional global reasoning fallback. Valid labels: minimal, low, medium, high,
+# xhigh, max, and none. Used only when no model suffix, Agent policy, saved
+# preference, or model `reasoning.default` chose an effort.
+reasoning: medium
 
 # Optional: agent profile selected when a workdir does not specify one.
 # Falls back to the built-in `build` agent when omitted.
@@ -665,16 +668,47 @@ An advertised effort menu describes capabilities, not a selection. hya never
 chooses its highest entry automatically, nor treats a remote model-list default
 as a user request. An explicit model `reasoning.default` remains a request
 default for that model; an explicit agent policy or `#variant` can override it.
+
+### Reasoning effort precedence
+
+When a request is sent, Hya resolves one effective reasoning effort using this
+order (highest precedence first):
+
+| Layer | Source | Example |
+| --- | --- | --- |
+| Suffix | `#level` on the model reference (also `--effort`) | `openai/gpt#high` |
+| Agent | An authored bundle Agent `model_policy.reasoning` | `reasoning: high` |
+| Preference | The user's saved per-`provider/model` effort (SQLite, all clients) | `/effort high` in the TUI |
+| Model default | `providers.<id>.models[].reasoning.default` | `default: medium` |
+| Global default | Top-level `reasoning` | `reasoning: low` |
+| None | No layer selected an effort | The request omits effort |
+
+The effort is resolved for every request, so a preference saved mid-session
+applies to the next request without a restart. For example, with
+`reasoning: low`, a model default of `medium`, and a saved preference of
+`high`, requests send `high`; clearing the preference sends `medium`; a model
+without a default sends `low`. A model suffix always wins.
 Without any explicit choice or configured default, the provider request omits
 effort. The upstream provider then decides its default; omission does **not**
 guarantee that the model will not think.
 
-The TUI's `/effort` picker shows the advertised choices and remembers the user's
-selection per base `provider/model` in its preferences. A selection is sent as
-`provider/model#variant`. `/effort default` removes the suffix and returns to
-configured/upstream behavior; `/effort none` sends `#none` to override any
-configured effort using the protocol mappings below. See
-[Thinking effort](tui.md#thinking-effort) for selection and persistence examples.
+Saved preferences live in the session database (table
+`model_effort_preference`) and are shared by every client of that backend.
+Interface (`hya.v1.AgentModels`):
+
+| RPC | HTTP | Body / result |
+| --- | --- | --- |
+| `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `{preferences: [{providerId, modelId, effort, updatedAt}]}` |
+| `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `{effort}`; an empty `effort` clears the preference |
+
+`SessionInfo.effectiveEffort` (empty when none) and `SessionInfo.effortSource`
+(`EFFORT_SOURCE_SUFFIX`, `_PREFERENCE`, `_MODEL_DEFAULT`, `_GLOBAL_DEFAULT`,
+`_NONE`; `_AGENT` is applied per request but not reported) show what the
+session's next request sends.
+
+The TUI's `/effort` picker shows the advertised choices and saves the choice
+as the model's preference; `/effort default` clears it. See
+[Thinking effort](tui.md#thinking-effort) for selection examples.
 
 **Provider budget / label mapping:**
 

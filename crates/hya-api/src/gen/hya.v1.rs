@@ -34,6 +34,33 @@ pub struct PageInfo {
     #[prost(bool, tag = "2")]
     pub has_more: bool,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ModelEffortPreference {
+    #[prost(string, tag = "1")]
+    pub provider_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub effort: ::prost::alloc::string::String,
+    #[prost(int64, tag = "4")]
+    pub updated_at: i64,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListModelEffortPreferencesRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListModelEffortPreferencesResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub preferences: ::prost::alloc::vec::Vec<ModelEffortPreference>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetModelEffortPreferenceRequest {
+    #[prost(string, tag = "1")]
+    pub provider_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub effort: ::prost::alloc::string::String,
+}
 /// A concrete provider/model selection.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AgentModelSelection {
@@ -307,6 +334,61 @@ pub mod agent_models_client {
                 .insert(GrpcMethod::new("hya.v1.AgentModels", "SetAgentModel"));
             self.inner.unary(req, path, codec).await
         }
+        /// hya.http: GET /v1/model-effort-preferences
+        pub async fn list_model_effort_preferences(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListModelEffortPreferencesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListModelEffortPreferencesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.AgentModels/ListModelEffortPreferences",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("hya.v1.AgentModels", "ListModelEffortPreferences"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Empty effort clears the preference.
+        /// hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
+        pub async fn set_model_effort_preference(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetModelEffortPreferenceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ModelEffortPreference>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.AgentModels/SetModelEffortPreference",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("hya.v1.AgentModels", "SetModelEffortPreference"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -340,6 +422,23 @@ pub mod agent_models_server {
             &self,
             request: tonic::Request<super::SetAgentModelRequest>,
         ) -> std::result::Result<tonic::Response<super::AgentModelState>, tonic::Status>;
+        /// hya.http: GET /v1/model-effort-preferences
+        async fn list_model_effort_preferences(
+            &self,
+            request: tonic::Request<super::ListModelEffortPreferencesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListModelEffortPreferencesResponse>,
+            tonic::Status,
+        >;
+        /// Empty effort clears the preference.
+        /// hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
+        async fn set_model_effort_preference(
+            &self,
+            request: tonic::Request<super::SetModelEffortPreferenceRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ModelEffortPreference>,
+            tonic::Status,
+        >;
     }
     /// Durable per-agent model preference surface, backed by the app-owned
     /// control handle.
@@ -494,6 +593,109 @@ pub mod agent_models_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SetAgentModelSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.AgentModels/ListModelEffortPreferences" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListModelEffortPreferencesSvc<T: AgentModels>(pub Arc<T>);
+                    impl<
+                        T: AgentModels,
+                    > tonic::server::UnaryService<
+                        super::ListModelEffortPreferencesRequest,
+                    > for ListModelEffortPreferencesSvc<T> {
+                        type Response = super::ListModelEffortPreferencesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListModelEffortPreferencesRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AgentModels>::list_model_effort_preferences(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListModelEffortPreferencesSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.AgentModels/SetModelEffortPreference" => {
+                    #[allow(non_camel_case_types)]
+                    struct SetModelEffortPreferenceSvc<T: AgentModels>(pub Arc<T>);
+                    impl<
+                        T: AgentModels,
+                    > tonic::server::UnaryService<super::SetModelEffortPreferenceRequest>
+                    for SetModelEffortPreferenceSvc<T> {
+                        type Response = super::ModelEffortPreference;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::SetModelEffortPreferenceRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AgentModels>::set_model_effort_preference(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SetModelEffortPreferenceSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -13893,6 +14095,12 @@ pub struct SessionInfo {
     /// Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
     #[prost(enumeration = "SessionKind", tag = "21")]
     pub kind: i32,
+    /// Effective reasoning effort selected for the current model. Empty means no effort.
+    #[prost(string, tag = "22")]
+    pub effective_effort: ::prost::alloc::string::String,
+    /// Precedence layer that selected effective_effort.
+    #[prost(enumeration = "EffortSource", tag = "23")]
+    pub effort_source: i32,
 }
 /// Where a forked session came from.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -14148,6 +14356,48 @@ pub struct RevertSessionResponse {
     /// Files this call wrote (or could not restore).
     #[prost(message, repeated, tag = "2")]
     pub files: ::prost::alloc::vec::Vec<RevertedFile>,
+}
+/// Source of a session's effective reasoning effort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum EffortSource {
+    Unspecified = 0,
+    Suffix = 1,
+    Agent = 2,
+    Preference = 3,
+    ModelDefault = 4,
+    GlobalDefault = 5,
+    None = 6,
+}
+impl EffortSource {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "EFFORT_SOURCE_UNSPECIFIED",
+            Self::Suffix => "EFFORT_SOURCE_SUFFIX",
+            Self::Agent => "EFFORT_SOURCE_AGENT",
+            Self::Preference => "EFFORT_SOURCE_PREFERENCE",
+            Self::ModelDefault => "EFFORT_SOURCE_MODEL_DEFAULT",
+            Self::GlobalDefault => "EFFORT_SOURCE_GLOBAL_DEFAULT",
+            Self::None => "EFFORT_SOURCE_NONE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "EFFORT_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "EFFORT_SOURCE_SUFFIX" => Some(Self::Suffix),
+            "EFFORT_SOURCE_AGENT" => Some(Self::Agent),
+            "EFFORT_SOURCE_PREFERENCE" => Some(Self::Preference),
+            "EFFORT_SOURCE_MODEL_DEFAULT" => Some(Self::ModelDefault),
+            "EFFORT_SOURCE_GLOBAL_DEFAULT" => Some(Self::GlobalDefault),
+            "EFFORT_SOURCE_NONE" => Some(Self::None),
+            _ => None,
+        }
+    }
 }
 /// Kind of a session (ADR-0024).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

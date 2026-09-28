@@ -25,22 +25,6 @@ import { isKnownEffort } from "./catalog"
 import type { KeyLike } from "../keys/bindings"
 import { modelReference, truncate } from "./format"
 
-/**
- * `reference` with the effort remembered for that base model appended —
- * unless it already carries an explicit `#suffix` (an explicit choice wins
- * over the cache), the remembered label is `default` (that choice cleared
- * the cache), or the model's current menu rejects the cached label (stale
- * cache; fall back to no suffix). A model the catalog does not list has no
- * checkable menu, so its remembered choice still applies.
- */
-export function rememberedModelRef(reference: string, efforts: Readonly<Record<string, string>> | undefined, models: readonly ModelSummary[]): string {
-  if (!reference || reference.includes("#")) return reference
-  const effort = efforts?.[reference]
-  if (!effort || effort === "default") return reference
-  const row = models.find((model) => model.id === reference)
-  if (row && !isKnownEffort(row, effort)) return reference
-  return `${reference}#${effort}`
-}
 
 /** The explicit `#suffix` of `reference` that a known catalog row rejects; `undefined` when the reference is fine (unknown rows are the backend's to validate). */
 export function invalidEffortSuffix(reference: string, models: readonly ModelSummary[]): string | undefined {
@@ -672,7 +656,6 @@ export function defaultModelRef(state: {
   pendingAgent: string | undefined
   agents: readonly AgentSummary[]
   models: readonly ModelSummary[]
-  thinkingEfforts?: Readonly<Record<string, string>>
 }): string {
   if (state.selected) return modelReference(state.selected)
   const agent = state.pendingAgent ?? state.agents.find((item) => !item.hidden)?.name ?? "build"
@@ -680,7 +663,7 @@ export function defaultModelRef(state: {
   // The agent's configured model keeps its explicit `#variant` (it wins over the remembered effort).
   const preferredRef = preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}${preferred.variant ? `#${preferred.variant}` : ""}` : undefined
   const base = state.pendingModel ?? preferredRef ?? state.models[0]?.id ?? ""
-  return rememberedModelRef(base, state.thinkingEfforts, state.models)
+  return base
 }
 
 /** Column titles over `providerLine` rows. */

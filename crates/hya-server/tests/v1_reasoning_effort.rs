@@ -21,7 +21,7 @@ use hya_provider::{
     ReasoningEffort,
 };
 use hya_server::{AppState, router};
-use hya_store::SessionStore;
+use hya_store::{OwnerRunId, SessionStore};
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -49,10 +49,11 @@ impl Provider for EffortProvider {
     }
 
     fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {
-        let served = match model.as_str().split_once('#') {
+        let base = match model.as_str().split_once('#') {
             Some((base, _)) => base,
             None => model.as_str(),
         };
+        let served = base.strip_prefix("effort/").unwrap_or(base);
         match served {
             "fake" => Some(ReasoningEffort::Medium),
             "third" => Some(ReasoningEffort::Low),
@@ -82,6 +83,8 @@ impl Provider for EffortProvider {
 
 struct Fixture {
     app: axum::Router,
+    store: SessionStore,
+    owner: OwnerRunId,
     requests: Arc<Mutex<Vec<CompletionRequest>>>,
     dir: PathBuf,
 }
@@ -92,20 +95,31 @@ impl Drop for Fixture {
     }
 }
 
-/// Startup agent on `fake` carrying the startup model's configured `medium`.
+/// Startup agent on `fake` with no Agent effort, as the runtime builds it:
+/// model defaults come from the route per request.
 async fn fixture(label: &str) -> Fixture {
+    fixture_with_global(label, None).await
+}
+
+async fn fixture_with_global(label: &str, global: Option<ReasoningEffort>) -> Fixture {
     let dir = support::tempdir(label).canonicalize().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let (perm, _asks) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        Arc::new(ProviderRouter::new().with(Arc::new(EffortProvider {
-            requests: Arc::clone(&requests),
-        }))),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
-        perm,
-        EventBus::default(),
-    ));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+    let engine = Arc::new(
+        SessionEngine::new(
+            store.clone(),
+            Arc::new(ProviderRouter::new().with(Arc::new(EffortProvider {
+                requests: Arc::clone(&requests),
+            }))),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            perm,
+            EventBus::default(),
+        )
+        .with_global_reasoning(global),
+    );
     let state = AppState::new(
         engine,
         Arc::new(AgentSpec {
@@ -113,11 +127,13 @@ async fn fixture(label: &str) -> Fixture {
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
             workdir: dir.clone(),
-            reasoning: Some(ReasoningEffort::Medium),
+            reasoning: None,
         }),
     );
     Fixture {
         app: router(state),
+        store,
+        owner,
         requests,
         dir,
     }
@@ -269,4 +285,115 @@ async fn invalid_variant_sends_no_effort_instead_of_a_default() {
     fx.switch(&session, "third#bogus").await;
     let request = fx.prompt_request(&session, 1).await;
     assert_eq!(request.reasoning, None);
+}
+
+impl Fixture {
+    async fn prefer(&self, provider: &str, model: &str, effort: Option<&str>) {
+        match effort {
+            Some(effort) => self
+                .store
+                .upsert_model_effort_preference(self.owner, provider, model, effort, 1)
+                .await
+                .unwrap(),
+            None => self
+                .store
+                .clear_model_effort_preference(self.owner, provider, model)
+                .await
+                .unwrap(),
+        }
+    }
+
+    /// `(effectiveEffort, effortSource)` the session info reports.
+    async fn reported(&self, session: &str) -> (String, String) {
+        let (status, info) = call(
+            &self.app,
+            Method::GET,
+            &format!("/v1/sessions/{session}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{info}");
+        (
+            info["effectiveEffort"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            info["effortSource"].as_str().unwrap_or_default().to_owned(),
+        )
+    }
+}
+
+/// A stored per-model preference applies to the very next request (no
+/// restart), loses to an explicit `#variant`, and clearing it falls back.
+/// Session info reports exactly what the request carries.
+#[tokio::test]
+async fn stored_preference_drives_the_next_request_and_session_info() {
+    let fx = fixture("effort-preference").await;
+    let session = fx.session("effort/other").await;
+    assert_eq!(
+        fx.reported(&session).await,
+        (String::new(), "EFFORT_SOURCE_NONE".to_owned())
+    );
+
+    fx.prefer("effort", "other", Some("high")).await;
+    let request = fx.prompt_request(&session, 0).await;
+    assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+    assert_eq!(
+        fx.reported(&session).await,
+        ("high".to_owned(), "EFFORT_SOURCE_PREFERENCE".to_owned())
+    );
+
+    fx.switch(&session, "effort/other#low").await;
+    let request = fx.prompt_request(&session, 1).await;
+    assert_eq!(request.reasoning, Some(ReasoningEffort::Low));
+    assert_eq!(
+        fx.reported(&session).await,
+        ("low".to_owned(), "EFFORT_SOURCE_SUFFIX".to_owned())
+    );
+
+    fx.switch(&session, "effort/other").await;
+    fx.prefer("effort", "other", None).await;
+    let request = fx.prompt_request(&session, 2).await;
+    assert_eq!(request.reasoning, None);
+    assert_eq!(
+        fx.reported(&session).await,
+        (String::new(), "EFFORT_SOURCE_NONE".to_owned())
+    );
+}
+
+/// Precedence below the preference: the model's configured default, then
+/// the global `reasoning:` default.
+#[tokio::test]
+async fn model_default_beats_global_default_which_beats_nothing() {
+    let fx = fixture_with_global("effort-global", Some(ReasoningEffort::High)).await;
+    let session = fx.session("third").await;
+    let request = fx.prompt_request(&session, 0).await;
+    assert_eq!(request.reasoning, Some(ReasoningEffort::Low));
+    assert_eq!(
+        fx.reported(&session).await,
+        ("low".to_owned(), "EFFORT_SOURCE_MODEL_DEFAULT".to_owned())
+    );
+
+    fx.switch(&session, "other").await;
+    let request = fx.prompt_request(&session, 1).await;
+    assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+    assert_eq!(
+        fx.reported(&session).await,
+        ("high".to_owned(), "EFFORT_SOURCE_GLOBAL_DEFAULT".to_owned())
+    );
+}
+
+/// A preference outranks the model's configured default.
+#[tokio::test]
+async fn preference_outranks_the_model_default() {
+    let fx = fixture("effort-pref-over-default").await;
+    // `effort/third` is `third`, whose configured default is `low`.
+    let session = fx.session("effort/third").await;
+    fx.prefer("effort", "third", Some("high")).await;
+    let request = fx.prompt_request(&session, 0).await;
+    assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+    assert_eq!(
+        fx.reported(&session).await,
+        ("high".to_owned(), "EFFORT_SOURCE_PREFERENCE".to_owned())
+    );
 }

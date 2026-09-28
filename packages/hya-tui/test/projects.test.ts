@@ -293,21 +293,6 @@ test("a new-session attempt without an active Project opens the Project view ins
   h.controller.dispose()
 })
 
-test("/new with an explicit model gains the remembered effort; its typed suffix and a stale cache win or fall", async () => {
-  const h = harness()
-  await h.controller.start()
-  h.store.setThinkingEfforts({ "hya/echo": "low" })
-  await h.controller.newSession("build", "hya/echo")
-  expect(h.store.state.selected?.model).toEqual({ providerId: "hya", modelId: "echo", variant: "low" })
-  // A typed suffix is explicit; the cache never overrides it.
-  await h.controller.newSession("build", "hya/echo#medium")
-  expect(h.store.state.selected?.model).toEqual({ providerId: "hya", modelId: "echo", variant: "medium" })
-  // A remembered choice the model no longer advertises is not applied.
-  h.store.setThinkingEfforts({ "hya/echo": "max" })
-  await h.controller.newSession("build", "hya/echo")
-  expect(h.store.state.selected?.model).toEqual({ providerId: "hya", modelId: "echo" })
-  h.controller.dispose()
-})
 
 test("the Project view creates, renames, edits roots of, and deletes a Project", async () => {
   const h = harness()

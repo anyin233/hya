@@ -42,6 +42,8 @@ pub mod compaction;
 pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
 mod coordination;
+/// Effective reasoning effort resolution shared by request and display layers.
+pub mod effort;
 /// Session engine, agent specs, and turn admission.
 pub mod engine;
 /// Shared error type for the core runtime.
@@ -116,6 +118,7 @@ pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
+pub use effort::{EffectiveEffort, EffortSource, resolve_effort};
 pub use engine::{
     AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
     BoundWorkflowSender, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,

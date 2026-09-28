@@ -391,6 +391,28 @@
         "x-server-streaming": false
       }
     },
+    "/v1/model-effort-preferences": {
+      "get": {
+        "operationId": "AgentModels.ListModelEffortPreferences",
+        "summary": "",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.ListModelEffortPreferences",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/model-effort-preferences/{provider_id}/{model_id}": {
+      "put": {
+        "operationId": "AgentModels.SetModelEffortPreference",
+        "summary": "Empty effort clears the preference.",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SetModelEffortPreference",
+        "x-server-streaming": false
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "Catalog.ListModels",
@@ -1148,6 +1170,52 @@
   },
   "components": {
     "schemas": {
+      "ModelEffortPreference": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ListModelEffortPreferencesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "preferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelEffortPreference"
+            }
+          }
+        }
+      },
+      "SetModelEffortPreferenceRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        }
+      },
       "AgentModelSelection": {
         "type": "object",
         "description": "A concrete provider/model selection.",
@@ -4338,6 +4406,12 @@
           },
           "kind": {
             "$ref": "#/components/schemas/SessionKind"
+          },
+          "effective_effort": {
+            "type": "string"
+          },
+          "effort_source": {
+            "$ref": "#/components/schemas/EffortSource"
           }
         }
       },
@@ -5272,6 +5346,19 @@
           "RELAY_STATE_CONNECTING",
           "RELAY_STATE_CONNECTED",
           "RELAY_STATE_BACKOFF"
+        ]
+      },
+      "EffortSource": {
+        "type": "string",
+        "description": "Source of a session's effective reasoning effort.",
+        "enum": [
+          "EFFORT_SOURCE_UNSPECIFIED",
+          "EFFORT_SOURCE_SUFFIX",
+          "EFFORT_SOURCE_AGENT",
+          "EFFORT_SOURCE_PREFERENCE",
+          "EFFORT_SOURCE_MODEL_DEFAULT",
+          "EFFORT_SOURCE_GLOBAL_DEFAULT",
+          "EFFORT_SOURCE_NONE"
         ]
       },
       "SessionKind": {

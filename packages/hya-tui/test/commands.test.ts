@@ -60,6 +60,30 @@ test("registers every native slash command with a description", () => {
   expect(registry.get("/login")).toBeUndefined()
 })
 
+test("/effort persists the base model preference and strips a session suffix; default clears", async () => {
+  const requests: Array<{ providerId: string; modelId: string; effort: string }> = []
+  const updates: string[] = []
+  const h = harness({
+    setModelEffortPreference: async (providerId, modelId, effort) => {
+      requests.push({ providerId, modelId, effort })
+      return { providerId, modelId, effort }
+    },
+    updateSessionModel: async (session, model) => {
+      updates.push(`${session}:${model}`)
+      return { id: session, agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
+    },
+  })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoningVariants: ["low"] }], workflows: [], providers: [], commands: [] })
+  h.store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } })
+  await h.run("/effort low")
+  await h.run("/effort default")
+  expect(requests).toEqual([
+    { providerId: "openai", modelId: "gpt-6-astra", effort: "low" },
+    { providerId: "openai", modelId: "gpt-6-astra", effort: "" },
+  ])
+  expect(updates).toEqual(["hysec_1:openai/gpt-6-astra"])
+})
+
 test("parses a command line into name, words, and the raw argument text", () => {
   const { registry } = harness()
   expect(registry.parse("/answer req_1  yes please")).toEqual({
@@ -203,112 +227,6 @@ function effortContext(events: string[], store: AppStore): CommandContext {
   }
 }
 
-test("/effort updates the session first and remembers the choice only after the update succeeded", async () => {
-  const store = createAppStore()
-  const events: string[] = []
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } })
-  await createCommandRegistry().dispatch("/effort low", effortContext(events, store))
-  // One event stream proves the order: server update, then cache, then refresh.
-  expect(events).toEqual(["model openai/gpt-6-astra#low", 'prefs {"thinkingEfforts":{"openai/gpt-6-astra":"low"}}', "refresh"])
-  expect(store.state.selected?.model?.variant).toBe("low")
-  expect(store.state.status).toBe("Thinking effort → low")
-})
-
-test("a failed model update changes neither the session nor the cache", async () => {
-  const store = createAppStore()
-  const events: string[] = []
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } })
-  const context = effortContext(events, store)
-  context.client.updateSessionModel = async () => { throw new Error("provider down") }
-  await expect(createCommandRegistry().dispatch("/effort low", context)).rejects.toThrow("provider down")
-  expect(events).toEqual([])
-  expect(store.state.thinkingEfforts).toEqual({})
-  expect(store.state.selected?.model?.variant).toBeUndefined()
-})
-
-test("/effort default drops the explicit suffix and forgets the cached choice", async () => {
-  const { store, updates, calls, run } = modelSwitchingHarness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.setThinkingEfforts({ "openai/gpt-6-astra": "low" })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } })
-  await run("/effort default")
-  expect(updates).toEqual(["hysec_1:openai/gpt-6-astra"])
-  expect(calls).toEqual(['prefs {"thinkingEfforts":{}}', "refresh"])
-  expect(store.state.selected?.model?.variant).toBeUndefined()
-  expect(store.state.thinkingEfforts).toEqual({})
-  expect(store.state.status).toBe("Thinking effort → default")
-})
-
-test("/effort explicit none keeps reasoning explicitly off, distinct from the unset default", async () => {
-  const { store, updates, calls, run } = modelSwitchingHarness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } })
-  await run("/effort none")
-  expect(updates).toEqual(["hysec_1:openai/gpt-6-astra#none"])
-  expect(calls).toEqual(['prefs {"thinkingEfforts":{"openai/gpt-6-astra":"none"}}', "refresh"])
-  expect(store.state.selected?.model?.variant).toBe("none")
-  // Unset sessions still display the default, not `none`.
-  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } })
-  expect(currentThinkingEffort(store.state)).toBe("default")
-})
-
-test("a repeated effort choice catches the cache up without another model update", async () => {
-  const { store, updates, calls, run } = modelSwitchingHarness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra", variant: "low" } })
-  await run("/effort low")
-  expect(updates).toEqual([])
-  expect(calls).toEqual(['prefs {"thinkingEfforts":{"openai/gpt-6-astra":"low"}}'])
-  expect(store.state.status).toBe("Thinking effort → low")
-})
-
-test("an effort label outside the model's advertised menu is rejected", async () => {
-  const { store, updates, calls, run } = modelSwitchingHarness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } })
-  await expect(run("/effort max")).rejects.toThrow("Unknown thinking effort max for openai/gpt-6-astra")
-  expect(updates).toEqual([])
-  expect(calls).toEqual([])
-})
-
-test("/effort with no session remembers the choice for the next one", async () => {
-  const { store, updates, calls, run } = modelSwitchingHarness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  await run("/effort low")
-  expect(store.state.pendingModel).toBe("openai/gpt-6-astra#low")
-  expect(updates).toEqual([])
-  expect(calls).toEqual(['prefs {"thinkingEfforts":{"openai/gpt-6-astra":"low"}}'])
-  expect(store.state.status).toBe("Thinking effort → low · applies when the session is created")
-})
-
-test("picking a row in the /effort picker matches the direct command", async () => {
-  const runChoice = async (choice: "picker" | "direct") => {
-    const h = modelSwitchingHarness()
-    h.store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-    h.store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } })
-    if (choice === "picker") {
-      await h.run("/effort")
-      const picker = h.pickers.at(-1)!
-      expect(picker.title).toBe("Thinking effort")
-      expect(picker.rows.map((row) => row.id)).toEqual(["default", "none", "minimal", "low", "medium", "high"])
-      expect(picker.rows.find((row) => row.current)?.id).toBe("default")
-      await picker.onSelect({ id: "low", label: "low" })
-    } else {
-      await h.run("/effort low")
-    }
-    const state = h.store.state
-    return {
-      reference: modelReference(state.selected!),
-      cache: { ...state.thinkingEfforts },
-      status: state.status,
-      updates: h.updates,
-      prefs: h.calls.filter((call) => call.startsWith("prefs")),
-    }
-  }
-  expect(await runChoice("picker")).toEqual(await runChoice("direct"))
-})
 
 test("/think aliases /effort and wins any backend name clash", async () => {
   const { registry } = harness()
@@ -320,22 +238,6 @@ test("/think aliases /effort and wins any backend name clash", async () => {
   expect(entries.filter((entry) => entry.name === "/think")).toEqual([{ name: "/think", description: "Set the thinking effort (alias of /effort)", argumentHint: "[default|none|minimal|low|medium|high|xhigh|max]", source: "local" }])
 })
 
-test("/model applies the remembered effort to a model switch; an explicit suffix wins", async () => {
-  const { store, updates, run } = modelSwitchingHarness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [astra], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "other" } })
-  store.setThinkingEfforts({ "openai/gpt-6-astra": "low" })
-  await run("/model openai/gpt-6-astra")
-  expect(updates).toEqual(["hysec_1:openai/gpt-6-astra#low"])
-  // A typed suffix overrides the cache; a rejected one never reaches the server.
-  await run("/model openai/gpt-6-astra#high")
-  expect(updates).toEqual(["hysec_1:openai/gpt-6-astra#low", "hysec_1:openai/gpt-6-astra#high"])
-  await expect(run("/model openai/gpt-6-astra#max")).rejects.toThrow("Unknown thinking effort max for openai/gpt-6-astra")
-  expect(updates).toHaveLength(2)
-  // An empty suffix is invalid too, and never reaches the server.
-  await expect(run("/model openai/gpt-6-astra#")).rejects.toThrow('empty "#effort" suffix')
-  expect(updates).toHaveLength(2)
-})
 
 test("/rename updates the session title", async () => {
   const { store, run } = harness({

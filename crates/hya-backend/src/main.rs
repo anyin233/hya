@@ -185,9 +185,9 @@ async fn cmd_exec(
         .with_yolo(yolo)
         .with_pure(pure);
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -419,9 +419,9 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
         .with_yolo(yolo)
         .with_pure(pure);
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -560,9 +560,9 @@ async fn cmd_goal(
     )
     .to_string();
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -720,9 +720,9 @@ async fn cmd_loop(
     )
     .to_string();
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -944,7 +944,7 @@ async fn main() -> anyhow::Result<()> {
     let resume = cli_args::bare_resume(&cli)?;
     let connect = cli_args::bare_connect(&cli)?;
     let allow_hosts = cli_args::bare_allow_hosts(&cli)?;
-    let model = cli.model.clone();
+    let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
     let yolo = cli.yolo;
     let pure = cli.pure;
     let db = cli.db.clone();

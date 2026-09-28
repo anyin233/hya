@@ -58,6 +58,7 @@ export async function run(options: Options): Promise<void> {
   let serverToken = options.server ? envToken : undefined
   let renderer: CliRenderer | undefined
   let controller: Controller | undefined
+  const store = createAppStore()
   let stopping = false
   const shutdown = async (code: number, mode: ExitMode): Promise<void> => {
     // Once: `renderer.destroy()` re-enters here synchronously (its "destroy" event).
@@ -119,7 +120,6 @@ export async function run(options: Options): Promise<void> {
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
   const client = new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
-  const store = createAppStore({ thinkingEfforts: loaded.preferences.thinkingEfforts })
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)
   store.setBackend(backend)

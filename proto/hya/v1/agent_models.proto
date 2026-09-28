@@ -24,6 +24,31 @@ service AgentModels {
   //
   // hya.http: PUT /v1/agent-models/{agent_id}
   rpc SetAgentModel(SetAgentModelRequest) returns (AgentModelState);
+  // hya.http: GET /v1/model-effort-preferences
+  rpc ListModelEffortPreferences(ListModelEffortPreferencesRequest) returns (ListModelEffortPreferencesResponse);
+
+  // Empty effort clears the preference.
+  // hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
+  rpc SetModelEffortPreference(SetModelEffortPreferenceRequest) returns (ModelEffortPreference);
+ }
+
+message ModelEffortPreference {
+  string provider_id = 1;
+  string model_id = 2;
+  string effort = 3;
+  int64 updated_at = 4;
+}
+
+message ListModelEffortPreferencesRequest {}
+
+message ListModelEffortPreferencesResponse {
+  repeated ModelEffortPreference preferences = 1;
+}
+
+message SetModelEffortPreferenceRequest {
+  string provider_id = 1;
+  string model_id = 2;
+  string effort = 3;
 }
 
 // A concrete provider/model selection.

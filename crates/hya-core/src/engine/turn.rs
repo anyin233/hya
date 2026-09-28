@@ -1739,7 +1739,14 @@ impl SessionEngine {
                 },
             )
             .await?;
-            let request = request_from_messages(&live_agent, messages, resources, &model, depth);
+            // Resolved every round, so a preference saved mid-session applies
+            // to the next request without a restart.
+            let effort = self
+                .effective_effort(&model, live_agent.reasoning)
+                .await?
+                .effort;
+            let request =
+                request_from_messages(&live_agent, messages, resources, &model, depth, effort);
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
                     .request_root_session(session, &mut root_session_cache)

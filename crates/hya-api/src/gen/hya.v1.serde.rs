@@ -6621,6 +6621,92 @@ impl<'de> serde::Deserialize<'de> for DisposeProcessResponse {
         deserializer.deserialize_struct("hya.v1.DisposeProcessResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for EffortSource {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "EFFORT_SOURCE_UNSPECIFIED",
+            Self::Suffix => "EFFORT_SOURCE_SUFFIX",
+            Self::Agent => "EFFORT_SOURCE_AGENT",
+            Self::Preference => "EFFORT_SOURCE_PREFERENCE",
+            Self::ModelDefault => "EFFORT_SOURCE_MODEL_DEFAULT",
+            Self::GlobalDefault => "EFFORT_SOURCE_GLOBAL_DEFAULT",
+            Self::None => "EFFORT_SOURCE_NONE",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for EffortSource {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "EFFORT_SOURCE_UNSPECIFIED",
+            "EFFORT_SOURCE_SUFFIX",
+            "EFFORT_SOURCE_AGENT",
+            "EFFORT_SOURCE_PREFERENCE",
+            "EFFORT_SOURCE_MODEL_DEFAULT",
+            "EFFORT_SOURCE_GLOBAL_DEFAULT",
+            "EFFORT_SOURCE_NONE",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = EffortSource;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "EFFORT_SOURCE_UNSPECIFIED" => Ok(EffortSource::Unspecified),
+                    "EFFORT_SOURCE_SUFFIX" => Ok(EffortSource::Suffix),
+                    "EFFORT_SOURCE_AGENT" => Ok(EffortSource::Agent),
+                    "EFFORT_SOURCE_PREFERENCE" => Ok(EffortSource::Preference),
+                    "EFFORT_SOURCE_MODEL_DEFAULT" => Ok(EffortSource::ModelDefault),
+                    "EFFORT_SOURCE_GLOBAL_DEFAULT" => Ok(EffortSource::GlobalDefault),
+                    "EFFORT_SOURCE_NONE" => Ok(EffortSource::None),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for EnsureProjectForPathRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -12747,6 +12833,168 @@ impl<'de> serde::Deserialize<'de> for ListMessagesResponse {
         deserializer.deserialize_struct("hya.v1.ListMessagesResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ListModelEffortPreferencesRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.ListModelEffortPreferencesRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListModelEffortPreferencesRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListModelEffortPreferencesRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListModelEffortPreferencesRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListModelEffortPreferencesRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(ListModelEffortPreferencesRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListModelEffortPreferencesRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListModelEffortPreferencesResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.preferences.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListModelEffortPreferencesResponse", len)?;
+        if !self.preferences.is_empty() {
+            struct_ser.serialize_field("preferences", &self.preferences)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListModelEffortPreferencesResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "preferences",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Preferences,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "preferences" => Ok(GeneratedField::Preferences),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListModelEffortPreferencesResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListModelEffortPreferencesResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListModelEffortPreferencesResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut preferences__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Preferences => {
+                            if preferences__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preferences"));
+                            }
+                            preferences__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListModelEffortPreferencesResponse {
+                    preferences: preferences__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListModelEffortPreferencesResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ListModelsRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16883,6 +17131,155 @@ impl<'de> serde::Deserialize<'de> for MessageStarted {
             }
         }
         deserializer.deserialize_struct("hya.v1.MessageStarted", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ModelEffortPreference {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.provider_id.is_empty() {
+            len += 1;
+        }
+        if !self.model_id.is_empty() {
+            len += 1;
+        }
+        if !self.effort.is_empty() {
+            len += 1;
+        }
+        if self.updated_at != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ModelEffortPreference", len)?;
+        if !self.provider_id.is_empty() {
+            struct_ser.serialize_field("providerId", &self.provider_id)?;
+        }
+        if !self.model_id.is_empty() {
+            struct_ser.serialize_field("modelId", &self.model_id)?;
+        }
+        if !self.effort.is_empty() {
+            struct_ser.serialize_field("effort", &self.effort)?;
+        }
+        if self.updated_at != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("updatedAt", ToString::to_string(&self.updated_at).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ModelEffortPreference {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "provider_id",
+            "providerId",
+            "model_id",
+            "modelId",
+            "effort",
+            "updated_at",
+            "updatedAt",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProviderId,
+            ModelId,
+            Effort,
+            UpdatedAt,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "providerId" | "provider_id" => Ok(GeneratedField::ProviderId),
+                            "modelId" | "model_id" => Ok(GeneratedField::ModelId),
+                            "effort" => Ok(GeneratedField::Effort),
+                            "updatedAt" | "updated_at" => Ok(GeneratedField::UpdatedAt),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ModelEffortPreference;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ModelEffortPreference")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ModelEffortPreference, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut provider_id__ = None;
+                let mut model_id__ = None;
+                let mut effort__ = None;
+                let mut updated_at__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProviderId => {
+                            if provider_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("providerId"));
+                            }
+                            provider_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ModelId => {
+                            if model_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("modelId"));
+                            }
+                            model_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Effort => {
+                            if effort__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("effort"));
+                            }
+                            effort__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::UpdatedAt => {
+                            if updated_at__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("updatedAt"));
+                            }
+                            updated_at__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(ModelEffortPreference {
+                    provider_id: provider_id__.unwrap_or_default(),
+                    model_id: model_id__.unwrap_or_default(),
+                    effort: effort__.unwrap_or_default(),
+                    updated_at: updated_at__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ModelEffortPreference", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ModelRef {
@@ -24195,6 +24592,12 @@ impl serde::Serialize for SessionInfo {
         if self.kind != 0 {
             len += 1;
         }
+        if !self.effective_effort.is_empty() {
+            len += 1;
+        }
+        if self.effort_source != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -24263,6 +24666,14 @@ impl serde::Serialize for SessionInfo {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.kind)))?;
             struct_ser.serialize_field("kind", &v)?;
         }
+        if !self.effective_effort.is_empty() {
+            struct_ser.serialize_field("effectiveEffort", &self.effective_effort)?;
+        }
+        if self.effort_source != 0 {
+            let v = EffortSource::try_from(self.effort_source)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.effort_source)))?;
+            struct_ser.serialize_field("effortSource", &v)?;
+        }
         struct_ser.end()
     }
 }
@@ -24301,6 +24712,10 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "project_id",
             "projectId",
             "kind",
+            "effective_effort",
+            "effectiveEffort",
+            "effort_source",
+            "effortSource",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24326,6 +24741,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             Ephemeral,
             ProjectId,
             Kind,
+            EffectiveEffort,
+            EffortSource,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24368,6 +24785,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "ephemeral" => Ok(GeneratedField::Ephemeral),
                             "projectId" | "project_id" => Ok(GeneratedField::ProjectId),
                             "kind" => Ok(GeneratedField::Kind),
+                            "effectiveEffort" | "effective_effort" => Ok(GeneratedField::EffectiveEffort),
+                            "effortSource" | "effort_source" => Ok(GeneratedField::EffortSource),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24408,6 +24827,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut ephemeral__ = None;
                 let mut project_id__ = None;
                 let mut kind__ = None;
+                let mut effective_effort__ = None;
+                let mut effort_source__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -24538,6 +24959,18 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             kind__ = Some(map_.next_value::<SessionKind>()? as i32);
                         }
+                        GeneratedField::EffectiveEffort => {
+                            if effective_effort__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("effectiveEffort"));
+                            }
+                            effective_effort__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::EffortSource => {
+                            if effort_source__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("effortSource"));
+                            }
+                            effort_source__ = Some(map_.next_value::<EffortSource>()? as i32);
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -24562,6 +24995,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     ephemeral: ephemeral__.unwrap_or_default(),
                     project_id: project_id__.unwrap_or_default(),
                     kind: kind__.unwrap_or_default(),
+                    effective_effort: effective_effort__.unwrap_or_default(),
+                    effort_source: effort_source__.unwrap_or_default(),
                 })
             }
         }
@@ -25482,6 +25917,133 @@ impl<'de> serde::Deserialize<'de> for SetAgentModelRequest {
             }
         }
         deserializer.deserialize_struct("hya.v1.SetAgentModelRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SetModelEffortPreferenceRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.provider_id.is_empty() {
+            len += 1;
+        }
+        if !self.model_id.is_empty() {
+            len += 1;
+        }
+        if !self.effort.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.SetModelEffortPreferenceRequest", len)?;
+        if !self.provider_id.is_empty() {
+            struct_ser.serialize_field("providerId", &self.provider_id)?;
+        }
+        if !self.model_id.is_empty() {
+            struct_ser.serialize_field("modelId", &self.model_id)?;
+        }
+        if !self.effort.is_empty() {
+            struct_ser.serialize_field("effort", &self.effort)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SetModelEffortPreferenceRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "provider_id",
+            "providerId",
+            "model_id",
+            "modelId",
+            "effort",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProviderId,
+            ModelId,
+            Effort,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "providerId" | "provider_id" => Ok(GeneratedField::ProviderId),
+                            "modelId" | "model_id" => Ok(GeneratedField::ModelId),
+                            "effort" => Ok(GeneratedField::Effort),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SetModelEffortPreferenceRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.SetModelEffortPreferenceRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SetModelEffortPreferenceRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut provider_id__ = None;
+                let mut model_id__ = None;
+                let mut effort__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProviderId => {
+                            if provider_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("providerId"));
+                            }
+                            provider_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ModelId => {
+                            if model_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("modelId"));
+                            }
+                            model_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Effort => {
+                            if effort__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("effort"));
+                            }
+                            effort__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(SetModelEffortPreferenceRequest {
+                    provider_id: provider_id__.unwrap_or_default(),
+                    model_id: model_id__.unwrap_or_default(),
+                    effort: effort__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.SetModelEffortPreferenceRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SetProviderAuthRequest {
