@@ -119,7 +119,7 @@ async fn fixture(dir: &Path, script: Vec<Vec<FakeStep>>) -> Fixture {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -128,7 +128,7 @@ async fn fixture(dir: &Path, script: Vec<Vec<FakeStep>>) -> Fixture {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir.to_path_buf(),

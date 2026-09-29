@@ -39,6 +39,7 @@ fn release_rehearsal_requires_a_host_target() {
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
         "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
     ]
     .into_iter()
     .find(|target| *target != host)

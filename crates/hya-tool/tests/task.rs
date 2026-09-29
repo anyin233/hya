@@ -113,10 +113,10 @@ async fn subagent_can_spawn_nested_task() {
 }
 
 #[tokio::test]
-async fn omitted_subagent_type_selects_general() {
+async fn omitted_subagent_type_selects_the_task_agent() {
     let parent = SessionId::new();
     let (spawner, mut rx) = SpawnerPlane::new();
-    let ctx = ctx_with_session(vec![allow(Action::Task, "general")], spawner, parent);
+    let ctx = ctx_with_session(vec![allow(Action::Task, "hya-task")], spawner, parent);
     let tool = ToolRegistry::builtins().get("task").unwrap();
 
     let mut handle = tokio::spawn(async move {
@@ -134,7 +134,7 @@ async fn omitted_subagent_type_selects_general() {
         result = &mut handle => panic!("omitted target rejected before spawn: {result:?}"),
         req = rx.recv() => req.expect("spawn request"),
     };
-    assert_eq!(req.members[0].subagent_type, "general");
+    assert_eq!(req.members[0].subagent_type, "hya-task");
     req.reply
         .send(Ok(vec![MemberOutcome {
             member: "mbr_1".to_string(),
@@ -554,7 +554,7 @@ fn task_schema_chooses_the_agent_by_subagent_type_only() {
         props["subagent_type"]["description"]
             .as_str()
             .unwrap()
-            .contains("general"),
+            .contains("hya-task"),
         "the omitted default is documented"
     );
 }

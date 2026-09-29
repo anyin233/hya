@@ -27,7 +27,7 @@ test.describe("/model picker", () => {
     await newSession(term)
     await prompt(term, "hi")
     await term.waitForText("First reply.", 20_000)
-    await term.waitForText(/● build · fake\/fast/)
+    await term.waitForText(/● hya-main · fake\/fast/)
 
     await prompt(term, "/model")
     await term.waitForText("Model")
@@ -43,7 +43,7 @@ test.describe("/model picker", () => {
 
     await prompt(term, "again")
     await term.waitForText("Second reply.", 20_000)
-    await term.waitForText(/● build · fake\/slow/)
+    await term.waitForText(/● hya-main · fake\/slow/)
   })
 
   test("before a session exists the choice is remembered and applied to the next session", async ({ tui, backend }) => {
@@ -57,7 +57,7 @@ test.describe("/model picker", () => {
     await term.waitForText("Model → fake/slow · applies when the session is created")
     await prompt(term, "hello")
     await term.waitForText("First reply.", 20_000)
-    await term.waitForText(/● build · fake\/slow/)
+    await term.waitForText(/● hya-main · fake\/slow/)
   })
 
   test("/model provider/model keeps working directly", async ({ tui, backend }) => {
@@ -69,7 +69,7 @@ test.describe("/model picker", () => {
 })
 
 test.describe("/model with the agent's model pinned in config.yaml", () => {
-  test.use({ model: { models: ["fast", "slow"], agentModels: { build: "fake/slow" }, steps: [textStep("First reply."), textStep("Second reply.")] } })
+  test.use({ model: { models: ["fast", "slow"], agentModels: { "hya-main": "fake/slow" }, steps: [textStep("First reply."), textStep("Second reply.")] } })
 
   test("switches only the session; the next session starts on the pinned model again", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
@@ -78,12 +78,12 @@ test.describe("/model with the agent's model pinned in config.yaml", () => {
     await term.waitForText("Model → fake/fast")
     await prompt(term, "hi")
     await term.waitForText("First reply.", 20_000)
-    await term.waitForText(/● build · fake\/fast/)
+    await term.waitForText(/● hya-main · fake\/fast/)
 
     await prompt(term, "/new")
     await term.waitForText(/Created hysec_/)
     await prompt(term, "again")
     await term.waitForText("Second reply.", 20_000)
-    await term.waitForText(/● build · fake\/slow/)
+    await term.waitForText(/● hya-main · fake\/slow/)
   })
 })

@@ -29,7 +29,7 @@ inputs:
   v: Any value.
 nodes:
   capture:
-    agent: general
+    agent: hya-task
     directive: captured={{input.v}}
 ---
 flowchart TD

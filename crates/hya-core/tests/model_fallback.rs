@@ -673,7 +673,7 @@ async fn model_fallback_hook_supplies_next_model_after_pre_stream_failure() {
     let consult = &consults[0];
     assert_eq!(consult.session, fixt.session);
     assert_eq!(consult.root_session, fixt.session);
-    assert_eq!(consult.agent, Some(AgentName::new("build")));
+    assert_eq!(consult.agent, Some(AgentName::new("hya-task")));
     assert_eq!(consult.model, ModelRef::new("alpha"));
     assert_eq!(consult.error_class, ModelFailureClass::Auth);
     assert!(consult.error_message.contains("re-login"));

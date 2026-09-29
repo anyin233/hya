@@ -19,10 +19,12 @@ Examples:
 - Resident Bun example (spawned agent): [`examples/bun-resident/`](examples/bun-resident/)
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
-Core agents (`build`, `plan`, `explore`, `general`, the reserved
-`compaction` / `summary` / `title`, and the `hya-*` development agents) come
-from the trusted [`hya/core-agents` preset](core-agents.md) and run on
-the full Harness plane. Its source is
+Core agents (`hya-main`, `hya-plan`, `hya-task`, `hya-scout`,
+`hya-reviewer`, and reserved `hya-compaction`, `hya-summary`, `hya-title`)
+come from the trusted [`hya/core-agents` preset](core-agents.md). The preset
+has access to the Harness plane subject to each agent's `resource_view.deny`:
+`hya-plan` denies write, edit, apply_patch, and bash; `hya-scout` also denies
+task and archive. Its source is
 [`bundles/presets/core-agents`](../bundles/presets/core-agents/). Public bundle
 payloads cannot request that trusted origin.
 
@@ -116,7 +118,7 @@ catalog-level tables. `agents()` returns an empty slice and `workflow()` returns
 `None`; `plugin_bundle()` exposes the prepared payload.
 
 Static Skills use the existing runtime resource registry. Full-plane agents such
-as `build` can invoke `skill` with `{"name":"plugin-help"}` after installation.
+as `hya-main` can invoke `skill` with `{"name":"plugin-help"}` after installation.
 Agent-bearing bundles retain their scoped resource views. An installed generation
 is loaded at the next root binding; existing bindings remain immutable.
 Declared process and MCP providers start before the new generation is published.
@@ -126,7 +128,7 @@ private agent views, and failure behavior.
 ### Which sessions a Plugin's hooks reach
 
 An installed Plugin's hooks are global: they run for every agent's sessions.
-That includes built-in agents such as `build` and `explore`, and every
+That includes built-in agents such as `hya-main` and `hya-scout`, and every
 bundle-defined agent from an AgentBundle, AgentSetBundle, or WorkflowBundle. A
 bundle agent does not select Plugin hooks, so its `hook_refs` do not list them.
 
@@ -573,7 +575,7 @@ for await (const line of createInterface({ input: process.stdin })) {
 On the wire (`resource` is `{ type, value }` as for `permission.ask`):
 
 ```json
-{"jsonrpc":"2.0","id":7,"method":"hook/permission.approve","params":{"session":"hysec_…","root_session":"hysec_…","agent":"build","mode":"careful","action":"bash","resource":{"type":"command","value":"git status"}}}
+{"jsonrpc":"2.0","id":7,"method":"hook/permission.approve","params":{"session":"hysec_…","root_session":"hysec_…","agent":"hya-main","mode":"careful","action":"bash","resource":{"type":"command","value":"git status"}}}
 {"jsonrpc":"2.0","id":7,"result":{"outcome":"allow_once"}}
 ```
 
@@ -620,15 +622,15 @@ Example agent with `model_policy`:
 
 ```yaml
 agent:
-  id: build
-  description: Default coding agent
+  id: acme-builder
+  description: Coding agent
   role: main
-  prompt: prompts/build.md
+  prompt: prompts/builder.md
   model_policy:
     model: anthropic/claude-sonnet-4-6
     category: deep
     reasoning: high
-  can_spawn: [explore, general]
+  can_spawn: [hya-scout, hya-task]
 ```
 
 ---
@@ -750,9 +752,9 @@ and deny still apply:
 
 ```yaml
 agent:
-  id: explore
+  id: acme-scout
   role: subagent
-  prompt: prompts/explore.md
+  prompt: prompts/scout.md
   resource_view:
     allow:
       - harness:tool/write
@@ -791,7 +793,7 @@ agent:
 - `role: subagent` is hidden from direct client selection.
 - `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
 - Every spawned agent is a resident actor, whatever its `role`; there is no per-agent lifecycle choice.
-- Empty or omitted `subagent_type` on the `task` tool normalizes to `general` before authorization.
+- Empty or omitted `subagent_type` on the `task` tool normalizes to `hya-task` before authorization.
 
 ### `can_spawn` enforcement
 
@@ -810,7 +812,7 @@ caller unusable; an actual spawn of that id still fails with
 
 Both surface to the model as **tool errors**, not permission prompts. Widening
 `can_spawn` is the only fix; a permission rule cannot grant the spawn. Catalog
-lookup does not rewrite an unknown `subagent_type` to `general`.
+lookup does not rewrite an unknown `subagent_type` to `hya-task`.
 
 ---
 
@@ -916,13 +918,14 @@ restart with no rebuild; an installed layout loads the packaged
 
 They differ from bundle agents in three ways:
 
-- They run on the full Harness plane and own no bundle resources, so they never
-  have a sidecar.
+- They have trusted Harness-plane access subject to their `resource_view`
+  restrictions and own no bundle resources, so they never have a sidecar.
 - Their ids are reserved: installing a bundle whose agent claims one is rejected
   at install with `BUNDLE_AGENT_ID_RESERVED`.
-- An ordinary built-in spawns the **whole ordinary set**, so installing a bundle
-  makes its agent spawnable immediately, with no edit to any built-in. The
-  reserved system agents `compaction`, `summary`, and `title` are never
+- Ordinary built-ins can spawn ordinary catalog agents, so installing a bundle
+  makes its agent spawnable immediately, with no edit to a built-in's
+  `can_spawn`; `hya-scout` cannot call `task` because its view denies it. The
+  reserved system agents `hya-compaction`, `hya-summary`, and `hya-title` are never
   selectable and never an ordinary spawn target.
 
 ---

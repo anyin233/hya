@@ -330,7 +330,7 @@ function describe(tool: string, input: Json, output: unknown, raw: string, shell
     }
     case "task": {
       const members = Array.isArray(input.members) ? input.members.map(record) : []
-      const agent = str(input.subagent_type) || str(members[0]?.subagent_type) || str(meta.subagent_type) || "general"
+      const agent = str(input.subagent_type) || str(members[0]?.subagent_type) || str(meta.subagent_type) || "hya-task"
       const description = str(input.description) ?? str(members[0]?.description) ?? str(out.title) ?? ""
       const child = str(meta.sessionId)
       return {

@@ -14,11 +14,11 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
     })
     return Response.json(url.endsWith("/turns")
       ? { turn: { id: "msg_1", state: "TURN_STATE_RUNNING" } }
-      : { session: { id: "hysec_1", agent: "build", workdir: "/work" } })
+      : { session: { id: "hysec_1", agent: "hya-main", workdir: "/work" } })
   }
 
   const client = new HyaClient("http://127.0.0.1:8080/", "/work", fetcher)
-  const session = await client.createSession("build", "offline/echo", { workdir: "/work" })
+  const session = await client.createSession("hya-main", "offline/echo", { workdir: "/work" })
   const turn = await client.createTurn(session.id, "hello")
 
   expect(session.id).toBe("hysec_1")
@@ -29,7 +29,7 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
       method: "POST",
       header: null,
       // A local start: the server reuses the Project containing the cwd or creates one (EnsureProjectForPath).
-      body: { agent: "build", model: "offline/echo", workdir: "/work", kind: "SESSION_KIND_PROJECT" },
+      body: { agent: "hya-main", model: "offline/echo", workdir: "/work", kind: "SESSION_KIND_PROJECT" },
     },
     {
       url: "http://127.0.0.1:8080/v1/sessions/hysec_1/turns",
@@ -44,12 +44,12 @@ test("a session created on connect asks the daemon to drop it while unused (ephe
   const bodies: unknown[] = []
   const fetcher: FetchLike = async (_input, init) => {
     bodies.push(init?.body ? JSON.parse(String(init.body)) : undefined)
-    return Response.json({ session: { id: "hysec_1", agent: "build", workdir: "/work", ephemeral: true } })
+    return Response.json({ session: { id: "hysec_1", agent: "hya-main", workdir: "/work", ephemeral: true } })
   }
   const client = new HyaClient("http://127.0.0.1:8080/", "/work", fetcher)
-  const session = await client.createSession("build", "offline/echo", { workdir: "/work" }, { ephemeral: true })
+  const session = await client.createSession("hya-main", "offline/echo", { workdir: "/work" }, { ephemeral: true })
   expect(session.ephemeral).toBe(true)
-  expect(bodies).toEqual([{ agent: "build", model: "offline/echo", kind: "SESSION_KIND_PROJECT", workdir: "/work", ephemeral: true }])
+  expect(bodies).toEqual([{ agent: "hya-main", model: "offline/echo", kind: "SESSION_KIND_PROJECT", workdir: "/work", ephemeral: true }])
 })
 
 test("getVcsStatus scopes GetVcsStatus to the client's directory", async () => {
@@ -74,8 +74,8 @@ test("decodes SSE frames split across transport chunks", () => {
 })
 
 test("parses only scoped JSON API commands", () => {
-  expect(parseApiCommand('/api POST /v1/sessions {"agent":"build"}')).toEqual({
-    method: "POST", path: "/v1/sessions", body: { agent: "build" },
+  expect(parseApiCommand('/api POST /v1/sessions {"agent":"hya-main"}')).toEqual({
+    method: "POST", path: "/v1/sessions", body: { agent: "hya-main" },
   })
   expect(() => parseApiCommand("/api GET https://example.com/")).toThrow("/v1/")
   expect(() => parseApiCommand("/api GET /v1/sessions {} ")).toThrow("GET")
@@ -169,7 +169,7 @@ test("admits a shell turn and finds files through scoped v1 requests", async () 
       : { turn: { id: "msg_a", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" } })
   }
   const client = new HyaClient("http://h", "/work", fetcher)
-  const turn = await client.createShellTurn("hysec_1", "echo hi", "build", { providerId: "fake", modelId: "model" })
+  const turn = await client.createShellTurn("hysec_1", "echo hi", "hya-main", { providerId: "fake", modelId: "model" })
   expect(turn.id).toBe("msg_a")
   expect(await client.findFiles("**/*ma in*", 20)).toEqual(["src/main.ts"])
   expect(calls).toEqual([
@@ -177,7 +177,7 @@ test("admits a shell turn and finds files through scoped v1 requests", async () 
       url: "http://h/v1/sessions/hysec_1/turns",
       method: "POST",
       header: null,
-      body: { shell: { command: "echo hi", agent: "build", model: { providerId: "fake", modelId: "model" } } },
+      body: { shell: { command: "echo hi", agent: "hya-main", model: { providerId: "fake", modelId: "model" } } },
     },
     { url: "http://h/v1/fs/find?pattern=**%2F*ma%20in*&limit=20&directory=%2Fwork", method: "GET", header: null, body: undefined },
   ])
@@ -217,8 +217,8 @@ test("revertSession and forkSession post RevertSession / ForkSession bodies", as
     const url = String(input)
     calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
     return Response.json(url.endsWith("/fork")
-      ? { session: { id: "hysec_2", agent: "build", workdir: "/work", forkedFrom: { session: "hysec_1", messageId: "msg_2" } }, promptText: "again" }
-      : { session: { id: "hysec_1", agent: "build", workdir: "/work", revert: { messageId: "msg_2", text: "again", hiddenMessages: 2 } }, files: [{ path: "/work/a", action: "restored" }] })
+      ? { session: { id: "hysec_2", agent: "hya-main", workdir: "/work", forkedFrom: { session: "hysec_1", messageId: "msg_2" } }, promptText: "again" }
+      : { session: { id: "hysec_1", agent: "hya-main", workdir: "/work", revert: { messageId: "msg_2", text: "again", hiddenMessages: 2 } }, files: [{ path: "/work/a", action: "restored" }] })
   }
   const client = new HyaClient("http://127.0.0.1:8080", "/work", fetcher)
   const reverted = await client.revertSession("hysec_1", {})
@@ -253,15 +253,15 @@ function recordingFetcher(reply: (url: string, method: string) => unknown) {
 const project = { id: "prj_1", name: "work", roots: ["/work", "/docs"], sessionCount: 2, busy: true }
 
 test("createSession places a session in a Project, at a workdir, or as a temporary session", async () => {
-  const { calls, fetcher } = recordingFetcher(() => ({ session: { id: "s", agent: "build", workdir: "/work" } }))
+  const { calls, fetcher } = recordingFetcher(() => ({ session: { id: "s", agent: "hya-main", workdir: "/work" } }))
   const client = new HyaClient("http://h", "/work", fetcher)
-  await client.createSession("build", "m/x", { projectId: "prj_1", workdir: "/work/sub" })
-  await client.createSession("build", "m/x", { projectId: "prj_1" })
-  await client.createSession("build", "m/x", { temporary: true })
+  await client.createSession("hya-main", "m/x", { projectId: "prj_1", workdir: "/work/sub" })
+  await client.createSession("hya-main", "m/x", { projectId: "prj_1" })
+  await client.createSession("hya-main", "m/x", { temporary: true })
   expect(calls.map((call) => call.body)).toEqual([
-    { agent: "build", model: "m/x", kind: "SESSION_KIND_PROJECT", projectId: "prj_1", workdir: "/work/sub" },
-    { agent: "build", model: "m/x", kind: "SESSION_KIND_PROJECT", projectId: "prj_1" },
-    { agent: "build", model: "m/x", kind: "SESSION_KIND_TEMPORARY" },
+    { agent: "hya-main", model: "m/x", kind: "SESSION_KIND_PROJECT", projectId: "prj_1", workdir: "/work/sub" },
+    { agent: "hya-main", model: "m/x", kind: "SESSION_KIND_PROJECT", projectId: "prj_1" },
+    { agent: "hya-main", model: "m/x", kind: "SESSION_KIND_TEMPORARY" },
   ])
 })
 
@@ -305,7 +305,7 @@ test("Project rpcs use the v1 routes and unwrap their responses", async () => {
 })
 
 test("listSessions filters by Project", async () => {
-  const { calls, fetcher } = recordingFetcher(() => ({ sessions: [{ id: "s", agent: "build", workdir: "/work", projectId: "prj_1" }] }))
+  const { calls, fetcher } = recordingFetcher(() => ({ sessions: [{ id: "s", agent: "hya-main", workdir: "/work", projectId: "prj_1" }] }))
   const client = new HyaClient("http://h", "/work", fetcher)
   expect((await client.listSessions({ projectId: "prj_1" })).map((row) => row.id)).toEqual(["s"])
   await client.listSessions()
@@ -395,7 +395,7 @@ test("every scoped call names the scope in its directory field and no request or
   await client.getVcsStatus()
   await client.getVcsDiff()
   await client.listAgentModels("hysec_1")
-  await client.setAgentModel("general", undefined)
+  await client.setAgentModel("hya-task", undefined)
   await client.streamSession("hysec_1", "0", () => undefined, new AbortController().signal)
   await client.streamGlobal(() => undefined, new AbortController().signal)
   expect(calls.map((call) => [call.method, call.url.replace("http://h", ""), call.body])).toEqual([
@@ -409,7 +409,7 @@ test("every scoped call names the scope in its directory field and no request or
     ["GET", "/v1/vcs?directory=%2Fwork%20dir", undefined],
     ["GET", "/v1/vcs/diff?directory=%2Fwork%20dir", undefined],
     ["GET", "/v1/agent-models?session=hysec_1&directory=%2Fwork%20dir", undefined],
-    ["PUT", "/v1/agent-models/general", { directory: "/work dir" }],
+    ["PUT", "/v1/agent-models/hya-task", { directory: "/work dir" }],
   ])
   expect(calls.every((call) => call.header === null)).toBe(true)
   expect(streamed).toEqual([null, null])
@@ -421,11 +421,11 @@ test("an empty scope (remote start before a Project) names no directory", async 
   await client.bootstrap()
   await client.listAgents()
   await client.getVcsStatus()
-  await client.setAgentModel("general", undefined)
+  await client.setAgentModel("hya-task", undefined)
   expect(calls.map((call) => [call.url.replace("http://h", ""), call.body, call.header])).toEqual([
     ["/v1/bootstrap", undefined, null],
     ["/v1/agents?page.limit=500", undefined, null],
     ["/v1/vcs", undefined, null],
-    ["/v1/agent-models/general", {}, null],
+    ["/v1/agent-models/hya-task", {}, null],
   ])
 })

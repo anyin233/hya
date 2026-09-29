@@ -10,6 +10,8 @@
 //! and stale commits.
 //! `install.sh` remains break-glass bootstrap/recovery. Network download is
 //! outside this TCB; operators copy a complete local package directory in.
+//! The separate [`release_install`] path (bare `hya update`) reinstalls from
+//! the published GitHub release, checked only against its `SHA256SUMS`.
 
 pub mod cli;
 mod error;
@@ -19,6 +21,7 @@ mod layout;
 mod lease;
 mod metadata;
 mod pipeline;
+pub mod release_install;
 mod smoke;
 mod stage;
 mod trust;

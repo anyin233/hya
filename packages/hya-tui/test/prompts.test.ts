@@ -20,7 +20,7 @@ const permission = (id: string, session: string, payload: Record<string, unknown
 const question = (id: string, session: string, title: string, options: string[] = [], detail = ""): Interaction => ({
   id, session, type: "INTERACTION_TYPE_QUESTION", title, options, ...(detail ? { detail } : {}),
 })
-const session = (id: string, extra: Partial<SessionInfo> = {}): SessionInfo => ({ id, agent: "build", workdir: "/w", ...extra })
+const session = (id: string, extra: Partial<SessionInfo> = {}): SessionInfo => ({ id, agent: "hya-main", workdir: "/w", ...extra })
 const context = (extra: Partial<PromptContext> = {}): PromptContext => ({
   selected: session("hysec_p"),
   sessions: [session("hysec_p")],
@@ -35,7 +35,7 @@ test("bash asks show the command; options are allow once, always allow (with the
   const view = promptView(permission("perm_1", "hysec_p", {
     action: "bash", resource: "echo hello", always: ["echo hello *"], callId: "call_1", tool: "bash", input: { command: "echo hello" },
   }, "bash echo hello"), context(), 0, 1)
-  expect(view).toMatchObject({ id: "perm_1", kind: "permission", title: "bash echo hello", asker: "build", subagent: false, tool: "bash", position: 0, total: 1 })
+  expect(view).toMatchObject({ id: "perm_1", kind: "permission", title: "bash echo hello", asker: "hya-main", subagent: false, tool: "bash", position: 0, total: 1 })
   expect(texts(view.body)).toEqual(["$ echo hello"])
   // The headline reads like the tool card: tool and summary.
   expect(view.headline).toBe("bash  echo hello")
@@ -111,7 +111,7 @@ test("respond bodies: once, always (persist), deny, answer, reject", () => {
 
 test("question prompts list the options, then Other… and Reject; free text in the input answers on Enter", () => {
   const view = promptView(question("que_1", "hysec_p", "Which color?", ["red", "blue"], "Color"), context(), 0, 1)
-  expect(view).toMatchObject({ kind: "question", title: "Which color?", header: "Color", headline: "Color: Which color?", asker: "build" })
+  expect(view).toMatchObject({ kind: "question", title: "Which color?", header: "Color", headline: "Color: Which color?", asker: "hya-main" })
   expect(view.options.map((option) => option.label)).toEqual(["red", "blue", "Other…", "Reject"])
   const empty = { index: 0, draft: "" }
   expect(promptKey(view, empty, key("2"))).toEqual({ type: "choose", choice: { kind: "answer", answer: "blue" } })
@@ -146,11 +146,11 @@ test("a listed question without options takes them from its waiting ask_user cal
 test("the queue holds the asks of the open session and its subagent sessions, oldest first", () => {
   const sessions = [
     session("hysec_p"),
-    session("hysec_c", { parent: "hysec_p", agent: "general" }),
-    session("hysec_g", { parent: "hysec_c", agent: "explore" }),
+    session("hysec_c", { parent: "hysec_p", agent: "hya-task" }),
+    session("hysec_g", { parent: "hysec_c", agent: "hya-scout" }),
     session("hysec_other"),
   ]
-  const members: MemberInfo[] = [{ member: "mbr_1", child: "hysec_new", agent: "scout", description: "survey" }]
+  const members: MemberInfo[] = [{ member: "mbr_1", child: "hysec_new", agent: "hya-scout", description: "survey" }]
   const tree = treeSessionIds("hysec_p", sessions, ["hysec_new"])
   expect([...tree].sort()).toEqual(["hysec_c", "hysec_g", "hysec_new", "hysec_p"])
   const interactions = [
@@ -167,13 +167,13 @@ test("the queue holds the asks of the open session and its subagent sessions, ol
 })
 
 test("a subagent's ask is labelled with the subagent and its task", () => {
-  const sessions = [session("hysec_p"), session("hysec_c", { parent: "hysec_p", agent: "general" })]
-  const members: MemberInfo[] = [{ member: "mbr_1", child: "hysec_c", agent: "general", description: "survey the repo" }]
+  const sessions = [session("hysec_p"), session("hysec_c", { parent: "hysec_p", agent: "hya-task" })]
+  const members: MemberInfo[] = [{ member: "mbr_1", child: "hysec_c", agent: "hya-task", description: "survey the repo" }]
   const view = promptView(permission("perm_c", "hysec_c", { action: "bash", resource: "ls", tool: "bash", input: { command: "ls" } }), context({ sessions, members }), 1, 2)
-  expect(view).toMatchObject({ asker: "subagent general · survey the repo", subagent: true, position: 1, total: 2 })
+  expect(view).toMatchObject({ asker: "subagent hya-task · survey the repo", subagent: true, position: 1, total: 2 })
   // Before the session list knows the child: the member row still names it.
   const early = promptView(permission("perm_c", "hysec_c", { action: "bash", resource: "ls" }), context({ members }), 0, 1)
-  expect(early.asker).toBe("subagent general · survey the repo")
+  expect(early.asker).toBe("subagent hya-task · survey the repo")
 })
 
 test("listed rows keep the options and header a live frame carried; resolved ids stay hidden", () => {

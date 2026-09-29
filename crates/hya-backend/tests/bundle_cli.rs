@@ -386,11 +386,11 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
         first_party_row("hya/todo-tools", "  active Plugin -"),
         first_party_row(
             "hya/goal-loop",
-            " goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+            " hya-goal-guide,hya-goal-verifier active AgentSetBundle -",
         ),
         first_party_row(
             "hya/plan-impl-review",
-            " plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active WorkflowBundle plan-impl-review",
         ),
     ] {
         assert!(
@@ -1416,7 +1416,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
             LIST_HEADER.to_string(),
             first_party_row(
                 "hya/goal-loop",
-                " goal-loop-guide,goal-loop-verifier active AgentSetBundle -"
+                " hya-goal-guide,hya-goal-verifier active AgentSetBundle -"
             ),
         ],
         "unexpected bundle id search rows:\n{by_bundle_id_stdout}"
@@ -1441,7 +1441,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
 
     // Agent id match reaches the other first-party bundle.
     let by_agent = bundle_command(&data_root)
-        .args(["bundle", "search", "plan-impl-review-planner"])
+        .args(["bundle", "search", "hya-pir-planner"])
         .output()?;
     assert_success("search by agent id", &by_agent);
     assert!(
@@ -1543,11 +1543,11 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
         first_party_row("hya/todo-tools", "  active Plugin -"),
         first_party_row(
             "hya/goal-loop",
-            " goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+            " hya-goal-guide,hya-goal-verifier active AgentSetBundle -",
         ),
         first_party_row(
             "hya/plan-impl-review",
-            " plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+            " hya-pir-implementer,hya-pir-planner,hya-pir-reviewer active WorkflowBundle plan-impl-review",
         ),
     ] {
         assert!(

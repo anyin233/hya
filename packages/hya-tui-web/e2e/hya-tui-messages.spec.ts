@@ -42,10 +42,10 @@ test.describe("roles", () => {
     expect((await term.cell(user.row, user.col))?.bg).toBe(colors.panel)
     expect((await term.cell(user.row, user.col))?.fg).toBe(colors.fg)
 
-    const header = await at(term, "build · fake/model")
+    const header = await at(term, "hya-main · fake/model")
     expect(header.row).toBeGreaterThan(user.row)
     expect((await term.cell(header.row, header.col))?.fg).toBe(colors.accent)
-    expect((await term.cell(header.row, header.col + "build · ".length))?.fg).toBe(colors.muted)
+    expect((await term.cell(header.row, header.col + "hya-main · ".length))?.fg).toBe(colors.muted)
     const answer = await at(term, "Plain answer from the assistant")
     expect(answer.row).toBe(header.row + 1)
     expect((await term.cell(answer.row, answer.col))?.bg).toBe(colors.bg)

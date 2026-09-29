@@ -763,20 +763,15 @@ fn skill_header_count(system: &str) -> usize {
 }
 
 #[tokio::test]
-async fn root_turn_missing_definition_fails_closed_without_general_fallback() {
+async fn root_turn_missing_definition_continues_as_the_task_agent() {
     let home = support::TestDir::new("root-missing-home");
     let workdir = support::TestDir::new("root-missing-def");
     let _home = HomeGuard::set(home.path());
     let provider = Arc::new(CaptureProvider {
         requests: Mutex::new(Vec::new()),
     });
-    let engine = engine_with(
-        catalog(&[AgentFixture::new("general")
-            .model("bundle-general-model")
-            .category("quick")]),
-        provider.clone(),
-    )
-    .await;
+    // The catalog holds only the built-ins; `ghost` is not one of them.
+    let engine = engine_with(catalog(&[]), provider.clone()).await;
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -789,49 +784,47 @@ async fn root_turn_missing_definition_fails_closed_without_general_fallback() {
         .await
         .unwrap();
     engine
-        .admit_user_prompt(session, "should not run".to_string())
+        .admit_user_prompt(session, "continue as the task agent".to_string())
         .await
         .unwrap();
 
-    let err = engine
+    engine
         .run_turn(
             session,
             &composed_base(workdir.path().to_path_buf()),
             CancellationToken::new(),
         )
         .await
-        .expect_err("missing root definition must fail closed");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "must not synthesize or fall back to general for a missing root definition"
-    );
+        .expect("a missing root definition continues as hya-task");
+    let agent = engine.read_projection(session).await.unwrap().session.agent;
+    assert_eq!(agent.as_ref().map(AgentName::as_str), Some("hya-task"));
+    // The fallback runs the built-in task agent's own definition.
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let system = requests[0].system.as_deref().expect("system prompt");
+    assert!(system.contains("You are hya-task"), "{system}");
 }
 
 #[tokio::test]
-async fn root_turn_prompt_none_preserves_composed_base_and_appends_skills_once() {
+async fn root_turn_prompt_none_preserves_composed_base() {
     let home = support::TestDir::new("root-prompt-none-home");
     let workdir = support::TestDir::new("root-prompt-none");
     let _home = HomeGuard::set(home.path());
-    write_skill(workdir.path(), "session-skill");
     let provider = Arc::new(CaptureProvider {
         requests: Mutex::new(Vec::new()),
     });
+    // A non-built-in agent with no prompt: every built-in now carries one.
+    // (Workdir skills reach built-ins only; the skill section is pinned by
+    // `root_turn_session_workdir_wins_over_bundle_and_base_workdir`.)
     let engine = engine_with(
-        catalog(&[AgentFixture::new("build")
-            .model("bundle-default-model")
-            .category("deep")
-            .workdir("/bundle/must-not-win")]),
+        catalog(&[AgentFixture::new("plain-main")]),
         provider.clone(),
     )
     .await;
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("plain-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -864,13 +857,6 @@ async fn root_turn_prompt_none_preserves_composed_base_and_appends_skills_once()
     assert!(
         system.contains(AGENTS_MARKER),
         "prompt=None must not erase AGENTS/context composition: {system}"
-    );
-    assert_eq!(skill_header_count(system), 1, "skill section once");
-    assert!(system.contains("session-skill"));
-    assert!(
-        system.find(BASE_MARKER).unwrap()
-            < system.find("These skills are available on demand").unwrap(),
-        "skills append after preserved base"
     );
     assert!(
         !system.contains(BUNDLE_PROMPT),
@@ -956,7 +942,7 @@ async fn root_turn_session_model_and_model_switched_win_over_base_and_bundle_def
         requests: Mutex::new(Vec::new()),
     });
     let engine = engine_with(
-        catalog(&[AgentFixture::new("build")
+        catalog(&[AgentFixture::new("hya-main")
             .model("bundle-default-model")
             .category("ultrabrain")]),
         provider.clone(),
@@ -965,7 +951,7 @@ async fn root_turn_session_model_and_model_switched_win_over_base_and_bundle_def
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("created-session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1112,7 +1098,7 @@ async fn root_turn_session_workdir_wins_over_bundle_and_base_workdir() {
     });
     let engine = engine_with(
         catalog(&[
-            AgentFixture::new("build").workdir(bundle_dir.path().to_string_lossy().into_owned())
+            AgentFixture::new("hya-main").workdir(bundle_dir.path().to_string_lossy().into_owned())
         ]),
         provider.clone(),
     )
@@ -1120,7 +1106,7 @@ async fn root_turn_session_workdir_wins_over_bundle_and_base_workdir() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: session_dir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1168,11 +1154,11 @@ async fn root_turn_records_one_turn_binding() {
     let provider = Arc::new(CaptureProvider {
         requests: Mutex::new(Vec::new()),
     });
-    let engine = engine_with(catalog(&[AgentFixture::new("build")]), provider).await;
+    let engine = engine_with(catalog(&[AgentFixture::new("hya-main")]), provider).await;
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1235,14 +1221,14 @@ async fn root_sidecar_resolver_uses_captured_binding_and_acks_before_model_poll(
         factory,
     });
     let engine = Arc::new(
-        engine_with(catalog(&[AgentFixture::new("build")]), provider.clone())
+        engine_with(catalog(&[AgentFixture::new("hya-main")]), provider.clone())
             .await
             .with_sidecar_environment(environment.clone() as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1255,7 +1241,7 @@ async fn root_sidecar_resolver_uses_captured_binding_and_acks_before_model_poll(
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root sidecar test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1277,7 +1263,7 @@ async fn root_sidecar_resolver_uses_captured_binding_and_acks_before_model_poll(
     let captured_generation = {
         let calls = resolver_calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "root resolves its sidecar exactly once");
-        assert_eq!(calls[0].1, "build");
+        assert_eq!(calls[0].1, "hya-main");
         calls[0].0
     };
     let published_generation = engine
@@ -1370,7 +1356,7 @@ async fn root_sidecar_resolver_uses_captured_binding_and_acks_before_model_poll(
         let calls = resolver_calls.lock().unwrap();
         assert_eq!(calls.len(), 2, "root resolves each sidecar exactly once");
         assert_eq!(calls[0].1, calls[1].1, "root stable id remains unchanged");
-        assert_eq!(calls[1].1, "build");
+        assert_eq!(calls[1].1, "hya-main");
         assert_eq!(
             calls[1].0, published_generation,
             "second root must resolve the published generation"
@@ -1428,14 +1414,14 @@ async fn root_sidecar_length_completion_gracefully_shuts_down() {
         }),
     });
     let engine = Arc::new(
-        engine_with_provider(catalog(&[AgentFixture::new("build")]), provider)
+        engine_with_provider(catalog(&[AgentFixture::new("hya-main")]), provider)
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1448,7 +1434,7 @@ async fn root_sidecar_length_completion_gracefully_shuts_down() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root sidecar length test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1500,14 +1486,14 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
         }),
     });
     let engine = Arc::new(
-        engine_with(catalog(&[AgentFixture::new("build")]), provider.clone())
+        engine_with(catalog(&[AgentFixture::new("hya-main")]), provider.clone())
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1520,7 +1506,7 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root sidecar loss test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1587,14 +1573,14 @@ async fn root_sidecar_loss_during_model_terminates_before_released_output() {
         }),
     });
     let engine = Arc::new(
-        engine_with_provider(catalog(&[AgentFixture::new("build")]), provider.clone())
+        engine_with_provider(catalog(&[AgentFixture::new("hya-main")]), provider.clone())
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1607,7 +1593,7 @@ async fn root_sidecar_loss_during_model_terminates_before_released_output() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root in-flight loss test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1700,14 +1686,14 @@ async fn root_sidecar_activation_dispatcher_observes_post_ack_turn_events() {
         }),
     });
     let engine = Arc::new(
-        engine_with(catalog(&[AgentFixture::new("build")]), provider)
+        engine_with(catalog(&[AgentFixture::new("hya-main")]), provider)
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1720,7 +1706,7 @@ async fn root_sidecar_activation_dispatcher_observes_post_ack_turn_events() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root activation hook test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1832,14 +1818,14 @@ async fn root_sidecar_after_hook_transport_loss_fences_tool_event_before_commit(
         vec![FakeStep::Finish(FinishReason::Stop)],
     ]));
     let engine = Arc::new(
-        engine_with_provider(catalog(&[AgentFixture::new("build")]), provider)
+        engine_with_provider(catalog(&[AgentFixture::new("hya-main")]), provider)
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1852,7 +1838,7 @@ async fn root_sidecar_after_hook_transport_loss_fences_tool_event_before_commit(
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root activation hook loss test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1931,14 +1917,14 @@ async fn root_sidecar_before_hook_transport_loss_stops_before_after_hook_or_comm
         vec![FakeStep::Finish(FinishReason::Stop)],
     ]));
     let engine = Arc::new(
-        engine_with_provider(catalog(&[AgentFixture::new("build")]), provider)
+        engine_with_provider(catalog(&[AgentFixture::new("hya-main")]), provider)
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1951,7 +1937,7 @@ async fn root_sidecar_before_hook_transport_loss_stops_before_after_hook_or_comm
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root activation hook before-loss test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -2023,14 +2009,14 @@ async fn root_sidecar_event_transport_loss_stops_before_model_poll() {
         requests: Mutex::new(Vec::new()),
     });
     let engine = Arc::new(
-        engine_with(catalog(&[AgentFixture::new("build")]), provider.clone())
+        engine_with(catalog(&[AgentFixture::new("hya-main")]), provider.clone())
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -2043,7 +2029,7 @@ async fn root_sidecar_event_transport_loss_stops_before_model_poll() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root activation event loss test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -2105,14 +2091,14 @@ async fn root_sidecar_shutdown_failure_is_not_reported_as_success() {
         }),
     });
     let engine = Arc::new(
-        engine_with(catalog(&[AgentFixture::new("build")]), provider.clone())
+        engine_with(catalog(&[AgentFixture::new("hya-main")]), provider.clone())
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -2125,7 +2111,7 @@ async fn root_sidecar_shutdown_failure_is_not_reported_as_success() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root sidecar shutdown failure test".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -2177,14 +2163,14 @@ async fn root_sidecar_cancel_while_factory_start_is_pending_stops_before_model_p
         }),
     });
     let engine = Arc::new(
-        engine_with(catalog(&[AgentFixture::new("build")]), provider.clone())
+        engine_with(catalog(&[AgentFixture::new("hya-main")]), provider.clone())
             .await
             .with_sidecar_environment(environment as Arc<dyn SidecarEnvironment>),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -2197,7 +2183,7 @@ async fn root_sidecar_cancel_while_factory_start_is_pending_stops_before_model_p
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: "root pending sidecar start test".to_string(),
         workdir: workdir.path().to_path_buf(),

@@ -80,7 +80,10 @@ export const shellMarker = "The following tool was executed by the user"
 
 function block(part: MessagePart, active: boolean, shell: string | undefined, shellTurn: boolean): Block | undefined {
   if (part.text) return part.text.text ? { kind: "text", id: part.id, text: part.text.text } : undefined
-  if (part.reasoning) return { kind: "reasoning", id: part.id, text: part.reasoning.text, words: words(part.reasoning.text), active }
+  if (part.reasoning) {
+    const text = part.reasoning.text ?? ""
+    return { kind: "reasoning", id: part.id, text, words: words(text), active }
+  }
   if (part.toolCall) {
     const card = toolCard(part.toolCall, shell !== undefined ? { command: shell } : {})
     return { kind: "tool", id: part.id, ...(part.toolCall.callId ? { callId: part.toolCall.callId } : {}), card, ...(shellTurn ? { shell: true } : {}) }

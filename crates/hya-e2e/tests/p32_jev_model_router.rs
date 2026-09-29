@@ -193,7 +193,7 @@ async fn t2_27_jev_picks_the_tier_and_the_session_stays_on_it() {
             body["questions"]["difficulty"]["criteria"]["hard"],
             "Cross-cutting design and subtle debugging"
         );
-        assert_eq!(body["state"]["agent"], "build");
+        assert_eq!(body["state"]["agent"], "hya-main");
         assert!(
             body["state"]["latest_user_message"]
                 .as_str()

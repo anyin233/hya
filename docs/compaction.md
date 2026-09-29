@@ -19,7 +19,7 @@ emits. Thresholds and token accounting are configured alongside; see
 | --- | --- | --- | --- |
 | `shake` | Moves stale completed tool-output bodies to durable storage (`artifact://` handles), leaving the calls, inputs, and reasoning in place. Lossless: the body stays retrievable by reading the handle. | no | `ContextEvicted` |
 | `remote` | Asks the route to fold its own context window (OpenAI Responses `/responses/compact`; `openai-response`, `openai-codex`, and `grok-build` routes). | provider-side | `native` |
-| `soft` | Folds the transcript prefix into a structured, incrementally anchored summary (the fixed `compaction` system agent). | yes | `local_summarizer` |
+| `soft` | Folds the transcript prefix into a structured, incrementally anchored summary (the fixed `hya-compaction` system agent). | yes | `local_summarizer` |
 | `snapcompact` | Replaces the folded prefix with a local, deterministic dense archive under oh-my-pi's serialization budgets. Works with no summarizer wired at all. | no | `snap_compact` |
 | `handoff` | Has a model write a handoff document over the **verbatim transcript** and commits it as the compaction summary. | yes | `handoff` |
 

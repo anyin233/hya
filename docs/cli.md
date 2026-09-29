@@ -14,7 +14,7 @@ standalone `hya-updater` binary are gone.
 | Sessions | `sessions`, `tail-session` |
 | Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
-| Self-update TCB | `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
+| Update | bare `update` (reinstall from the latest release, [`docs/install.md`](install.md)); self-update TCB `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
@@ -220,7 +220,7 @@ loads:
 | User (default) | `--user` | The installed-bundle registry, `$XDG_DATA_HOME/hya/bundles/registry.sqlite3` (fallback `~/.local/share/hya/bundles/registry.sqlite3`). | Shadows first-party bundles with the same id or namespace. |
 | Project | `--project` | Bundle source directories under `./.hya/bundles/<dir>/` in the current directory. The runtime loads them for sessions of the registered Project that has this directory as a root (not from the directory a server was started in). | Highest: shadows user-installed and first-party bundles with the same id or namespace. |
 
-`--user` and `--project` are mutually exclusive. The twelve bundles shipped with
+`--user` and `--project` are mutually exclusive. The eleven bundles shipped with
 hya have scope `builtin`: they are listed but cannot be installed over as presets
 or removed.
 
@@ -707,10 +707,10 @@ applies only to that invocation and is not written as an Agent preference.
 **Which agent runs.** The new root Session's Agent id is resolved the same way
 `serve` resolves one: config `default_agent` (see
 [Configuration](configuration.md#agent-selection)) when set, otherwise the
-built-in `build` agent. There is no per-invocation `--agent` flag yet. An
+built-in `hya-main` agent. There is no per-invocation `--agent` flag yet. An
 unresolvable `default_agent` (not a selectable agent id in the bound catalog)
 fails the run with a clear `UnknownAgentId` error instead of silently falling
-back to `build`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
+back to `hya-main`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
 `hya workflow run` (when it creates a new Session) all resolve the root Agent
 the same way.
 
@@ -752,9 +752,8 @@ hya run --format json "summarize this repo"
 ```
 
 Compat-compatible alias for `exec`. Message words are joined with spaces.
-Like `exec`, `run` persists only when the global `--db <PATH>` is supplied,
 and resolves its root Agent the same way (config `default_agent`, else the
-built-in `build` agent — see [`hya exec`](#hya-exec)).
+built-in `hya-main` agent — see [`hya exec`](#hya-exec)).
 `--format json` and `--json` both emit event JSONL.
 
 ## `hya -p`
@@ -767,7 +766,7 @@ Runs goal mode with an in-memory store. Each iteration runs an agent turn, then
 an independent evaluator judges the transcript. The run stops when the evaluator
 returns `met=true`, a cap is reached, or cancellation is requested. Goal mode
 does not persist to the global `--db` database. The worker Agent is resolved
-the same way as `hya exec`'s root Agent (config `default_agent`, else `build`
+the same way as `hya exec`'s root Agent (config `default_agent`, else `hya-main`
 — see [`hya exec`](#hya-exec)); the independent evaluator is a separate,
 unaffected model selection (`--evaluator-model` / `goal.evaluator_model`).
 
@@ -1140,7 +1139,7 @@ with `Provider not found: <id>`. Provider declarations that resolved no rows do
 not fabricate output.
 
 **`agent list`.** Default output is Compat-parity: only the built-in primary
-agent, printed as `build (primary)` followed by its permission rules as
+agent, printed as `hya-main (primary)` followed by its permission rules as
 pretty-printed JSON. Pass `--all` to also list ordinary agents reachable from
 the built-in catalog. Deliberate limitation: `agent list` **never**
 inspects on-disk agent files under `.hya/`, `.claude/`, or `.opencode/`, nor
@@ -1196,10 +1195,15 @@ Empty `--db` is remapped to the durable XDG path (not in-memory).
 This command intentionally exits cleanly on broken pipe (exit 0), so shell
 filters such as `head` and `grep -q` can close stdout without causing a panic.
 
-## `hya update` (self-update TCB)
+## `hya update`
 
-`hya update` verifies signed release metadata, stages immutable generations,
-optionally smokes them, and activates only with explicit owner authorization.
+Bare `hya update [--version VERSION] [--force] [--prefix DIR]` reinstalls
+the running hya's prefix from the latest (or the given) GitHub release with
+the same installer as `curl … | sh`; see [Install and update](install.md).
+
+The subcommands below are the self-update TCB. They verify signed release
+metadata, stage immutable generations,
+optionally smoke them, and activate only with explicit owner authorization.
 It replaces the former standalone `hya-updater` binary. The commands are
 implemented in the independent `hya-updater` library crate, and `hya`
 dispatches them before composing any runtime: no config bootstrap, bundles,

@@ -174,7 +174,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("base"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -185,7 +185,7 @@ async fn four_categories_drive_four_distinct_model_calls() {
 
     let reg = config_registry();
     let base = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("base"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),

@@ -70,7 +70,7 @@ export function childActivity(messages: readonly MessageInfo[]): string | undefi
         const card = toolCard(part.toolCall)
         return [card.tool, card.summary].filter(Boolean).join(" ")
       }
-      const text = part.text?.text.split("\n").map((line) => line.trim()).find(Boolean)
+      const text = part.text?.text?.split("\n").map((line) => line.trim()).find(Boolean)
       if (text) return text
     }
   }

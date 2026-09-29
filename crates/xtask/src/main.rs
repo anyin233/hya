@@ -11,7 +11,7 @@
 //! - `package-native-tool-bundle` — stage one built Rust tool-family executable
 //!   into its policy source and emit a deterministic public package.
 //!
-//! - `stage-first-party-bundles` — package the twelve trusted first-party
+//! - `stage-first-party-bundles` — package the eleven trusted first-party
 //!   bundles for an installed layout and, optionally, as release assets.
 //! - `release-rehearsal` — validate and smoke the non-publishing release asset.
 //! - `gen-api` — regenerate the `hya.v1` contract crate and its docs from

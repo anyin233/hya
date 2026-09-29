@@ -20,7 +20,7 @@ async fn t2_16_agent_model_preference_steers_spawned_subagent_model() {
                     json!({
                         "description": "e2e preferred child",
                         "prompt": "report PREFERRED_CHILD_OK",
-                        "subagent_type": "general",
+                        "subagent_type": "hya-task",
                         "inline_agent": {
                             "description": "",
                             "category": "",
@@ -47,21 +47,21 @@ async fn t2_16_agent_model_preference_steers_spawned_subagent_model() {
         .get_json("/v1/agent-models")
         .await
         .expect("agent-model listing");
-    let general_row = listed["agents"]
+    let task_row = listed["agents"]
         .as_array()
         .expect("agents array")
         .iter()
-        .find(|row| row["agentId"] == "general")
-        .expect("general row");
+        .find(|row| row["agentId"] == "hya-task")
+        .expect("hya-task row");
     assert_eq!(
-        general_row["source"],
+        task_row["source"],
         json!("AGENT_MODEL_SOURCE_DEFAULT"),
-        "no preference set yet: {general_row}"
+        "no preference set yet: {task_row}"
     );
 
-    // Set the durable preference: general -> fake/pref-target (PUT route).
+    // Set the durable preference: hya-task -> fake/pref-target (PUT route).
     env.put_json(
-        "/v1/agent-models/general",
+        "/v1/agent-models/hya-task",
         &json!({"preference": {"providerId": "fake", "modelId": "pref-target"}}),
     )
     .await
@@ -69,7 +69,7 @@ async fn t2_16_agent_model_preference_steers_spawned_subagent_model() {
 
     let session = env.create_session().await.expect("session");
     let _ = env
-        .prompt(session, "spawn a general subagent on the preferred model")
+        .prompt(session, "spawn a hya-task subagent on the preferred model")
         .await
         .expect("task prompt");
 
@@ -87,28 +87,27 @@ async fn t2_16_agent_model_preference_steers_spawned_subagent_model() {
     assert_eq!(
         child_requests[0]["model"],
         json!("pref-target"),
-        "spawned general must run on the remembered preference: {child_requests:?}"
+        "spawned hya-task must run on the remembered preference: {child_requests:?}"
     );
 
-    // The listing now reports the remembered tier for general.
     let listed = env
         .get_json("/v1/agent-models")
         .await
         .expect("agent-model listing after set");
-    let general_row = listed["agents"]
+    let task_row = listed["agents"]
         .as_array()
         .expect("agents array")
         .iter()
-        .find(|row| row["agentId"] == "general")
-        .expect("general row after set");
+        .find(|row| row["agentId"] == "hya-task")
+        .expect("hya-task row after set");
     assert_eq!(
-        general_row["source"],
+        task_row["source"],
         json!("AGENT_MODEL_SOURCE_REMEMBERED"),
-        "preference is durable and catalog-matching: {general_row}"
+        "preference is durable and catalog-matching: {task_row}"
     );
     assert_eq!(
-        general_row["preference"]["modelId"],
+        task_row["preference"]["modelId"],
         json!("pref-target"),
-        "{general_row}"
+        "{task_row}"
     );
 }

@@ -103,9 +103,9 @@ fn core_agents_are_backed_by_the_verified_embedded_preset() {
 #[test]
 fn core_agents_resolve_through_their_preset_qualified_identity() {
     let catalog = empty_catalog();
-    let bare = catalog.resolve("build").expect("bare preset agent");
+    let bare = catalog.resolve("hya-main").expect("bare preset agent");
     let qualified = catalog
-        .resolve("bundle:hya/core-agents/agent/build")
+        .resolve("bundle:hya/core-agents/agent/hya-main")
         .expect("qualified preset agent");
     assert_eq!(bare, qualified);
     assert_eq!(qualified.origin.preset_bundle_id(), Some("hya/core-agents"));
@@ -114,7 +114,14 @@ fn core_agents_resolve_through_their_preset_qualified_identity() {
 #[test]
 fn resolves_builtins_with_zero_installed_bundles() {
     let catalog = empty_catalog();
-    for id in ["build", "plan", "explore", "general", "hya-main", "title"] {
+    for id in [
+        "hya-main",
+        "hya-plan",
+        "hya-scout",
+        "hya-task",
+        "hya-reviewer",
+        "hya-title",
+    ] {
         let definition = catalog.resolve(id).unwrap_or_else(|| panic!("{id}"));
         assert_eq!(definition.stable_id, id);
         assert_eq!(definition.origin, AgentOrigin::Builtin);
@@ -146,14 +153,14 @@ fn resolves_a_bundle_agent_by_qualified_reference() {
 
 #[test]
 fn an_installed_bundle_may_not_shadow_a_builtin_agent_id() {
-    let bundles = BundleCatalog::from_prepared(&[installed("acme/impostor", "build", &[])])
+    let bundles = BundleCatalog::from_prepared(&[installed("acme/impostor", "hya-main", &[])])
         .expect("bundle catalog");
     let error = AgentCatalog::new(Arc::new(bundles)).expect_err("shadowing must be rejected");
     assert_eq!(
         error,
         BundleError::BuiltinAgentIdShadowed {
             bundle_id: "acme/impostor".to_string(),
-            agent_id: "build".to_string(),
+            agent_id: "hya-main".to_string(),
         }
     );
 }
@@ -163,30 +170,30 @@ fn installing_a_bundle_makes_its_agent_spawnable_by_a_builtin() {
     let before = empty_catalog();
     assert!(
         !before
-            .spawnable("build")
+            .spawnable("hya-main")
             .expect("roster")
             .iter()
             .any(|agent| agent.stable_id == "acme-reviewer")
     );
 
     let after = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
-    let roster = after.spawnable("build").expect("roster");
+    let roster = after.spawnable("hya-main").expect("roster");
     assert!(
         roster
             .iter()
             .any(|agent| agent.stable_id == "acme-reviewer"),
         "installing a bundle must not require editing any builtin definition"
     );
-    assert!(after.resolve_spawn("build", "acme-reviewer").is_ok());
+    assert!(after.resolve_spawn("hya-main", "acme-reviewer").is_ok());
 }
 
 #[test]
 fn reserved_system_agents_stay_unspawnable_by_ordinary_agents() {
     let catalog = catalog(&[installed("acme/reviewer", "acme-reviewer", &[])]);
-    for reserved in ["compaction", "summary", "title"] {
+    for reserved in ["hya-compaction", "hya-summary", "hya-title"] {
         assert!(
             !catalog
-                .spawnable("build")
+                .spawnable("hya-main")
                 .expect("roster")
                 .iter()
                 .any(|agent| agent.stable_id == reserved),
@@ -194,7 +201,7 @@ fn reserved_system_agents_stay_unspawnable_by_ordinary_agents() {
         );
         assert!(
             matches!(
-                catalog.resolve_spawn("build", reserved),
+                catalog.resolve_spawn("hya-main", reserved),
                 Err(BundleError::AgentSpawnNotAllowed { .. })
             ),
             "`{reserved}` must not be spawnable"
@@ -209,7 +216,7 @@ fn reserved_system_agents_stay_unspawnable_by_ordinary_agents() {
 #[test]
 fn a_bundle_agent_spawns_only_what_it_lists() {
     let catalog = catalog(&[
-        installed("acme/lead", "acme-lead", &["explore", "acme-helper"]),
+        installed("acme/lead", "acme-lead", &["hya-scout", "acme-helper"]),
         installed("acme/helper", "acme-helper", &[]),
     ]);
     let roster = catalog.spawnable("acme-lead").expect("roster");
@@ -217,12 +224,12 @@ fn a_bundle_agent_spawns_only_what_it_lists() {
         .iter()
         .map(|agent| agent.stable_id)
         .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["explore", "acme-helper"]);
+    assert_eq!(ids, vec!["hya-scout", "acme-helper"]);
 
-    assert!(catalog.resolve_spawn("acme-lead", "explore").is_ok());
+    assert!(catalog.resolve_spawn("acme-lead", "hya-scout").is_ok());
     assert!(catalog.resolve_spawn("acme-lead", "acme-helper").is_ok());
     assert!(matches!(
-        catalog.resolve_spawn("acme-lead", "general"),
+        catalog.resolve_spawn("acme-lead", "hya-task"),
         Err(BundleError::AgentSpawnNotAllowed { .. })
     ));
 }
@@ -233,7 +240,7 @@ fn a_missing_can_spawn_target_is_skipped_in_the_roster_but_errors_on_spawn() {
     let catalog = catalog(&[installed(
         "acme/lead",
         "acme-lead",
-        &["explore", "not-installed"],
+        &["hya-scout", "not-installed"],
     )]);
     let ids = catalog
         .spawnable("acme-lead")
@@ -243,7 +250,7 @@ fn a_missing_can_spawn_target_is_skipped_in_the_roster_but_errors_on_spawn() {
         .collect::<Vec<_>>();
     assert_eq!(
         ids,
-        vec!["explore"],
+        vec!["hya-scout"],
         "an uninstalled target is skipped, not fatal"
     );
     assert!(matches!(
@@ -268,7 +275,7 @@ fn the_ordinary_roster_holds_every_builtin_and_bundle_agent_sorted() {
         installed("acme/alpha", "acme-alpha", &[]),
     ]);
     let ids = catalog
-        .spawnable("build")
+        .spawnable("hya-main")
         .expect("roster")
         .iter()
         .map(|agent| agent.stable_id)
@@ -278,18 +285,11 @@ fn the_ordinary_roster_holds_every_builtin_and_bundle_agent_sorted() {
         vec![
             "acme-alpha",
             "acme-zeta",
-            "build",
-            "explore",
-            "general",
-            "hya-docs",
-            "hya-explorer",
-            "hya-implementer",
             "hya-main",
-            "hya-planner",
-            "hya-release",
+            "hya-plan",
             "hya-reviewer",
-            "hya-tester",
-            "plan",
+            "hya-scout",
+            "hya-task",
         ]
     );
 }
@@ -340,37 +340,6 @@ agents:
             .resolve("bundle:acme/team/agent/team-worker")
             .is_some()
     );
-}
-
-#[test]
-fn first_party_subagent_bundle_exposes_one_resident_worker() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../bundles/first-party/subagents");
-    let prepared = hya_bundle::prepare_package(
-        hya_bundle::BundleSource::read_directory(root).expect("subagent bundle source"),
-    )
-    .expect("prepare subagent bundle");
-    let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("verified catalog");
-    let catalog = AgentCatalog::new(Arc::new(bundles)).expect("runtime catalog");
-
-    let worker = catalog
-        .resolve_spawn("build", "hya-worker")
-        .expect("resident worker");
-    assert_eq!(
-        worker.origin,
-        AgentOrigin::Bundle {
-            bundle_id: "hya/subagents"
-        }
-    );
-    assert!(!worker.origin.is_preset());
-    assert!(!catalog.is_reserved(worker.stable_id));
-    // The transient/resident split is gone with `spawn_lifecycle`.
-    for removed in ["hya-transient-worker", "hya-resident-worker"] {
-        assert!(
-            catalog.resolve_spawn("build", removed).is_err(),
-            "`{removed}` must no longer exist"
-        );
-    }
 }
 
 #[test]

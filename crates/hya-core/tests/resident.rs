@@ -37,7 +37,7 @@ async fn engine_with(limits: SubagentLimits) -> (Arc<SessionEngine>, AgentSpec) 
     // Catalog-backed id: resident turns exact-resolve session AgentName; "worker"
     // is a roster handle only and is not a Bundle definition.
     let agent = AgentSpec {
-        name: AgentName::new("general"),
+        name: AgentName::new("hya-task"),
         model: ModelRef::new("hya/offline"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -50,7 +50,7 @@ async fn make_root(engine: &SessionEngine) -> SessionId {
     engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -64,7 +64,7 @@ async fn make_child(engine: &SessionEngine, root: SessionId) -> SessionId {
     engine
         .create(CreateSession {
             parent: Some(root),
-            agent: AgentName::new("general"),
+            agent: AgentName::new("hya-task"),
             model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -184,9 +184,11 @@ async fn quiescence_wakes_main_to_synthesize() {
     // Main-as-actor must be registered so quiescence has someone to wake.
     // Catalog-derived root roster/resource policy (root session agent is "build").
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let root_agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let root_agents = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
     let root_resources = engine
-        .agent_resource_policy_for_binding(&binding, "build")
+        .agent_resource_policy_for_binding(&binding, "hya-main")
         .unwrap();
     supervisor
         .ensure_main(
@@ -286,9 +288,11 @@ async fn reports_consumed_in_lead_turn_do_not_wake_synthesis() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     let lease = engine.try_begin_turn(root).unwrap();
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let agents = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
     let resources = engine
-        .agent_resource_policy_for_binding(&binding, "build")
+        .agent_resource_policy_for_binding(&binding, "hya-main")
         .unwrap();
     supervisor
         .ensure_main(
@@ -354,9 +358,11 @@ async fn message_budget_kill_cancels_the_team() {
     let root = make_root(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let root_agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let root_agents = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
     let root_resources = engine
-        .agent_resource_policy_for_binding(&binding, "build")
+        .agent_resource_policy_for_binding(&binding, "hya-main")
         .unwrap();
     supervisor
         .ensure_main(

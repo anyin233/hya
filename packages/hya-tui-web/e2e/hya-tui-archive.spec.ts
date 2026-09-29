@@ -19,7 +19,7 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** The open session's id, from the header (`hya · <id> · build …`) while it has no title. */
+/** The open session's id, from the header (`hya · <id> · hya-main …`) while it has no title. */
 async function headerId(term: Tui): Promise<string> {
   await term.waitForText(/hya · hysec_\S+ · /, 30_000)
   return /hya · (hysec_\S+) · /.exec(await term.text())![1]!
@@ -41,7 +41,7 @@ async function listed(backend: Backend, query = ""): Promise<string[]> {
 
 /** A session made by another client (not this TUI's to drop), with a title. */
 async function otherSession(backend: Backend, title: string): Promise<string> {
-  const { session: created } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "build", model: fakeModelRef, workdir: backend.dir })
+  const { session: created } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "hya-main", model: fakeModelRef, workdir: backend.dir })
   await api(backend, "PATCH", `/v1/sessions/${created.id}`, { title })
   return created.id
 }
@@ -168,7 +168,7 @@ test.describe("/sessions archived toggle", () => {
     // Another client archives the open session: the sidebar marks it live.
     await term.resize(1100, 640)
     await api(backend, "PATCH", `/v1/sessions/${hidden}`, { archived: true })
-    await term.waitForText(/build · archived/, 20_000)
+    await term.waitForText(/hya-main · archived/, 20_000)
   })
 })
 

@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use hya_bundle::{AgentRole, ModelPolicy};
+use hya_bundle::{AgentRole, ModelPolicy, ResourceView};
 use hya_bundle::{
     BundleError, PreparedAgent, PreparedAgentSetBundle, PreparedCatalog, PreparedInstallableBundle,
     first_party_bundle,
@@ -20,6 +20,15 @@ use crate::agent_catalog::{AgentDefinition, AgentOrigin};
 
 /// Stable identity of the trusted core-agents preset.
 pub const CORE_AGENTS_PRESET_ID: &str = "hya/core-agents";
+
+/// Default primary agent: new root sessions run it unless configuration or the
+/// request selects another.
+pub const MAIN_AGENT_ID: &str = "hya-main";
+
+/// General-purpose worker: the `task` target when `subagent_type` is empty, and
+/// the agent a stored session continues as when its recorded agent no longer
+/// exists in the catalog.
+pub const TASK_AGENT_ID: &str = "hya-task";
 
 /// The preset's `extensions.files` policy asset.
 #[derive(Deserialize)]
@@ -91,6 +100,9 @@ pub struct BuiltinAgent {
     pub spawn_scope: SpawnScope,
     /// Reserved system agent: never selectable and never an ordinary spawn target.
     pub system_reserved: bool,
+    /// Domain-tool view from the preset (`resource_view`), e.g. the write and
+    /// shell tools a read-only agent is denied.
+    pub resource_view: &'static ResourceView,
 }
 
 impl BuiltinAgent {
@@ -173,6 +185,7 @@ fn load_core_agents() -> Result<LoadedCoreAgents, BundleError> {
                     SpawnScope::AllOrdinary
                 },
                 system_reserved: reserved,
+                resource_view: &agent.resource_view,
             }
         })
         .collect();

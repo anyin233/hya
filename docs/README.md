@@ -100,9 +100,10 @@ If you want to understand the codebase:
 | [Core agents](core-agents.md) | Trusted first-party agent preset and reserved-agent provenance. |
 | [Tool-family presets](base-tools.md) | Five trusted tool groups, exposure, aliases, and permission defaults. |
 | [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
-| [Subagent bundles](subagent-bundles.md) | The bundle-defined resident worker (`hya-worker`). |
+| [Subagent bundles](subagent-bundles.md) | Use the built-in `hya-task` worker and author optional bundle-defined subagents. |
 | [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |
 | [Extra bundles](extra-bundles.md) | Optional `hya-extra/*` packages (zvec-grep MCP, scout subagent, model routing) that double as bundle-coverage fixtures. |
+| [Install and update](install.md) | Release packages per platform, the `curl … \| sh` installer (`hya-install.sh`), bare `hya update`, mirrors, archive layout. |
 | [Secure self-update](self-update.md) | `hya update` over the independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md) | Foreground Unix listener FD handoff primitive and successor-process follow-up plan. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |

@@ -280,9 +280,9 @@ flipped. Re-read `GET /v1/projects`. Session streams do not carry it.
 ```sh
 curl -X POST localhost:3250/v1/projects/ensure -d '{"path": "/home/me/repo"}'
 curl -X POST localhost:3250/v1/sessions \
-  -d '{"agent": "build", "model": "anthropic/claude-sonnet-5", "projectId": "prj_..."}'
+  -d '{"agent": "hya-main", "model": "anthropic/claude-sonnet-5", "projectId": "prj_..."}'
 curl -X POST localhost:3250/v1/sessions \
-  -d '{"agent": "build", "model": "anthropic/claude-sonnet-5", "kind": "SESSION_KIND_TEMPORARY"}'
+  -d '{"agent": "hya-main", "model": "anthropic/claude-sonnet-5", "kind": "SESSION_KIND_TEMPORARY"}'
 ```
 
 ```json
@@ -379,7 +379,7 @@ curl -X POST localhost:3250/v1/sessions \
 ```
 
 ```json
-{ "session": { "id": "hysec_...", "agent": "build", "workdir": "/work", "ephemeral": true, "projectId": "prj_...", "kind": "SESSION_KIND_PROJECT" } }
+{ "session": { "id": "hysec_...", "agent": "hya-main", "workdir": "/work", "ephemeral": true, "projectId": "prj_...", "kind": "SESSION_KIND_PROJECT" } }
 ```
 
 ```json
@@ -430,7 +430,7 @@ server) made it. Child (subagent) sessions never produce these frames.
   re-list too.
 
 ```json
-{ "event": { "seq": "1", "session": "hysec_...", "sessionStarted": { "agent": "build", "model": "openai/gpt-5", "workdir": "/repo" } } }
+{ "event": { "seq": "1", "session": "hysec_...", "sessionStarted": { "agent": "hya-main", "model": "openai/gpt-5", "workdir": "/repo" } } }
 { "event": { "session": "hysec_...", "timeRecorded": "2026-09-26T10:00:00Z", "sessionUpdated": { "busy": true } } }
 { "event": { "session": "hysec_...", "timeRecorded": "2026-09-26T10:00:09Z", "sessionUpdated": { "busy": false } } }
 { "event": { "session": "hysec_...", "timeRecorded": "2026-09-26T10:01:00Z", "sessionDeleted": {} } }
@@ -833,7 +833,7 @@ Link a tool card to its child:
   `metadata.sessionId` is the child session id.
 
 ```json
-{ "event": { "seq": "21", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "agent": "general", "description": "survey the repo", "status": "MEMBER_STATUS_SPAWNING", "callId": "call_...", "depth": 1 } } }
+{ "event": { "seq": "21", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "agent": "hya-task", "description": "survey the repo", "status": "MEMBER_STATUS_SPAWNING", "callId": "call_...", "depth": 1 } } }
 { "event": { "seq": "25", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "status": "MEMBER_STATUS_RUNNING" } } }
 { "event": { "seq": "40", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "status": "MEMBER_STATUS_DONE", "summary": "found 3 crates" } } }
 ```

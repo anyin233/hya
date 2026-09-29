@@ -23,13 +23,13 @@ inputs:
   topic: Subject every branch studies.
 nodes:
   branch-a:
-    agent: explore
+    agent: hya-scout
     directive: alpha branch on {{input.topic}}
   branch-b:
-    agent: general
+    agent: hya-task
     directive: beta branch on {{input.topic}}
   merge:
-    agent: general
+    agent: hya-task
     directive: MERGED REPORT
 ---
 flowchart TD
@@ -44,7 +44,7 @@ inputs:
   v: Any value, including equals signs.
 nodes:
   capture:
-    agent: general
+    agent: hya-task
     directive: captured={{input.v}}
 ---
 flowchart TD
@@ -57,7 +57,7 @@ name: routed
 description: One Stage with an explicit offline model route.
 nodes:
   execute:
-    agent: general
+    agent: hya-task
     directive: Execute through the routed model.
     model:
       id: hya/offline
@@ -169,15 +169,15 @@ fn cli_run_reports_durable_fan_out_and_join_projection() -> Result<(), Box<dyn s
         "missing overall status header:\n{stdout}"
     );
     assert!(
-        stdout.contains("\n  branch-a [completed] agent=explore members=1"),
+        stdout.contains("\n  branch-a [completed] agent=hya-scout members=1"),
         "branch-a Stage row missing:\n{stdout}"
     );
     assert!(
-        stdout.contains("\n  branch-b [completed] agent=general members=1"),
+        stdout.contains("\n  branch-b [completed] agent=hya-task members=1"),
         "branch-b Stage row missing:\n{stdout}"
     );
     assert!(
-        stdout.contains("\n  merge [completed] agent=general members=1"),
+        stdout.contains("\n  merge [completed] agent=hya-task members=1"),
         "merge Stage row missing:\n{stdout}"
     );
     Ok(())

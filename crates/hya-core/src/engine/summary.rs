@@ -95,7 +95,7 @@ pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, 
         .session
         .agent
         .clone()
-        .unwrap_or_else(|| AgentName::new("build"));
+        .unwrap_or_else(|| AgentName::new(crate::MAIN_AGENT_ID));
     let model = projection
         .session
         .model

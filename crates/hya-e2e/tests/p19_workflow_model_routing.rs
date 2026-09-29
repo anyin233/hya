@@ -20,7 +20,7 @@ inputs:
   target: Work to route.
 nodes:
   prepare:
-    agent: general
+    agent: hya-task
     directive: PREPARE {{input.target}}
     model:
       id: fake/primary
@@ -29,21 +29,21 @@ nodes:
         - id: fake/primary-fallback
           reasoning: medium
   loop:
-    agent: general
+    agent: hya-task
     directive: LOOP WORK
     mode: loop
     model:
       id: fake/loop
       reasoning: low
     verify:
-      agent: general
+      agent: hya-task
       until: LOOP_OK
       max_iterations: 1
       model:
         id: fake/loop
         reasoning: high
   finish:
-    agent: general
+    agent: hya-task
     directive: FINISH
     model:
       id: fake/final

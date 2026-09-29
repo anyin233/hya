@@ -138,7 +138,7 @@ async fn engine_with_gate() -> (Arc<SessionEngine>, AgentSpec, Arc<GateProvider>
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
     let agent = AgentSpec {
-        name: AgentName::new("general"),
+        name: AgentName::new("hya-task"),
         model: ModelRef::new("hya/offline"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -168,9 +168,11 @@ async fn register_main(
     root: SessionId,
 ) {
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let agents = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
     let resources = engine
-        .agent_resource_policy_for_binding(&binding, "build")
+        .agent_resource_policy_for_binding(&binding, "hya-main")
         .unwrap();
     supervisor
         .ensure_main(
@@ -314,7 +316,7 @@ fn first_assistant_finish_seq(events: &[Envelope], session: SessionId) -> Option
 #[tokio::test]
 async fn quiescence_wake_queues_behind_the_leads_active_turn() {
     let (engine, agent, provider) = engine_with_gate().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     provider.gate(root);
 
@@ -337,7 +339,7 @@ async fn quiescence_wake_queues_behind_the_leads_active_turn() {
 
     // Mid-turn, the lead spawns a member (what the `task` tool does).
     register_main(&supervisor, &engine, &agent, root).await;
-    let scout = make_session(&engine, Some(root), "general").await;
+    let scout = make_session(&engine, Some(root), "hya-task").await;
     supervisor
         .register_existing_resident(
             root,
@@ -427,7 +429,7 @@ async fn quiescence_wake_queues_behind_the_leads_active_turn() {
 #[tokio::test]
 async fn mail_to_the_lead_mid_turn_is_delivered_at_the_turn_boundary() {
     let (engine, agent, provider) = engine_with_gate().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     provider.gate(root);
 
@@ -449,7 +451,7 @@ async fn mail_to_the_lead_mid_turn_is_delivered_at_the_turn_boundary() {
         .expect("lead turn reaches the provider");
 
     register_main(&supervisor, &engine, &agent, root).await;
-    let scout = make_session(&engine, Some(root), "general").await;
+    let scout = make_session(&engine, Some(root), "hya-task").await;
     supervisor
         .register_existing_resident(root, scout, "scout".to_string(), agent.clone(), None)
         .await
@@ -504,7 +506,7 @@ async fn mail_to_the_lead_mid_turn_is_delivered_at_the_turn_boundary() {
 #[tokio::test]
 async fn concurrent_run_turn_calls_on_one_session_serialize() {
     let (engine, agent, provider) = engine_with_gate().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     provider.gate(root);
     engine
         .admit_user_prompt(root, "first".to_string())
@@ -549,7 +551,7 @@ async fn concurrent_run_turn_calls_on_one_session_serialize() {
 #[tokio::test]
 async fn a_queued_turn_can_be_cancelled_while_waiting() {
     let (engine, agent, provider) = engine_with_gate().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     provider.gate(root);
     engine
         .admit_user_prompt(root, "first".to_string())
@@ -595,8 +597,8 @@ async fn a_queued_turn_can_be_cancelled_while_waiting() {
 #[tokio::test]
 async fn a_second_turn_claim_is_a_typed_error() {
     let (engine, _agent, _provider) = engine_with_gate().await;
-    let root = make_session(&engine, None, "build").await;
-    let other = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let other = make_session(&engine, None, "hya-main").await;
     let lease = engine.try_begin_turn(root).unwrap();
     assert!(engine.turn_active(root));
     match engine.try_begin_turn(root) {
@@ -618,11 +620,11 @@ async fn a_second_turn_claim_is_a_typed_error() {
 #[tokio::test]
 async fn members_of_one_lead_stream_concurrently() {
     let (engine, agent, provider) = engine_with_gate().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     register_main(&supervisor, &engine, &agent, root).await;
-    let a = make_session(&engine, Some(root), "general").await;
-    let b = make_session(&engine, Some(root), "general").await;
+    let a = make_session(&engine, Some(root), "hya-task").await;
+    let b = make_session(&engine, Some(root), "hya-task").await;
     *provider.rendezvous.lock().unwrap() = Some((HashSet::from([a, b]), Arc::new(Barrier::new(2))));
     for (session, handle) in [(a, "worker-a"), (b, "worker-b")] {
         supervisor

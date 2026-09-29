@@ -99,7 +99,7 @@ async fn t2_30_token_summary_api_and_tool_report_session_tree_usage() {
                     json!({
                         "description": "token summary child",
                         "prompt": "do the child work",
-                        "subagent_type": "general",
+                        "subagent_type": "hya-task",
                         "inline_agent": {
                             "description": "",
                             "category": "",
@@ -222,7 +222,7 @@ async fn t2_30_token_summary_api_and_tool_report_session_tree_usage() {
         .find(|row| !row["parent"].is_null())
         .expect("child row");
     assert_eq!(child_row["parent"], session.to_string());
-    assert_eq!(child_row["agent"], "general");
+    assert_eq!(child_row["agent"], "hya-task");
     let root_rounds = number(&root_row["models"][0]["rounds"]);
     let child_rounds = number(&child_row["models"][0]["rounds"]);
     assert_eq!(root_row["models"][0]["model"], "fake/model", "{report}");

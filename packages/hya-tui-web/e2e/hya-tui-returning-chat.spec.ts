@@ -27,7 +27,7 @@ test("a plain relaunch restores the waiting chat and offers approval keys, then 
 
   // A newer saved chat must not hide a conversation that needs an answer.
   const { session: newer } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", {
-    agent: "build", model: fakeModelRef, workdir: backend.dir,
+    agent: "hya-main", model: fakeModelRef, workdir: backend.dir,
   })
   await api(backend, "PATCH", `/v1/sessions/${newer.id}`, { title: "Newer saved chat" })
 

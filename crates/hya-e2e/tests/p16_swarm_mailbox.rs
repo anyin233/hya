@@ -26,7 +26,7 @@ fn resident_member(marker: &str, directive: &str) -> Value {
     json!({
         "description": format!("resident {marker}"),
         "prompt": directive,
-        "subagent_type": "general",
+        "subagent_type": "hya-task",
         "inline_agent": { "prompt": format!("{marker} You are a resident teammate.") }
     })
 }

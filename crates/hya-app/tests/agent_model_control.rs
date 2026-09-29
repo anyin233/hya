@@ -24,7 +24,7 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
         .upsert_agent_model_preference(
             owner,
             &AgentModelPreference {
-                agent: AgentName::new("general"),
+                agent: AgentName::new("hya-task"),
                 provider_id: "hya".to_string(),
                 model_id: "offline".to_string(),
             },
@@ -40,12 +40,12 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
 
     let loaded = runtime.bind_turn(std::path::Path::new(".")).unwrap();
     assert_eq!(
-        loaded.agent_model_preference("general"),
+        loaded.agent_model_preference("hya-task"),
         Some(&ModelRef::new("hya/offline"))
     );
     assert_eq!(
         control
-            .effective_model(&loaded, "general", &ModelRef::new("fallback"))
+            .effective_model(&loaded, "hya-task", &ModelRef::new("fallback"))
             .unwrap(),
         ModelRef::new("hya/offline")
     );
@@ -54,22 +54,22 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
     control
         .set(
             &binding,
-            "title",
+            "hya-title",
             Some(AgentModelIdentity::new("hya", "offline")),
         )
         .await
         .unwrap();
     let after_set = runtime.bind_turn(std::path::Path::new(".")).unwrap();
     assert_eq!(
-        after_set.agent_model_preference("title"),
+        after_set.agent_model_preference("hya-title"),
         Some(&ModelRef::new("hya/offline"))
     );
 
-    control.set(&binding, "general", None).await.unwrap();
+    control.set(&binding, "hya-task", None).await.unwrap();
     let after_clear = runtime.bind_turn(std::path::Path::new(".")).unwrap();
-    assert_eq!(after_clear.agent_model_preference("general"), None);
+    assert_eq!(after_clear.agent_model_preference("hya-task"), None);
     assert_eq!(
-        after_clear.agent_model_preference("title"),
+        after_clear.agent_model_preference("hya-title"),
         Some(&ModelRef::new("hya/offline"))
     );
 
@@ -77,7 +77,7 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
     assert_eq!(
         rows,
         vec![AgentModelPreference {
-            agent: AgentName::new("title"),
+            agent: AgentName::new("hya-title"),
             provider_id: "hya".to_string(),
             model_id: "offline".to_string(),
         }]
@@ -99,7 +99,7 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
     let unavailable = control
         .set(
             &binding,
-            "general",
+            "hya-task",
             Some(AgentModelIdentity::new("openai", "missing")),
         )
         .await
@@ -128,7 +128,7 @@ async fn failed_owner_fenced_mutation_keeps_the_published_snapshot() {
     let error = control
         .set(
             &binding,
-            "general",
+            "hya-task",
             Some(AgentModelIdentity::new("hya", "offline")),
         )
         .await
@@ -138,7 +138,7 @@ async fn failed_owner_fenced_mutation_keeps_the_published_snapshot() {
         AgentModelControlError::Store(hya_store::StoreError::RuntimeOwnerClaimRequired)
     ));
     let after = runtime.bind_turn(std::path::Path::new(".")).unwrap();
-    assert_eq!(after.agent_model_preference("general"), None);
+    assert_eq!(after.agent_model_preference("hya-task"), None);
 }
 
 #[tokio::test]
@@ -168,7 +168,7 @@ async fn control_accepts_models_of_routes_the_engine_published_after_startup() {
     let offline = || Some(AgentModelIdentity::new("hya", "offline"));
 
     let before = control
-        .set(&binding, "general", offline())
+        .set(&binding, "hya-task", offline())
         .await
         .expect_err("no route serves hya/offline yet");
     assert!(matches!(
@@ -180,10 +180,10 @@ async fn control_accepts_models_of_routes_the_engine_published_after_startup() {
         Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
         engine.provider_catalog_snapshot(),
     );
-    control.set(&binding, "general", offline()).await.unwrap();
+    control.set(&binding, "hya-task", offline()).await.unwrap();
     let after = runtime.bind_turn(std::path::Path::new(".")).unwrap();
     assert_eq!(
-        after.agent_model_preference("general"),
+        after.agent_model_preference("hya-task"),
         Some(&ModelRef::new("hya/offline"))
     );
 }

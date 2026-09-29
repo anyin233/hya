@@ -2377,7 +2377,7 @@ impl TurnBinding {
         let definition = self
             .snapshot
             .catalog
-            .require(requested.unwrap_or("general"))?;
+            .require(requested.unwrap_or(crate::TASK_AGENT_ID))?;
         Ok(self.overlay_agent_model(definition))
     }
 
@@ -2425,9 +2425,15 @@ impl TurnBinding {
         let definition = self.snapshot.catalog.require(stable_id)?;
         let plane = AgentToolPlane::for_origin(&definition.origin);
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
-        // Built-ins own no bundle, so they carry no view and no hooks.
+        // Built-ins own no bundle: their view comes from the core-agents
+        // preset (read-only agents deny the write tools), and they carry no hooks.
         let (resource_view, hook_refs) = match bundle_id.as_deref() {
-            None => (ResourceView::default(), Vec::new()),
+            None => (
+                crate::builtin_agents::builtin_agent(stable_id)
+                    .map(|agent| agent.resource_view.clone())
+                    .unwrap_or_default(),
+                Vec::new(),
+            ),
             Some(id) => {
                 let (_, agent) = self
                     .snapshot
@@ -4601,7 +4607,7 @@ mod tests {
             .bind_turn(Path::new("/tmp/hya-plugin-skill-view"))
             .unwrap();
         let policy = binding
-            .agent_resource_policy_on_plane("build", AgentToolPlane::Full)
+            .agent_resource_policy_on_plane("hya-main", AgentToolPlane::Full)
             .unwrap();
         let resources = binding.compile_agent_resources(&policy).unwrap();
         assert!(
@@ -4670,7 +4676,7 @@ mod tests {
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-bundled-mcp-kind"))
             .unwrap();
-        let policy = binding.agent_resource_policy("build").unwrap();
+        let policy = binding.agent_resource_policy("hya-main").unwrap();
         let candidates = binding.collect_resource_candidates(&policy).unwrap();
         assert!(
             candidates
@@ -4746,14 +4752,14 @@ agent:
                 .len(),
             1
         );
-        assert!(binding.bundle_hooks_for_agent("build").is_empty());
+        assert!(binding.bundle_hooks_for_agent("hya-main").is_empty());
         assert!(
             !binding
                 .has_selected_bundle_sidecar_capability("private-process-agent")
                 .unwrap()
         );
         let root = binding
-            .compile_agent_resources(&binding.agent_resource_policy("build").unwrap())
+            .compile_agent_resources(&binding.agent_resource_policy("hya-main").unwrap())
             .unwrap();
         assert!(root.resolve_tool("private-process__echo").is_none());
     }
@@ -4846,7 +4852,7 @@ agents:
         let plugin_b_hooks = binding.bundle_hooks("acme/plugin-b").unwrap();
         let owner_hooks = binding.bundle_hooks("acme/owner").unwrap();
 
-        let builtin = binding.bundle_hooks_for_agent("build");
+        let builtin = binding.bundle_hooks_for_agent("hya-main");
         assert_eq!(builtin.len(), 2, "built-ins keep every Plugin's hooks");
         assert!(Arc::ptr_eq(&builtin[0], &plugin_a_hooks));
         assert!(Arc::ptr_eq(&builtin[1], &plugin_b_hooks));
@@ -4926,7 +4932,7 @@ agent:
             BTreeSet::from(["echo__ping".to_string()])
         );
         let root = binding
-            .compile_agent_resources(&binding.agent_resource_policy("build").unwrap())
+            .compile_agent_resources(&binding.agent_resource_policy("hya-main").unwrap())
             .unwrap();
         assert!(root.resolve_tool("private-mcp__mcp__echo__ping").is_none());
     }
@@ -8598,6 +8604,48 @@ agent:
         }
     }
 
+    /// The core-agents preset's `resource_view` narrows built-ins too: the
+    /// read-only planner and scout never see the write or shell tools, and the
+    /// scout cannot spawn; the default agent keeps the full set.
+    #[test]
+    fn read_only_builtins_are_denied_write_and_shell_tools() {
+        let registry = test_runtime_registry(
+            ToolRegistry::builtins(),
+            Arc::new(TestCatalog::from_prepared(&[]).unwrap()),
+        );
+        let binding = registry
+            .bind_turn(&PathBuf::from("/tmp/hya-read-only-builtins"))
+            .unwrap();
+        let names = |stable_id: &str| {
+            let policy = binding.agent_resource_policy(stable_id).unwrap();
+            schema_names(&binding.compile_agent_resources(&policy).unwrap())
+        };
+        let writes = ["write", "edit", "apply_patch", "bash"];
+
+        let plan = names("hya-plan");
+        for denied in writes {
+            assert!(!plan.contains(denied), "hya-plan sees `{denied}`: {plan:?}");
+        }
+        assert!(plan.contains("grep") && plan.contains("task"), "{plan:?}");
+
+        let scout = names("hya-scout");
+        for denied in writes.into_iter().chain(["task", "archive"]) {
+            assert!(
+                !scout.contains(denied),
+                "hya-scout sees `{denied}`: {scout:?}"
+            );
+        }
+        assert!(
+            scout.contains("grep") && scout.contains("read"),
+            "{scout:?}"
+        );
+
+        let main = names("hya-main");
+        for kept in writes {
+            assert!(main.contains(kept), "hya-main lacks `{kept}`: {main:?}");
+        }
+    }
+
     #[test]
     fn injected_read_serves_channel_mail_but_never_files() {
         let compiled = compile_bundle_agent(
@@ -8650,7 +8698,7 @@ agent:
         let compiled = compile_bundle_agent(
             ToolRegistry::builtins(),
             PreparedAgent {
-                can_spawn: vec![AgentName::new("explore")],
+                can_spawn: vec![AgentName::new("hya-scout")],
                 ..agent("narrow-lead", view(&["harness:tool/grep"], &[]))
             },
         )
@@ -8731,7 +8779,7 @@ agent:
         let compiled = compile_bundle_agent(
             ToolRegistry::builtins(),
             PreparedAgent {
-                can_spawn: vec![AgentName::new("explore")],
+                can_spawn: vec![AgentName::new("hya-scout")],
                 ..agent(
                     "no-task-lead",
                     view(&["harness:tool/grep"], &["harness:tool/task", "send"]),
@@ -8790,7 +8838,7 @@ agent:
         let binding = registry
             .bind_turn(&PathBuf::from("/tmp/hya-coordination-tools"))
             .unwrap();
-        let policy = binding.agent_resource_policy("build").unwrap();
+        let policy = binding.agent_resource_policy("hya-main").unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
         let names = schema_names(&compiled);
         for expected in [

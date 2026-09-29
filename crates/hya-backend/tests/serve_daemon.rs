@@ -256,7 +256,7 @@ fn create_session(url: &str, workdir: &Path) -> Result<String, Box<dyn std::erro
         "POST",
         "/v1/sessions",
         &serde_json::json!({
-            "agent": "build",
+            "agent": "hya-main",
             "model": "fake/model",
             "workdir": workdir.display().to_string(),
         }),

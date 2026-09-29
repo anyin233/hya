@@ -149,7 +149,7 @@ export type FakeModel = {
   setUsage(usage: Usage): void
   /**
    * Reply to the backend's background session-title requests (the fixed
-   * `title` agent, recognized by its system prompt) with `title`. Title
+   * `hya-title` agent, recognized by its system prompt) with `title`. Title
    * requests never consume the shared queue or a route, never appear in
    * `requests()`, and carry no usage, so scripted specs stay deterministic
    * whenever the title task runs; by default they get an empty reply and the
@@ -205,7 +205,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** Opening of the fixed `title` agent's system prompt (the `core-agents` preset). */
+/** Opening of the fixed `hya-title` agent's system prompt (the `core-agents` preset). */
 export const titleAgentMarker = "You are a title generator."
 
 /** Start the fake model server. `initial` seeds the shared (unrouted) queue. */

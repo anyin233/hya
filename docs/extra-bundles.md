@@ -2,7 +2,7 @@
 
 `hya-extra/*` are optional bundles shipped alongside hya, under
 `bundles/extra/`. They are not installed by default and are not part of the
-twelve trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
+`eleven trusted [first-party bundles](bundle-runtime.md#first-party-bundles);
 each one is an ordinary public `.hyabundle` package that you build and
 install like any other bundle described in
 [AgentBundle Authoring](agent-bundle-authoring.md). They exist for two
@@ -57,7 +57,7 @@ See [Bundle configuration files](configuration.md#bundle-configuration-files).
 | Contract | Value |
 | --- | --- |
 | MCP resource | `resources.mcp` id `zvec-grep`, argv `zg server --stdio --mcp-toolset agent`, `timeout_ms: 600000` |
-| Tool name (full-plane agent, e.g. `build`) | `zvec-grep__mcp__zvec-grep__zvec_grep_search` |
+| Tool name (full-plane agent, e.g. `hya-main`) | `zvec-grep__mcp__zvec-grep__zvec_grep_search` |
 | Tool name (a bundle agent that selects this server, e.g. `hya-extra/scout`) | `<local-server-id>__zvec_grep_search` (the bundle chooses the local id) |
 | Tool input | `{"root": "<absolute path>", "query"?: string, "queries"?: [...], "fts"?: [...], "limit"?: number, ...}` — `root` is required and must be absolute |
 | Skill id | `zvec-grep` (`resources/skills/zvec-grep/SKILL.md`) |
@@ -90,7 +90,7 @@ cargo run -p xtask -- package-bundle bundles/extra/scout scout.hyabundle
 hya bundle install scout.hyabundle
 ```
 
-Once installed, any built-in agent (e.g. `build`) can spawn it with the
+Once installed, any built-in agent (e.g. `hya-main`) can spawn it with the
 `task` tool using `subagent_type: "scout"` — no `can_spawn` edit is needed,
 because installing an `AgentSetBundle` makes its agents immediately
 spawnable from the ordinary built-in roster.
@@ -435,8 +435,8 @@ curl "$HYA_URL/v1/sessions/$SESSION/bundles/hya-extra%2Ftoken-summary/usage?scop
   ],
   "total": { "...": "same fields as a model row, without model" },
   "sessions": [
-    { "session": "hysec_...", "agent": "build", "models": [ "..." ], "total": { "...": "..." } },
-    { "session": "hysec_...", "parent": "hysec_...", "agent": "general", "models": [ "..." ], "total": { "...": "..." } }
+    { "session": "hysec_...", "agent": "hya-main", "models": [ "..." ], "total": { "...": "..." } },
+    { "session": "hysec_...", "parent": "hysec_...", "agent": "hya-task", "models": [ "..." ], "total": { "...": "..." } }
   ]
 }
 ```
@@ -447,10 +447,10 @@ query: { scope: "tree" } }`; the reply's `status` is `200` and `body` holds
 the JSON above.
 
 Once installed, any agent that can reach the bundle's namespace can call the
-tool directly, for example `build`:
+tool directly, for example `hya-main`:
 
 ```
-build calls token-summary__token_summary({"scope": "tree", "format": "table"})
+hya-main calls token-summary__token_summary({"scope": "tree", "format": "table"})
 ```
 
 which returns a compact Markdown table (columns: model, input, cache
@@ -463,7 +463,7 @@ renders as `—`) plus one line per subagent session.
 | --- | --- |
 | Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/summary.ts']}`. `summary.ts` and `schemas/usage.json` are packaged (`summary.test.ts` is undeclared and stays out). |
 | API endpoint | `apis: [{ id: usage, method: GET, scope: session, path: /usage, description: "Per-model token usage of the session tree", response_schema: schemas/usage.json }]` — `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`. `hya bundle info hya-extra/token-summary` prints `api=GET session /usage id=usage response_schema=schemas/usage.json description=…`. |
-| Tool name (full-plane agent, e.g. `build`) | `token-summary__token_summary` |
+| Tool name (full-plane agent, e.g. `hya-main`) | `token-summary__token_summary` |
 | Config | None. |
 
 Endpoint `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`:

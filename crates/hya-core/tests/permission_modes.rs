@@ -39,7 +39,7 @@ fn workdir() -> PathBuf {
 
 fn agent(dir: &std::path::Path) -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "you are build".to_string(),
         workdir: dir.to_path_buf(),
@@ -110,7 +110,7 @@ async fn create(
     engine
         .create(CreateSession {
             parent,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -453,7 +453,7 @@ async fn bundle_mode_approver_decides_and_defer_falls_back_to_the_user() {
         assert_eq!(seen[0].session, child);
         assert_eq!(seen[0].root_session, root);
         assert_eq!(seen[0].mode, "careful");
-        assert_eq!(seen[0].agent, Some(AgentName::new("build")));
+        assert_eq!(seen[0].agent, Some(AgentName::new("hya-main")));
         assert_eq!(seen[0].action, hya_tool::Action::Bash);
     }
 
