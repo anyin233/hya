@@ -383,7 +383,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
         const updated = await client.updateSessionModel(selected.id, reference)
         store.setSelected(updated)
         await persistAgentModel({ store, client, actions }, updated, reference)
-        store.setStatus(`Model → ${modelReference(store.state.selected!) || reference}`)
+        // The server's reply, not the store: a racing session-list read may have replaced it.
+        store.setStatus(`Model → ${modelReference(updated) || reference}`)
         await actions.refresh()
         return
       }
