@@ -88,14 +88,14 @@ mail. Nested `task` calls are allowed up to the hardcoded two-layer depth cap
 `Action::Task` for every member; the spawner also enforces the caller's
 `can_spawn` roster (unknown or disallowed agents surface as
 `unknown_agent_id` / `agent_spawn_not_allowed`). An empty or omitted
-`subagent_type` normalizes to `"general"`; a non-empty unknown id does not
-fall back to `general`.
+`subagent_type` normalizes to `"hya-task"`; a non-empty unknown id does not
+fall back to `hya-task`.
 
 | Parameter | Role |
 | --- | --- |
 | `description` | Short label (required with single-member form). |
 | `prompt` | Work for the agent (required). |
-| `subagent_type` | Agent id — the only way to choose the agent (also per member); empty/omitted normalizes to `"general"`. It also names the member: the handle leaf is `<subagent_type>-<operator>`, where the resolved agent id is sanitized (lowercased; other characters → `-`; at most 32 characters) and the harness appends one random operator name (`"subagent_type": "scout"` → `main/scout-suzuran`; omitted → `main/general-amiya`). |
+| `subagent_type` | Agent id — the only way to choose the agent (also per member); empty/omitted normalizes to `"hya-task"`. It also names the member: the handle leaf is `<subagent_type>-<operator>`, where the resolved agent id is sanitized (lowercased; other characters → `-`; at most 32 characters) and the harness appends one random operator name (`"subagent_type": "hya-scout"` → `main/hya-scout-suzuran`; omitted → `main/hya-task-amiya`). |
 | `category` | Logical model-category override. |
 | `model` | Concrete provider/model override (wins over category). A `#level` suffix (`anthropic/claude-sonnet-4-5#low`) sets the child's thinking effort. |
 | `effort` | Thinking effort for this spawn (also per member): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
@@ -111,16 +111,16 @@ behavior are specified in
 Example:
 
 ```json
-{"description": "map the parser", "prompt": "find every entry point", "subagent_type": "scout"}
+{"description": "map the parser", "prompt": "find every entry point", "subagent_type": "hya-scout"}
 ```
 
-returns `Resident main/scout-suzuran is live; results arrive as its report.`
+returns `Resident main/hya-scout-suzuran is live; results arrive as its report.`
 
 **Removed `name` (0.41.0, breaking).** `task` no longer takes a `name` (top
 level or per member). A call that still passes one fails with an `input`
 error — "`name` was removed; the handle is derived from `subagent_type`. …" —
 and spawns nothing, because a caller that meant `name` to pick the agent would
-otherwise silently get `general`.
+otherwise silently get `hya-task`.
 
 Removed fields: `task_id` (resume is superseded by mail revival of archived
 agents), `background` (every spawn is non-blocking), and `resident` (every
@@ -205,7 +205,7 @@ Resulting sets (channel family loaded — the default builtin registry):
 | Root (built-in, or bundle `role: main`) with spawn rights | 0 | `wait`, `task`, `archive`, `send`, `list_channel`, `read channel://` |
 | Root without spawn rights | 0 | `wait`, `send`, `list_channel`, `read channel://` |
 | Subagent with spawn rights | 1 | `report`, `wait`, `task`, `archive`, `send`, `list_channel`, `read channel://` |
-| Subagent without spawn rights (e.g. `scout`) | ≥ 1 | `report`, `wait`, `send`, `list_channel`, `read channel://` |
+| Subagent without spawn rights (e.g. `hya-scout`) | ≥ 1 | `report`, `wait`, `send`, `list_channel`, `read channel://` |
 | Any subagent at the depth cap | 2 | `report`, `wait`, `send`, `list_channel`, `read channel://` |
 
 Without the channel family there are no channel tools and no `report` (it
@@ -270,7 +270,7 @@ counts as read. The unread-mail rejection names every channel holding unread
 mail and the exact read call, for example:
 
 ```text
-report rejected: `main/scout-suzuran` has 2 unread mail message(s) on #DM-rgli51cb (2); answer them first. Read it with `read channel://DM-rgli51cb?last=2` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
+report rejected: `main/hya-scout-suzuran` has 2 unread mail message(s) on #DM-rgli51cb (2); answer them first. Read it with `read channel://DM-rgli51cb?last=2` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
 ```
 
 Handle-addressed mail is attributed to the DM channel shared with its sender;
@@ -280,12 +280,12 @@ the whole inbox seen.
 
 **`read channel://<id>`** accepts a channel id from `list_channel` (`DM-…`,
 `announce-…`, `<unit>#<name>`; leading `#`s and padding are stripped with a
-warning). It also accepts a **member handle**, canonical (`main/scout-suzuran`)
-or a leaf (`scout-suzuran`). A handle reads the caller's DM with that member,
+warning). It also accepts a **member handle**, canonical (`main/hya-scout-suzuran`)
+or a leaf (`hya-scout-suzuran`). A handle reads the caller's DM with that member,
 and the output starts with a warning that names the DM id:
 
 ```text
-[warning] normalized channel id `#main/scout-suzuran` → `main/scout-suzuran`; `#main/scout-suzuran` is a member handle, not a channel: showing your DM with it, `DM-rgli51cb` (read it as `read channel://DM-rgli51cb`)
+[warning] normalized channel id `#main/hya-scout-suzuran` → `main/hya-scout-suzuran`; `#main/hya-scout-suzuran` is a member handle, not a channel: showing your DM with it, `DM-rgli51cb` (read it as `read channel://DM-rgli51cb`)
 ```
 
 A real channel id always wins. Channel ids are minted `DM-…`/`announce-…`
@@ -296,7 +296,7 @@ file is served the same way; a file whose name starts with `#` (an editor's
 lists the caller's own channels (DM peers named) and points to `list_channel`:
 
 ```text
-unknown channel `#main/nobody`; your channels: `DM-rgli51cb` (DM with main/scout-suzuran). Read one with `read channel://<id>`; `list_channel` lists them with unread counts.
+unknown channel `#main/nobody`; your channels: `DM-rgli51cb` (DM with main/hya-scout-suzuran). Read one with `read channel://<id>`; `list_channel` lists them with unread counts.
 ```
 
 An accepted report returns `{"title": "Report accepted", "output": "Report
@@ -324,11 +324,11 @@ the returned handle to revive.
 removed in 0.41.0): required `target`, optional `reason`.
 
 ```json
-{"target": "main/hya-worker-exusiai", "reason": "superseded by the new plan"}
+{"target": "main/hya-task-exusiai", "reason": "superseded by the new plan"}
 ```
 
 `target` is the subagent's canonical handle, a leaf relative to the caller
-(`hya-worker-exusiai`), or its session id (`hysec_…`) — the `task` result's
+(`hya-task-exusiai`), or its session id (`hysec_…`) — the `task` result's
 `member`/`session`. The target must be a live descendant of the caller. Its
 own live subagents are archived first (deepest first). For each member an
 in-flight turn is cancelled (`MessageFinished { finish: cancelled, cause:
@@ -353,7 +353,7 @@ Errors (`ToolError::Input`, actionable text):
 calling turn until subagents finish, bounded by a timeout.
 
 ```json
-{"targets": ["main/hya-worker-exusiai", "main/hya-worker-texas"], "mode": "any", "timeout_secs": 300}
+{"targets": ["main/hya-task-exusiai", "main/hya-task-texas"], "mode": "any", "timeout_secs": 300}
 ```
 
 | Field | Type | Contract |
@@ -392,16 +392,16 @@ output cap, so the cap never cuts it and `metadata` always arrives intact.
 
 ```text
 Subagents finished.
-- main/hya-implementer-exusiai [reported] done
-- main/scout-suzuran [already reported] done
+- main/hya-task-exusiai [reported] done
+- main/hya-scout-suzuran [already reported] done
 Still running: main/hya-reviewer-texas
 1 new mail message(s), now marked read (history: read channel://<id>?last=N).
 
-Report from main/hya-implementer-exusiai (done):
+Report from main/hya-task-exusiai (done):
 Implemented the parser …
 [… 2693 more chars; full text: read channel://DM-rgli51cb]
 
-Report from main/scout-suzuran (done):
+Report from main/hya-scout-suzuran (done):
 Entry points: src/cli.rs:12, src/lib.rs:40
 
 Mail from main/hya-reviewer-texas @DM-k2m9x0qa:
@@ -422,8 +422,8 @@ example, a grandchild's report mailed to its own parent).
 
 ```json
 {"woke_by": "members", "waited_ms": 5210,
- "finished": [{"handle": "main/hya-implementer-exusiai", "session": "hysec_…", "state": "reported", "outcome": "done", "channel": "DM-rgli51cb", "report_chars": 3028, "report_truncated": true}],
- "already_finished": [{"handle": "main/scout-suzuran", "session": "hysec_…", "state": "reported", "outcome": "done", "channel": "DM-x81ka0ld", "report_chars": 44, "report_truncated": false}],
+ "finished": [{"handle": "main/hya-task-exusiai", "session": "hysec_…", "state": "reported", "outcome": "done", "channel": "DM-rgli51cb", "report_chars": 3028, "report_truncated": true}],
+ "already_finished": [{"handle": "main/hya-scout-suzuran", "session": "hysec_…", "state": "reported", "outcome": "done", "channel": "DM-x81ka0ld", "report_chars": 44, "report_truncated": false}],
  "running":  [{"handle": "main/hya-reviewer-texas", "session": "hysec_…", "state": "working"}],
  "mail": [{"from": "main/hya-reviewer-texas", "channel": "DM-k2m9x0qa", "chars": 212}]}
 ```

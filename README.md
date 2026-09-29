@@ -25,9 +25,9 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.43.22`,
+hya is under active development (workspace version `0.43.23`,
 `MIT OR Apache-2.0`). The latest public binary release is `v0.35.1`; the
-checked-out `0.43.22` workspace is newer and is not published to crates.io. Build
+checked-out `0.43.23` workspace is newer and is not published to crates.io. Build
 this checkout from source as described below. APIs, config, and command surfaces
 may still change between versions.
 
@@ -60,7 +60,7 @@ export PATH="$HOME/.local/bin:$PATH"
 hya serve
 ```
 
-The installer places `bin/hya`, the twelve first-party bundles it loads at
+The installer places `bin/hya`, the eleven first-party bundles it loads at
 startup under `bundles/`, and three Bun programs with their production
 dependencies under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions),
 `tui/` (the terminal UI bare `hya` starts), and `tui-web/` (the WebUI host).

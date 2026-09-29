@@ -26,7 +26,6 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/agent-channels",
     "hya/goal-loop",
     "hya/plan-impl-review",
-    "hya/subagents",
 ];
 
 /// In-tree source groups searched for a first-party bundle directory.

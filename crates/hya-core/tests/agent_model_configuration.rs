@@ -108,7 +108,7 @@ async fn session(engine: &SessionEngine, id: SessionId, parent: Option<SessionId
             Some(id),
             CreateSession {
                 parent,
-                agent: AgentName::new("general"),
+                agent: AgentName::new("hya-task"),
                 model: model("base"),
                 workdir: "/tmp".to_string(),
                 project: None,
@@ -128,7 +128,7 @@ async fn configuration_before_session_and_root_override_replay_isolated_and_immu
     // Configuration is published before any Session exists, so the first fresh
     // binding observes it without a remembered-preference round trip.
     runtime.publish_agent_model_configuration(AgentModelConfiguration {
-        builtin: BTreeMap::from([("general".to_string(), model("configured"))]),
+        builtin: BTreeMap::from([("hya-task".to_string(), model("configured"))]),
         bundles: BTreeMap::new(),
     });
 
@@ -138,12 +138,12 @@ async fn configuration_before_session_and_root_override_replay_isolated_and_immu
 
     let configured_binding = engine.bind_session_runtime(root, dir.path()).await.unwrap();
     assert_eq!(
-        configured_binding.configured_agent_model("general"),
+        configured_binding.configured_agent_model("hya-task"),
         Some(&model("configured"))
     );
     assert_eq!(
         configured_binding
-            .resolve_agent("general")
+            .resolve_agent("hya-task")
             .unwrap()
             .model_policy
             .model
@@ -152,7 +152,7 @@ async fn configuration_before_session_and_root_override_replay_isolated_and_immu
     );
 
     engine
-        .set_agent_model_override(child, AgentName::new("general"), Some(model("temporary")))
+        .set_agent_model_override(child, AgentName::new("hya-task"), Some(model("temporary")))
         .await
         .unwrap();
 
@@ -164,12 +164,12 @@ async fn configuration_before_session_and_root_override_replay_isolated_and_immu
             agent,
             model: Some(override_model),
         } if *session == root
-            && agent.as_str() == "general"
+            && agent.as_str() == "hya-task"
             && override_model == &model("temporary")
     )));
     let projected = engine.read_projection(root).await.unwrap();
     assert_eq!(
-        projected.session.agent_model_overrides.get("general"),
+        projected.session.agent_model_overrides.get("hya-task"),
         Some(&model("temporary"))
     );
 
@@ -183,12 +183,12 @@ async fn configuration_before_session_and_root_override_replay_isolated_and_immu
         .await
         .unwrap();
     assert_eq!(
-        child_binding.session_agent_model("general"),
+        child_binding.session_agent_model("hya-task"),
         Some(&model("temporary"))
     );
     assert_eq!(
         child_binding
-            .resolve_agent("general")
+            .resolve_agent("hya-task")
             .unwrap()
             .model_policy
             .model
@@ -199,32 +199,32 @@ async fn configuration_before_session_and_root_override_replay_isolated_and_immu
 
     // A later Session event cannot mutate already-captured bindings.
     engine
-        .set_agent_model_override(root, AgentName::new("general"), Some(model("new")))
+        .set_agent_model_override(root, AgentName::new("hya-task"), Some(model("new")))
         .await
         .unwrap();
     assert_eq!(
-        old_binding.session_agent_model("general"),
+        old_binding.session_agent_model("hya-task"),
         Some(&model("temporary"))
     );
     let new_binding = engine.bind_session_runtime(root, dir.path()).await.unwrap();
     assert_eq!(
-        new_binding.session_agent_model("general"),
+        new_binding.session_agent_model("hya-task"),
         Some(&model("new"))
     );
 
     // Clearing removes the temporary layer and reveals the captured file model.
     engine
-        .set_agent_model_override(root, AgentName::new("general"), None)
+        .set_agent_model_override(root, AgentName::new("hya-task"), None)
         .await
         .unwrap();
     let cleared = engine
         .bind_session_runtime(child, dir.path())
         .await
         .unwrap();
-    assert_eq!(cleared.session_agent_model("general"), None);
+    assert_eq!(cleared.session_agent_model("hya-task"), None);
     assert_eq!(
         cleared
-            .resolve_agent("general")
+            .resolve_agent("hya-task")
             .unwrap()
             .model_policy
             .model
@@ -240,16 +240,16 @@ async fn session_override_drives_omitted_requests_but_explicit_model_stays_local
     engine
         .runtime_registry()
         .publish_agent_model_configuration(AgentModelConfiguration {
-            builtin: BTreeMap::from([("general".to_string(), model("configured"))]),
+            builtin: BTreeMap::from([("hya-task".to_string(), model("configured"))]),
             bundles: BTreeMap::new(),
         });
     let root = session(&engine, SessionId::new(), None).await;
     engine
-        .set_agent_model_override(root, AgentName::new("general"), Some(model("temporary")))
+        .set_agent_model_override(root, AgentName::new("hya-task"), Some(model("temporary")))
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("general"),
+        name: AgentName::new("hya-task"),
         model: model("base"),
         system_prompt: "system".to_string(),
         workdir: dir.path().to_path_buf(),
@@ -298,7 +298,7 @@ async fn session_override_drives_omitted_requests_but_explicit_model_stays_local
         .unwrap();
     assert_eq!(requests.lock().await.as_slice(), &[model("temporary")]);
     engine
-        .set_agent_model_override(root, AgentName::new("general"), None)
+        .set_agent_model_override(root, AgentName::new("hya-task"), None)
         .await
         .unwrap();
     requests.lock().await.clear();

@@ -1158,7 +1158,7 @@ async fn engine() -> (Arc<SessionEngine>, AgentSpec) {
         EventBus::default(),
     ));
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -1246,7 +1246,7 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
         ),
     );
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -1426,7 +1426,7 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
                 input: json!({
                     "description": "nested task",
                     "prompt": "nested prompt",
-                    "subagent_type": "general"
+                    "subagent_type": "hya-task"
                 }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
@@ -1457,7 +1457,7 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1467,19 +1467,19 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
         .unwrap();
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "member harness".to_string(),
         workdir: workdir.path().to_path_buf(),
         reasoning: None,
     };
     let agent = engine
-        .agent_spec_for_binding(&binding, &base, "general")
+        .agent_spec_for_binding(&binding, &base, "hya-task")
         .unwrap();
     let agents = engine
-        .agent_roster_for_binding(&binding, "general")
+        .agent_roster_for_binding(&binding, "hya-task")
         .unwrap();
-    let resources = binding.agent_resource_policy("general").unwrap();
+    let resources = binding.agent_resource_policy("hya-task").unwrap();
     let member = MemberSpec {
         id: MemberId::new(),
         agent,
@@ -1603,7 +1603,7 @@ async fn governed_engine(
         .with_governor(SubagentGovernor::new(limits)),
     );
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -1750,7 +1750,7 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -2146,7 +2146,7 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
             project: None,
@@ -2720,7 +2720,7 @@ async fn resident_stop_durable_failure_defers_cleanup_and_allows_retry() {
         EventBus::default(),
     ));
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -2928,7 +2928,7 @@ async fn resident_registration_failure_releases_claim_and_leaves_no_slot() {
         EventBus::default(),
     ));
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -3105,7 +3105,7 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
         EventBus::default(),
     );
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -3553,7 +3553,7 @@ async fn message_budget_kill_store_failure_preserves_claim_and_slot_for_retry() 
         })),
     );
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -4227,7 +4227,7 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -4238,7 +4238,7 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
     let child = engine
         .create(CreateSession {
             parent: Some(root),
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -4331,7 +4331,7 @@ async fn transient_sidecar_loss_interrupts_running_member_before_provider_releas
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -4500,7 +4500,7 @@ async fn resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry()
         EventBus::default(),
     ));
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -4665,7 +4665,7 @@ async fn resident_stop_concurrent_with_ready_failure_cleanup_completes_idempoten
         EventBus::default(),
     ));
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -5133,7 +5133,7 @@ async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -5312,7 +5312,7 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -5613,7 +5613,7 @@ async fn governor_caps_streaming_concurrency() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5648,7 +5648,7 @@ async fn governor_rejects_members_beyond_budget() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5695,7 +5695,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5708,7 +5708,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
     let child = engine
         .create(CreateSession {
             parent: Some(root),
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5719,7 +5719,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
     let grandchild = engine
         .create(CreateSession {
             parent: Some(child),
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5745,7 +5745,7 @@ async fn run_team_records_member_lifecycle_on_lead() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5787,7 +5787,7 @@ async fn transient_sidecar_shutdown_follows_member_finished() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5822,7 +5822,7 @@ async fn transient_sidecar_failure_terminates_opaque_handle_once() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5861,7 +5861,7 @@ async fn transient_sidecar_parent_cancellation_marks_member_cancelled_and_termin
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5922,7 +5922,7 @@ async fn transient_sidecar_ack_failure_terminates_opaque_handle_once() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -5956,7 +5956,7 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -6025,7 +6025,7 @@ async fn run_team_can_resume_existing_member_session() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -6036,7 +6036,7 @@ async fn run_team_can_resume_existing_member_session() {
     let child = engine
         .create(CreateSession {
             parent: Some(lead),
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -6079,7 +6079,7 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -6090,7 +6090,7 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
     let child = engine
         .create(CreateSession {
             parent: Some(lead),
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -6219,7 +6219,7 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -6291,7 +6291,7 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
     let lead = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,

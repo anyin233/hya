@@ -1,2 +1,2 @@
-reserved_ids: [compaction, summary, title]
+reserved_ids: [hya-compaction, hya-summary, hya-title]
 ordinary_spawn_scope: all_ordinary

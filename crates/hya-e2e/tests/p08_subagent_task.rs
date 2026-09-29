@@ -21,7 +21,7 @@ async fn t2_1_task_tool_spawns_general_subagent() {
                     json!({
                         "description": "e2e child",
                         "prompt": "do the child work",
-                        "subagent_type": "general",
+                        "subagent_type": "hya-task",
                         "inline_agent": {
                             "description": "",
                             "category": "",
@@ -43,7 +43,7 @@ async fn t2_1_task_tool_spawns_general_subagent() {
     let session = env.create_session().await.expect("session");
     let root_id = session.to_string();
     let _ = env
-        .prompt(session, "spawn a general subagent")
+        .prompt(session, "spawn a hya-task subagent")
         .await
         .expect("task prompt");
 
@@ -57,8 +57,8 @@ async fn t2_1_task_tool_spawns_general_subagent() {
 
     let kinds = tree_subagent_types(&tree);
     assert!(
-        kinds.iter().any(|k| k == "general"),
-        "child member.subagent_type must be general; kinds={kinds:?}; tree={tree}; {}",
+        kinds.iter().any(|k| k == "hya-task"),
+        "child member.subagent_type must be hya-task; kinds={kinds:?}; tree={tree}; {}",
         env.diagnostics()
     );
 

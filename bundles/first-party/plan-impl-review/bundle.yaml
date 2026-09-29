@@ -1,18 +1,18 @@
 kind: WorkflowBundle
 identity:
   id: hya/plan-impl-review
-  version: 0.43.22
+  version: 0.43.23
   publisher: hya
 workflow:
   id: plan-impl-review
   path: workflows/plan-impl-review.hya.md
 agents:
-  - id: plan-impl-review-planner
+  - id: hya-pir-planner
     role: subagent
     prompt: prompts/planner.md
-  - id: plan-impl-review-implementer
+  - id: hya-pir-implementer
     role: subagent
     prompt: prompts/implementer.md
-  - id: plan-impl-review-reviewer
+  - id: hya-pir-reviewer
     role: subagent
     prompt: prompts/reviewer.md

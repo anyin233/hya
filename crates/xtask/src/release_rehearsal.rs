@@ -469,7 +469,7 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
     ensure_workflow_run_contract(
         &run_blocks,
         WORKFLOW_FIRST_PARTY_STAGE,
-        "stage the twelve first-party bundles into the archive and as release assets",
+        "stage the eleven first-party bundles into the archive and as release assets",
     )?;
     ensure_workflow_run_contract(
         &run_blocks,

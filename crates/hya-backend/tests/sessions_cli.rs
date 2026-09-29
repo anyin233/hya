@@ -73,7 +73,7 @@ async fn seed(
             &Event::SessionCreated {
                 session,
                 parent,
-                agent: AgentName::new("build"),
+                agent: AgentName::new("hya-main"),
                 model: ModelRef::new("fake"),
                 workdir: "/tmp".to_string(),
                 project: None,

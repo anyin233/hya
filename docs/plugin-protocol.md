@@ -134,7 +134,7 @@ result:
     {
       "session": "<id>",
       "parent": "<id>",
-      "agent": "build",
+      "agent": "hya-main",
       "usage": {
         "by_model": {
           "fake/model": {
@@ -375,7 +375,7 @@ the wire method, params, outcomes, and default posture.
   | --- | --- | --- |
   | `session` | session id | Session making the completion. |
   | `root_session` | session id, optional | Root of `session`'s spawn tree (the request chain). It equals `session` for a root session; a subagent at any depth reports its top ancestor. The host always sends it; it is optional only so older payloads still decode. |
-  | `agent` | string, optional | Stable id of the agent bound to `session` (for example `build`, `explore`, or a bundle agent id). |
+  | `agent` | string, optional | Stable id of the agent bound to `session` (for example `hya-main`, `hya-scout`, or a bundle agent id). |
   | `message` | message id | Assistant message being prepared. |
   | `request` | `WireCompletionRequest` | The completion request the host intends to send. |
 
@@ -397,7 +397,7 @@ Example params for a subagent turn:
 {
   "session": "0192f3c4-…-child",
   "root_session": "0192f3c1-…-root",
-  "agent": "explore",
+  "agent": "hya-scout",
   "message": "0192f3c5-…",
   "request": { "model": "anthropic/claude-sonnet-5", "messages": [], "tools": [] }
 }
@@ -475,7 +475,7 @@ declared permission modes (manifest `permission_modes:`, see
   the user. A failing approver therefore never allows anything.
 
 ```json
-{"jsonrpc":"2.0","id":7,"method":"hook/permission.approve","params":{"session":"hysec_…","root_session":"hysec_…","agent":"build","mode":"careful","action":"bash","resource":{"type":"command","value":"git status"}}}
+{"jsonrpc":"2.0","id":7,"method":"hook/permission.approve","params":{"session":"hysec_…","root_session":"hysec_…","agent":"hya-main","mode":"careful","action":"bash","resource":{"type":"command","value":"git status"}}}
 {"jsonrpc":"2.0","id":7,"result":{"outcome":"allow_once"}}
 ```
 
@@ -541,7 +541,7 @@ Example exchange:
 
 ```json
 {"jsonrpc":"2.0","id":7,"method":"hook/model.fallback","params":{
-  "session":"0192f3c4-…","root_session":"0192f3c1-…","agent":"build",
+  "session":"0192f3c4-…","root_session":"0192f3c1-…","agent":"hya-main",
   "message":"0192f3c5-…","model":"anthropic/claude-opus-5-5",
   "error":{"class":"retryable","message":"http status 529: overloaded"},
   "attempt":1,"tried":["anthropic/claude-opus-5-5"]}}

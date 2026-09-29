@@ -265,7 +265,7 @@ async fn root_session(
 
 fn base_spec(workdir: &support::TestDir) -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("general"),
+        name: AgentName::new("hya-task"),
         model: ModelRef::new("fake"),
         system_prompt: "base prompt".to_string(),
         workdir: workdir.path().to_path_buf(),
@@ -293,7 +293,7 @@ async fn root_turn_rebinds_new_tool_at_round_boundary() {
     let runtime = runtime_with_marker(support::builtin_only_catalog());
     let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-tool");
-    let session = root_session(&engine, &workdir, "general").await;
+    let session = root_session(&engine, &workdir, "hya-task").await;
     engine
         .admit_user_prompt(session, "call the marker tool".to_string())
         .await
@@ -338,7 +338,7 @@ async fn root_turn_survives_round_rebind_failure_with_old_tools() {
     let runtime = runtime_with_marker(support::builtin_only_catalog());
     let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-failure");
-    let session = root_session(&engine, &workdir, "general").await;
+    let session = root_session(&engine, &workdir, "hya-task").await;
     engine
         .admit_user_prompt(session, "call the marker tool".to_string())
         .await
@@ -385,7 +385,7 @@ async fn bound_member_rounds_do_not_rebind() {
     let runtime = runtime_with_marker(support::builtin_only_catalog());
     let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-member");
-    let lead = root_session(&engine, &workdir, "general").await;
+    let lead = root_session(&engine, &workdir, "hya-task").await;
     let engine = Arc::new(
         engine
             .as_ref()

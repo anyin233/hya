@@ -125,7 +125,7 @@ A member's canonical handle is its parent's path plus a **leaf**
   characters (`_`, `.`, `/`, spaces, non-ASCII) collapsed to one `-`, trimmed
   of `-`, capped at 32 characters, `agent` when nothing is left
   (`Acme_Scout.v2` → `acme-scout-v2`). An omitted or empty `subagent_type`
-  spawns `general`, so its prefix is `general`. An `inline_agent` overlay's
+  spawns `hya-task`, so its prefix is `hya-task`. An `inline_agent` overlay's
   `name` does not change the prefix. The caller cannot pick a prefix: the
   `name` parameter was removed and a call that still passes it fails with an
   `input` error.
@@ -134,8 +134,8 @@ A member's canonical handle is its parent's path plus a **leaf**
   1–26 characters, lowercase ASCII, `^[a-z0-9]+(-[a-z0-9]+)*$`), embedded
   with `include_str!` — no network access at build or run time.
 
-Examples: `main/scout-suzuran`, `main/hya-implementer-exusiai`,
-`main/hya-implementer-exusiai/general-amiya`,
+Examples: `main/hya-scout-suzuran`, `main/hya-task-exusiai`,
+`main/hya-task-exusiai/hya-task-amiya`,
 `main/hya-reviewer-blue-poison`.
 
 **Name list provenance.** Snapshot of the prts.wiki operator list (干员一览,

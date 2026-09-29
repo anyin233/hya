@@ -97,16 +97,16 @@ async fn goal_loop_bundle_skills_and_guide_agent_are_served_and_usable() {
         .expect("agent catalog");
     let agents_text = agents.to_string();
     assert!(
-        agents_text.contains("goal-loop-guide"),
-        "goal-loop-guide agent must be served: {agents_text}"
+        agents_text.contains("hya-goal-guide"),
+        "hya-goal-guide agent must be served: {agents_text}"
     );
 
     // The bundle agent's own session can read the bundle's skill through the
     // skill tool: the preset bundle's content is provided AND usable.
     let session = env
-        .create_session_with_agent("goal-loop-guide")
+        .create_session_with_agent("hya-goal-guide")
         .await
-        .expect("create goal-loop-guide session");
+        .expect("create hya-goal-guide session");
     env.prompt(session, "read the goal contract skill")
         .await
         .expect("prompt");

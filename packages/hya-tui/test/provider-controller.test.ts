@@ -12,7 +12,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 function harness(client: Partial<HyaClient>, catalog: { providers: ProviderSummary[]; models: ModelSummary[] }) {
   const store = createAppStore()
-  store.applyBootstrap({ agents: [{ name: "build", model: { providerId: "hya", modelId: "offline" } }], models: catalog.models })
+  store.applyBootstrap({ agents: [{ name: "hya-main", model: { providerId: "hya", modelId: "offline" } }], models: catalog.models })
   const picks: string[] = []
   let current = catalog
   const providers = createProviderController({

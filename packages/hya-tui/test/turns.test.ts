@@ -9,7 +9,7 @@ type Reply = TurnInfo | HttpError | Error
 
 function harness(replies: Reply[] = [], shell: (command: string) => Promise<TurnInfo> = async () => ({ id: "msg_shell", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" }), onEnd?: (outcome: { ok: boolean; detail: string }) => void) {
   const store = createAppStore()
-  store.openSession({ id: S, agent: "build", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
+  store.openSession({ id: S, agent: "hya-main", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
   const sent: string[] = []
   const shells: Array<{ command: string; agent: string; model: unknown }> = []
   const cancels: string[][] = []
@@ -216,7 +216,7 @@ test("opening another session clears the queue and the turn state", async () => 
   const { store, runner } = harness()
   await runner.submit("one")
   await runner.submit("two")
-  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w" })
   expect(store.state.queued).toEqual([])
   expect(store.state.running).toBe(false)
   expect(store.state.turnId).toBe("")
@@ -227,7 +227,7 @@ test("a shell turn runs the command with the session's agent and model and ends 
   const { store, runner, sent, shells } = harness()
   await runner.submit("echo hello", { shell: true })
   expect(sent).toEqual([])
-  expect(shells).toEqual([{ command: "echo hello", agent: "build", model: { providerId: "fake", modelId: "model" } }])
+  expect(shells).toEqual([{ command: "echo hello", agent: "hya-main", model: { providerId: "fake", modelId: "model" } }])
   expect(store.state.running).toBe(false)
   expect(store.state.queued).toEqual([])
   expect(store.state.status).toBe("Ready")

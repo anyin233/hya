@@ -21,16 +21,16 @@ inputs:
   target: What to explore.
 nodes:
   explore:
-    agent: general
+    agent: hya-task
     directive: EXPLORE {{input.target}}
   impl_a:
-    agent: general
+    agent: hya-task
     directive: IMPL A
   impl_b:
-    agent: general
+    agent: hya-task
     directive: IMPL B
   review:
-    agent: general
+    agent: hya-task
     directive: REVIEW both
 ---
 flowchart TD
@@ -90,7 +90,7 @@ async fn p17_user_authored_workflow_runs_fan_out_fan_in_via_tool() {
     );
     let kinds = tree_subagent_types(&tree);
     assert!(
-        kinds.iter().all(|k| k == "general"),
+        kinds.iter().all(|k| k == "hya-task"),
         "every stage resolves its declared agent; kinds={kinds:?}"
     );
 

@@ -31,7 +31,7 @@ async function api<T>(backend: Backend, method: string, path: string, body?: unk
 
 async function createSession(backend: Backend): Promise<SessionInfo> {
   const result = await api<{ session: SessionInfo }>(backend, "POST", "/v1/sessions", {
-    agent: "build",
+    agent: "hya-main",
     model: "fake/model",
     workdir: backend.dir,
   })

@@ -56,7 +56,7 @@ test.describe("multi-line input", () => {
     expect((await composer(term)).rows).toHaveLength(3)
     await term.attach(testInfo, "multiline-input")
     await term.press("Enter")
-    await term.waitForText("● build · hya/offline", 20_000)
+    await term.waitForText("● hya-main · hya/offline", 20_000)
     // One user block with the three lines, in order, on consecutive rows.
     const first = (await term.find("┃ line one"))!
     const lines = await term.lines()
@@ -73,7 +73,7 @@ test.describe("multi-line input", () => {
     await term.press("Shift+Enter")
     await term.type("line two")
     await expect.poll(() => composerText(term)).toBe("line one\nline two")
-    expect(await term.find("● build · hya/offline")).toBeNull()
+    expect(await term.find("● hya-main · hya/offline")).toBeNull()
     expect((await composer(term)).rows).toEqual(["line one", "line two"])
     await term.attach(testInfo, "multiline-default")
     await term.resize(700, 640)
@@ -84,7 +84,7 @@ test.describe("multi-line input", () => {
     expect(await term.find("No messages yet")).not.toBeNull()
     await term.attach(testInfo, "multiline-narrow")
     await term.press("Enter")
-    await term.waitForText("● build · hya/offline", 20_000)
+    await term.waitForText("● hya-main · hya/offline", 20_000)
     expect(await composerText(term)).toBe("")
     const first = (await term.find("┃ line one"))!
     const lines = await term.lines()
@@ -116,11 +116,11 @@ test.describe("multi-line input", () => {
     await page.evaluate(() => window.hyaTerm.term.paste("alpha\nbeta\ngamma"))
     await expect.poll(() => composerText(term)).toBe("paste: alpha\nbeta\ngamma")
     const text = await term.text()
-    expect(text).not.toContain("● build")
+    expect(text).not.toContain("● hya-main")
     expect(text).toContain("No messages yet")
     expect((await composer(term)).rows).toHaveLength(3)
     await term.press("Enter")
-    await term.waitForText("● build · hya/offline", 20_000)
+    await term.waitForText("● hya-main · hya/offline", 20_000)
     const first = (await term.find("┃ paste: alpha"))!
     expect((await term.lines())[first.row + 2]).toContain("┃ gamma")
   })
@@ -339,6 +339,6 @@ test.describe("@file references", () => {
     await term.waitForText("▸ file-b.md")
     await term.press("Enter")
     await expect.poll(() => composerText(term)).toBe("@file-b.md")
-    expect(await term.text()).not.toContain("● build")
+    expect(await term.text()).not.toContain("● hya-main")
   })
 })

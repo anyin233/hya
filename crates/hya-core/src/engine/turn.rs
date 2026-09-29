@@ -792,6 +792,38 @@ impl SessionEngine {
         outcome
     }
 
+    /// Continue a stored session whose recorded agent left the catalog (for
+    /// example a renamed built-in) as the general-purpose task agent.
+    ///
+    /// Records the switch as `AgentSwitched` so the projection and every client
+    /// show the agent that actually runs. Returns whether it switched; a
+    /// catalog without the task agent keeps the recorded id, and the turn then
+    /// fails with `AgentDefinitionMissing` naming it.
+    async fn fall_back_from_missing_agent(
+        &self,
+        session: SessionId,
+        projection: &hya_proto::Projection,
+        binding: &TurnBinding,
+    ) -> Result<bool, CoreError> {
+        let Some(recorded) = projection.session.agent.as_ref() else {
+            return Ok(false);
+        };
+        if binding.resolve_agent(recorded.as_str()).is_some()
+            || binding.resolve_agent(crate::TASK_AGENT_ID).is_none()
+        {
+            return Ok(false);
+        }
+        tracing::warn!(
+            %session,
+            recorded_agent = %recorded,
+            fallback = crate::TASK_AGENT_ID,
+            "stored session agent is not in the catalog; continuing as the task agent"
+        );
+        self.switch_agent(session, AgentName::new(crate::TASK_AGENT_ID))
+            .await?;
+        Ok(true)
+    }
+
     async fn run_claimed_turn(
         &self,
         session: SessionId,
@@ -809,7 +841,7 @@ impl SessionEngine {
             lease: _,
         } = request;
         self.validate_actor_claim(actor_claim).await?;
-        let projection = self.store.read_projection(session).await?;
+        let mut projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
         // Uncomposed base spec, captured before the prepared agent shadows it
         // below; round-boundary rebinds re-materialize from this.
@@ -818,17 +850,22 @@ impl SessionEngine {
             match activation {
                 TurnActivation::Root => {
                     let binding = self.bind_session_runtime(session, &workdir).await?;
+                    if self
+                        .fall_back_from_missing_agent(session, &projection, &binding)
+                        .await?
+                    {
+                        projection = self.store.read_projection(session).await?;
+                    }
                     let stable_id = projection
                         .session
                         .agent
                         .as_ref()
                         .unwrap_or(&agent.name)
-                        .as_str()
-                        .to_string();
+                        .as_str();
                     let (sidecar_handle, sidecar_tools) = start_root_sidecar(
                         self.sidecar_environment.as_ref(),
                         &binding,
-                        &stable_id,
+                        stable_id,
                         &cancel,
                     )
                     .await?;

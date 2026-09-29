@@ -124,7 +124,7 @@ async fn root_binding_refreshes_before_capture_while_plain_binding_stays_pure() 
     let workdir = support::TestDir::new("root-catalog-refresh");
 
     let plain_before = engine.bind_runtime(workdir.path()).expect("plain binding");
-    assert!(plain_before.resolve_agent("general").is_some());
+    assert!(plain_before.resolve_agent("hya-task").is_some());
     assert!(plain_before.resolve_agent("installed-agent").is_none());
     assert_eq!(refresh.calls.load(Ordering::SeqCst), 0);
 
@@ -182,7 +182,7 @@ async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
         .run_turn(
             session,
             &AgentSpec {
-                name: AgentName::new("general"),
+                name: AgentName::new("hya-task"),
                 model,
                 system_prompt: "base prompt".to_string(),
                 workdir: workdir.path().to_path_buf(),
@@ -237,7 +237,7 @@ async fn root_shell_refreshes_catalog_before_agent_resolution() {
         .run_shell(
             session,
             &AgentSpec {
-                name: AgentName::new("general"),
+                name: AgentName::new("hya-task"),
                 model,
                 system_prompt: "base prompt".to_string(),
                 workdir: workdir.path().to_path_buf(),

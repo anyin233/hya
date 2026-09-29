@@ -83,7 +83,7 @@ fn write_skill(root: &Path, name: &str, description: &str, body: &str) {
 
 fn agent(workdir: PathBuf) -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "base prompt".to_string(),
         workdir,
@@ -190,7 +190,7 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: session_dir.to_string_lossy().into_owned(),
             project: None,
@@ -218,8 +218,9 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
         1
     );
     assert!(!system.contains("Available skills"));
+    // The session agent's prompt (built-in hya-main) comes before the skills.
     assert!(
-        system.find("base prompt").unwrap()
+        system.find("You are hya-main").unwrap()
             < system.find("These skills are available on demand").unwrap()
     );
     // Compiled resource views expose harness-qualified spellings next to the short name.
@@ -258,7 +259,7 @@ async fn run_turn_shell_tool_uses_session_workdir_not_agent_workdir() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: session_dir.to_string_lossy().into_owned(),
             project: None,
@@ -309,7 +310,7 @@ async fn run_shell_uses_session_workdir_not_agent_workdir() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: session_dir.to_string_lossy().into_owned(),
             project: None,

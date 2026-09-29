@@ -136,7 +136,7 @@ async fn team() -> Team {
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
             project: None,
@@ -146,9 +146,9 @@ async fn team() -> Team {
         .unwrap();
     *provider.root.lock().unwrap() = Some(root);
     let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead = spec("build");
+    let lead = spec("hya-main");
     let binding = engine.bind_runtime(&lead.workdir).unwrap();
-    let resources = binding.agent_resource_policy("build").unwrap();
+    let resources = binding.agent_resource_policy("hya-main").unwrap();
     supervisor
         .ensure_main(root, lead, (binding, Arc::from([]), resources), None, None)
         .await
@@ -180,9 +180,9 @@ fn spec(name: &str) -> AgentSpec {
 
 /// Spawn a member under `parent`; `gated` parks its first turn until release.
 async fn spawn(team: &Team, parent: SessionId, gated: bool) -> (SessionId, String) {
-    let agent = spec("explore");
+    let agent = spec("hya-scout");
     let binding = team.engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy("explore").unwrap();
+    let resources = binding.agent_resource_policy("hya-scout").unwrap();
     team.provider.gate_members.store(gated, Ordering::SeqCst);
     let (session, handle) = team
         .supervisor

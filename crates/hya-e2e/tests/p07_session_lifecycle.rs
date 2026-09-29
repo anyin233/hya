@@ -75,7 +75,7 @@ async fn t1_11_session_list_and_resume_prompt() {
 }
 
 /// T1.11 — the production backend titles a root session in the background
-/// after its first prompt (fixed `title` agent), once: the title call never
+/// after its first prompt (fixed `hya-title` agent), once: the title call never
 /// consumes the turn's scripted steps, and a second prompt does not retitle.
 #[tokio::test]
 async fn t1_11_first_prompt_titles_the_session_once() {

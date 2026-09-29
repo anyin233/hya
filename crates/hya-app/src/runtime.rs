@@ -910,7 +910,7 @@ fn validate_activation_id(activation_id: &str) -> Result<(), CoreError> {
 /// Built-in root-session agent id used when neither an explicit override nor
 /// config `default_agent` selects one. Matches `serve`'s own fallback
 /// (`ServerState.default_agent`, then this same built-in agent).
-pub const BUILTIN_DEFAULT_AGENT_ID: &str = "build";
+pub const BUILTIN_DEFAULT_AGENT_ID: &str = hya_core::MAIN_AGENT_ID;
 
 /// Agent base only — for HTTP/SSE server and interactive TUI AppState assembly.
 ///
@@ -1704,7 +1704,7 @@ fn authorize_spawn_target<'a>(
 ) -> Result<AgentDefinition<'a>, SpawnError> {
     let requested = member.subagent_type.trim();
     let requested = if requested.is_empty() {
-        "general"
+        hya_core::TASK_AGENT_ID
     } else {
         requested
     };
@@ -3327,7 +3327,13 @@ mod tests {
                     .any(|resource| resource.local_id == skill)
             );
         }
-        for id in ["build", "plan", "explore", "general", "hya-main"] {
+        for id in [
+            "hya-main",
+            "hya-plan",
+            "hya-scout",
+            "hya-task",
+            "hya-reviewer",
+        ] {
             assert!(
                 catalog.resolve(id).is_some(),
                 "builtin `{id}` must resolve without any installed bundle"
@@ -4004,7 +4010,7 @@ name: shutdown-flow
 description: Hold one governed member until lifecycle shutdown.
 nodes:
   hold:
-    agent: explore
+    agent: hya-scout
     directive: WAIT FOR SHUTDOWN
 ---
 flowchart TD
@@ -4044,7 +4050,7 @@ flowchart TD
             .with_workflow_sender(workflow_sender.clone()),
         );
         let base = AgentSpec {
-            name: AgentName::new("build"),
+            name: AgentName::new("hya-main"),
             model: ModelRef::new("hya/offline"),
             system_prompt: "build".to_string(),
             workdir: workdir.clone(),
@@ -9191,21 +9197,21 @@ export default {
             staging_root.clone(),
         );
 
-        let build_factory = environment
-            .factory_for(&binding, "build")
-            .expect("resolve build sidecar capability");
+        let lead_factory = environment
+            .factory_for(&binding, "lead")
+            .expect("resolve lead sidecar capability");
         let worker_factory = environment
             .factory_for(&binding, "worker")
             .expect("resolve worker sidecar capability");
-        let build_is_static = build_factory.is_none();
+        let lead_is_static = lead_factory.is_none();
         let worker_is_executable = worker_factory.is_some();
 
         std::fs::remove_dir_all(turn_dir).expect("cleanup selected-agent turn directory");
         std::fs::remove_dir_all(staging_root).expect("cleanup selected-agent staging root");
 
         assert!(
-            build_is_static,
-            "build must stay process-free when its effective view denies bundle echo"
+            lead_is_static,
+            "lead must stay process-free when its effective view denies bundle echo"
         );
         assert!(
             worker_is_executable,

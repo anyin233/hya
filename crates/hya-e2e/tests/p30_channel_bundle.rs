@@ -7,9 +7,9 @@ use hya_bundle::{BundleSource, SourceFile, write_public_package};
 use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
 use serde_json::json;
 
-const ROOT: &str = "You are hya";
-const SECOND_ROOT: &str = "You are hya-main";
+const ROOT: &str = "hya-main";
 const CHILD: &str = "CHANNEL_POLICY_CHILD";
+const RESTORED_CHILD: &str = "RESTORED_CHILD";
 
 #[tokio::test]
 async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores_default() {
@@ -28,12 +28,12 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
     let spawn = |marker: &str| {
         tool_step(
             "task",
-            json!({"members": [{
+            json!({
                 "description": "channel-policy worker",
                 "prompt": "send a message to the parent",
-                "subagent_type": "general",
+                "subagent_type": "hya-task",
                 "inline_agent": {"prompt": format!("{marker} Send the requested message.")}
-            }]}),
+            }),
         )
     };
     let env = E2eEnvBuilder::new()
@@ -45,18 +45,10 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
             ],
         )
         .route(
-            "RESTORED_CHILD",
+            RESTORED_CHILD,
             vec![
                 tool_step("send", json!({"body": "RESTORED_CHANNEL_PAYLOAD"})),
                 text_step("RESTORED_CHILD_FINISHED"),
-            ],
-        )
-        .route(
-            SECOND_ROOT,
-            vec![
-                spawn("RESTORED_CHILD"),
-                text_step("SECOND_ROOT_DONE"),
-                text_step("MAIL_RECEIVED"),
             ],
         )
         .route(
@@ -65,6 +57,10 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
                 spawn(CHILD),
                 text_step("FIRST_ROOT_DONE"),
                 text_step("FIRST_ROOT_SETTLED"),
+                spawn(RESTORED_CHILD),
+                text_step("SECOND_ROOT_DONE"),
+                text_step("MAIL_RECEIVED"),
+                text_step("SECOND_ROOT_FINAL"),
             ],
         )
         .build()
@@ -104,18 +100,14 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
     env.prompt(second, "spawn a new worker under the default policy")
         .await
         .unwrap();
-    env.wait_route_contains(
-        SECOND_ROOT,
-        "RESTORED_CHANNEL_PAYLOAD",
-        Duration::from_secs(20),
-    )
-    .await
-    .unwrap_or_else(|error| {
-        panic!(
-            "default delivery was not restored: {error}; {}",
-            env.diagnostics()
-        )
-    });
+    env.wait_route_contains(ROOT, "RESTORED_CHANNEL_PAYLOAD", Duration::from_secs(20))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "default delivery was not restored: {error}; {}",
+                env.diagnostics()
+            )
+        });
     assert!(
         !env.route_dump(ROOT)
             .unwrap_or_default()

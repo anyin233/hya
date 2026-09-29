@@ -12,26 +12,65 @@ directory is read at startup, so edits apply on the next restart with no
 rebuild; an installed backend instead loads the packaged
 `hya-core-agents.hyabundle` beside it.
 
-The preset preserves the stable agent ids, prompts, selector roles, model
-defaults, and reserved system-agent behavior that
-existing sessions expect. The trusted preset origin selects the full host tool
-plane. Public `AgentBundle` and `AgentSetBundle` manifests cannot request that
-origin or the full plane, and an installed bundle cannot claim any core agent
-id.
+The preset defines the eight `hya-`-prefixed built-in ids, selector roles,
+model defaults, and reserved system-agent behavior. The trusted preset origin
+provides access to the host tool plane, subject to each agent's
+`resource_view` restrictions. Public `AgentBundle` and `AgentSetBundle`
+manifests cannot request that origin or the full plane, and an installed bundle
+cannot claim any core agent id.
 
 ## Usage
 
-Core agents require no installation or configuration. Select an ordinary agent
-by its stable id, such as `build`, `plan`, or `hya-main`. Code that needs an
-explicit bundle-qualified reference may use
-`bundle:hya/core-agents/agent/build`.
+Core agents require no installation or configuration. A new root session uses
+`hya-main` when `default_agent` is unset. Select an ordinary agent by its stable
+id, such as `hya-main` or `hya-plan`. Code that needs an explicit
+bundle-qualified reference may use `bundle:hya/core-agents/agent/hya-main`;
+it resolves to the same definition as `hya-main`. An omitted or empty
+`subagent_type` on `task` selects `hya-task`. Ordinary core agents can spawn
+ordinary catalog agents, including agents from installed bundles; the
+read-only `hya-scout` cannot call `task`. `hya-compaction`, `hya-summary`, and
+`hya-title` are reserved for engine-owned operations: they are resolvable by
+exact id but excluded from selectors and spawn rosters and cannot spawn other
+agents.
 
-For example, resolving `build` and
-`bundle:hya/core-agents/agent/build` through `AgentCatalog` returns the same
-definition. Ordinary core agents can spawn every ordinary catalog agent,
-including agents from installed bundles. `compaction`, `summary`, and `title`
-are reserved for engine-owned operations: they are resolvable by exact id but
-are excluded from selectors and spawn rosters and cannot spawn other agents.
+### Built-in agents
+
+The listed tool restrictions are enforced by the preset's `resource_view.deny`
+on canonical `harness:tool/*` resources, not merely by prompt instructions.
+
+| Id | Role | Tool restriction | Purpose |
+| --- | --- | --- | --- |
+| `hya-main` | main (default) | None | Orchestrate coding work and delegate. |
+| `hya-plan` | main | Denies write, edit, apply_patch, bash | Read-only planning and `plan_exit` handoff. |
+| `hya-task` | subagent (`task` default) | None | General-purpose focused work. |
+| `hya-scout` | subagent | Denies write, edit, apply_patch, bash, task, archive | Fast read-only research. |
+| `hya-reviewer` | subagent | Denies write, edit, apply_patch | Review patches and report findings. |
+| `hya-compaction` | reserved system subagent | Not selectable or spawnable | Context compaction. |
+| `hya-summary` | reserved system subagent | Not selectable or spawnable | Explicit summarization. |
+| `hya-title` | reserved system subagent | Not selectable or spawnable | Session titles. |
+
+### Migrating agent ids
+
+| Previous id(s) | New id |
+| --- | --- |
+| `build`, `hya-main` | `hya-main` |
+| `plan`, `hya-planner` | `hya-plan` |
+| `general`, `hya-worker`, `hya-implementer`, `hya-tester`, `hya-docs` | `hya-task` |
+| `explore`, `hya-explorer` | `hya-scout` |
+| `hya-reviewer` | `hya-reviewer` |
+| `compaction`, `summary`, `title` | `hya-compaction`, `hya-summary`, `hya-title` respectively |
+| `hya-release` | Removed (no replacement) |
+
+Update custom `agents` keys, `default_agent`, and explicit spawn targets to
+the new ids. A stored session whose recorded agent no longer resolves in its
+binding switches durably to `hya-task` on its next root turn (a prompt in that
+session); the `AgentSwitched` event updates projection and UI. Subagent
+sessions woken by mail are not switched: a child whose agent was removed fails
+with `AGENT_DEFINITION_MISSING`. Explicitly spawning an unknown agent still
+fails rather than falling back. The former first-party
+`hya/subagents` bundle has been removed; `hya-task` replaces its worker.
+Workflow-private agents are now `hya-goal-guide`, `hya-goal-verifier`, and
+`hya-pir-planner`, `hya-pir-implementer`, `hya-pir-reviewer`.
 
 Editing `bundle.yaml` or a prompt under the preset directory takes effect on
 the next restart; no rebuild is required in a Cargo build. Invalid source

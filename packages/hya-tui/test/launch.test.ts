@@ -42,12 +42,12 @@ test("the default database is the durable sessions.db that `hya sessions` reads"
 
 test("--continue picks the most recent top-level session of the ensured Project; --session names one", () => {
   const sessions = [
-    { id: "a", agent: "build", workdir: "/w", projectId: "prj_w", timeUpdated: "2026-09-25T10:00:00Z" },
-    { id: "child", agent: "explore", workdir: "/w", projectId: "prj_w", parent: "a", timeUpdated: "2026-09-25T12:00:00Z" },
+    { id: "a", agent: "hya-main", workdir: "/w", projectId: "prj_w", timeUpdated: "2026-09-25T10:00:00Z" },
+    { id: "child", agent: "hya-scout", workdir: "/w", projectId: "prj_w", parent: "a", timeUpdated: "2026-09-25T12:00:00Z" },
     // Another workdir inside the same Project counts: the Project, not the workdir, is matched.
-    { id: "b", agent: "build", workdir: "/w/sub", projectId: "prj_w", timeUpdated: "2026-09-25T11:00:00Z" },
-    { id: "elsewhere", agent: "build", workdir: "/other", projectId: "prj_o", timeUpdated: "2026-09-25T13:00:00Z" },
-    { id: "temp", agent: "build", workdir: "/cache/x", kind: "SESSION_KIND_TEMPORARY" as const, timeUpdated: "2026-09-25T14:00:00Z" },
+    { id: "b", agent: "hya-main", workdir: "/w/sub", projectId: "prj_w", timeUpdated: "2026-09-25T11:00:00Z" },
+    { id: "elsewhere", agent: "hya-main", workdir: "/other", projectId: "prj_o", timeUpdated: "2026-09-25T13:00:00Z" },
+    { id: "temp", agent: "hya-main", workdir: "/cache/x", kind: "SESSION_KIND_TEMPORARY" as const, timeUpdated: "2026-09-25T14:00:00Z" },
   ]
   expect(initialSessionId(sessions, { continue: true }, "prj_w")).toBe("b")
   expect(initialSessionId(sessions, { continue: false, session: "a" }, "prj_w")).toBe("a")

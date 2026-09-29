@@ -1098,7 +1098,7 @@ mod tests {
                 payload: Some(P::MessageStarted(pb::MessageStarted {
                     message: "m".into(),
                     role: pb::Role::Assistant as i32,
-                    agent: "plan".into(),
+                    agent: "hya-plan".into(),
                     model: "fake/beta".into(),
                 })),
             })),
@@ -1119,7 +1119,7 @@ mod tests {
         let message = mirror.messages()[0];
         assert_eq!(
             (message.agent.as_str(), message.model.as_str()),
-            ("plan", "fake/beta")
+            ("hya-plan", "fake/beta")
         );
         assert_eq!(message.time_created, at(10));
         assert_eq!(message.time_updated, at(12));
@@ -1211,7 +1211,7 @@ mod tests {
             P::MemberUpdated(pb::MemberInfo {
                 member: "mem".into(),
                 child: "child".into(),
-                agent: "general".into(),
+                agent: "hya-task".into(),
                 description: "look".into(),
                 status: pb::MemberStatus::Spawning as i32,
                 call_id: "c".into(),
@@ -1237,7 +1237,7 @@ mod tests {
                 members[0].call_id.as_str(),
                 members[0].summary.as_str()
             ),
-            ("general", "c", "ok")
+            ("hya-task", "c", "ok")
         );
     }
 }

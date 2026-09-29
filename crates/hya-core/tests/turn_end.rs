@@ -249,7 +249,7 @@ async fn scripted_engine(
         .with_governor(SubagentGovernor::new(SubagentLimits::default())),
     );
     let agent = AgentSpec {
-        name: AgentName::new("general"),
+        name: AgentName::new("hya-task"),
         model: ModelRef::new("hya/offline"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -279,9 +279,11 @@ async fn register_main(
     root: SessionId,
 ) {
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let agents = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
     let resources = engine
-        .agent_resource_policy_for_binding(&binding, "build")
+        .agent_resource_policy_for_binding(&binding, "hya-main")
         .unwrap();
     supervisor
         .ensure_main(
@@ -435,7 +437,7 @@ async fn archived(engine: &SessionEngine, root: SessionId) -> Vec<String> {
 #[tokio::test]
 async fn drain_closes_every_session_turn_with_a_cause() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     provider.script(root, Script::Hang);
     engine
@@ -456,8 +458,8 @@ async fn drain_closes_every_session_turn_with_a_cause() {
         .expect("lead turn reaches the provider");
 
     register_main(&supervisor, &engine, &agent, root).await;
-    let a = make_session(&engine, Some(root), "general").await;
-    let b = make_session(&engine, Some(root), "general").await;
+    let a = make_session(&engine, Some(root), "hya-task").await;
+    let b = make_session(&engine, Some(root), "hya-task").await;
     for (session, handle) in [(a, "worker-a"), (b, "worker-b")] {
         provider.script(session, Script::Hang);
         supervisor
@@ -555,10 +557,10 @@ async fn drain_closes_every_session_turn_with_a_cause() {
 #[tokio::test]
 async fn user_cancel_records_the_cause_and_does_not_broadcast() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     register_main(&supervisor, &engine, &agent, root).await;
-    let scout = make_session(&engine, Some(root), "general").await;
+    let scout = make_session(&engine, Some(root), "hya-task").await;
     supervisor
         .register_existing_resident(root, scout, "scout".to_string(), agent.clone(), None)
         .await
@@ -609,10 +611,10 @@ async fn user_cancel_records_the_cause_and_does_not_broadcast() {
 #[tokio::test]
 async fn lead_failure_broadcasts_wrap_up_and_never_archives_the_lead() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     register_main(&supervisor, &engine, &agent, root).await;
-    let worker = make_session(&engine, Some(root), "general").await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
     provider.script(worker, Script::Gate);
     supervisor
         .register_existing_resident(
@@ -691,10 +693,10 @@ async fn lead_failure_broadcasts_wrap_up_and_never_archives_the_lead() {
 #[tokio::test]
 async fn a_failed_lead_wake_does_not_archive_main() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     register_main(&supervisor, &engine, &agent, root).await;
-    let worker = make_session(&engine, Some(root), "general").await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
     supervisor
         .register_existing_resident(root, worker, "worker".to_string(), agent.clone(), None)
         .await
@@ -754,10 +756,10 @@ async fn a_failed_lead_wake_does_not_archive_main() {
 #[tokio::test]
 async fn archive_cancels_a_busy_member_turn_with_cause_archived() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     register_main(&supervisor, &engine, &agent, root).await;
-    let worker = make_session(&engine, Some(root), "general").await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
     provider.script(worker, Script::Hang);
     supervisor
         .register_existing_resident(
@@ -817,7 +819,7 @@ async fn archive_cancels_a_busy_member_turn_with_cause_archived() {
 #[tokio::test]
 async fn handoff_aborts_rather_than_terminalizing_a_stranded_turn() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
 
     provider.script(root, Script::Hang);
     engine
@@ -903,7 +905,7 @@ async fn handoff_aborts_rather_than_terminalizing_a_stranded_turn() {
 #[tokio::test]
 async fn suspend_checkpoints_before_the_next_model_call_and_resumes_once() {
     let (engine, agent, provider, gate) = engine_with_gate_tool().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
 
     provider.script(root, Script::Tool);
     engine
@@ -1005,9 +1007,9 @@ async fn suspend_checkpoints_before_the_next_model_call_and_resumes_once() {
 #[tokio::test]
 async fn aborted_handoff_re_drives_checkpointed_sessions_in_process() {
     let (engine, agent, provider, gate) = engine_with_gate_tool().await;
-    let draining = make_session(&engine, None, "build").await;
-    let stranded = make_session(&engine, None, "general").await;
-    let natural = make_session(&engine, None, "build").await;
+    let draining = make_session(&engine, None, "hya-main").await;
+    let stranded = make_session(&engine, None, "hya-task").await;
+    let natural = make_session(&engine, None, "hya-main").await;
 
     provider.script(draining, Script::Tool);
     provider.script(stranded, Script::Hang);
@@ -1153,7 +1155,7 @@ async fn aborted_handoff_re_drives_checkpointed_sessions_in_process() {
 #[tokio::test]
 async fn quiesce_waits_for_the_active_turn_and_refuses_new_ones() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
 
     provider.script(root, Script::Gate);
     engine
@@ -1245,14 +1247,14 @@ async fn handoff_readiness_names_sessions_with_pending_permission_asks() {
         permission,
         EventBus::default(),
     ));
-    let root = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
     // The session's recorded model routes to the fake provider.
     engine
         .switch_model(root, ModelRef::new("fake"))
         .await
         .unwrap();
     let ask_agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
@@ -1303,9 +1305,9 @@ async fn handoff_readiness_names_sessions_with_pending_permission_asks() {
 #[tokio::test]
 async fn restart_handoff_does_not_auto_resume_child_or_workflow_sessions() {
     let (engine, agent, provider) = engine_with_script().await;
-    let root = make_session(&engine, None, "build").await;
-    let child = make_session(&engine, Some(root), "general").await;
-    let workflow = make_session(&engine, None, "build").await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let child = make_session(&engine, Some(root), "hya-task").await;
+    let workflow = make_session(&engine, None, "hya-main").await;
 
     // A child whose transcript ends with the handoff close.
     let child_message = MessageId::new();
@@ -1346,7 +1348,7 @@ async fn restart_handoff_does_not_auto_resume_child_or_workflow_sessions() {
             stages: vec![hya_proto::WorkflowStagePlan {
                 id: "stage".to_string(),
                 title: None,
-                agent: AgentName::new("general"),
+                agent: AgentName::new("hya-task"),
                 mode: "once".to_string(),
                 level: 0,
                 worker_model: None,

@@ -241,7 +241,7 @@ export type FakeModelOption = {
   contextLimit?: number
   /** `modalities.input` per model id (docs/configuration.md), e.g. `{ model: ["text"] }` to make a model refuse image attachments. */
   modelModalities?: Record<string, string[]>
-  /** Pin agents' models in the backend config (`agents.<id>.model`), e.g. `{ build: "fake/beta" }`. */
+  /** Pin agents' models in the backend config (`agents.<id>.model`), e.g. `{ "hya-main": "fake/beta" }`. */
   agentModels?: Record<string, string>
 }
 
@@ -398,7 +398,7 @@ export async function api<T>(backend: Backend, method: string, path: string, bod
  * Returns the new session's id.
  */
 export async function headlessTurn(backend: Backend, text: string): Promise<string> {
-  const { session } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "build", model: fakeModelRef, workdir: backend.dir })
+  const { session } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "hya-main", model: fakeModelRef, workdir: backend.dir })
   await api(backend, "POST", `/v1/sessions/${session.id}/turns`, { prompt: { text } })
   return session.id
 }

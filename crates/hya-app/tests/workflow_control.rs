@@ -112,7 +112,7 @@ inputs:
   request: Request to process.
 nodes:
   execute:
-    agent: general
+    agent: hya-task
     directive: {directive} {{{{input.request}}}}
 ---
 flowchart TD
@@ -600,7 +600,7 @@ name: {name}
 description: {name} precedence fixture.
 nodes:
   run:
-    agent: general
+    agent: hya-task
     directive: {directive}
 ---
 flowchart TD
@@ -680,7 +680,7 @@ name: {name}
 description: {name} precedence fixture.
 nodes:
   run:
-    agent: general
+    agent: hya-task
     directive: {directive}
 ---
 flowchart TD
