@@ -68,6 +68,26 @@ test.describe("/model picker", () => {
   })
 })
 
+test.describe("/model with the agent's model pinned in config.yaml", () => {
+  test.use({ model: { models: ["fast", "slow"], agentModels: { build: "fake/slow" }, steps: [textStep("First reply."), textStep("Second reply.")] } })
+
+  test("switches only the session; the next session starts on the pinned model again", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await newSession(term)
+    await prompt(term, "/model fake/fast")
+    await term.waitForText("Model → fake/fast")
+    await prompt(term, "hi")
+    await term.waitForText("First reply.", 20_000)
+    await term.waitForText(/● build · fake\/fast/)
+
+    await prompt(term, "/new")
+    await term.waitForText(/Created hysec_/)
+    await prompt(term, "again")
+    await term.waitForText("Second reply.", 20_000)
+    await term.waitForText(/● build · fake\/slow/)
+  })
+})
+
 test.describe("/agent picker", () => {
   test.use({ model: { steps: [textStep("Reply one."), textStep("Reply two.")] } })
 

@@ -1,6 +1,6 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
-import { parseApiCommand, type SessionInfo } from "../client"
+import { HttpError, parseApiCommand, type SessionInfo } from "../client"
 import { agentRows, effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
@@ -184,13 +184,22 @@ export function openModelPicker({ store, client, actions }: CommandContext, opti
   })
 }
 
-/** Persist `/model`'s choice for the active agent, including an explicit `#effort` suffix. */
+/**
+ * Persist `/model`'s choice for the active agent, including an explicit `#effort` suffix.
+ * An agent pinned by `agents.<id>.model` answers 409: the config owns its default, so the
+ * choice stays a session override (the session model already carries the suffix).
+ */
 async function persistAgentModel(context: CommandContext, session: SessionInfo, reference: string): Promise<void> {
   const [base, effort] = reference.split("#", 2)
   const [providerId, ...modelParts] = base!.split("/")
   const modelId = modelParts.join("/")
   if (!providerId || !modelId) return
-  await context.client.setAgentModel(session.agent, { providerId, modelId }, session.id)
+  try {
+    await context.client.setAgentModel(session.agent, { providerId, modelId }, session.id)
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 409) return
+    throw error
+  }
   if (effort) await context.client.setAgentEffort(session.agent, effort)
 }
 

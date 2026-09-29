@@ -95,6 +95,8 @@ type BackendSetup = {
   contextLimit?: number
   /** `modalities.input` per model id (docs/configuration.md), e.g. `{ model: ["text"] }` to make a model refuse image attachments. */
   modelModalities?: Record<string, string[]>
+  /** `agents.<id>.model` pins in the backend config, by agent id (docs/configuration.md). */
+  agentModels?: Record<string, string>
   mcpServers?: Record<string, McpServerOption>
 }
 
@@ -107,6 +109,13 @@ export type McpServerOption = {
 /** argv of the fixture stdio MCP server (e2e/fixtures/mcp-tools-server.ts) listing `count` tools `tool_01`…. */
 export function mcpToolsServer(count: number): string[] {
   return ["bun", fileURLToPath(new URL("./fixtures/mcp-tools-server.ts", import.meta.url)), String(count)]
+}
+
+/** The backend config's `agents:` map of pinned models; empty when no agent is pinned. */
+function agentsYaml(models: Record<string, string> | undefined): string {
+  const entries = Object.entries(models ?? {})
+  if (entries.length === 0) return ""
+  return "agents:\n" + entries.map(([agent, model]) => `  ${JSON.stringify(agent)}:\n    model: ${JSON.stringify(model)}\n`).join("")
 }
 
 /** The backend config's `mcp:` map; JSON arrays and strings are valid YAML flow values. */
@@ -122,7 +131,7 @@ function mcpYaml(servers: Record<string, McpServerOption> | undefined): string {
  * the environment a `hya` process needs to use them.
  */
 async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir: string; env: Record<string, string> }> {
-  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit, modelModalities, mcpServers } = setup
+  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit, modelModalities, agentModels, mcpServers } = setup
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -143,6 +152,7 @@ async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir:
     await writeFile(
       join(hyaCfgDir, "config.yaml"),
       `default_model: ${fakeModelRef}\n` +
+        agentsYaml(agentModels) +
         "providers:\n" +
         "  fake:\n" +
         `    kind: ${providerKinds[protocol]}\n` +
@@ -231,6 +241,8 @@ export type FakeModelOption = {
   contextLimit?: number
   /** `modalities.input` per model id (docs/configuration.md), e.g. `{ model: ["text"] }` to make a model refuse image attachments. */
   modelModalities?: Record<string, string[]>
+  /** Pin agents' models in the backend config (`agents.<id>.model`), e.g. `{ build: "fake/beta" }`. */
+  agentModels?: Record<string, string>
 }
 
 /**
@@ -281,6 +293,7 @@ const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | unde
   ...(model?.models ? { modelIds: model.models } : {}),
   ...(model?.contextLimit ? { contextLimit: model.contextLimit } : {}),
   ...(model?.modelModalities ? { modelModalities: model.modelModalities } : {}),
+  ...(model?.agentModels ? { agentModels: model.agentModels } : {}),
   ...(mcpServers ? { mcpServers } : {}),
 })
 
