@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/core-skills
-  version: 0.43.23
+  version: 0.43.24
   publisher: hya
 namespace: core-skills
 resources:
