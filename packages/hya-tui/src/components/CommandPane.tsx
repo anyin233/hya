@@ -113,6 +113,11 @@ export function CommandPane() {
       close()
       return true
     }
+    if (event.name === "backspace" && !event.ctrl && !event.meta && editor) {
+      editor.deleteCharBackward()
+      if (!editor.plainText) close()
+      return true
+    }
     const shown = menu()
     if (event.shift && !event.ctrl && !event.meta && (event.name === "up" || event.name === "down") && editor) {
       const text = event.name === "up" ? history.previous(editor.plainText) : history.next()

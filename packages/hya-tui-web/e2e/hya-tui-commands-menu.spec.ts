@@ -76,6 +76,32 @@ async function createSessionViaMenu(term: Tui): Promise<void> {
 
 test.describe("command menu", () => {
   for (const width of [1100, 700]) {
+    test(`Backspace closes an emptied command pane and preserves the message draft (${width}px)`, async ({ tui, backend }) => {
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await connected(term)
+      await term.type("keep this draft")
+      await expect.poll(() => composerText(term)).toBe("keep this draft")
+      await term.press("Control+x")
+      await term.type("/h")
+      await term.waitForText("▸ /help")
+      await term.press("Backspace")
+      await expect.poll(() => commandText(term)).toBe("/")
+      await term.press("Home")
+      await term.press("Backspace")
+      await expect.poll(() => commandText(term)).toBe("/")
+      await term.press("End")
+      await term.press("Backspace")
+      await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+      expect(await composerText(term)).toBe("keep this draft")
+      await term.type(" continues")
+      await expect.poll(() => composerText(term)).toBe("keep this draft continues")
+      await term.press("Control+x")
+      await term.type("/")
+      await expect.poll(() => commandText(term)).toBe("/")
+      await term.press("Escape")
+      await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+    })
+
     test(`Up/Down reach commands beyond the visible rows and wrap at the full list (${width}px)`, async ({ tui, backend }, testInfo) => {
       await writeSkill(backend.dir, "zz-navigation-last", "Last navigation choice", "Say hello.")
       const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
