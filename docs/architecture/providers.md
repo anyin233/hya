@@ -68,7 +68,9 @@ DeepSeek's thinking mode requires each earlier assistant message's
 field so a tool result can be sent back without an upstream HTTP 400. The
 OpenAI Chat SSE decoder maps nonempty `choices[0].delta.reasoning_content`
 strings to `ReasoningStart`, `ReasoningDelta`, and `ReasoningEnd` events. The
-ending event carries `provider_data: {"openai_chat_reasoning_content": true}`.
+ending event carries `provider_data: {"type": "reasoning_content"}`. Stored
+sessions written by the older decoder with
+`{"openai_chat_reasoning_content": true}` still replay that reasoning.
 When tool input begins, the decoder closes any active text part first. The
 engine persists that completed text immediately, preserving transcript order
 while keeping tool input visible during the live turn.
@@ -78,7 +80,7 @@ and any `tool_calls`. It does this for earlier assistant messages with or
 without tool calls. For `deepseek-*` model ids, it also sends an empty string
 when an earlier assistant message has no reasoning delta; DeepSeek still
 requires the field after a tool call. Reasoning parts from other protocols lack
-this marker and are not sent as OpenAI Chat reasoning content.
+these markers and are not sent as OpenAI Chat reasoning content.
 
 To use this path, add a DeepSeek OpenAI-compatible provider in the TUI's `/key`
 view, save its API key, and select a DeepSeek model. For example, after setting
@@ -449,8 +451,14 @@ Chat Completions compatible APIs (`ProviderKind::OpenAiCompatible`):
 - tools become `type: function` tool definitions
 - tool results are emitted as `role: tool`
 - streamed text deltas become `TextStart` / `TextDelta` / `TextEnd`
+- streamed `delta.reasoning_content` becomes `ReasoningStart` /
+  `ReasoningDelta` / `ReasoningEnd` with
+  `provider_data: {"type": "reasoning_content"}`
 - streamed tool arguments are accumulated and emitted as `ToolCallRequested`
 - decoder closes on SSE data `[DONE]` or on plain stream end (`finish()`)
+- an open reasoning part ends before text starts, and open reasoning or text
+  ends before a tool call starts. The engine persists these parts at their end
+  event, so a part left open would be stored after a later tool call.
 
 **Finish-reason mapping** (`openai/decoder.rs`):
 
@@ -465,9 +473,32 @@ Chat Completions compatible APIs (`ProviderKind::OpenAiCompatible`):
 the string `"{}"` in `function.arguments`, because the wire format requires a
 JSON object string.
 
-Stored assistant messages may contain interleaved text and tool parts. The
-encoder clusters `text + tool calls + results` into wire messages that satisfy
-the provider's tool-call pairing rules.
+Stored assistant messages may contain interleaved reasoning, text, and tool
+parts. The encoder clusters `reasoning + text + tool calls + results` into
+wire messages that satisfy the provider's tool-call pairing rules.
+
+**`reasoning_content` round-trip.** Thinking-mode chat APIs (DeepSeek V4,
+Kimi) return HTTP 400 `The reasoning_content in the thinking mode must be
+passed back to the API` when a later request omits the reasoning of an
+earlier assistant message. The route's replay policy is
+`ReasoningReplayPolicy::ReasoningContent`: reasoning parts marked
+`{"type": "reasoning_content"}` (or the older
+`{"openai_chat_reasoning_content": true}`) are resent on every turn as the wire
+message's `reasoning_content`. Once a transcript holds any such part, every
+assistant wire message carries `reasoning_content`; it is `""` when that
+message had none. Reasoning from other protocols (for example Anthropic
+thinking before a model switch) is never sent. A transcript without
+chat-native reasoning is encoded without the field for other models; DeepSeek
+models include an empty field for their tool turns. Example second request of
+a tool round:
+
+```json
+{"role": "assistant", "content": "I'll start by finding your slides draft.",
+ "reasoning_content": "User wants the slides draft; glob for it.",
+ "tool_calls": [{"id": "…", "type": "function",
+                 "function": {"name": "glob", "arguments": "{\"pattern\":\"**/*slide*\"}"}}]},
+{"role": "tool", "tool_call_id": "…", "content": "slides_draft.md"}
+```
 
 **Media.** User/system media parts fail encode with
 `ProviderError::Incompatible("OpenAI chat does not support media type <mime>")`

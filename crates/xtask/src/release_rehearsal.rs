@@ -20,11 +20,10 @@ const BUN_VERSION: &str = "1.4.2";
 /// Highest text-lockfile version [`BUN_VERSION`] can read.
 const BUN_LOCKFILE_VERSION: u64 = 2;
 /// Targets the release matrix builds; a rehearsal runs on one of these hosts.
-const RELEASE_TARGETS: [&str; 4] = [
+const RELEASE_TARGETS: [&str; 3] = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
 ];
 
 /// Require the rehearsal target to be the machine it runs on.
@@ -188,7 +187,6 @@ fn opentui_native_package(target: &str) -> Result<&'static str> {
         "x86_64-unknown-linux-gnu" => Ok("@opentui/core-linux-x64"),
         "aarch64-unknown-linux-gnu" => Ok("@opentui/core-linux-arm64"),
         "aarch64-apple-darwin" => Ok("@opentui/core-darwin-arm64"),
-        "x86_64-apple-darwin" => Ok("@opentui/core-darwin-x64"),
         _ => bail!("no OpenTUI native package is known for release target `{target}`"),
     }
 }
@@ -2054,10 +2052,7 @@ mod tests {
             opentui_native_package("aarch64-apple-darwin")?,
             "@opentui/core-darwin-arm64"
         );
-        assert_eq!(
-            opentui_native_package("x86_64-apple-darwin")?,
-            "@opentui/core-darwin-x64"
-        );
+        assert!(opentui_native_package("x86_64-apple-darwin").is_err());
         assert!(opentui_native_package("x86_64-pc-windows-msvc").is_err());
         Ok(())
     }
