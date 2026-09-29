@@ -58,10 +58,15 @@ pub(crate) fn bundle_sidecar_command() -> Option<Vec<String>> {
     find_bun().map(|bun| bundled_bun_adapter_command(&bun))
 }
 
-/// Bun executable used to host the TypeScript adapters (env `BUN`, then `PATH`).
+/// Bun executable used to host the TypeScript adapters: env `BUN`, then the
+/// Bun a release ships at `<prefix>/lib/hya/bin/bun`, then `PATH`.
 #[must_use]
 pub fn find_bun() -> Option<PathBuf> {
-    find_bun_path()
+    resolve_bun(
+        non_empty_env_path("BUN"),
+        std::env::current_exe().ok().as_deref(),
+        std::env::var_os("PATH"),
+    )
 }
 
 /// Resolve the bundled Claude adapter directory for spawn and install paths.
@@ -217,12 +222,32 @@ fn resolve_claude_adapter_dir(
     workspace_root.join("crates/hya-plugin-claude/adapter")
 }
 
-fn find_bun_path() -> Option<PathBuf> {
-    if let Some(path) = non_empty_env_path("BUN") {
-        return Some(path);
+/// The release archive's Bun beside `<prefix>/bin/hya`, also through the
+/// resolved executable when `hya` is a symlink into the prefix.
+fn installed_bun(executable: &Path) -> Option<PathBuf> {
+    let beside = |exe: &Path| {
+        exe.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("../lib/hya/bin")
+            .join(bun_executable_names()[0])
+    };
+    std::iter::once(beside(executable))
+        .chain(executable.canonicalize().ok().map(|real| beside(&real)))
+        .find(|candidate| candidate.is_file())
+}
+
+fn resolve_bun(
+    env_bun: Option<PathBuf>,
+    executable: Option<&Path>,
+    path: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    if let Some(bun) = env_bun {
+        return Some(bun);
     }
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
+    if let Some(bun) = executable.and_then(installed_bun) {
+        return Some(bun);
+    }
+    for dir in std::env::split_paths(&path?) {
         for name in bun_executable_names() {
             let candidate = dir.join(name);
             if candidate.is_file() {
@@ -346,6 +371,39 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].id, "enabled");
         assert_eq!(specs[0].command, vec!["plugin-bin"]);
+    }
+
+    /// A release install runs the Bun it ships, not whichever Bun is on
+    /// `PATH`; `BUN` still overrides both.
+    #[test]
+    fn bun_resolution_prefers_env_then_installed_then_path() {
+        let root = std::env::temp_dir().join(format!("hya-find-bun-{}", std::process::id()));
+        let write = |relative: &str| {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap_or(&root)).unwrap_or_default();
+            std::fs::write(&path, "").unwrap_or_default();
+            path
+        };
+        let exe = write("prefix/bin/hya");
+        let path_bun = write("path/bun");
+        let path = Some(std::ffi::OsString::from(root.join("path")));
+        assert_eq!(
+            super::resolve_bun(None, Some(&exe), path.clone()),
+            Some(path_bun),
+            "without an installed Bun, PATH wins"
+        );
+        let installed = write("prefix/lib/hya/bin/bun");
+        let found = super::resolve_bun(None, Some(&exe), path.clone());
+        assert_eq!(
+            found.and_then(|bun| bun.canonicalize().ok()),
+            installed.canonicalize().ok()
+        );
+        let env = PathBuf::from("/opt/bun");
+        assert_eq!(
+            super::resolve_bun(Some(env.clone()), Some(&exe), path),
+            Some(env)
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

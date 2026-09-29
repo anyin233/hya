@@ -18,7 +18,10 @@ same trust domain and must be protected by host ownership/permissions.
 Network download is **outside** the TCB; download a complete package directory
 first, then verify/stage/activate.
 
-`install.sh` remains break-glass bootstrap and manual recovery.
+`install.sh` remains break-glass bootstrap and manual recovery. Bare
+`hya update` (no subcommand) is a different, non-TCB path: it reinstalls from
+the published GitHub release, checked against its `SHA256SUMS`
+([install.md](install.md)).
 
 ## Rebuild and restart (source checkout)
 

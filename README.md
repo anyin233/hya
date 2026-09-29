@@ -31,6 +31,20 @@ checked-out `0.43.22` workspace is newer and is not published to crates.io. Buil
 this checkout from source as described below. APIs, config, and command surfaces
 may still change between versions.
 
+## Install a Release
+
+Linux (x86_64, arm64, glibc) and macOS (Apple silicon, Intel):
+
+```sh
+curl -fsSL https://github.com/anyin233/hya/releases/latest/download/hya-install.sh | sh
+hya update   # later: move to the newest release
+```
+
+The release package includes Bun, so nothing else needs to be installed. It
+installs into `~/.local` by default. The installer verifies the release's
+`SHA256SUMS` and rolls back a failed update. See [Install and update](docs/install.md)
+for options, mirrors, and hosting the script yourself.
+
 
 ## Build From Source
 
@@ -50,8 +64,9 @@ The installer places `bin/hya`, the twelve first-party bundles it loads at
 startup under `bundles/`, and three Bun programs with their production
 dependencies under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions),
 `tui/` (the terminal UI bare `hya` starts), and `tui-web/` (the WebUI host).
-Bun must be on `PATH`. Release archives use the same layout; each first-party
-bundle is also published as a standalone release asset (see
+Bun must be on `PATH`. Release archives use the same layout and also ship
+Bun at `lib/hya/bin/bun`; each first-party bundle is also published as a
+standalone release asset (see
 [first-party bundles](docs/bundle-runtime.md#release-assets)).
 
 

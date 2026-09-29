@@ -170,7 +170,8 @@ pub(crate) fn resolve_asset_dir(
 }
 
 /// Bun is required for the TUI and the WebUI. `found` is
-/// `hya_app::plugins::find_bun()`: `$BUN` as given, else `bun` on `PATH`.
+/// `hya_app::plugins::find_bun()`: `$BUN` as given, else the release's
+/// `<prefix>/lib/hya/bin/bun`, else `bun` on `PATH`.
 pub(crate) fn check_bun(found: Option<PathBuf>) -> Result<PathBuf, String> {
     match found {
         Some(path) if path.is_file() => Ok(path),
@@ -179,7 +180,7 @@ pub(crate) fn check_bun(found: Option<PathBuf>) -> Result<PathBuf, String> {
             path.display()
         )),
         None => Err(
-            "Bun is required for the TUI and the WebUI but was not found on PATH: install it from https://bun.sh or set BUN=<path>. Other subcommands (`hya serve`, `hya exec`, …) do not need it."
+            "Bun is required for the TUI and the WebUI but was not found: release installs ship it at <prefix>/lib/hya/bin/bun (reinstall with `hya update --force`); otherwise install it from https://bun.sh or set BUN=<path>. Other subcommands (`hya serve`, `hya exec`, …) do not need it."
                 .to_string(),
         ),
     }
