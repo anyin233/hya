@@ -148,14 +148,27 @@ fn acquire_file(root: &Path) -> Result<File, UpdaterError> {
         .truncate(false)
         .open(&path)
         .map_err(|e| UpdaterError::LeaseUnavailable(format!("open updater lease: {e}")))?;
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if result != 0 {
-        return Err(UpdaterError::LeaseUnavailable(
-            "updater root is already owned".into(),
-        ));
+    // A child that another thread forks shares this open file (and its flock)
+    // until it execs; a released lease can therefore stay locked for a moment.
+    // Retry for a bounded window before reporting the root as owned.
+    let deadline = std::time::Instant::now() + LEASE_RETRY_WINDOW;
+    loop {
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(file);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(UpdaterError::LeaseUnavailable(
+                "updater root is already owned".into(),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    Ok(file)
 }
+
+/// How long a busy lease is retried: long enough to outlast a fork-to-exec
+/// window, short enough that a real concurrent owner is reported promptly.
+const LEASE_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn monotonic_nonce() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -204,6 +217,33 @@ mod tests {
             Err(UpdaterError::LeaseUnavailable(_))
         ));
         drop(first);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A child forked by another thread shares the lease's open file (and so
+    /// its flock) until it execs and closes it. That brief copy must not make
+    /// the next owner fail as if the root were owned.
+    #[test]
+    fn a_briefly_held_copy_of_a_released_lease_does_not_block_the_next_owner() {
+        let root =
+            std::env::temp_dir().join(format!("hya-updater-lease-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let first = match UpdaterOwner::acquire(&root) {
+            Ok(owner) => owner,
+            Err(error) => panic!("lease acquisition failed: {error}"),
+        };
+        let copy = match first.lease.try_clone() {
+            Ok(copy) => copy,
+            Err(error) => panic!("duplicate the lease fd: {error}"),
+        };
+        drop(first);
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(copy);
+        });
+        let next = UpdaterOwner::acquire(&root);
+        assert!(next.is_ok(), "{:?}", next.err());
+        let _ = holder.join();
         let _ = std::fs::remove_dir_all(root);
     }
 }
