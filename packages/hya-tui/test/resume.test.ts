@@ -58,6 +58,7 @@ test("a sessionUpdated archived frame drops the sidebar row (the open one stays,
 
 function harness(options: { webTab?: boolean } = {}) {
   const store = createAppStore()
+  store.setSessions(sessions.filter((row) => !row.archived))
   if (options.webTab) store.setWebTab(true)
   const calls: string[] = []
   const pickers: PickerSpec[] = []
@@ -97,7 +98,7 @@ test("in a WebUI tab /to-background is hidden and only explains that closing the
   expect(completeCommand("/to-b", terminal.store.completionContext(), terminal.registry)).toEqual(["/to-background"])
 })
 
-test("/resume [id] resumes a session; /sessions toggles archived sessions with Ctrl+A and resumes an archived pick", async () => {
+test("/resume [id] resumes a session; /sessions shows archived sessions until Ctrl+A hides them", async () => {
   const { calls, pickers, archivedFlags, run } = harness()
   await run("/resume")
   await run("/resume hysec_9")
@@ -106,17 +107,20 @@ test("/resume [id] resumes a session; /sessions toggles archived sessions with C
   calls.length = 0
   await run("/sessions")
   const first = pickers.at(-1)!
-  expect(first.rows.map((row) => row.id)).not.toContain("arch")
-  expect(first.hint).toContain("Ctrl+A shows archived")
+  expect(first.rows.map((row) => row.id)).toContain("arch")
+  expect(first.hint).toContain("Ctrl+A hides archived")
   // Ctrl+A commits the toggle at once (no confirm step).
   const toggle = sessionPickerActions.find((action) => action.id === "archived")!
   expect(toggle).toMatchObject({ key: "a", ctrl: true, prompt: "none" })
   const outcome = pickerKey(createPicker({ title: "Sessions", rows: first.rows, actions: sessionPickerActions }), { name: "a", ctrl: true, meta: false, shift: false, sequence: "\x01" })
   expect(outcome.type).toBe("commit")
   await first.onAction!("archived", first.rows[0]!)
+  const hidden = pickers.at(-1)!
+  expect(hidden.rows.map((row) => row.id)).not.toContain("arch")
+  expect(hidden.hint).toContain("Ctrl+A shows archived")
+  await hidden.onAction!("archived", hidden.rows[0]!)
   const shown = pickers.at(-1)!
   expect(archivedFlags.at(-1)).toBe(true)
-  expect(shown.title).toContain("archived")
   const archivedRow = shown.rows.find((row) => row.id === "arch")!
   expect(archivedRow.tag).toBe("archived")
   await shown.onSelect(archivedRow)

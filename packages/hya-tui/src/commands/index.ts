@@ -5,8 +5,10 @@ export {
   filterCommands,
   mergeCommandEntries,
   requiresArgument,
+  suggestCommandInput,
   type CommandEntry,
   type CommandSource,
+  type CommandSuggestion,
 } from "./menu"
 export {
   CommandRegistry,

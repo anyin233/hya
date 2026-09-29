@@ -1,0 +1,530 @@
+// hya API v1 — agent, model, provider, command, skill, and tool catalogs.
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/common.proto";
+
+// Catalog surface used by pickers, completion UIs, and setup flows, plus
+// the provider-management calls behind the TUI Provider View (add or update
+// a provider, refresh its remote model list, override model metadata in
+// `config.yaml`, and test a model). Provider changes apply live: the server
+// rebuilds that provider's route and the catalog, and emits
+// `catalog.updated`.
+service Catalog {
+  // Agents that can be bound to a session.
+  //
+  // hya.http: GET /v1/agents
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+
+  // Models across providers, optionally filtered to one provider.
+  //
+  // hya.http: GET /v1/models
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+
+  // Providers with their aggregate auth status.
+  //
+  // hya.http: GET /v1/providers
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+
+  // One provider's detail including its models.
+  //
+  // hya.http: GET /v1/providers/{provider_id}
+  rpc GetProvider(GetProviderRequest) returns (ProviderInfo);
+
+  // Add or update a provider in `config.yaml` (and save its API key when
+  // one is given), fetch its remote model list into the model cache, and
+  // apply it live. A failed fetch does not fail the call: `discovery`
+  // reports it.
+  //
+  // hya.http: PUT /v1/providers/{provider_id}
+  rpc UpsertProvider(UpsertProviderRequest) returns (ProviderUpdate);
+
+  // Re-read the provider's config entry and key, fetch its remote model
+  // list into the model cache, and apply it live.
+  //
+  // hya.http: POST /v1/providers/{provider_id}/refresh
+  rpc RefreshProvider(RefreshProviderRequest) returns (ProviderUpdate);
+  // Refresh the installed-bundle catalog and the directory's Project
+  // overlay now instead of at the next bind, and report what is published.
+  // A generation that fails to prepare (for example a bundle process that
+  // does not start) keeps the previous one and is reported in `errors`.
+  //
+  // hya.http: POST /v1/bundles:refresh
+  rpc RefreshBundles(RefreshBundlesRequest) returns (RefreshBundlesResponse);
+
+  // Write one model's entry (with its metadata overrides) into the
+  // provider's `models:` in `config.yaml` and apply it live. The model id
+  // travels in the body because ids may contain `/` or `:`.
+  //
+  // hya.http: PUT /v1/providers/{provider_id}/models
+  rpc SetProviderModel(SetProviderModelRequest) returns (ProviderUpdate);
+
+  // Remove one model's entry from the provider's `models:` in
+  // `config.yaml` and apply it live; a remote model stays listed from the
+  // model cache. The model id travels as the `modelId` query parameter.
+  //
+  // hya.http: DELETE /v1/providers/{provider_id}/models
+  rpc RemoveProviderModel(RemoveProviderModelRequest) returns (ProviderUpdate);
+
+  // Send one `hi` user message to a provider's model with max output tokens
+  // 1 (no tools, no reasoning) and report whether a normal reply came back.
+  //
+  // hya.http: POST /v1/providers/{provider_id}/test
+  rpc TestProviderModel(TestProviderModelRequest) returns (TestProviderModelResponse);
+
+  // Slash-command catalog entries.
+  //
+  // hya.http: GET /v1/commands
+  rpc ListCommands(ListCommandsRequest) returns (ListCommandsResponse);
+
+  // Skill catalog entries.
+  //
+  // hya.http: GET /v1/skills
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+
+  // Tool registry entries including hidden aliases.
+  //
+  // hya.http: GET /v1/tools
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // Session permission modes accepted by `UpdateSession.permission_mode`:
+  // the built-in `manual` and `yolo`, then every bundle's
+  // `permission_modes:` as `<bundle-id>/<mode-id>` in the request's catalog
+  // scope: a session's own scope, else the directory's (its Project's
+  // bundles when it lies inside one), else the global view (installed and
+  // first-party bundles only; no Project bundle).
+  //
+  // hya.http: GET /v1/permission-modes
+  rpc ListPermissionModes(ListPermissionModesRequest) returns (ListPermissionModesResponse);
+}
+
+// Provider/model identity pair. `model_id` is provider-local.
+message ModelRef {
+  // Provider identifier as configured (e.g. `anthropic`).
+  string provider_id = 1;
+  // Provider-local model identifier (e.g. `claude-sonnet-4-6`).
+  string model_id = 2;
+  // Optional reasoning variant suffix (e.g. `high`).
+  string variant = 3;
+}
+
+// Authentication state of a provider route.
+enum AuthStatus {
+  // Unset sentinel; never emitted by the server.
+  AUTH_STATUS_UNSPECIFIED = 0;
+  // Credentials present and accepted.
+  AUTH_STATUS_CREDENTIALED = 1;
+  // Route needs no credentials.
+  AUTH_STATUS_UNAUTHENTICATED = 2;
+  // Credentials missing; provider requires them.
+  AUTH_STATUS_AUTH_REQUIRED = 3;
+  // Credentials present but rejected by the provider.
+  AUTH_STATUS_AUTH_REJECTED = 4;
+  // Auth does not apply to this route kind.
+  AUTH_STATUS_NOT_APPLICABLE = 5;
+}
+
+message ListAgentsRequest {
+  // Directory scope (absolute). Optional:
+  // empty lists the global view (no project sources).
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One selectable agent.
+message AgentSummary {
+  // Agent name used in `CreateSessionRequest.agent`.
+  string name = 1;
+  // Default model the agent runs on.
+  ModelRef model = 2;
+  // One-line description for pickers.
+  string description = 3;
+  // Whether the agent is hidden from default pickers.
+  bool hidden = 4;
+}
+
+message ListAgentsResponse {
+  // Agents bound to the directory.
+  repeated AgentSummary agents = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListModelsRequest {
+  // Ignored: this rpc does not depend on a directory.
+  string directory = 1;
+  // Restrict to one provider when non-empty.
+  string provider_id = 2;
+  // Standard pagination controls.
+  PageRequest page = 3;
+}
+
+// One selectable model.
+message ModelSummary {
+  // Fully qualified model reference string (`provider/model`).
+  string id = 1;
+  // Provider identifier.
+  string provider_id = 2;
+  // Provider-local model identifier.
+  string model_id = 3;
+  // Display name when the provider publishes one.
+  string display_name = 4;
+  // Whether the model supports reasoning effort variants, as declared by
+  // its metadata (the remote model list or the config `reasoning` field);
+  // unset when unknown. An unknown model still accepts the provider
+  // family's effort variants at runtime.
+  optional bool reasoning = 5;
+  // Auth state of the owning provider route.
+  AuthStatus auth = 6;
+  // Context window in tokens from the model's metadata (config
+  // `limit.context`, else the remote model list); 0 (omitted) when unknown.
+  // With no known window the runtime sizes compaction against a 200000-token
+  // fallback.
+  uint64 context_limit = 7;
+  // Maximum output tokens from the model's metadata (config `limit.output`,
+  // else the remote model list); 0 (omitted) when unknown.
+  uint64 output_limit = 8;
+  // Where the row comes from: `remote` (the provider's remote model list,
+  // via the model cache), `config` (only a `models:` entry in
+  // `config.yaml`), `override` (both; config fields win field by field), or
+  // `offline` (the built-in `hya/offline` row).
+  string source = 9;
+  // Whether the model accepts image input (config `modalities.input`
+  // contains `image`); unset when unknown. Prompt turns with attachments
+  // are refused only when this is `false`.
+  optional bool image_input = 10;
+  // Effort labels accepted by this model, in provider order. Empty when unknown or unsupported.
+  repeated string reasoning_variants = 11;
+  // Explicit configured effort default. Empty when no default is selected.
+  optional string reasoning_default = 12;
+}
+
+message ListModelsResponse {
+  // Models matching the filter.
+  repeated ModelSummary models = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListProvidersRequest {
+  // Ignored: this rpc does not depend on a directory.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One provider route with aggregate auth state.
+message ProviderSummary {
+  // Provider identifier as configured.
+  string id = 1;
+  // Human-readable provider name.
+  string name = 2;
+  // Aggregate auth status across the provider's routes.
+  AuthStatus auth = 3;
+  // Vendor documentation/auth URL when known.
+  string website = 4;
+  // Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`.
+  string result = 5;
+  // Config `kind` (`openai`, `openai-response`, `anthropic`, `google`,
+  // `openai-codex`, `grok-build`); empty for the offline provider.
+  string kind = 6;
+  // Config `base_url`; empty for the offline provider.
+  string base_url = 7;
+  // Where the provider's credential comes from: `saved` (an API key in
+  // `auth/<id>.yaml`), `oauth` (a saved OAuth bundle), `config` (an inline
+  // `api_key` in `config.yaml`), or `none`. Never the secret itself.
+  string key_source = 8;
+  // Number of model rows the provider currently serves.
+  uint32 model_count = 9;
+}
+
+message ListProvidersResponse {
+  // Providers visible in this directory.
+  repeated ProviderSummary providers = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message GetProviderRequest {
+  // Ignored: this rpc does not depend on a directory.
+  string directory = 1;
+  // Provider identifier.
+  string provider_id = 2;
+}
+
+// Provider detail with its model rows.
+message ProviderInfo {
+  // Provider summary.
+  ProviderSummary summary = 1;
+  // Models exposed by this provider.
+  repeated ModelSummary models = 2;
+  // Whether an API-key auth method is supported.
+  bool supports_api_key = 3;
+  // Whether an OAuth flow is supported.
+  bool supports_oauth = 4;
+}
+
+message UpsertProviderRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Provider id: 1-64 ASCII letters, digits, `-`, or `_` (`hya` is
+  // reserved for the offline provider).
+  string provider_id = 2;
+  // Protocol kind: `openai` (OpenAI-compatible Chat Completions),
+  // `openai-response`, `anthropic`, or `google`; the config aliases
+  // `openai-compatible`, `openai-completion`, `openai-codex`, and
+  // `grok-build` are accepted too.
+  string kind = 3;
+  // API root, `http://` or `https://` (for example
+  // `https://api.openai.com/v1`).
+  string base_url = 4;
+  // API key to save in `auth/<id>.yaml`; absent or empty keeps the current
+  // credential.
+  optional string api_key = 5;
+}
+
+message RefreshProviderRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+}
+
+message RefreshBundlesRequest {
+  // Directory scope: its Project's bundles are refreshed too; empty: global.
+  string directory = 1;
+}
+
+message RefreshBundlesResponse {
+  // Runtime configuration generation now bound for the scope.
+  uint64 generation = 1;
+  // Every bundle published for the scope after the refresh.
+  repeated RefreshedBundle bundles = 2;
+  // Refresh failures; each kept the previous generation published.
+  repeated BundleRefreshError errors = 3;
+  // `global`, `directory` (not inside a registered Project: no project
+  // bundles load), or `project`.
+  string scope = 4;
+}
+
+message RefreshedBundle {
+  string id = 1;
+  string version = 2;
+  // Prepared bundle digest (`hya bundle info` shows the same value).
+  string prepared_digest = 3;
+  // `user` (installed registry, first-party included) or `project`.
+  string scope = 4;
+}
+
+message BundleRefreshError {
+  // Bundle the failure names; empty when the refresh cannot attribute it.
+  string bundle_id = 1;
+  string message = 2;
+}
+
+message SetProviderModelRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+  // Provider-local model id (may contain `/` and `:`).
+  string model_id = 3;
+  // Patch semantics: an absent field keeps the entry's current value; a
+  // present field sets it, and `""` / `0` clears it. The entry is created
+  // when missing.
+  //
+  // Display name written as the entry's `name`; absent keeps it, `""`
+  // removes it.
+  optional string display_name = 4;
+  // Context window written as `limit.context`; absent keeps it, 0 removes
+  // it. A value outside 0..=4294967295 (or not an integer) is
+  // `invalid_argument`.
+  optional uint32 context_limit = 5;
+  // Max output tokens written as `limit.output`; absent keeps it, 0 removes
+  // it. Must not exceed `context_limit` when both are set.
+  optional uint32 output_limit = 6;
+  // Reasoning switch written as `reasoning: true|false`; absent keeps the
+  // current `reasoning` field (a detailed `reasoning:` mapping is kept when
+  // this is true). Only `RemoveProviderModel` clears it.
+  optional bool reasoning = 7;
+}
+
+message RemoveProviderModelRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+  // Provider-local model id whose config entry is removed.
+  string model_id = 3;
+}
+
+// Outcome of one remote model-list fetch.
+message DiscoveryOutcome {
+  // True when the remote model list was fetched and parsed (possibly
+  // empty).
+  bool ok = 1;
+  // `models`, `empty`, `auth_required`, `auth_rejected`, `unavailable`,
+  // `invalid`, or `unsupported`.
+  string result = 2;
+  // Bounded, non-secret failure description when `ok` is false.
+  string error_message = 3;
+  // Number of remote models fetched (and now in the model cache).
+  uint32 model_count = 4;
+}
+
+// A provider after a change, applied live.
+message ProviderUpdate {
+  // The provider with its effective model rows.
+  ProviderInfo provider = 1;
+  // Remote model-list fetch outcome; unset when the call did not fetch.
+  DiscoveryOutcome discovery = 2;
+}
+
+message TestProviderModelRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+  // Provider-local model id to probe.
+  string model_id = 3;
+}
+
+message TestProviderModelResponse {
+  // True when the reply stream completed without an error (a `length`
+  // finish is a normal reply: the probe caps output at one token).
+  bool ok = 1;
+  // Text the model returned (often one token or empty).
+  string text = 2;
+  // Finish reason when the provider reported one: `stop`, `length`,
+  // `tool_calls`, `cancelled`, or `error`.
+  string finish_reason = 3;
+  // Stable failure class when `ok` is false: `http_<status>`, `transport`,
+  // `timeout`, `unknown_model`, `incompatible`, `decode`, `auth_expired`,
+  // or `provider_error`.
+  string error_code = 4;
+  // Bounded provider failure message when `ok` is false.
+  string error_message = 5;
+  // Wall-clock time of the probe in milliseconds.
+  uint32 latency_ms = 6;
+}
+
+message ListCommandsRequest {
+  // Directory scope (absolute). Optional:
+  // empty lists the global view (no project sources).
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One slash-command entry.
+message CommandSummary {
+  // Command name without the leading `/`.
+  string name = 1;
+  // One-line description for completion UIs.
+  string description = 2;
+  // Argument hint shown after the command name.
+  string argument_hint = 3;
+  // Positional/flag hints from the command template, in template order.
+  repeated string hints = 5;
+  // Where the command was discovered (`command`, `skill`, ...).
+  string source = 6;
+  // Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+  string template = 7;
+  // Agent the command run binds when authored.
+  string agent = 8;
+  // Model the command run binds when authored.
+  string model = 9;
+  // Whether the command runs as a detached subtask.
+  optional bool subtask = 10;
+}
+
+message ListCommandsResponse {
+  // Commands visible in this directory.
+  repeated CommandSummary commands = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListSkillsRequest {
+  // Directory scope (absolute). Optional:
+  // empty lists the global view (no project sources).
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One invocable skill.
+message SkillSummary {
+  // Skill name used with `/skill` and the skill plane.
+  string name = 1;
+  // One-line description of what the skill does.
+  string description = 2;
+  // Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
+  string source = 3;
+  // Full skill markdown body (frontmatter + content).
+  string content = 4;
+  // Where the skill file lives (`<built-in>` for compiled-in skills).
+  string location = 5;
+}
+
+message ListSkillsResponse {
+  // Skills visible in this directory.
+  repeated SkillSummary skills = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListToolsRequest {
+  // Ignored: this rpc does not depend on a directory.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One tool registry entry.
+message ToolSummary {
+  // Canonical tool name.
+  string name = 1;
+  // One-line description of the tool's contract.
+  string description = 2;
+  // Tool origin: `builtin`, `mcp`, or `plugin`.
+  string kind = 3;
+  // Whether the name is a hidden alias.
+  bool hidden = 4;
+}
+
+message ListToolsResponse {
+  // Tools visible in this directory.
+  repeated ToolSummary tools = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListPermissionModesRequest {
+  // Directory scope (absolute). Optional:
+  // with neither it nor `session`, the global view is listed.
+  string directory = 1;
+  // List the modes `UpdateSession.permission_mode` accepts for this
+  // session (its own catalog scope). Wins over `directory`.
+  string session = 2;
+}
+
+// One selectable session permission mode.
+message PermissionModeSummary {
+  // Mode id for `UpdateSession.permission_mode` (`manual`, `yolo`, or
+  // `<bundle-id>/<mode-id>`).
+  string id = 1;
+  // Short human-readable name.
+  string title = 2;
+  // Longer description; empty when the bundle declares none.
+  string description = 3;
+  // `builtin` or the id of the bundle that declares the mode.
+  string source = 4;
+}
+
+message ListPermissionModesResponse {
+  // Built-in modes first, then bundle modes sorted by bundle and mode id.
+  repeated PermissionModeSummary modes = 1;
+}

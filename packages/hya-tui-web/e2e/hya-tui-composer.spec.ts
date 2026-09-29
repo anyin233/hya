@@ -30,7 +30,7 @@ async function composer(term: Tui): Promise<{ top: number; rows: string[]; title
   return { top, rows, title }
 }
 
-const placeholder = "Message, /command, !shell, or @file"
+const placeholder = "Message, !shell, or @file · / commands"
 
 /** The composer's text; `""` while it shows the placeholder. */
 async function composerText(term: Tui): Promise<string> {

@@ -1,0 +1,474 @@
+// hya API v1 — event replay and live streaming.
+//
+// The streams are the backbone of the event-driven contract: writes admit
+// work and return handles; every projection change arrives here. Frames
+// are identical over HTTP SSE and gRPC server-streaming, including the
+// typed `resync` signal emitted when a consumer falls behind the bus.
+//
+// `StreamEvent` is a curated wire projection of the internal event log:
+// it exposes the categories clients consume, not the internal storage
+// encoding, and both transports serialize it identically (protojson).
+//
+// Durable vs live frames: a durable event carries its log `seq` (> 0) and
+// is replayable with `ListEvents`. Live-only frames carry `seq = 0`, which
+// protojson omits: the assistant text deltas of an in-flight provider round
+// (`partStarted` / `partAppended` / `partReplaced` / `partCompleted` for a
+// text part) and the pending-interaction frames (`permissionRequested`,
+// `questionRequested`, `interactionResolved`). Live frames are never
+// persisted and never replayed. When the round ends, the durable log
+// records each text part once as `partStarted` + `partReplaced` (full
+// text) + `partCompleted` with the same message and part ids the live
+// frames used, so a client folds both by id. Reasoning deltas are live-only
+// (`seq = 0`); the durable replay uses one `partReplaced` snapshot followed
+// by `partCompleted` for each reasoning part.
+// A tool call streams durably as `partStarted` (kind `tool_call`, with
+// `tool` and `callId`), `partAppended` argument fragments,
+// `toolStateChanged` RUNNING with the parsed `inputJson`, then
+// `toolStateChanged` OK (`outputJson`, `durationMs`) or ERROR
+// (`errorCode`, `errorMessage`).
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hya/v1/interaction.proto";
+import "hya/v1/message.proto";
+import "hya/v1/workflow.proto";
+
+// Replay and live-stream surface.
+service Events {
+  // Replay events of one session after a sequence watermark.
+  //
+  // hya.http: GET /v1/sessions/{session}/events
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+
+  // Live stream for one session; server-streaming over gRPC and SSE over
+  // HTTP. Delivers durable events and live-only (`seq = 0`) frames as they
+  // happen; it does not replay history (read `ListEvents` for that). Emits
+  // `resync` when the consumer lags: frames in the gap (live deltas
+  // included) are lost, so re-read the projection (`ListMessages`) or
+  // replay `ListEvents` from the last durable `seq` applied.
+  //
+  // hya.http: GET /v1/sessions/{session}/events/stream
+  rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream StreamFrame);
+
+  // Live stream across all sessions of a directory scope.
+  //
+  // hya.http: GET /v1/events/stream
+  rpc StreamGlobalEvents(StreamGlobalEventsRequest) returns (stream StreamFrame);
+}
+
+message ListEventsRequest {
+  // Session identifier to replay.
+  string session = 1;
+  // Return only events with `seq` strictly greater than this value.
+  uint64 since_seq = 2;
+  // Maximum events to return; 0 uses the server default.
+  uint32 limit = 3;
+  // When true, also return the canonical durable envelope JSON lines in
+  // `raw_envelopes` for tooling and test harnesses. The internal envelope
+  // shape is not a stable contract; clients must treat it as opaque.
+  bool include_raw = 4;
+}
+
+message ListEventsResponse {
+  // Session identifier.
+  string session = 1;
+  // Replayed events in sequence order.
+  repeated StreamEvent events = 2;
+  // Highest `seq` contained in this response; pass as the next
+  // `since_seq`.
+  uint64 next_seq = 3;
+  // Canonical durable envelope JSON lines, present only when the request
+  // set `include_raw`. Internal shape; treat as opaque beyond replay.
+  repeated string raw_envelopes = 4;
+}
+
+message StreamSessionEventsRequest {
+  // Session identifier to stream.
+  string session = 1;
+  // Skip durable events with `seq` at or below this watermark. Live-only
+  // frames (`seq = 0`) are always delivered. No history is replayed.
+  uint64 since_seq = 2;
+  // Also deliver the live interaction frames (`permissionRequested`,
+  // `questionRequested`, `interactionResolved`) of every descendant session
+  // (subagents at any depth). Such a frame's `session` names the descendant
+  // that asked, not the streamed session. Durable events stay per session.
+  bool include_descendants = 3;
+}
+
+message StreamGlobalEventsRequest {
+  // Ignored: this rpc does not depend on a directory.
+  string directory = 1;
+  // Skip durable events with `seq` at or below this watermark. Live-only
+  // frames (`seq = 0`) are always delivered. No history is replayed.
+  uint64 since_seq = 2;
+  // Deliver only interaction and session-list frames: the live interaction
+  // frames (`permissionRequested`, `questionRequested`,
+  // `interactionResolved`) of every session, the process-wide
+  // `catalogUpdated` and `projectsUpdated` notices, and the session-list
+  // frames of root sessions — durable `sessionStarted` and `sessionUpdated`
+  // (title, agent, model, permission mode, archived), live
+  // `sessionUpdated.busy`, and live `sessionDeleted`. Every other engine
+  // event (text, tools, messages, and any child session's list changes) is
+  // skipped. A `resync` frame means session-list frames were lost: list the
+  // sessions again. For a client that follows one session on its session
+  // stream and needs only the asks of the others and live session and
+  // Project lists.
+  bool interactions_only = 3;
+}
+
+// One frame on a live stream.
+message StreamFrame {
+  // Frame payload; exactly one kind is set.
+  oneof frame {
+    // A projected event.
+    StreamEvent event = 1;
+    // Lag signal: replay from `last_seq` to recover.
+    ResyncFrame resync = 2;
+  }
+}
+
+// Typed lag signal replacing the legacy SSE `resync` event name.
+message ResyncFrame {
+  // The watermark the stream was opened with (`since_seq`); a client that
+  // tracks its own last applied durable `seq` should replay from that.
+  uint64 last_seq = 1;
+}
+
+// One curated projected event from the event log.
+message StreamEvent {
+  // Monotonic sequence number within the session; 0 (omitted in protojson)
+  // for live-only frames, which `ListEvents` never returns.
+  uint64 seq = 1;
+  // Owning session identifier.
+  string session = 2;
+  // When the event was recorded.
+  google.protobuf.Timestamp time_recorded = 3;
+  // Event payload; exactly one kind is set.
+  oneof payload {
+    // A session was created.
+    SessionStarted session_started = 4;
+    // Session metadata changed (title, model, agent, background, permission
+    // mode, archived), or — live-only — a root session's busy state.
+    SessionUpdated session_updated = 5;
+    // A message started (user admitted or assistant round began).
+    MessageStarted message_started = 6;
+    // A message reached a terminal state.
+    MessageFinished message_finished = 7;
+    // A part was appended to a message.
+    PartStarted part_started = 8;
+    // Content was appended to a streaming part (text/reasoning deltas).
+    PartAppended part_appended = 9;
+    // A part reached its final form.
+    PartCompleted part_completed = 10;
+    // A tool call's execution state changed.
+    ToolStateChanged tool_state_changed = 11;
+    // A permission decision is pending.
+    PermissionRequested permission_requested = 12;
+    // A question is pending.
+    QuestionRequested question_requested = 13;
+    // A pending interaction was resolved.
+    InteractionResolved interaction_resolved = 14;
+    // The session todo list changed.
+    TodoUpdated todo_updated = 15;
+    // The workflow projection changed.
+    WorkflowUpdated workflow_updated = 16;
+    // Token usage was recorded for a round.
+    TokensRecorded tokens_recorded = 17;
+    // A compaction strategy was applied to the context.
+    CompactionApplied compaction_applied = 18;
+    // A root session was deleted (live-only, global stream).
+    SessionDeleted session_deleted = 19;
+    // A text or reasoning part's whole text was set (the durable record of
+    // a streamed text part, or a plugin rewrite of it).
+    PartReplaced part_replaced = 20;
+    // A runtime error was recorded; when it names a message, the turn that
+    // drove that message failed (`MessageInfo.error`).
+    ErrorReported error_reported = 21;
+    // A subagent spawned by this session was created or changed status
+    // (durable, on the parent session's stream). `member` is always set;
+    // the spawn frame carries every field, later frames carry `status`
+    // (and `summary`/`child` on finish) and leave the rest empty, so fold
+    // by `member`.
+    MemberInfo member_updated = 22;
+    // The session was reverted (durable), or its pending revert was undone
+    // (`undone`). Re-read the session (`SessionInfo.revert`) and its
+    // messages: a revert hides `messageId` and every later message; an undo
+    // brings them back. A later `messageStarted` commits a pending revert.
+    SessionReverted session_reverted = 23;
+    // Complete parts were added to a message in one step (durable): the
+    // images attached to a prompt turn, as `AttachmentPart`s without their
+    // bytes. Append them to the message after its text.
+    PartsAdded parts_added = 24;
+    // A catalog changed: the provider/model catalog (a provider was added,
+    // edited, or refreshed, a key was set or removed, or startup discovery
+    // finished; `project_id` empty), or one Project's catalog tier (its
+    // roots changed or it was deleted; `project_id` names it). Live-only
+    // and process-wide: `seq` is 0 and `session` is empty on every stream
+    // it reaches (global and session). Re-read `ListModels` /
+    // `ListProviders`, and the agent/command/skill catalogs of the affected
+    // scope (every scope when `project_id` is empty).
+    CatalogUpdated catalog_updated = 25;
+    // The server is shutting down (ADR-0023): the last frame of every live
+    // stream (global and session, SSE and gRPC) before it ends, and the only
+    // frame of a stream opened while shutting down. Live-only and
+    // process-wide (`seq` 0, empty `session`). `reason` says whether a
+    // client should start the next server itself; see `ServerStopping`.
+    ServerStopping server_stopping = 26;
+    // The Project list changed: a Project was created, updated, or
+    // deleted, a Project gained or lost a session, or a Project's `busy`
+    // flag changed. Live-only and process-wide, delivered on the global
+    // stream only (also with `interactions_only`): `seq` is 0 and `session`
+    // is empty. Re-read `ListProjects`.
+    ProjectsUpdated projects_updated = 27;
+  }
+}
+
+// A catalog changed.
+message CatalogUpdated {
+  // The Project whose catalog tier changed; empty for a global change
+  // (provider/model catalog, or an unknown set of scopes).
+  string project_id = 1;
+}
+
+// The Project list changed; carries no fields.
+message ProjectsUpdated {}
+
+// Why the server is going away.
+message ServerStopping {
+  // `stop`: stopped on purpose (`hya serve stop`); do not start another.
+  // `restart`: `hya serve restart`; a new server of the same database
+  // follows, attach to it. `signal`: SIGTERM/SIGINT/SIGHUP from anything
+  // else (a foreground `hya serve` interrupted, a supervisor); treat like
+  // `stop`. A stream that ends without this frame lost its server
+  // unexpectedly (crash, kill, network).
+  string reason = 1;
+}
+
+// Complete parts added to a message in one step.
+message PartsAdded {
+  // Owning message identifier.
+  string message = 1;
+  // The added parts, in message order.
+  repeated PartInfo parts = 2;
+}
+
+// A session revert or its undo.
+message SessionReverted {
+  // The reverted user message; empty for an undo.
+  string message_id = 1;
+  // True for an undo (`RevertSession.undo`).
+  bool undone = 2;
+  // Files the operation wrote (or could not restore).
+  repeated RevertedFile files = 3;
+}
+
+// A session was created.
+message SessionStarted {
+  // Agent name bound to the new session.
+  string agent = 1;
+  // Model reference string the session starts on.
+  string model = 2;
+  // Absolute working directory of the session.
+  string workdir = 3;
+  // Parent session id when this is a child.
+  string parent = 4;
+}
+
+// Session metadata changed.
+message SessionUpdated {
+  // New title when changed.
+  optional string title = 1;
+  // New model reference string when changed.
+  optional string model = 2;
+  // New agent name when changed.
+  optional string agent = 3;
+  // New background flag when changed.
+  optional bool background = 4;
+  // New permission mode of the session tree when changed (emitted on the
+  // root session only).
+  optional string permission_mode = 5;
+  // New archived flag of a root session when changed: `true` when it was
+  // archived, `false` when it was unarchived (explicitly or by a new turn).
+  optional bool archived = 6;
+  // New busy state of a root session (`SessionInfo.busy`): `true` when a
+  // turn (or Workflow run) started, `false` when it went idle. Live-only
+  // (`seq` 0), set alone, and only on the global stream (also with
+  // `interactions_only`); never on session streams and never replayed.
+  optional bool busy = 7;
+}
+
+// A session was deleted: its log is gone. Live-only (`seq` 0), for root
+// sessions only, on the global stream (also with `interactions_only`).
+message SessionDeleted {}
+
+// A message started.
+message MessageStarted {
+  // Message identifier.
+  string message = 1;
+  // Author role.
+  Role role = 2;
+  // Agent the assistant turn runs as; empty for user, system, and shell
+  // messages.
+  string agent = 3;
+  // Model the assistant turn requested (`provider/model`); the model that
+  // finally served it is `MessageInfo.model`. Empty where `agent` is.
+  string model = 4;
+}
+
+// A message reached a terminal state.
+message MessageFinished {
+  // Message identifier.
+  string message = 1;
+  // Terminal finish reason.
+  FinishReason finish = 2;
+  // Token usage of the final round when the backend accounts it here.
+  TokenUsage usage = 3;
+  // Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
+  FinishCause cause = 4;
+}
+
+// A part was appended to a message.
+message PartStarted {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+  // Part kind discriminator matching `PartInfo.kind`.
+  string kind = 3;
+  // Tool name when `kind` is `tool_call`.
+  string tool = 4;
+  // Tool call id when `kind` is `tool_call`.
+  string call_id = 5;
+}
+
+// Streaming delta appended to a part. Assistant text and reasoning deltas are
+// live-only (`seq = 0`); legacy durable deltas remain replay-compatible.
+message PartAppended {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+  // Incremental delta: text for text/reasoning parts, a raw argument JSON
+  // fragment for `tool_call` parts (append to `ToolCallPart.input_json`).
+  string text_delta = 3;
+}
+
+// A part reached its final form.
+message PartCompleted {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+}
+
+// A text or reasoning part's text was replaced wholesale. Clients set the
+// part's text to `text` (not append); it supersedes any live deltas they
+// accumulated for the same part id.
+message PartReplaced {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+  // Full text of the part.
+  string text = 3;
+}
+
+// A runtime error was recorded.
+message ErrorReported {
+  // Message whose turn failed; empty for errors not tied to a message.
+  string message = 1;
+  // Stable machine code (for example `provider_error`).
+  string code = 2;
+  // Human-readable error text as the engine recorded it.
+  string error_message = 3;
+}
+
+// A tool call's execution state changed.
+message ToolStateChanged {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier of the tool call.
+  string part = 2;
+  // Matching call id (empty on a direct part overwrite).
+  string call_id = 3;
+  // New execution state.
+  ToolExecutionState state = 4;
+  // Stable error code when the call failed.
+  string error_code = 5;
+  // Error text when the call failed, was denied, or was blocked.
+  string error_message = 6;
+  // Full parsed arguments as JSON text; set when the call is requested
+  // (`RUNNING`) and replaces the streamed argument fragments.
+  string input_json = 7;
+  // Output as JSON text when the call finished OK (same cap as stored).
+  string output_json = 8;
+  // Wall time in milliseconds when the call finished OK.
+  uint64 duration_ms = 9;
+  // Tool name when known (set on `RUNNING`).
+  string tool = 10;
+}
+
+// A permission decision is pending.
+message PermissionRequested {
+  // Pending interaction id; respond via `Interactions.RespondInteraction`.
+  string request = 1;
+  // Interaction summary (title, options, payload).
+  Interaction interaction = 2;
+}
+
+// A question is pending.
+message QuestionRequested {
+  // Pending interaction id; respond via `Interactions.RespondInteraction`.
+  string request = 1;
+  // Interaction summary (title, options, payload).
+  Interaction interaction = 2;
+}
+
+// A pending interaction was resolved.
+message InteractionResolved {
+  // Resolved interaction id.
+  string request = 1;
+}
+
+// The session todo list changed.
+message TodoUpdated {
+  // Full replacement todo list (the same rows `GetSessionTodo` returns).
+  repeated TodoItem items = 1;
+}
+
+// The workflow projection changed.
+message WorkflowUpdated {
+  // Full replacement workflow state.
+  WorkflowState state = 1;
+}
+
+// Billed usage of one provider call. Durable: one per streaming round of an
+// assistant message, plus side calls (title, summarizer) made for the
+// session, which carry no `message`.
+message TokensRecorded {
+  // Assistant message the round belongs to; empty for a side call.
+  string message = 1;
+  // Usage of this one call (not a message sum).
+  TokenUsage usage = 2;
+  // Model that served the call (`provider/model`).
+  string model = 3;
+}
+
+// A compaction folded part of the context behind a summary. Emitted by the
+// automatic mid-turn strategies and by a manual `CompactSession`.
+message CompactionApplied {
+  // Sequence of this compaction record.
+  uint64 until_seq = 1;
+  // Strategy that fired: `native`, `local_summarizer`, `snap_compact`, or
+  // `handoff` (a manual compaction reports `local_summarizer`).
+  string strategy = 2;
+  // System message carrying the summary (the transcript divider).
+  string message = 3;
+  // Number of messages folded behind the summary.
+  uint32 folded_count = 4;
+  // Whether a client asked for it (`CompactSession`) rather than the
+  // context crossing its threshold.
+  bool manual = 5;
+}

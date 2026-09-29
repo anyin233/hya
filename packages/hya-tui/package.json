@@ -9,6 +9,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@grpc/grpc-js": "1.14.5",
+    "@grpc/proto-loader": "0.8.1",
     "@opentui/core": "0.5.12",
     "@opentui/solid": "0.5.12",
     "solid-js": "1.9.12"

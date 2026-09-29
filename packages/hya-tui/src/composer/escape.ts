@@ -2,7 +2,7 @@
 export type EscapeAction = "closeMenu" | "declinePrompt" | "returnToParent" | "cancelTurn" | "clearInput" | "none"
 
 export interface EscapeState {
-  /** The `@file` list or the command menu is open. */
+  /** The `@file` list is open (the command pane handles its own Esc). */
   menuOpen: boolean
   /** A turn admitted by this TUI runs (or is being admitted). */
   running: boolean

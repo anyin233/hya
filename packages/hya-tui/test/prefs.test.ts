@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadPreferences, preferencesPath, savePreferences } from "../src/prefs"
+import { defaultPaneLayout, splitPane } from "../src/state/panes"
 
 const dirs: string[] = []
 function temp(): string {
@@ -82,3 +83,34 @@ test("vim is a boolean preference; another type is ignored", () => {
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ vim: false })
 })
 
+test("permissionMode is a nonempty string and is saved alongside other preferences", () => {
+  const path = join(temp(), "tui.json")
+  writeFileSync(path, JSON.stringify({ permissionMode: " ", theme: "light" }))
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light" })
+  writeFileSync(path, JSON.stringify({ permissionMode: false }))
+  expect(loadPreferences(path).preferences).toEqual({})
+  savePreferences(path, { permissionMode: "yolo" })
+  savePreferences(path, { theme: "hya" })
+  expect(loadPreferences(path).preferences).toEqual({ theme: "hya", permissionMode: "yolo" })
+})
+
+test("a valid tiled layout survives preferences round-trip; an invalid tree is ignored", () => {
+  const path = join(temp(), "tui.json")
+  const paneLayout = splitPane(defaultPaneLayout(), "vertical", "jobs")
+  savePreferences(path, { theme: "light", paneLayout })
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light", paneLayout })
+  writeFileSync(path, JSON.stringify({ theme: "light", paneLayout: { ...paneLayout, active: "missing" } }))
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light" })
+})
+
+test("a saved version-1 center split loads with editable outer side panes", () => {
+  const path = join(temp(), "tui.json")
+  const legacy = { version: 1, active: "pane-2", root: { type: "split", axis: "vertical", weight: 0.5,
+    first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
+  writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
+  const loaded = loadPreferences(path).preferences.paneLayout!
+  expect(loaded.version).toBe(2)
+  expect(loaded.active).toBe("pane-2")
+  expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
+  expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')
+})

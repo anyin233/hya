@@ -4,12 +4,14 @@ The `packages/hya-tui` frontend is the terminal client of hya. Running
 `hya` in a terminal starts it together with the WebUI, both connected to the
 database's backend daemon, which `hya` starts when none runs (see
 [Start it](#start-it)); from a source checkout it can also be run directly, or
-connect to a server you name with `--server`. It uses OpenTUI for
+connect to a server you name with `--server` or directly to its gRPC listener
+with `--grpc`. It uses OpenTUI for
 display and input while the backend remains the owner of sessions, event
-history, tool execution, and permissions. The screen is one main column (the transcript of the open
-session, pending interactions, the status line, and the input) plus a
-sidebar with the session list, todos, and session context that you can show
-or hide (see [Layout](#layout)). Assistant replies render as Markdown with
+history, tool execution, and permissions. The default screen places Projects
+on the left, the conversation and its input in the middle, and separate
+Sessions, Todos, and Context panes on the right. The full layout is editable,
+and the side panes follow terminal width unless pinned (see [Layout](#layout)).
+Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
 tool call is a card with its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
@@ -23,10 +25,11 @@ shows the mode in effect (see [Permission modes](#permission-modes)).
 Models and Workflows have dedicated views, and `/key` opens the full-screen
 [Provider View](#provider-view) (providers, keys, model lists, model tests,
 and model metadata); the API command view exposes the other HTTP/JSON operations
-in `hya.v1`. The input is a multi-line editor with input history; it also
-runs `!command` shell turns, completes `@file` references, and opens a
-command menu on `/` (see [Composer](#composer)). Tab completes slash commands
-using the TUI and server command catalogs. One persistent instruction line
+in `hya.v1`. The message composer is a multi-line editor with its own history;
+it also runs `!command` shell turns and completes `@file` references. `/` on
+an empty composer opens a separate [command pane](#command-pane), with its
+own input and history. Tab completes commands from the TUI and server
+catalogs. One persistent instruction line
 stays below the input at the bottom of the screen and changes with the
 current view. `?` on an empty input (or `/help`) lists every key and
 command (see [Key help](#key-help)).
@@ -72,6 +75,25 @@ cd packages/hya-tui
 bun install --frozen-lockfile
 ```
 
+If `node_modules` lives on another disk, keep `node_modules` in its resolved
+path. OpenTUI's Bun preload recognizes Solid's client renderer by that path;
+a link to a directory named only `hya-tui-node-modules` can load Solid's server
+renderer and leave the terminal blank. For a fresh checkout, run this from the
+repository root before `bun install`:
+
+```sh
+mkdir -p "$HOME/data/hya-tui/node_modules"
+ln -s "$HOME/data/hya-tui/node_modules" packages/hya-tui/node_modules
+(cd packages/hya-tui && bun install --frozen-lockfile)
+readlink -f packages/hya-tui/node_modules
+```
+
+The last command should end in `/node_modules`. The TUI command and its
+`--server` and `--grpc` options work the same way with this setup; no server
+API or configuration field changes. If WebUI dependencies also live on another
+disk, use the same layout for `packages/hya-tui-web/node_modules` (for example,
+`$HOME/data/hya-tui-web/node_modules`) so its TypeScript imports resolve.
+
 Then, from the repository root, one command starts the TUI (and, if none
 runs, the backend daemon):
 
@@ -80,7 +102,7 @@ cargo build -p hya-backend --bin hya        # once; or put a released hya on PAT
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
 ```
 
-Without `--server` the TUI uses the backend daemon of its database
+Without `--server` or `--grpc` the TUI uses the backend daemon of its database
 ([ADR-0022](adr/0022-one-writer-per-database.md),
 [ADR-0023](adr/0023-persistent-backend-daemon.md)):
 
@@ -139,13 +161,37 @@ connects after the daemon was restarted on another port. `/status` shows
 `Backend     daemon · pid <pid> · via --backend/--server` for a `--server`
 without `--db`.
 
+To use the same `hya.v1` server over gRPC, pass the listener's `HOST:PORT`.
+The server accepts gRPC on its main HTTP port (h2c); `HYA_GRPC_BIND` can add
+another listener. This is useful when a client needs the gRPC transport while
+keeping the same sessions, events, and permissions. For example, in two
+terminals from the repository root:
+
+```sh
+HYA_GRPC_BIND=127.0.0.1:22104 hya serve --bind 127.0.0.1:22103 --db "$HOME/hya-sessions.db"
+bun packages/hya-tui/src/main.ts --grpc 127.0.0.1:22104 --dir "$PWD"
+```
+
+`--grpc` takes only a host and port (an optional `grpc://` prefix is accepted).
+It cannot be combined with `--server` or `--db`; the TUI connects to that
+fixed listener and never starts a local daemon. `--dir`, `--session`,
+`--continue`, and `--resume` work as with `--server`. Requests use the
+`hya.v1` RPC matching each operation in the [v1 API catalog](protocol/api-reference.md);
+responses are the corresponding protobuf messages. The two live event calls
+are `Events.StreamSessionEvents` with `{session, since_seq,
+include_descendants}` and `Events.StreamGlobalEvents` with
+`{interactions_only: true}`. See the [protocol guide](protocol/README.md)
+for the message and event payload definitions. `/connect-remote` can still
+switch this TUI to an HTTP relay bridge during the session.
+
 | Flag | Meaning |
 | --- | --- |
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI uses the database's daemon. |
+| `--grpc <host:port>` | Direct hya.v1 gRPC listener (h2c). Mutually exclusive with `--server` and `--db`; no local daemon is started. |
 | `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `directory` scope of every scoped request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary that starts the daemon and that `/connect-remote` runs `hya bridge` with (first in the lookup order above). |
-| `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
-| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
+| `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server` or `--grpc`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
+| `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). Unlike a plain launch, it never reopens an archived session. |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
 | `--server-label <text>` | Show this text instead of the server URL in the header, the sidebar `Context` box, and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
@@ -157,12 +203,27 @@ without `--db`.
 
 ### Sessions on start and exit
 
-Without `--continue`, `--session`, or `--resume`, the TUI creates a new session as soon as
-it connects, in the active Project (with the default agent and model; without
-any model the first prompt creates it instead), so the header names it before
-you type. A `--remote` start without an active Project creates none: it opens
-the [Project view](#project-view) instead.
-`/sessions` (or the sidebar) reaches the earlier ones. Empty sessions do not
+Without `--continue`, `--session`, or `--resume`, a local TUI opens the
+active Project's most recently updated saved conversation, including one
+archived by `/exit`. A conversation with a pending permission or question
+request takes priority over a newer saved chat, so you see its transcript
+and the numbered answer choices immediately. The TUI unarchives the opened
+conversation. If this Project has no saved conversation, it creates a new
+session with the default agent and model (without any model, the first prompt
+creates it instead). A `--remote` start without an active Project creates
+none: it opens the [Project view](#project-view) instead. Type `/new` for a
+fresh conversation; `/sessions` shows prior chats, including archived ones.
+
+The TUI code can live in a different checkout from the Project whose history
+you want. Set `--dir` to the **Project work directory**, not the directory
+containing the frontend source. For example:
+
+```sh
+bun /path/to/hya/packages/hya-tui/src/main.ts \
+  --server http://127.0.0.1:8080 --dir /path/to/project
+```
+
+Empty sessions do not
 pile up: the TUI creates that session (and every `/new` one) *ephemeral*,
 and the backend daemon deletes it about 5 s after no TUI shows it any more
 while it is still unused — after `/new`, `/open`, `/sessions`, a `/fork`
@@ -186,8 +247,9 @@ For example, type `summarize this repository`, then `/models` to inspect
 available routes, and `/open 1` to return to the first session. Press Ctrl+C
 twice (or type `/exit`) to quit and archive the session, or Ctrl+D on an
 empty input (`/to-background`) to quit and leave it running. Next time,
-`--resume` offers the conversation again (archived or not), and
-`--continue` picks up the newest one that is not archived:
+Plain launch opens the saved conversation again, `--resume` offers a picker
+instead (archived or not), and `--continue` picks up the newest one that is
+not archived:
 
 ```sh
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --resume
@@ -214,8 +276,9 @@ or fork yet) is never archived: the daemon deletes it once no TUI shows it
 graceful exit waits at most 2 s for the archive of a used session.
 
 In a WebUI tab (`--web-tab`) `/to-background` is not offered (it is left
-out of the command menu, completion, and `/help`); typing it, or Ctrl+D on
-an empty input, shows `Close the tab to leave this session running` and
+out of the command pane's suggestions, completion, and `/help`); typing it
+there, or Ctrl+D on an empty input, shows
+`Close the tab to leave this session running` and
 does not quit. Closing the tab already does that.
 
 To come back to a session, archived or not: `--resume [id]` at start, or
@@ -223,7 +286,7 @@ To come back to a session, archived or not: `--resume [id]` at start, or
 which cannot pass flags, resumes). Both unarchive the session and open it,
 and say `Resumed <title>`. The terminal TUI and WebUI tabs of one database
 share its daemon, so each resumes the other's sessions. The `/sessions`
-picker shows archived sessions too after Ctrl+A (see
+picker shows archived sessions by default; Ctrl+A hides them (see
 [Row actions](#row-actions)). Sending a prompt into an archived session
 (for example one another client archived while it was open here) unarchives
 it on the backend as well.
@@ -273,7 +336,7 @@ last frame of each stream says why (`serverStopping {reason}`, see
 [Server shutdown](protocol/README.md#server-shutdown)). When a stream ends or
 fails, the TUI probes the server twice, 500 ms apart; a server that still
 answers was a blip, and the stream just reconnects (with the usual backoff).
-A TUI that knows its database (started without `--server`, or with `--db`)
+A TUI that knows its database (started without `--server` or `--grpc`, or with `--db`)
 then acts on the reason:
 
 | Reason | What the TUI does | Status line |
@@ -539,16 +602,16 @@ A second, narrower sidebar on the left lists every Project live
 | Up / Down | On the input's first / last line: the previous / next submitted input. |
 | `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
-| `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
+| `/` with an empty message, or Ctrl+X then `/` while drafting | Focus the separate command pane. The message draft stays in place (see [Command pane](#command-pane)). |
 | `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
-| Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
-| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
+| Esc | In the command pane, return to the message composer; with a file list open, close it; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
+| Ctrl+C | In the command pane, close it. In the composer, clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
 | Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
 | `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
 | `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
-| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
+| `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
@@ -557,7 +620,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
-| Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In an open list (the command menu, the file list, a picker) it moves the highlight up instead. |
+| Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In a command suggestion list, file list, or picker it moves the highlight up instead. |
 | `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
 | `/diff` | Open the full-screen [Diff view](#diff-view): the working tree diff, split per file. |
 | `/mcp` | Open the full-screen [MCP servers](#mcp-servers) view: server status, tools, connect/disconnect, login. |
@@ -572,6 +635,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
+| `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
@@ -592,7 +656,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
 | `/api METHOD /v1/path [JSON]` | Send an HTTP/JSON request and show its JSON response. It is sent as typed: a scoped rpc needs its `directory` (for example `/api GET /v1/fs/list?directory=/abs/dir`). |
 | `/help`, `?` | Open the key and command help overlay (`?` only on an empty input; with text it types `?`). See [Key help](#key-help). |
-| Tab | Complete a slash command name (or, in the command menu, the highlighted entry) or a supported argument; repeat Tab to cycle argument matches. |
+| Tab | In the command pane, complete the highlighted command name or a supported argument; repeat to cycle argument matches. In a file list, insert the highlighted reference. |
 | PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
 | Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
 | Mouse wheel | Scroll the transcript. |
@@ -609,7 +673,7 @@ the next-step instruction.
 Other slash commands are forwarded to the backend as `CommandTurn`s, so
 custom commands and skills from the server catalog (`ListCommands`, which
 already includes skills tagged `source: "skill"`) remain usable in this
-frontend. Tab suggestions and the command menu also use that catalog.
+frontend. The command pane's suggestions and Tab completion also use that catalog.
 Argument completion covers agents, sessions, models, Workflows, pending
 interaction IDs, permission modes, and HTTP operations from the
 generated OpenAPI catalog. Suggestions are refreshed with `/refresh` or
@@ -661,32 +725,21 @@ list as plain text instead.
 ## Layout
 
 ```text
-hya · <session> · <agent> <provider/model> · thinking none · <server>   ┌─Sessions───────┐
-mode manual · …/work · ⎇ main                           │▸ 1. Review         │
-                                                        │   build · ◌ waiting│
-┃ your prompt                                           │                    │
-                                                        └────────────────────┘
-● build · fake/model                                    ┌─Todos──────────────┐
-◌ bash  cargo test · awaiting approval                  │○ write tests       │
-⠹ 0:07 · Running bash cargo test · Esc to interrupt     │◐ fix the bug       │
-                                                        └────────────────────┘
-┌─Permission─────────────────────────────────────────┐  ┌─Context────────────┐
-│bash  cargo test                                    │  │Session  hysec_…    │
-│asked by build                                      │  │Agent    build      │
-││ $ cargo test                                      │  │Model    fake/model │
-│▸ 1  Allow once                                     │  │Messages 2          │
-│  2  Always allow  bash: cargo test                 │  │Dir      …/work     │
-│  3  Deny                                           │  │Server   127.0.0.1:…│
-│1-3 or ↑↓ Enter · Esc denies · perm_… · mode manual │  └────────────────────┘
-└────────────────────────────────────────────────────┘
-Connected to hya 0.41.0 · /help for commands
-┌────────────────────────────────────────────────────┐
-│ Message, /command, !shell, or @file                │
-└────────────────────────────────────────────────────┘
-Enter a prompt · /new creates a session · /help …
+┌─Projects───┐┌─Conversation──────────────────┐┌─Sessions──────┐
+│ ▸ hya     ││ hya · <session> · <model>      ││ ▸ 1. Review   │
+│   app     ││ thinking none · mode manual   ││              │
+│           ││ ┃ your prompt                 │├─Todos─────────┤
+│           ││ ● build · fake/model          ││ ○ write tests│
+│           ││ ◌ bash · awaiting approval    │├─Context───────┤
+│           ││ ┌─Permission───────────────┐ ││ Agent  build │
+│           ││ │ 1 Allow · 2 Always · 3 Deny│ ││ Model  fake/…│
+│           ││ └──────────────────────────┘ ││              │
+│           ││ ┌─Message or / commands────┐ ││              │
+│           ││ └──────────────────────────┘ ││              │
+└───────────┘└───────────────────────────────┘└──────────────┘
 ```
 
-The main column holds, from top to bottom: the header line (session, agent,
+The Conversation pane holds, from top to bottom: the header line (session, agent,
 model, server, in the accent color), the status bar (permission mode,
 directory, git branch, a compact todo count while the sidebar is hidden,
 connection state — see
@@ -711,8 +764,8 @@ the bordered input, and the instruction line. The permission mode picker
   live todo list — see
   [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
   and `Context` (session, agent, model, the merged transcript's message
-  count, directory, server). It is 32 columns wide (at most 40% of a narrow
-  terminal, at least 20). By default it follows the width: shown at 110
+  count, directory, server). These are three independent panes in the right
+  branch of the editable layout tree. By default they follow the width: shown at 110
   columns or more, hidden below, so an 80-column terminal gets the full
   width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
   any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
@@ -720,7 +773,7 @@ the bordered input, and the instruction line. The permission mode picker
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
   [Projects](#projects) and [Pickers](#pickers)).
-- **Left Projects sidebar.** A second, narrower (16–28 columns) titled box on
+- **Left Projects sidebar.** A narrower titled pane on
   the left: one row per Project (`ListProjects`, live via `projectsUpdated`
   the same as the Project view), the active one marked `▸`, a busy marker
   `●` while a session of it runs a turn, and its session count. It needs
@@ -738,9 +791,9 @@ the bordered input, and the instruction line. The permission mode picker
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
   `Pending (N)` box appears above the prompt with up to three of them
-  (`! <title> · <n>. <session> · <id>`: which session asks, by its `/open`
-  number and title) and the commands that answer them; `/open <n>` goes to
-  that session to answer with its prompt. They arrive live — see
+  (`! <title> · <n>. <session>` for a listed chat, or `saved session` when
+  archived). Press **F4** to reopen the oldest request's conversation; its
+  normal prompt then shows numbered answer choices. They arrive live — see
   [Asks of other sessions](#asks-of-other-sessions). `/interactions` lists
   every detail. It disappears when nothing else is pending.
 - **Keys and the browser.** Ctrl+B, Ctrl+O, Ctrl+G, and Ctrl+P are not
@@ -752,9 +805,97 @@ the bordered input, and the instruction line. The permission mode picker
   keyboard layouts often remap them to accented or symbol characters instead
   of delivering a plain modified keypress, in a browser and in a native
   terminal alike.)
-- **Focus.** The input keeps the keyboard focus. Mouse clicks (on the
-  transcript, a `Thinking` line, a tool card, or the sidebar) never move it (the renderer
-  runs with `autoFocus: false`).
+- **Focus.** The message composer remains the text input when a read-only
+  pane is selected; its PgUp/PgDn and Ctrl+Home/Ctrl+End keys scroll that
+  pane. Clicking Projects selects it and routes Up/Down to the project
+  highlight and Enter to opening it. Alt+arrows move between panes. The
+  renderer runs with `autoFocus: false`.
+
+### Tiled workspace
+
+The complete screen is one editable tree of nested rectangles. The default
+tree has Projects on the left, Conversation in the middle, and Sessions,
+Todos, and Context stacked on the right. Conversation contains the header,
+transcript, prompts, command input, message composer, and footer, so moving
+it moves the whole interactive surface. Each other rectangle has an assigned
+job; you can split, resize, reassign, or close any auxiliary rectangle.
+Additional jobs include jobs, models, Workflows, interactions, status, and
+API output. The global modal and full-screen overlays cover the tree.
+`/layout reset` restores the five-pane arrangement.
+
+Open the command pane with `/` on an empty message, then enter a layout
+command. For example:
+
+```text
+/layout focus pane-2              # select Projects on a wide terminal
+/layout resize +5                 # widen Projects by five percentage points
+/layout focus pane-3              # select Sessions
+/layout assign jobs               # show Jobs in the former Sessions rectangle
+/layout split horizontal todos    # split Jobs into top and bottom rectangles
+/layout focus pane-1              # select Conversation
+/layout reset                     # restore Projects | Conversation | right stack
+```
+
+`vertical` divides left/right; `horizontal` divides top/bottom. A new pane
+starts selected. The selected pane has an accent border; generic auxiliary
+panes also show `▸` and their pane id in the title.
+Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
+also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
+`/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
+pane. Focus changes keep each pane mounted, including its scroll position;
+for example, scroll up in Conversation, press Alt+Right to inspect a side pane,
+then Alt+Left to return to the same part of the transcript. The visible tree
+is recalculated when the layout, terminal width, or sidebar visibility changes,
+while live session and todo data still update their panes. Alt+Left/Right are
+pane keys, so use plain arrow keys for cursor movement in the message editor.
+Commands still use the single
+[command pane](#command-pane). Existing main views such as `/models` appear
+in the Conversation rectangle; full-screen views and modal pickers cover the
+tree. `/layout show` returns Conversation to chat.
+
+| Command | Effect |
+| --- | --- |
+| `/layout` or `/layout show` | Show the pane count and selected pane; return from another main view. |
+| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to 16 panes. |
+| `/layout assign <job>` | Change the selected pane's job. Assigning `conversation` swaps it with the current conversation pane; the sole conversation cannot be removed. |
+| `/layout focus <left\|right\|up\|down\|pane-id>` | Select a neighboring pane or a stable id such as `pane-2`. Alt+arrows use this action. |
+| `/layout resize <+N\|-N>` | Grow or shrink the selected pane against its nearest sibling by N percentage points, clamped to 10–90%. |
+| `/layout close` | Close the selected auxiliary pane and give its rectangle to its sibling. |
+| `/layout reset` | Restore the five-pane left/middle/right layout. |
+
+Jobs are derived from the TUI's current projection: busy sessions, live
+subagent members of the open session, queued prompts, and pending requests.
+The open session's turn and member activity update through its stream; busy
+state for other sessions follows their catalog updates or `/refresh`. This
+layout does not start another session stream or create another chat input.
+
+The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
+Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
+Projects is hidden unless `/projects-sidebar on` pins it open. Below 110
+columns, Sessions, Todos, and Context are hidden unless `/sidebar on` pins
+them open. These modes filter the matching pane jobs in any layout; the
+saved tree remains intact. `Ctrl+P` opens and selects a Projects pane;
+`Ctrl+B` toggles panes assigned Sessions, Todos, and Context, wherever they
+are placed.
+Resizing the terminal or toggling a sidebar keeps unsent message and command
+drafts, including their in-process input histories.
+
+The layout is saved automatically in the TUI preferences file and restored
+on the next start. TUI processes sharing that file (including WebUI tabs)
+each keep their loaded layout in memory; the last layout edit saved wins for
+the next start. Its exact JSON contract is `paneLayout: {version: 2,
+root: PaneNode, active: string}`. A `PaneNode` is either
+`{type: "pane", id: "pane-N", kind: PaneKind}` or
+`{type: "split", axis: "horizontal"|"vertical", weight: number,
+first: PaneNode, second: PaneNode}`. `weight` is the first child's fraction
+and stays between `0.1` and `0.9`. `PaneKind` is `conversation`, `projects`, `jobs`,
+`sessions`, `todos`, `context`, `models`, `workflows`, `interactions`,
+`status`, or `api`. Saved trees with duplicate ids, no conversation,
+unknown jobs, invalid weights, or more than 16 panes are ignored. Saved
+version-1 center-only trees are migrated by placing them between editable
+Projects and right-side panes. Layout
+editing uses no new backend route: each pane reads the existing session,
+catalog, interaction, and stream data already held by the TUI.
 
 The colors come from the theme in effect (see [Themes](#themes)). The
 default `hya` theme:
@@ -829,6 +970,8 @@ interface TuiPreferences {
   theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
+  permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
+  paneLayout?: PaneLayout // versioned full-workspace split tree; see Tiled workspace above
 }
 ```
 
@@ -838,11 +981,11 @@ interface TuiPreferences {
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
   wrong type is ignored.
-- A change (`/theme`'s Enter or `/vim`) merges the changed key into
-  what is on disk — keys this TUI does not know are kept — and writes a
-  temporary file in the same directory, then renames it over the file, so a
-  crash never leaves a half-written file. The directory is created when
-  missing.
+- A change (`/theme`'s Enter, `/vim`, or a successful permission mode switch)
+  merges the changed key into what is on disk —
+  keys this TUI does not know are kept — and writes a temporary file in the
+  same directory, then renames it over the file, so a crash never leaves a
+  half-written file. The directory is created when missing.
 
 **Interfaces for components.** `src/theme.ts` exports the palette of the
 theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
@@ -994,6 +1137,11 @@ reconnecting: <error>` in the status line while it retries (also reflected
 in the status bar's `reconnecting`); a version mismatch between this TUI and
 the backend's bootstrap version appends `backend <version> ≠ tui <version>`
 to the initial `Connected to hya …` status.
+The packaged TUI and WebUI use the same version as the backend in this source
+checkout. If that notice appears after replacing only the backend executable,
+reinstall or run the TUI from the matching checkout and reconnect; for example,
+run `HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"`
+from the checkout used to build that `hya` binary.
 
 ## Messages
 
@@ -1035,6 +1183,16 @@ While a reply streams, the renderer keeps its last blocks provisional, so an
 unclosed code fence shows its lines as code so far and an unclosed `**` shows
 as plain text until it closes. When the reply finishes, its final text is
 parsed again from the start.
+
+A streamed ATX heading (`#` through `######` followed by a space) keeps its
+accent color and bold style as its text arrives. A marker-only chunk such as
+`### ` waits for heading text instead of flashing literal hashes. For
+example, ask the model to reply with `### Summary` followed by a paragraph;
+the TUI shows `Summary` in accent as it streams, with no key or setting to
+enable. The input contract is unchanged: `partAppended {message, part,
+textDelta}` on the session event stream extends an assistant `text` part,
+`partReplaced {message, part, text}` may replace it, and `messageFinished`
+finalizes the Markdown. A `###` line inside a fenced code block remains code.
 
 **Reasoning.** Reasoning parts arrive as `reasoning` parts (durable deltas;
 see the protocol guide). They are collapsed by default. Ctrl+O or `/thinking`
@@ -1154,7 +1312,7 @@ child's status and what it last did, and it always shows these lines:
 transcript, and the input's placeholder and the footer say so. Enter on a
 prompt or `!command` keeps the text and shows
 `Read-only: this is a subagent's session · Esc returns to the parent`;
-slash commands still run. Esc, when no list is open, opens the parent session
+the command pane still runs slash commands. Esc, when the command pane and file list are closed, opens the parent session
 again (status `Back to the parent session`); the text you typed stays, and a
 second Esc clears it. Opening another session this way resets the parent's
 overlay and prompt queue like any session switch; the parent's turn keeps
@@ -1209,13 +1367,15 @@ under its header, in the error color:
 
 ## Composer
 
-The input at the bottom of the main column is a multi-line editor (OpenTUI's
-built-in `<textarea>`). It keeps the keyboard focus. Its placeholder is
-`Message, /command, !shell, or @file`.
+The input at the bottom of the main column is a multi-line message editor
+(OpenTUI's built-in `<textarea>`). It keeps keyboard focus while the command
+pane is closed. Its placeholder is `Message, !shell, or @file · / commands`.
 
-**Writing.** Enter sends the whole input: a prompt, a `/command`, or a
-`!command`. Ctrl+J, Shift+Enter, and Alt+Enter insert a newline instead of
-sending. The WebUI translates Shift+Enter to the same LF sequence used by
+**Writing.** Enter sends the whole input as a prompt or `!command` shell turn.
+Commands are entered in the separate [command pane](#command-pane). A slash
+inside an existing draft is ordinary text; a pasted line beginning with `/`
+also stays a message. Ctrl+J, Shift+Enter, and Alt+Enter insert a newline
+instead of sending. The WebUI translates Shift+Enter to the same LF sequence used by
 Ctrl+J because xterm.js otherwise reports Shift+Enter as plain Enter. A
 bracketed paste inserts its text, line breaks included, and never sends it.
 In a native terminal, Shift+Enter requires kitty keyboard protocol or
@@ -1226,13 +1386,15 @@ press Enter to submit one prompt containing `first line\nsecond line`.
 The box grows with its content up to 8 rows (wrapped lines count), then
 scrolls. Newlines stay in the prompt text, so the transcript shows the lines
 as typed. Editing keys: Left/Right, Up/Down between lines, Home/End to the
-start/end of the current line, Ctrl+Left/Right or Alt+Left/Right by word,
+start/end of the current line, Ctrl+Left/Right or Alt+Left/Right by word
+(Alt+Left/Right selects panes while the workspace is tiled),
 Ctrl+A / Ctrl+E to the start/end of the logical line, Backspace, Delete,
 Alt+Backspace deletes the previous word (Ctrl+W too, outside a browser, which
 reserves it), Ctrl+U / Ctrl+K delete to the line start/end, Ctrl+- undo.
 
-**History.** Every sent input (prompts, `!commands`, `/commands`) is kept for
-the life of the TUI process, up to 200 entries; it is not saved to disk.
+**History.** Every sent prompt or `!command` is kept for the life of the TUI
+process, up to 200 entries; it is not saved to disk. Commands have their own
+history in the command pane.
 Up on the first line of the input shows the previous entry; Down on the last
 line shows the next one, and past the newest entry it restores what you were
 typing before. Any edit ends history navigation. Repeated sends of the same
@@ -1326,8 +1488,8 @@ Tab or Enter replaces the `@text` token with `@<relative path>` and a space;
 Esc closes the list until you edit the token again. The lookup runs 120 ms
 after the last keystroke. Matching is case-sensitive (the server's glob), and
 the best matches come first: file name starts with the text, then file name
-contains it, then only the path does; shorter paths first. Slash-command lines
-(`/…`) have no file references.
+contains it, then only the path does; shorter paths first. The separate
+command input does not resolve file references.
 
 The reference is plain text: the prompt carries `@src/main.rs` as typed. For
 most files nothing else happens — the agent reads the file with its tools if
@@ -1393,34 +1555,76 @@ path is looked up:
 A file only in this machine's `--dir` is `file not found` in remote mode
 unless pasted as above. Local mode is unchanged: everything is read here.
 
-### Command menu
+### Command pane
 
-Typing `/` at the start of the input (before any other character) opens a
-`Commands` box above it, the same overlay position and key handling as the
-`@file` list. Each row shows the name, its argument hint, its description
-(truncated to width), and its source in brackets: `[local]` (this TUI's own
+The `Commands` pane has a single-line input separate from the message
+composer. Press `/` while the message composer is empty, or from the Projects
+sidebar, to focus it. While a message draft is open, press Ctrl+X then `/`;
+the draft stays in the composer. The pane appears above the composer, and
+the footer shows its keys. For example, press `/`, type `models`, and press
+Enter to open the model catalog. To type `src/main.rs` in a message, keep
+typing in the composer; its slash is literal after the first character.
+
+The input starts with `/`. Each suggestion row shows the command name, its
+argument hint, its description (truncated to width), and its source in
+brackets: `[local]` (this TUI's own
 registry), `[command]` (a custom or built-in server command, `/init` and
 `/review` among them), or `[skill]` (a discovered skill — see
 [Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
 keep typing the name: an exact match ranks first, then a prefix match, then a
 substring match, then any name whose letters appear in order (a subsequence
-match); ties break alphabetically. Up/Down move the highlight; Esc closes the
-menu and keeps the typed text.
+match); ties break alphabetically. Up/Down move the highlight; Shift+Tab moves
+it upward. Esc or Ctrl+C closes the pane and keeps its command draft for
+reopening. Shift+Up/Down walks its own last 200 submitted commands. The
+message composer keeps a separate history and draft.
+
+After the command name, the same menu shows argument choices at every depth
+that the command can complete. This makes subcommands and their next values
+visible while typing. For example, `/layout ` lists actions including `split`
+and `assign`; `/layout split ` lists `horizontal` and `vertical`; and
+`/layout split vertical ` lists pane jobs such as `jobs` and `todos`.
+`conversation` is offered for `/layout assign`, but not for a split because a
+split cannot create a second conversation pane. `/api ` similarly lists HTTP
+methods, then `/api GET /v1/hea` suggests `/api GET /v1/health`. At most eight
+rows are shown; type more of the current argument to narrow the list. Commands
+without an argument completer show their syntax hint in the command-name row
+but do not invent argument values after the name.
 
 Tab always completes the highlighted name and a trailing space, so you keep
 typing its arguments. Enter's behavior depends on the highlighted command's
 argument hint: with no hint, or one written `[in brackets]` (an optional
 argument, for example `/new [agent] [model]` or `/sidebar [on|off]`), Enter
-runs the command as is. Any other hint (`/open <id|number>`, `/key
-set|remove <provider>`) names a required first argument, so Enter behaves
+runs the command as is. Any other hint (`/open <id|number>`, `/workflow
+select <name>`) names a required first argument, so Enter behaves
 like Tab: it completes the name and waits for you to type the argument.
+For an argument row, Tab or Enter inserts the highlighted full command line
+and a trailing space, then shows the next available choices. An argument
+selection does not run the command; press Enter again after the final value
+when no choice is highlighted. Up/Down and Shift+Tab navigate argument rows
+the same way as command-name rows. If the typed argument already exactly
+matches its only completion, the menu closes so Enter runs the command.
+
+The command pane builds all selectable rows through
+`suggestCommandInput(input, entries, complete)`. Each row is a
+`CommandSuggestion` with `label: string`, `replacement: string`,
+`kind: "command" | "argument"`, and `runOnEnter: boolean`. A local command's
+`CommandSpec.complete(position, context)` supplies zero or more full-line
+replacement strings for any argument depth; `position` contains `words`,
+`current`, and `head` (the text before `current`). Name rows use the merged
+local/backend catalog; argument rows use these existing local completers.
+No new server operation or payload is involved.
 
 Local and backend (command or skill) names are merged and deduplicated by
 name; a local name always wins a clash with a backend name (the registry
 looks up local commands before falling back to the backend, so a local
 command is what actually runs either way). The list refreshes with
 `/refresh`/Ctrl+R and whenever the session or directory changes, the same as
-Tab completion.
+Tab completion. The command pane uses the same registry and `GET /v1/commands`
+catalog as before. A backend command or skill still creates a `CommandTurn`
+through `POST /v1/sessions/{id}/turns` with
+`{ "command": { "command": string, "arguments": string } }`; a local command
+runs its existing TUI handler. View commands such as `/models` still switch
+the main panel in the current layout.
 
 ### Skill commands
 
@@ -1565,7 +1769,7 @@ clipboard; use [Copy](#copy) for that).
 **Esc precedence** (vim on), first match wins:
 
 1. The picker or the one-line yolo confirmation is open: it takes Esc.
-2. The command menu or the file list is open: Esc closes it.
+2. The command pane or the file list is open: Esc closes it.
 3. Insert mode: Esc switches to normal mode — nothing else, even while a
    turn runs or a prompt is shown.
 4. Normal mode with a count or operator pending: Esc cancels it.
@@ -1717,8 +1921,9 @@ without typing its id. The agent's turn waits until you answer.
 The first row is `<header>: <question>`. Each option sends
 `{question: {answer: "<label>"}}`. For a free-text answer, type it into the
 input and press Enter: it sends `{question: {answer: "<text>"}}` instead of a
-prompt (a `/command` still runs as a command). Choosing `Other…` only points
-you at the input. `Reject` (or Esc) sends `{question: {rejected: true}}`;
+prompt. A slash command entered in the command pane runs separately.
+Choosing `Other…` only points you at the input. `Reject` (or Esc) sends
+`{question: {rejected: true}}`;
 `ask_user` then reports the question as unanswered. Only the first question
 of a multi-question `ask_user` call is shown (the backend answers one per
 interaction).
@@ -1737,8 +1942,8 @@ Key order, first match wins:
 1. The permission mode picker, while open, takes every key but Ctrl+C; the
    one-line yolo confirmation takes Enter, Esc, and Shift+Tab (see
    [Permission modes](#permission-modes)), so they never answer the prompt.
-2. An open list (the `/` command menu or the `@file` list) takes Up/Down,
-   Tab, Shift+Tab (highlight up), Enter, and Esc.
+2. The command pane takes its own input and keys. An open `@file` list takes
+   Up/Down, Tab, Shift+Tab (highlight up), Enter, and Esc.
 3. The prompt, with an empty input: `1`–`9` choose that option at once;
    Up/Down move the highlight (`▸`, accent color); Enter chooses the
    highlighted option; Esc declines. With text in the input, a question takes
@@ -1799,33 +2004,34 @@ its prompt only appears once you open that session.
 
 **Usage.** When such an ask arrives:
 
-- the [pending block](#layout) lists it as `! <title> · <n>. <session> ·
-  <id>` (`?` for a question), where `<n>` is the session's number in the
-  sidebar and `/open`;
-- the status line says `Permission needed in <n>. <session> · /open <n> to
-  answer there` (`Question in …` for a question);
+- the [pending block](#layout) lists it as `! <title> · <n>. <session>`
+  (`?` for a question). For an archived or otherwise unlisted chat it says
+  `saved session`, keeping raw IDs out of the narrow box;
+- the status line says `Permission needed in <n>. <session> · F4 to review`
+  (`Question in …` for a question);
 - while the terminal is unfocused, a [desktop
   notification](#desktop-notifications) says `Permission needed: <title> ·
   in <n>. <session>`.
 
-`/open <n>` (or `/sessions`) opens that session; its prompt appears as
-usual and `1`/`2`/`3` answer it there. `/approve <id>`, `/deny <id>`, and
-`/answer <id> <text>` still answer from anywhere; the pending line shows
-which session the id belongs to first. An ask answered elsewhere (in the
-other tab) disappears at once. A session created since the last listing
-is listed again when its first ask arrives, so the line can name it (a
-session the listing does not return — another directory — is named by its
-id, and `/open <id>` still works).
+**F4** opens and unarchives the oldest waiting request's root session,
+including one archived by `/exit`; the complete transcript and prompt appear
+there. Press `1` to allow a permission once, `2` to save an allow rule, or
+`3` to deny. Esc also denies; with text in the input, clear it before using
+the numbered keys. `/sessions` can open any saved chat, and `/open <n>` or
+`/open <id>` still works. `/approve <id>`, `/deny <id>`, and `/answer <id>
+<text>` remain available for scripts or the `/interactions` view, which
+shows full IDs. An ask answered elsewhere disappears at once. A session
+created since the last listing is listed again when its first ask arrives.
 
 Example: this TUI views session 1 while another tab's session 2 asks to run
 a command:
 
 ```text
 ╭Pending (1)──────────────────────────────────────────────────────────╮
-│ ! bash echo hi · 2. Fix the build · perm_01a0…                      │
-│ /open <n> answers there · /approve <id> · /deny <id> · …            │
+│ ! bash echo hi · 2. Fix the build                                   │
+│ F4 review request · /sessions past chats · /interactions details   │
 ╰─────────────────────────────────────────────────────────────────────╯
-Permission needed in 2. Fix the build · /open 2 to answer there
+Permission needed in 2. Fix the build · F4 to review
 ```
 
 **Interfaces.** From start, the TUI keeps one subscription to
@@ -1899,8 +2105,8 @@ status bar, and notes every switch in the transcript.
   modes in the backend's listing order → `manual`. The listing is read with
   the other catalogs at start and on `/refresh`; without it (an older
   backend) the cycle is `manual` ↔ `yolo`. Shift+Tab also works while a
-  permission prompt is shown. In an open list (the `/` command menu, the
-  `@file` list, the picker) it moves the highlight up instead and the mode
+  permission prompt is shown. In command suggestions, the `@file` list, or a
+  picker it moves the highlight up instead and the mode
   does not change.
 - **`/permissions`** opens a picker with every mode from
   `GET /v1/permission-modes`: its title, `[source]` (`builtin`, or the id
@@ -1952,6 +2158,23 @@ choice is remembered — the status bar shows it and the status line reads
 is sent right after the next session is created (the first prompt, `/new`,
 or a command that creates one), before the prompt is admitted. Opening an
 existing session instead shows that session's own mode.
+
+**Default for new sessions.** After a successful mode switch, the TUI saves
+the selected mode as `permissionMode` in its [preferences file](#preferences-file).
+New sessions created by this TUI use that mode, including after a TUI restart;
+existing sessions retain the mode stored by the backend. For example, run
+`/permissions yolo`, press Enter to confirm, then run `/new`: the new session
+starts in `yolo`. Restart the TUI and create another session to use the same
+default without another confirmation prompt. Run `/permissions manual` to make
+later new sessions ask for permission again. A canceled or rejected switch
+does not change the saved default. If a saved bundle mode is no longer
+available, applying it to a new session reports a permission mode error and
+leaves that session in `manual`.
+The preference accepts `manual`, `yolo`, or a `<bundle-id>/<mode-id>` string;
+the backend validates the mode when the TUI sends
+`PATCH /v1/sessions/{id}` with `{ "permissionMode": "<mode>" }` after
+creating a session. The TUI also saves a mode chosen before a session exists
+once that mode is successfully applied to the first session.
 
 ### Display
 
@@ -2145,7 +2368,7 @@ with no loading state.
 - **`/sessions`** opens a picker with a `New session` row first, then every
   session as a tree (top-level sessions, subagent sessions nested under
   their parent and `[subagent]` tagged — see [Subagents](#subagents)),
-  showing the agent, model, and a relative update time (`3m`, `2h`) in the
+  including archived chats by default, showing the agent, model, and a relative update time (`3m`, `2h`) in the
   detail column, and `● running` while busy. `●` marks the open session.
   Enter on the `New session` row runs `/new`; Enter on any other row opens
   it.
@@ -2154,9 +2377,9 @@ with no loading state.
 ┌─Sessions──────────────────────────────────────────────────────────────┐
 │ Filter ▏  3 of 3                                                      │
 │ ▸   New session          [new]       Create a session with the curr… │
-│   ● Fix the flaky test              hya-main · fake/model · 3m           │
-│       ↳ Explore the auth code [subagent]  hya-scout · fake/model · 1m  │
-│ Enter open · F2 rename · Ctrl+D del · Ctrl+A shows archived · Esc clo… │
+│   ● Fix the flaky test              hya-main · fake/model · 3m       │
+│       ↳ Explore the auth code [subagent]  hya-scout · fake/model · 1m│
+│ F2 rename · Ctrl+D del · Ctrl+A hides archived · F3 all · Esc closes  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2179,10 +2402,10 @@ filter never sees (never Ctrl+R, which means refresh):
   the same way whether or not the row is the open session, so the open
   session is never deleted without it. Deleting a session also removes every
   descendant subagent session and its session-scoped persisted state.
-- **Ctrl+A** shows archived sessions too (it re-reads the list with
-  `GET /v1/sessions?includeArchived=true`; the title becomes `Sessions ·
-  archived included` and archived rows are tagged `[archived]`), and hides
-  them again. Enter on an archived row resumes it like `/resume <id>`: it is
+- **Ctrl+A** hides archived sessions, or shows them again (the default list
+  reads `GET /v1/sessions?includeArchived=true`; the title says `Sessions ·
+  archived included` and archived rows are tagged `[archived]`). Enter on an
+  archived row resumes it like `/resume <id>`: it is
   unarchived, then opened. The sidebar never lists archived sessions.
 
 `state/picker.ts`'s `PickerAction` (`{id, key, ctrl?, label, prompt: "value"
@@ -2565,8 +2788,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
-| `GET /v1/sessions?includeArchived=true` | No body | Archived root sessions too (`SessionInfo.archived`, `archivedAt`): the `/resume` picker and the `/sessions` picker after Ctrl+A. |
-| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); `--resume`, `/resume`, and opening an archived `/sessions` row unarchive (`false`). |
+| `GET /v1/sessions?includeArchived=true&projectId=<id>` | No body | `ListSessionsResponse.sessions: SessionInfo[]`, including archived chats (`archived`, `archivedAt`, `ephemeral`, `busy`, `timeUpdated`, `parent`, `projectId`). A plain local launch uses it to choose the latest durable root session of the active Project, preferring a tree with a waiting interaction. The `/sessions` and `/resume` pickers also include archived sessions by default. The `projectId` filter is optional for the pickers. |
+| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); plain relaunch, `--resume`, `/resume`, F4 review, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; deletes the requested session and every descendant subagent session, while unrelated sessions remain. The TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); completes `/agent <name>`. |
@@ -2591,7 +2814,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
-| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
+| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for command-pane suggestions and completion. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` (Provider View `k`) | `{status, provider?, discovery?}`; the key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body (Provider View `x`) | `{provider?}` |
@@ -2605,13 +2828,14 @@ own key line; see [Provider View](#provider-view)):
 
 | View or state | Bottom instruction |
 | --- | --- |
-| Chat | `Enter a prompt · /new creates a session · /help lists commands · / opens the command menu` |
+| Chat | `Enter a prompt · /new creates a session · /sessions history · F4 requests · / commands` |
+| Tiled chat | `Alt+arrows select pane · /layout split|assign|resize|close|reset · / commands` |
 | Models | `Next: /model <provider/model> to switch this session · /key opens the Provider View · /help` |
 | Workflows | `Next: /workflow select <name> or /workflow run [name]` |
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
 | Chat in a subagent's session | `Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch` |
 | API | `Next: /api GET /v1/health · /help for command syntax` |
-| Help | `Enter a prompt or choose a /command · Tab completes` |
+| Help | `Esc returns · / opens the command pane · Tab completes there` |
 | Todos | `Next: /refresh to reload the list · /help` |
 | Status | `Next: /model, /agent, or /rename to change what's shown · /help` |
 
@@ -2713,11 +2937,12 @@ together.
 | `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
 | `src/state/catalog.ts` | `/model`/`/effort`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
-| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
+| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
-| `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()` (right sidebar), `projectsSidebarVisible()`, `toggledProjectsSidebar()`, `projectsSidebarWidth()` (left Projects sidebar), and `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/layout.ts` | Sidebar visibility modes and width breakpoints, plus `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned full-screen split tree, visibility filtering, migration, focus geometry, assignment, close/resize reducers, and the recursive renderer. |
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
 | `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
@@ -2725,10 +2950,10 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
-| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, routing keys and pastes to an open Provider View, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
+| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root split-tree mount and overlays, startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the message `<textarea>`, history, shell mode, file list, global key routing), `CommandPane` (separate `<input>`, suggestions, completion, command history), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
-| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
+| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command pane's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z, and `toggleProjectsSidebar` on Ctrl+P) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
@@ -2818,10 +3043,10 @@ To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
 }
 ```
 
-The name becomes Tab-completable and appears in the command menu and the
+The name becomes Tab-completable and appears in the command pane and the
 help overlay automatically (source `[local]`; it wins a name clash with a
 backend command). An `argumentHint` written `[in brackets]` is optional (the command
-menu's Enter runs it as is); anything else is treated as required (Enter
+pane's Enter runs it as is); anything else is treated as required (Enter
 completes the name and waits). Add a row to the command table above. Unregistered `/names` still go to the backend as
 `CommandTurn`s (custom commands and skills; see
 [Skill commands](#skill-commands)). To add a key, append a
@@ -2855,8 +3080,9 @@ covers user and assistant styling, Markdown and code highlighting, reasoning
 (Ctrl+O, `/thinking`, click), error, length, and cancel notices, and
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
-queued prompts, and the turn status line (`Ready`, provider errors).
-`e2e/hya-tui-commands-menu.spec.ts` covers the `/` command menu (open,
+heading previews without marker or color flashes, queued prompts, and the
+turn status line (`Ready`, provider errors).
+`e2e/hya-tui-commands-menu.spec.ts` covers the `/` command pane (open,
 fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
 commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,
 `/rename`, and `/status`. `e2e/hya-tui-tools.spec.ts` covers tool cards (read, bash, edit/write diff
@@ -2917,6 +3143,6 @@ columns); `e2e/hya-tui-prompts.spec.ts`
 checks that a subagent's ask arrives on the `includeDescendants` stream
 with no interactions listing in between, and that an ask of a session run
 headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
-pending block with its session, then `/open <n>` answers it there (default
+pending block with its session, then F4 opens its numbered prompt (default
 and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
 single desktop notification.

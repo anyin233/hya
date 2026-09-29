@@ -65,7 +65,7 @@ async function reachable(url: string): Promise<boolean> {
  * `pgrep`, to match the full argv on macOS and Linux).
  */
 function pids(needle: string, except?: string): number[] {
-  return execFileSync("ps", ["-axo", "pid=,command="]).toString().split("\n")
+  return execFileSync("ps", ["-axo", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 }).toString().split("\n")
     .filter((line) => line.includes(needle) && !(except && line.includes(except)))
     .map((line) => Number(line.trim().split(/\s+/)[0]))
 }
@@ -86,7 +86,9 @@ test.describe("bare hya", () => {
     await webPage.goto(`http://127.0.0.1:${port}/`)
     await expect.poll(() => webPage.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    await web.waitForText("Connected to hya", 30_000)
+    // A plain tab reopens the terminal's conversation, so it may show
+    // `Resumed …` rather than a generic connection message.
+    await web.waitForText("hello from the terminal", 30_000)
     // The header now keeps the current effort visible and may clip the server
     // URL; `/status` is the unambiguous server contract.
     await prompt(web, "/status")
@@ -99,6 +101,8 @@ test.describe("bare hya", () => {
     // Closed before typing (an Esc right before a key reads as Alt+key).
     await expect.poll(async () => (await web.text()).includes("Esc closes")).toBe(false)
 
+    // Start a separate chat; a plain tab now shares the terminal's last one.
+    await prompt(web, "/new")
     // …and the other way round: the tab's session shows up in the terminal.
     await prompt(web, "hello from the web tab")
     await web.waitForText(/^Ready/m, 20_000)
@@ -232,7 +236,7 @@ test.describe("bare hya", () => {
     const late = await page.context().newPage()
     await late.goto(`http://127.0.0.1:${port}/`)
     const lateTui = new Tui(late, `http://127.0.0.1:${port}/`)
-    await lateTui.waitForText("Connected to hya", 30_000)
+    await lateTui.waitForText("still works after the move", 30_000)
     await prompt(lateTui, "/status")
     await lateTui.waitForText(new RegExp(`Backend\\s+daemon · pid ${after}`))
   })

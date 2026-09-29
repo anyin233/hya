@@ -6,12 +6,12 @@ export function footerInstruction(view: View, childView = false): string {
   if (childView && view === "chat") return "Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch"
 
   switch (view) {
-    case "chat": return "Enter a prompt · /new creates a session · /help lists commands · / opens the command menu"
+    case "chat": return "Enter a prompt · /new creates a session · /sessions history · F4 requests · / commands"
     case "models": return "Next: /model <provider/model> to switch this session · /key opens the Provider View · /help"
     case "workflows": return "Next: /workflow select <name> or /workflow run [name]"
     case "interactions": return "Next: /approve <id>, /deny <id>, or /answer <id> <text>"
     case "api": return "Next: /api GET /v1/health · /help for command syntax"
-    case "help": return "Enter a prompt or choose a /command · Tab completes"
+    case "help": return "Esc returns · / opens the command pane · Tab completes there"
     case "todos": return "Next: /refresh to reload the list · /help"
     case "status": return "Next: /model, /agent, or /rename to change what's shown · /help"
   }

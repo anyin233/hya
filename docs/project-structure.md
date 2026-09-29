@@ -285,7 +285,7 @@ owner-gated activation) library, plus the `hya update` command surface
 
 The interactive frontend lives outside the Cargo workspace:
 
-- `packages/hya-tui` — Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE contract
+- `packages/hya-tui` — Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE contract or direct gRPC
   (`src/client.ts` API client, `src/completion.ts` slash completion,
   `src/instructions.ts` footer hints, `src/main.ts` layout and commands). See
   [tui.md](tui.md).

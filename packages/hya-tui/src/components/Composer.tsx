@@ -1,11 +1,10 @@
 import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, usePaste } from "@opentui/solid"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
 import { historyEntry } from "../bridge"
 import { secretMask } from "../state/format"
-import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
 import { attachmentLabel, imageMentionPaths, pastedImagePath, type AttachmentPreview } from "../composer/attachments"
 import { escapeAction } from "../composer/escape"
 import { InputHistory } from "../composer/history"
@@ -15,6 +14,7 @@ import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { projectsSidebarVisible } from "../state/layout"
+import { paneLeaves } from "../state/panes"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
@@ -25,16 +25,11 @@ export const composerMaxRows = 8
 const mentionDebounceMs = 120
 export const quitHint = "Press Ctrl+C again to quit"
 /** Status while the Ctrl+X chord waits for its second key. */
-export const chordHint = "Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork"
+export const chordHint = "Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork · / commands"
 
 interface FileMenu {
   token: MentionToken
   items: string[]
-  index: number
-}
-
-interface CmdMenu {
-  items: CommandEntry[]
   index: number
 }
 
@@ -44,9 +39,9 @@ interface CmdMenu {
  * content up to `composerMaxRows` rows, then scrolls. Up/Down on the first/last
  * line walk the input history. Esc closes the `@file` list, else declines a
  * shown prompt, else cancels the running turn, else clears the input (composer/escape.ts).
- * Key order: the modal picker (every key but Ctrl+C), the one-line yolo
- * confirmation (Enter, Esc, Shift+Tab), then Shift+Tab in an open list
- * (highlight up), the lists, the prompt dock, and the key bindings
+ * Key order: the modal picker (every key but Ctrl+C), a full-screen view,
+ * the command pane, the Projects sidebar, the one-line yolo confirmation,
+ * the file list, the prompt dock, and the key bindings
  * (Shift+Tab cycles the permission mode; docs/tui.md "Permission modes").
  *
  * Permission/question prompts (components/PromptDock.tsx): after the lists,
@@ -59,7 +54,7 @@ interface CmdMenu {
  * `@text` token opens a file suggestion list from `FindFiles`.
  *
  * Vim mode (`/vim`, composer/vim.ts): the state machine sees keys after the
- * lists. In insert mode it takes only Esc (unless a list is open, which Esc
+ * file list. In insert mode it takes only Esc (unless the list is open, which Esc
  * closes first) and switches to normal mode. In normal mode it runs after the
  * prompt dock (so an empty input still answers a prompt with digits, Enter,
  * Esc) and before history and the bindings; keys it passes on (Ctrl keys,
@@ -68,7 +63,7 @@ interface CmdMenu {
  *
  * Ctrl+X arms a chord for one key: Ctrl+E (or E) then opens the external
  * editor (`controller.openEditor`, composer/editor.ts); U, R, F (or with
- * Ctrl) run `/undo`, `/redo`, `/fork` whatever the input holds
+ * Ctrl) run `/undo`, `/redo`, `/fork`, and `/` focuses the command pane
  * (app/revert.ts); any other key drops the chord and is handled as usual.
  *
  * While the Provider View (`/key`, components/ProviderView.tsx) — or the
@@ -80,21 +75,16 @@ interface CmdMenu {
  * screen) and is otherwise ignored. Ctrl+C closes the open view and keeps
  * its quit meaning.
  */
-export function Composer() {
+export function Composer(props: { width: number }) {
   const { store, controller, ui } = useApp()
-  const size = useTerminalDimensions()
   let editor: TextareaRenderable | undefined
   const [value, setValue] = createSignal("")
   const [rows, setRows] = createSignal(1)
   const [menu, setMenu] = createSignal<FileMenu | undefined>()
-  const [cmdMenu, setCmdMenu] = createSignal<CmdMenu | undefined>()
   /** Pending `@path` image attachments of the current text (composer/attachments.ts), shown above the input; an `error` entry blocks submit. */
   const [attachments, setAttachments] = createSignal<AttachmentPreview[]>([])
-  const history = new InputHistory()
+  const history = ui.composerHistory ??= new InputHistory()
   const quitGuard = createQuitGuard()
-  let choices: string[] = []
-  let index = -1
-  let completed = ""
   /**
    * Text the composer itself last put in the editor (history, completion,
    * clearing). Content-change events arrive after the change, so a change
@@ -117,7 +107,7 @@ export function Composer() {
   const agentsOpen = () => store.state.agentsView !== undefined
   const projectViewOpen = () => store.state.projectView !== undefined
   const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentsOpen() || projectViewOpen()
-  /** A subagent's session is open: prompts are disabled, slash commands still run. */
+  /** A subagent's session is open: prompts are disabled; the command pane stays available. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
   /** Vim state machine (composer/vim.ts); reset whenever vim mode is switched. */
@@ -135,6 +125,7 @@ export function Composer() {
   }))
 
   onCleanup(() => {
+    if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
     if (lookupTimer) clearTimeout(lookupTimer)
     if (attachmentTimer) clearTimeout(attachmentTimer)
     if (hintTimer) clearTimeout(hintTimer)
@@ -160,15 +151,15 @@ export function Composer() {
   /** Rows the text needs at the editor's width (wrapped lines counted), capped at `composerMaxRows`. */
   function measure(): void {
     if (!editor) return
-    const width = Math.max(1, editor.width)
+    const width = Math.max(1, Math.floor(props.width) - 4)
     const lines = editor.plainText.split("\n")
       .reduce((total, line) => total + Math.max(1, Math.ceil((Bun.stringWidth(line) + 1) / width)), 0)
     setRows(Math.max(1, Math.min(composerMaxRows, lines)))
   }
 
-  // Wrapping changes with the width.
+  // The pane width remains available while OpenTUI recreates the textarea.
   createEffect(() => {
-    size()
+    props.width
     queueMicrotask(measure)
   })
 
@@ -188,43 +179,9 @@ export function Composer() {
     setMenu(undefined)
   }
 
-  function closeCmdMenu(): void { setCmdMenu(undefined) }
-
-  /**
-   * Open, refresh, or close the `/` command menu: shown while the whole
-   * input is `/` plus a name being typed (no space yet — once a space is
-   * typed the name is settled and argument completion takes over via the
-   * existing Tab `complete()` cycle). Fuzzy-filters the merged local +
-   * backend (commands and skills) command list; see commands/menu.ts.
-   */
-  function updateCommandMenu(): void {
-    if (!editor || overlayViewOpen()) return closeCmdMenu()
-    const text = editor.plainText
-    if (!text.startsWith("/") || /\s/.test(text)) return closeCmdMenu()
-    const items = filterCommands(controller.commandEntries(), text.slice(1)).slice(0, commandSuggestionLimit)
-    if (!items.length) return closeCmdMenu()
-    setCmdMenu((open) => ({ items, index: open && open.index < items.length ? open.index : 0 }))
-  }
-
-  /** Tab: complete the highlighted command's name (keeps typing args). Enter: run it if it needs no argument, else complete like Tab (commands/menu.ts `requiresArgument`). */
-  function acceptCommandEntry(run: boolean): void {
-    const open = cmdMenu()
-    const entry = open?.items[open.index]
-    if (!editor || !entry) return
-    if (run && !requiresArgument(entry.argumentHint)) {
-      closeCmdMenu()
-      replace(entry.name)
-      submit()
-      return
-    }
-    closeCmdMenu()
-    replace(`${entry.name} `)
-  }
-
   /** Open, refresh, or close the `@file` list for the token at the cursor. */
   function updateMention(): void {
     if (!editor || overlayViewOpen()) return closeMenu()
-    if (editor.plainText.startsWith("/")) return closeMenu()
     const token = mentionAt(editor.plainText, editor.cursorOffset)
     if (!token) {
       dismissed = undefined
@@ -269,39 +226,21 @@ export function Composer() {
     const text = editor.plainText
     setValue(text)
     store.setDraft(text.length > 0)
+    ui.composerInput = { text, cursor: editor.cursorOffset }
     measure()
     if (text !== replaced) {
       replaced = undefined
       history.reset()
-      if (text.startsWith("/") && !text.includes("\n")) {
-        const found = controller.complete(text)
-        if (found.length) store.setStatus(`Tab: ${found.slice(0, 5).join("  ")}${found.length > 5 ? "  …" : ""}`)
-      }
     }
-    updateCommandMenu()
     updateMention()
     updateAttachments(text)
-  }
-
-  function complete(): void {
-    if (!editor) return
-    const text = editor.plainText
-    if (completed !== text) {
-      choices = controller.complete(text)
-      index = -1
-    }
-    if (!choices.length) return
-    index = (index + 1) % choices.length
-    replace(choices[index] ?? text)
-    completed = editor.plainText
-    store.setStatus(`${index + 1}/${choices.length} completion · Tab cycles`)
   }
 
   function submit(): void {
     if (!editor || overlayViewOpen()) return
     const text = editor.plainText
     if (!text.trim()) return
-    if (readOnly() && !text.trim().startsWith("/")) {
+    if (readOnly()) {
       // Keep the text: it can be sent once back in the parent.
       store.setStatus(readOnlyStatus)
       return
@@ -309,14 +248,13 @@ export function Composer() {
     // A relay link is a secret: history keeps the input without it (src/bridge.ts).
     history.push(historyEntry(text))
     closeMenu()
-    closeCmdMenu()
     replace("")
     // A new input starts in insert mode.
     if (store.state.vim && vim.mode !== "insert") {
       vim = initialVimState()
       store.setVimMode("insert")
     }
-    void controller.submit(text)
+    void controller.submit(text, "message")
   }
 
   /** Apply one vim result to the textarea (edits through its undo history) and the status bar. */
@@ -347,16 +285,10 @@ export function Composer() {
     }, quitWindowMs)
   }
 
-  /** Up/Down: move in the command or file list, else walk history from the first/last line. */
+  /** Up/Down: move in the file list, else walk message history from the first/last line. */
   function arrow(key: KeyEvent, consume: () => void): boolean {
     if (key.ctrl || key.meta || key.shift || (key.name !== "up" && key.name !== "down")) return false
     const step = key.name === "up" ? -1 : 1
-    const openCmd = cmdMenu()
-    if (openCmd) {
-      consume()
-      setCmdMenu({ ...openCmd, index: (openCmd.index + step + openCmd.items.length) % openCmd.items.length })
-      return true
-    }
     const open = menu()
     if (open) {
       consume()
@@ -425,8 +357,42 @@ export function Composer() {
         return
       }
     }
+    // Pane navigation is global to the tiled workspace, including while the
+    // command input is open. Modal pickers and full-screen views above win.
+    const focusAction = resolveBinding(key)
+    if (paneLeaves(store.state.paneLayout.root).length > 1 && focusAction?.startsWith("focusPane")) {
+      consume()
+      const direction = focusAction.slice("focusPane".length).toLowerCase()
+      void controller.submit(`/layout focus ${direction}`, "command")
+      return
+    }
+    // A command pane owns its input and history. Ordinary keys continue to
+    // its focused <input>; navigation and submission are handled there.
+    if (ui.command?.active()) {
+      if (ui.command.key(key)) consume()
+      return
+    }
+    const inputEmpty = !(editor?.plainText ?? value())
+    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || inputEmpty, chord })
+    if (commandShortcut === "openCommands") {
+      consume()
+      if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
+      chord = undefined
+      quitGuard.disarm()
+      ui.command?.open()
+      return
+    }
+    if (store.state.projectsSidebarFocus && commandShortcut === "chord") {
+      consume()
+      chord = "ctrl+x"
+      if (store.state.status !== chordHint) beforeChord = store.state.status
+      store.setStatus(chordHint)
+      return
+    }
     // The left Projects sidebar has focus (Ctrl+P): Up/Down/Enter/Esc go to it.
-    if (store.state.projectsSidebarFocus && !store.state.picker && !overlayViewOpen()) {
+    if (store.state.projectsSidebarFocus && !store.state.picker && !overlayViewOpen()
+      && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar") {
+      chord = undefined
       if (key.ctrl && !key.meta && key.name === "c") { store.setProjectsSidebarFocus(false); return }
       consume()
       controller.projectsSidebarKey(key)
@@ -461,26 +427,11 @@ export function Composer() {
         return
       }
     }
-    // The editor's own text is always live; `sync()` (onContentChange) can
-    // lag one render behind fast typing (programmatic or a fast typist), so
-    // recompute the command menu from `editor.plainText` right here before
-    // acting on it — Tab/Enter/Up/Down must never act on a stale filtered
-    // list from before the most recent keystroke.
-    updateCommandMenu()
-    const cmdOpen = cmdMenu()
-    // Shift+Tab in an open list moves its highlight up instead of cycling the permission mode.
-    if (isShiftTab(key) && (cmdOpen || menu())) {
+    // Shift+Tab in the file list moves its highlight up instead of cycling the permission mode.
+    if (isShiftTab(key) && menu()) {
       consume()
-      if (cmdOpen) setCmdMenu({ ...cmdOpen, index: (cmdOpen.index - 1 + cmdOpen.items.length) % cmdOpen.items.length })
-      else {
-        const files = menu()!
-        setMenu({ ...files, index: (files.index - 1 + files.items.length) % files.items.length })
-      }
-      return
-    }
-    if (cmdOpen && !key.ctrl && !key.meta && !key.shift && (key.name === "tab" || key.name === "return" || key.name === "kpenter")) {
-      consume()
-      acceptCommandEntry(key.name !== "tab")
+      const files = menu()!
+      setMenu({ ...files, index: (files.index - 1 + files.items.length) % files.items.length })
       return
     }
     const open = menu()
@@ -490,7 +441,7 @@ export function Composer() {
       return
     }
     // Vim insert mode: Esc switches to normal mode (an open list takes Esc first, below).
-    if (store.state.vim && vim.mode === "insert" && !cmdOpen && !open && editor) {
+    if (store.state.vim && vim.mode === "insert" && !open && editor) {
       const result = vimKey(vim, { text: editor.plainText, cursor: editor.cursorOffset }, key)
       if (result.type === "handled") {
         consume()
@@ -502,7 +453,7 @@ export function Composer() {
     // A shown permission/question prompt comes next (after the lists): with
     // an empty input it takes digits, Up/Down, Enter, and Esc; with text, a
     // question takes Enter as its answer. Other keys reach the input.
-    const shown = cmdOpen || open ? undefined : currentPrompt(store.state)
+    const shown = open ? undefined : currentPrompt(store.state)
     if (shown) {
       const draft = editor?.plainText ?? value()
       const result = promptKey(shown.view, { index: store.promptIndex(shown.view.id), draft }, key)
@@ -536,15 +487,17 @@ export function Composer() {
     const action = resolveBinding(key, { composerEmpty: !(editor?.plainText ?? value()) })
     if (action !== "quit") quitGuard.disarm()
     if (!action) return
-    const transcript = store.state.view === "chat" ? ui.transcript : undefined
+    const focusedPane = paneLeaves(store.state.paneLayout.root).find((pane) => pane.id === store.state.paneLayout.active)
+    const transcript = store.state.view === "chat"
+      ? focusedPane?.kind === "conversation" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
+      : undefined
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined || cmdOpen !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
+        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()
-          closeCmdMenu()
         } else if (escape === "declinePrompt") {
           if (shown) controller.answer(shown.interaction, shown.view.kind === "question" ? { kind: "reject" } : { kind: "deny" })
         } else if (escape === "returnToParent") controller.returnToParent()
@@ -574,11 +527,17 @@ export function Composer() {
         return
       case "complete":
         consume()
-        complete()
+        return
+      case "openCommands":
+        // Routed above the Projects sidebar and the composer's local keys.
         return
       case "cycleMode":
         consume()
         controller.modes.cycle()
+        return
+      case "reviewPending":
+        consume()
+        controller.reviewPending()
         return
       case "refresh":
         controller.refreshAll()
@@ -593,8 +552,14 @@ export function Composer() {
           store.setProjectsSidebarFocus(false)
           store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
         } else {
+          const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
+          if (!projects) {
+            store.setStatus("No Projects pane · /layout split vertical projects to add one")
+            return
+          }
           if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
           if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
+          store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
           store.setProjectsSidebarFocus(true)
           store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
         }
@@ -662,6 +627,10 @@ export function Composer() {
     // A bracketed paste never submits: its line breaks (CR from xterm.js) become newlines.
     // eslint-disable-next-line no-control-regex
     const cleaned = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n")
+    if (ui.command?.active()) {
+      ui.command.paste(cleaned)
+      return
+    }
     // A terminal pastes a file dragged into the window as its path (quoted or
     // escaped when it has spaces): turn it into an `@path ` mention instead
     // of raw text when the path exists, so it resolves like a typed mention.
@@ -685,20 +654,6 @@ export function Composer() {
 
   return (
     <box width="100%" flexShrink={0} flexDirection="column">
-      <Show when={cmdMenu()}>
-        {(open) => (
-          <box width="100%" flexShrink={0} border borderColor={colors.border} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1}>
-            <For each={open().items}>
-              {(entry, row) => (
-                <text height={1} wrapMode="none" fg={row() === open().index ? colors.accent : colors.fg}>
-                  {`${row() === open().index ? "▸" : " "} ${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}]`}
-                </text>
-              )}
-            </For>
-            <text height={1} wrapMode="none" fg={colors.muted}>Up/Down select · Tab completes name · Enter runs or completes · Esc closes</text>
-          </box>
-        )}
-      </Show>
       <Show when={menu()}>
         {(open) => (
           <box width="100%" flexShrink={0} border borderColor={colors.border} title="Files" backgroundColor={colors.panel} flexDirection="column" paddingX={1}>
@@ -740,20 +695,33 @@ export function Composer() {
         visible={!store.state.secretEntry}
       >
         <textarea
-          ref={(element: TextareaRenderable) => (editor = element)}
+          ref={(element: TextareaRenderable) => {
+            editor = element
+            const saved = ui.composerInput
+            if (saved?.text) {
+              replaced = saved.text
+              element.setText(saved.text)
+              element.cursorOffset = Math.min(saved.cursor, saved.text.length)
+              setValue(saved.text)
+              measure()
+            }
+          }}
           width="100%"
           height={rows()}
-          placeholder={readOnly() ? "Read-only subagent view · /commands work · Esc returns" : "Message, /command, !shell, or @file"}
+          placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
           textColor={colors.fg}
           focusedTextColor={colors.fg}
           cursorColor={colors.accent}
           cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
-          focused={!overlayViewOpen() && !store.state.picker && !store.state.secretEntry}
+          focused={!overlayViewOpen() && !store.state.picker && !store.state.secretEntry && !ui.command?.active()}
           onSubmit={submit}
           onContentChange={sync}
-          onCursorChange={() => updateMention()}
+          onCursorChange={() => {
+            if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
+            updateMention()
+          }}
         />
       </box>
     </box>

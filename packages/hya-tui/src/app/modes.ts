@@ -21,12 +21,29 @@ import type { AppStore } from "../state/store"
 export interface ModeSwitcherOptions {
   store: AppStore
   client: Pick<HyaClient, "updateSession" | "listInteractions">
+  /** Saved default for newly created sessions. */
+  preferredMode?: string
+  /** Persist a successfully selected mode as the default for future TUI processes. */
+  saveMode?: (mode: string) => void
 }
 
-export function createModeSwitcher({ store, client }: ModeSwitcherOptions) {
+export function createModeSwitcher({ store, client, preferredMode, saveMode }: ModeSwitcherOptions) {
   /** The user confirmed yolo once in this process: later switches to it do not ask again. */
   let yoloConfirmed = false
   let pending: Promise<void> = Promise.resolve()
+  let rememberedMode = preferredMode
+  if (rememberedMode && !store.state.selected) store.setPendingMode(rememberedMode)
+
+  function remember(mode: string): string | undefined {
+    if (rememberedMode === mode) return undefined
+    rememberedMode = mode
+    try {
+      saveMode?.(mode)
+    } catch (error) {
+      return String(error)
+    }
+    return undefined
+  }
 
   /** The mode in effect for the open session, else the one chosen for the next session, else manual. */
   function current(): string {
@@ -40,15 +57,19 @@ export function createModeSwitcher({ store, client }: ModeSwitcherOptions) {
   async function apply(mode: string): Promise<void> {
     const selected = store.state.selected
     if (!selected) {
-      store.setPendingMode(mode === manualMode ? undefined : mode)
+      store.setPendingMode(mode)
       store.setStatus(`Permission mode → ${mode} · applies when the session is created`)
       return
     }
     try {
       const info = await client.updateSession(selected.id, { permissionMode: mode })
       if (store.state.selected?.id !== selected.id) return
-      store.applyPermissionMode(info.permissionMode || mode)
-      store.setStatus(`Permission mode → ${label(info.permissionMode || mode)} · Shift+Tab cycles · /permissions lists`)
+      const applied = info.permissionMode || mode
+      store.applyPermissionMode(applied)
+      const saveError = remember(applied)
+      store.setStatus(saveError
+        ? `Permission mode → ${label(applied)} · default could not be saved: ${saveError}`
+        : `Permission mode → ${label(applied)} · Shift+Tab cycles · /permissions lists`)
       // Asks the switch resolved (yolo allows them once) close now, not at the next frame.
       store.setInteractions(await client.listInteractions())
     } catch (error) {
@@ -62,7 +83,10 @@ export function createModeSwitcher({ store, client }: ModeSwitcherOptions) {
     const decision = requestMode(mode, current(), yoloConfirmed)
     store.setModeConfirm(undefined)
     if (decision.type === "same") {
-      store.setStatus(`Permission mode is already ${label(mode)}`)
+      const saveError = store.state.selected ? remember(mode) : undefined
+      store.setStatus(saveError
+        ? `Permission mode is already ${label(mode)} · default could not be saved: ${saveError}`
+        : `Permission mode is already ${label(mode)}`)
       return Promise.resolve()
     }
     if (decision.type === "confirm") {
@@ -105,11 +129,16 @@ export function createModeSwitcher({ store, client }: ModeSwitcherOptions) {
     }
   }
 
-  /** Apply the mode chosen before the session existed (after `CreateSession`). */
+  /** Apply the pending choice or saved default after `CreateSession`. */
   async function applyPending(): Promise<void> {
-    const mode = store.state.pendingMode
+    const mode = store.state.pendingMode ?? rememberedMode
     if (!mode || !store.state.selected) return
     store.setPendingMode(undefined)
+    if (mode === (store.state.selected.permissionMode || manualMode)) {
+      const saveError = remember(mode)
+      if (saveError) store.setStatus(`Permission mode ${label(mode)} · default could not be saved: ${saveError}`)
+      return
+    }
     await apply(mode)
   }
 

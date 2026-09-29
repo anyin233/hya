@@ -1,12 +1,30 @@
 /** Solid context giving every component the store, the controller, and the server URL. */
 import { createContext, useContext } from "solid-js"
+import type { KeyEvent } from "@opentui/core"
 import type { AppStore } from "../state/store"
+import type { InputHistory } from "../composer/history"
 import type { Controller } from "./controller"
 
 /** Imperative handles registered by mounted components (the transcript's and Diff view's scroll actions). */
 export interface UiHandles {
   transcript?: TranscriptScroller
+  /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
+  panes?: Map<string, TranscriptScroller>
   diff?: DiffScroller
+  command?: CommandPaneHandle
+  composerHistory?: InputHistory
+  commandHistory?: InputHistory
+  composerInput?: { text: string; cursor: number }
+  commandInput?: { text: string; active: boolean; originSidebar: boolean }
+}
+
+/** One command input, independent of the message composer. */
+export interface CommandPaneHandle {
+  active(): boolean
+  open(): void
+  /** Returns true when the key was handled and must not reach the editor. */
+  key(event: KeyEvent): boolean
+  paste(text: string): void
 }
 
 export interface TranscriptScroller {

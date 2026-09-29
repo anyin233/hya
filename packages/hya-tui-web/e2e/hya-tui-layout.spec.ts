@@ -1,6 +1,5 @@
-// The single-column layout (header, transcript, status line, composer,
-// footer) and the toggleable sidebar (sessions, todos, context), at the
-// default viewport and at about 80 columns. See docs/tui.md "Layout".
+// The editable Projects/Conversation/right-side split tree at default and
+// narrow widths, including focus and viewport behavior. See docs/tui.md "Layout".
 
 import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep, toolStep } from "./hya"
@@ -20,6 +19,75 @@ async function sidebarShown(term: Tui): Promise<boolean> {
 
 test.describe("layout", () => {
   test.use({ model: { steps: [textStep("layout reply marker l1")] } })
+
+  test("Projects and right-side jobs participate in the editable split tree", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
+    await term.waitForText("Connected to hya")
+    await term.waitForText("Projects")
+    const initialConversation = (await term.find("hya ·"))!
+    const initialSessions = (await term.find("Sessions"))!
+    await term.press("Alt+ArrowLeft")
+    await term.waitForText("pane-2 projects")
+    await term.press("Control+p")
+    await term.waitForText("Projects sidebar unfocused")
+    await term.press("Alt+ArrowRight")
+    await term.waitForText("pane-1 conversation")
+    await prompt(term, "/layout focus pane-2")
+    await term.waitForText("pane-2 projects")
+    await prompt(term, "/layout resize +5")
+    await term.waitForText("pane-2 projects")
+    await expect.poll(async () => (await term.find("hya ·"))!.col).toBeGreaterThan(initialConversation.col)
+    await prompt(term, "/layout focus pane-3")
+    await prompt(term, "/layout assign jobs")
+    await term.waitForText("jobs · pane-3")
+    expect((await term.find("jobs · pane-3"))!.col).toBeGreaterThan(initialSessions.col - 2)
+    await expect.poll(() => term.find("Sessions")).toBeNull()
+    await prompt(term, "/layout focus pane-2")
+    await prompt(term, "/layout assign jobs")
+    await term.press("Control+p")
+    await term.waitForText("No Projects pane")
+  })
+
+  test("an open command survives a responsive pane reshape", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
+    await term.waitForText("Connected to hya")
+    await term.type("/layout split")
+    await term.waitForText("/layout split")
+    await term.resize(690, 640)
+    await term.waitForText("Commands")
+    await term.waitForText("/layout split")
+    await term.press("Escape")
+    await term.waitForText("Enter a prompt · /new creates a session")
+  })
+
+  test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
+    let term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "/layout split vertical jobs")
+    await term.waitForText("▸ jobs · pane-6")
+    const conversation = (await term.find("hya ·"))!
+    const jobs = (await term.find("jobs · pane-6"))!
+    expect(jobs.col).toBeGreaterThan(conversation.col)
+    await term.press("Alt+ArrowLeft")
+    await term.waitForText("pane-1 conversation")
+    await prompt(term, "/layout split horizontal todos")
+    await term.waitForText("pane-7 todos")
+    expect((await term.find("Todos"))!.col).toBeLessThan(jobs.col)
+    await prompt(term, "/layout assign conversation")
+    await term.waitForText("pane-7 conversation")
+    expect((await term.find("hya ·"))!.row).toBeGreaterThan(conversation.row)
+    await prompt(term, "hello after moving conversation")
+    await term.waitForText("layout reply marker l1", 20_000)
+
+    term = await tui(hyaTui(backend))
+    await term.waitForText("hya ·")
+    await term.waitForText("jobs · pane-6")
+    await term.waitForText("Resumed ")
+    await prompt(term, "/layout reset")
+    await term.waitForText("Layout · 5 panes")
+    await expect.poll(() => term.find("pane-6")).toBeNull()
+    await term.waitForText("Sessions")
+  })
 
   test("the default viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
@@ -69,7 +137,7 @@ test.describe("layout", () => {
     await prompt(term, "hello narrow")
     await term.waitForText("layout reply marker l1", 20_000)
     expect(await sidebarShown(term)).toBe(false)
-    await term.waitForText("Enter a prompt · /new creates a session · /help lists commands")
+    await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
     // Every row fits: no line is wider than the terminal.
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-closed")
@@ -87,6 +155,25 @@ test.describe("layout", () => {
   })
 })
 
+test.describe("pane focus", () => {
+  const longReply = `${Array.from({ length: 140 }, (_, index) => `scroll line ${index.toString().padStart(3, "0")}`).join("\n\n")}\n\nEND OF LONG REPLY`
+  test.use({ model: { steps: [textStep(longReply)] } })
+
+  test("switching panes keeps the conversation viewport where the user left it", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "show a long reply")
+    await term.waitForText("END OF LONG REPLY", 20_000)
+    await term.press("PageUp")
+    await expect.poll(() => term.find("END OF LONG REPLY")).toBeNull()
+    await term.press("Alt+ArrowRight")
+    await term.waitForText(/Layout · 5 panes · pane-[345] (sessions|todos|context)/)
+    await term.press("Alt+ArrowLeft")
+    await term.waitForText("pane-1 conversation")
+    expect(await term.find("END OF LONG REPLY")).toBeNull()
+  })
+})
+
 test.describe("pending interactions", () => {
   test.use({ model: { steps: [toolStep("bash", { command: "echo pending-block" }), textStep("after the ask")] } })
 
@@ -97,18 +184,32 @@ test.describe("pending interactions", () => {
     // The open session's ask: the permission prompt docked above the composer, no pending block.
     await term.waitForText("asked by hya-main", 20_000)
     const dock = (await term.find("Permission"))!
-    const input = (await term.find("Message, /command, !shell, or @file"))!
+    const input = (await term.find("Message, !shell, or @file · / commands"))!
     expect(dock.row).toBeLessThan(input.row)
     expect(await term.find("Pending (1)")).toBeNull()
     // Open a new session: the first session's ask is now elsewhere, listed in the pending block.
     await prompt(term, "/new")
     await term.waitForText(/Pending \(1\)/, 20_000)
     const block = (await term.find("Pending (1)"))!
-    expect(block.row).toBeLessThan((await term.find("Message, /command, !shell, or @file"))!.row)
+    expect(block.row).toBeLessThan((await term.find("Message, !shell, or @file · / commands"))!.row)
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)
-    await term.waitForText("/approve <id>")
+    await term.waitForText("F4 review request")
     expect(await term.find("asked by hya-main")).toBeNull()
+  })
+})
+
+test.describe("jobs pane", () => {
+  test.use({ model: { steps: [textStep("finished from tiled jobs pane", { chunkSize: 3, delayMs: 120 })] } })
+
+  test("shows the open session working while its turn streams", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "/layout split vertical jobs")
+    await term.waitForText("▸ jobs · pane-6")
+    await prompt(term, "show the work")
+    await term.waitForText("turn running", 20_000)
+    await term.waitForText("finished from tiled jobs pane", 20_000)
   })
 })

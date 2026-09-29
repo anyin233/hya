@@ -977,7 +977,7 @@ pub(crate) async fn serve_until(
                 };
 
                 // A handoff restart: resolve and validate the successor from
-                // the journal, stage the descriptors, acknowledge, quiesce,
+                // the journal, stage the descriptors, quiesce, acknowledge,
                 // close every active turn at its durable handoff boundary,
                 // and only then spawn the successor.
                 let reject = |why: String| {
@@ -1029,6 +1029,10 @@ pub(crate) async fn serve_until(
                     }
                 };
                 let handoff_token = state.token().to_owned();
+                // The CLI returns as soon as it sees `queued`. Hold the turn
+                // gate first, so its bash result cannot start another model
+                // round before the handoff checkpoint observes it.
+                handoff_engine.begin_handoff_quiesce();
                 if let Err(error) = db_lock::write_handoff_stage(
                     journal,
                     db_lock::HandoffStage::Queued,
@@ -1038,6 +1042,9 @@ pub(crate) async fn serve_until(
                 ) {
                     reject(format!("could not record the queued stage: {error}"));
                     drop(staged);
+                    let _ = handoff_engine
+                        .resume_handed_off_turns(&closure_base, None)
+                        .await;
                     continue;
                 }
                 // Pending interaction rows stay durable and are re-exposed by

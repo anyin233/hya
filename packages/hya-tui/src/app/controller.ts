@@ -66,8 +66,9 @@
  * changes that: after `stop` nothing is started and prompts are refused
  * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
- * Sessions (app/sessionKeeper.ts): without `--session`/`--continue`/
- * `--resume` a session is created on connect, `ephemeral` (as is every `/new`
+ * Sessions (app/sessionKeeper.ts): a plain local start resumes the active
+ * Project's latest durable session, preferring one with a waiting request;
+ * with no history a new `ephemeral` session is created (as is every `/new`
  * one): the daemon deletes it while still unused once no client watches it
  * (no session stream open on it), so leaving it (another session opened, any
  * exit, a kill) needs no request. `close("archive")` (a graceful exit:
@@ -98,7 +99,7 @@ import { editText } from "../composer/editor"
 import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
-import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
+import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
@@ -156,6 +157,8 @@ export interface ControllerOptions {
   connectionHint?: string
   /** TUI preferences file (src/prefs.ts); unset = preference changes apply for this run only. */
   preferencesPath?: string
+  /** Saved default for newly created sessions; existing sessions retain their backend mode. */
+  preferredPermissionMode?: string
   /** The terminal behind the renderer (app/run.tsx): clipboard and handing it to an external editor. */
   terminal?: TerminalAccess
   /** Environment for `$VISUAL` / `$EDITOR` (default `process.env`). */
@@ -215,7 +218,7 @@ type FileRead = { size: number; data?: string } | { error: string }
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   let remote = startedRemote
   let streamAbort: AbortController | undefined
@@ -276,7 +279,12 @@ export function createController({ client, store, directory, remote: startedRemo
     client,
     onEnd: (outcome) => sendNotification(outcome.ok ? "turnFinished" : "turnFailed", outcome.ok ? (store.state.selected?.title ?? "") : outcome.detail),
   })
-  const modes = createModeSwitcher({ store, client })
+  const modes = createModeSwitcher({
+    store,
+    client,
+    preferredMode: preferredPermissionMode,
+    saveMode: preferencesPath ? (mode) => savePreferences(preferencesPath, { permissionMode: mode }) : undefined,
+  })
   const keeper = createSessionKeeper({
     client: {
       getSession: (id) => client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
@@ -954,6 +962,15 @@ export function createController({ client, store, directory, remote: startedRemo
     refresh: async () => { store.setSessions(await client.listSessions()) },
   })
 
+  /** The oldest waiting request outside the open tree: F4 opens its root session so the normal prompt can answer it. */
+  async function reviewPending(): Promise<void> {
+    const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, childSessionIds(store.state.members, store.state.messages)).has(item.session))
+    if (!pending?.session) { status("No pending request in another session"); return }
+    const first = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(pending.session)}`)
+    const root = await keeper.rootOf(first)
+    await resumer.resume(root)
+  }
+
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
@@ -1087,17 +1104,18 @@ export function createController({ client, store, directory, remote: startedRemo
     return read
   }
 
-  /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */
-  async function submit(value: string): Promise<void> {
+  /** Submit text from a named input surface. `auto` preserves programmatic callers. */
+  async function submit(value: string, source: "auto" | "message" | "command" = "auto"): Promise<void> {
     const text = value.trim()
     if (!text) return
     try {
       // A relay link is a credential: only `/connect-remote` takes it, nothing else sends it anywhere.
-      if (containsRelayLink(text) && !/^\/connect-remote(\s|$)/.test(text)) {
+      if (containsRelayLink(text) && !(source !== "message" && /^\/connect-remote(\s|$)/.test(text))) {
         status(relayLinkRefusedStatus)
         return
       }
-      if (text.startsWith("/")) {
+      if (source === "command" || (source === "auto" && text.startsWith("/"))) {
+        if (!text.startsWith("/")) throw new Error("Command must start with /")
         await registry.dispatch(text, { store, client, actions })
         return
       }
@@ -1197,9 +1215,9 @@ export function createController({ client, store, directory, remote: startedRemo
    * Initial load: bootstrap, the Project of `--dir` (`EnsureProjectForPath`;
    * skipped with `--remote`, which starts without an active Project),
    * catalogs, then the session `startup` names (`--session <id>`, or
-   * `--continue`: the most recent top-level session of that Project);
-   * without either no session is open until the first prompt or `/new`
-   * creates one.
+   * `--continue`: the most recent nonarchived root of that Project). A
+   * plain local start reopens a saved chat, preferring one with a waiting
+   * request; with no history it creates a new ephemeral session.
    */
   async function start(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
@@ -1226,14 +1244,25 @@ export function createController({ client, store, directory, remote: startedRemo
       const resumeId = startup.resume?.id
       if (resumeId) await resumer.resume(resumeId).catch(() => { missing += ` · session ${resumeId} not found` })
       else if (startup.resume) {
-        // The picker waits for a choice; Esc (or nothing to pick) starts a new session as a plain start does.
+        // The picker waits for a choice; Esc (or nothing to pick) starts a new session.
         await resumer.resume(undefined, () => void newSession().catch(() => undefined))
       }
       else if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
       else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
-      // A plain start opens a new session right away (deleted again if it stays empty).
-      // Without a model it is created by the first prompt instead; without a
-      // Project (`--remote`) the first prompt or `/new` asks for one.
+      else if (!remote && store.state.activeProjectId) {
+        const projectId = store.state.activeProjectId
+        const history = await client.listSessions({ includeArchived: true, projectId }).catch((error: unknown) => {
+          missing += ` · could not read earlier sessions: ${String(error)}`
+          return [] as SessionInfo[]
+        })
+        const durable = history.filter((session) => !session.ephemeral)
+        const waiting = durable.filter((session) => store.state.interactions.some((ask) => ask.session && treeSessionIds(session.id, history).has(ask.session)))
+        const prior = newestTopLevelSession(waiting, projectId, { includeArchived: true })
+          ?? newestTopLevelSession(durable, projectId, { includeArchived: true })
+        if (prior) await resumer.resume(prior.id).catch((error: unknown) => { missing += ` · could not resume ${prior.id}: ${String(error)}` })
+        if (!store.state.selected) await newSession().catch(() => undefined)
+      }
+      // With no local Project or model, no session is created until the first prompt.
       else if (!remote || store.state.activeProjectId) await newSession().catch(() => undefined)
       if (remote && !store.state.selected) missing += ` · ${noProjectStatus}`
       // `--remote`: no Project was ensured; open the Project view so choosing or creating one is the first thing shown
@@ -1242,8 +1271,8 @@ export function createController({ client, store, directory, remote: startedRemo
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion} · hya serve restart` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
-      // `--resume <id>` already said `Resumed …`; keep it unless something needs saying.
-      const resumed = resumeId && !missing && !mismatch && store.state.status.startsWith("Resumed ")
+      // Reopening any session already said `Resumed …`; keep it unless something needs saying.
+      const resumed = !missing && !mismatch && store.state.status.startsWith("Resumed ")
       if (!resumed) status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
@@ -1314,7 +1343,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * local backend) and load it like a start: bootstrap, the
    * Project of `--dir` unless remote, catalogs, the global stream. A remote
    * opens the Project view (no session is created); a local backend opens a
-   * new session in the ensured Project, like a plain start.
+   * new session in the ensured Project.
    */
   async function enterServer(url: string, token?: string): Promise<{ ok: boolean; detail: string }> {
     client.setBaseUrl(url, token)
@@ -1582,7 +1611,7 @@ export function createController({ client, store, directory, remote: startedRemo
     secret.clear()
   }
 
-  /** Merged, deduplicated command list for the `/` command menu (commands/menu.ts). */
+  /** Merged, deduplicated suggestions for the command pane (commands/menu.ts). */
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
     const local = registry.list().filter((spec) => !(store.state.webTab && spec.terminalOnly))
@@ -1599,6 +1628,7 @@ export function createController({ client, store, directory, remote: startedRemo
     registry,
     submit,
     returnToParent: () => void returnToParent().catch((error: unknown) => status(`Open failed: ${String(error)}`)),
+    reviewPending: () => void reviewPending().catch((error: unknown) => status(`Review failed: ${String(error)}`)),
     cancelTurn,
     /** Ctrl+D: quit and leave the session running; in a WebUI tab only a notice (commands/native.ts `toBackground`). */
     toBackground: () => toBackground({ store, client, actions }),

@@ -6,6 +6,8 @@
 // decides — all under the default permission model, where bash asks — and
 // the user's own `!command` shell turns, which never ask.
 
+import { readFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
 import { approverBundle, expect, hyaTui, test, textStep, toolStep, type Backend } from "./hya"
 
@@ -251,6 +253,54 @@ test.describe("before a session exists", () => {
     await term.waitForText("Permission mode → yolo")
     await term.waitForText("mode ⚠ yolo")
   })
+})
+
+test("the last chosen permission mode becomes the default for new sessions and a restarted TUI", async ({ tui, backend }) => {
+  const prefs = join(dirname(backend.dir), "config", "hya", "tui.json")
+  const savedMode = async (): Promise<string | undefined> => {
+    try {
+      return (JSON.parse(await readFile(prefs, "utf8")) as { permissionMode?: string }).permissionMode
+    } catch {
+      return undefined
+    }
+  }
+
+  const first = await tui(hyaTui(backend))
+  await first.waitForText(/^mode manual/m)
+  await prompt(first, "/permissions yolo")
+  await first.waitForText(confirmLine)
+  await first.press("Enter")
+  await first.waitForText(/^mode ⚠ yolo/m)
+  await expect.poll(savedMode).toBe("yolo")
+
+  const firstId = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+  await prompt(first, "/new")
+  await expect.poll(async () => {
+    const id = /hya · (hysec_\w+)/.exec(await first.text())?.[1]
+    return id && id !== firstId ? id : undefined
+  }).not.toBeUndefined()
+  await first.waitForText(/^mode ⚠ yolo/m)
+  await expect.poll(() => backendMode(backend)).toBe("yolo")
+  await prompt(first, "/exit")
+  await first.waitForExit()
+
+  // A plain launch creates a fresh session; it must use the saved default.
+  const second = await tui(hyaTui(backend))
+  await second.waitForText(/hya · hysec_\w+/)
+  await second.waitForText(/^mode ⚠ yolo/m)
+  await expect.poll(() => backendMode(backend)).toBe("yolo")
+
+  await prompt(second, "/permissions manual")
+  await second.waitForText(/^mode manual/m)
+  await expect.poll(savedMode).toBe("manual")
+  const secondId = /hya · (hysec_\w+)/.exec(await second.text())![1]!
+  await prompt(second, "/new")
+  await expect.poll(async () => {
+    const id = /hya · (hysec_\w+)/.exec(await second.text())?.[1]
+    return id && id !== secondId ? id : undefined
+  }).not.toBeUndefined()
+  await second.waitForText(/^mode manual/m)
+  await expect.poll(() => backendMode(backend)).toBe("manual")
 })
 
 test.describe("bundle permission mode", () => {

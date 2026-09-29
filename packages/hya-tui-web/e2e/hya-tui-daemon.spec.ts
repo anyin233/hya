@@ -140,12 +140,12 @@ test.describe("backend daemon", () => {
     expect(await term.text()).not.toContain("Started a new server")
     expect(await term.text()).toContain(`hya · ${session}`)
     expect(successorPid).not.toBe(before)
-    expect(servePids(workspace)).toEqual([successorPid])
+    await expect.poll(() => servePids(workspace)).toEqual([successorPid])
     await prompt(term, "after the restart")
     await term.waitForText("After the new server.", 20_000)
     expect(await term.text()).toContain(`hya · ${session}`)
     await expect.poll(() => statusPid(term), { timeout: 30_000 }).toBe(successorPid)
-    expect(servePids(workspace)).toEqual([successorPid])
+    await expect.poll(() => servePids(workspace)).toEqual([successorPid])
   })
 
   test("a daemon killed with SIGKILL (no reason sent): the TUI starts the next one by itself", async ({ tui, workspace }, testInfo) => {

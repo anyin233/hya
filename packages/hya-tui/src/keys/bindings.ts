@@ -17,6 +17,11 @@ export type KeyAction =
   | "quit"
   | "eof"
   | "complete"
+  | "openCommands"
+  | "focusPaneLeft"
+  | "focusPaneRight"
+  | "focusPaneUp"
+  | "focusPaneDown"
   | "cycleMode"
   | "refresh"
   | "toggleSidebar"
@@ -33,12 +38,15 @@ export type KeyAction =
   | "undo"
   | "redo"
   | "fork"
+  | "reviewPending"
 
 /** The subset of OpenTUI's KeyEvent a binding looks at. */
 export interface KeyLike {
   name: string
   ctrl: boolean
   meta: boolean
+  /** Kitty's Option modifier; traditional terminals report Alt as `meta`. */
+  option?: boolean
   shift: boolean
   sequence: string
 }
@@ -62,7 +70,19 @@ export interface KeyBinding {
 const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.shift
 
 export const keyBindings: readonly KeyBinding[] = [
+  ...(["left", "right", "up", "down"] as const).map((direction) => ({
+    action: `focusPane${direction[0]!.toUpperCase()}${direction.slice(1)}` as KeyAction,
+    label: `Alt+${direction[0]!.toUpperCase()}${direction.slice(1)}`,
+    description: `Focus the ${direction} tiled pane`,
+    matches: (key: KeyLike) => (key.meta || key.option === true) && !key.ctrl && !key.shift && key.name === direction,
+  })),
   // The second key of a Ctrl+X chord comes first: while the chord is armed it wins over every other binding.
+  {
+    action: "openCommands",
+    label: "Ctrl+X /",
+    description: "Focus the command pane without changing the message draft",
+    matches: (key, context) => context.chord === "ctrl+x" && !key.ctrl && !key.meta && key.sequence === "/",
+  },
   {
     action: "externalEditor",
     label: "Ctrl+X Ctrl+E",
@@ -90,7 +110,7 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "chord",
     label: "Ctrl+X",
-    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor; U undo, R redo, F fork); any other next key cancels it",
+    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor; U undo, R redo, F fork, / commands); any other next key cancels it",
     matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "x" && context.chord === undefined,
   },
   {
@@ -121,8 +141,20 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "complete",
     label: "Tab",
-    description: "Complete the /command or argument; repeat to cycle",
+    description: "Complete the selected file reference in a prompt",
     matches: (key) => key.name === "tab" || key.sequence === "\t",
+  },
+  {
+    action: "openCommands",
+    label: "/",
+    description: "Focus the command pane when the message editor is empty; use Ctrl+X / while writing a message",
+    matches: (key, context) => !key.ctrl && !key.meta && key.sequence === "/" && context.composerEmpty === true,
+  },
+  {
+    action: "reviewPending",
+    label: "F4",
+    description: "Open the oldest pending permission or question in another session; then use its numbered choices",
+    matches: (key) => key.name === "f4" && !key.ctrl && !key.meta && !key.shift,
   },
   {
     action: "refresh",

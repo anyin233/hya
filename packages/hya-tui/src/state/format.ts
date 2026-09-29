@@ -145,14 +145,15 @@ export function sessionListText(state: AppState, width?: number): string {
 /**
  * One line per pending interaction the prompt does not show (asks of other
  * session trees): `! title · session · id` for permissions, `? title ·
- * session · id` for questions, where `session` is `askSessionLabel` (the
- * session is omitted when the ask names none).
+ * session` for questions, where a listed session uses its `/open` number and
+ * title; an archived/unlisted session says `saved session` instead of a raw id.
  */
 export function pendingLines(state: AppState, width?: number): string[] {
   const prompted = new Set(promptQueue(state.interactions, state).map((item) => item.id))
   return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => {
-    const session = item.session ? ` · ${askSessionLabel(item.session, state.sessions)}` : ""
-    return truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}${session} · ${item.id}`, width)
+    const label = item.session ? askSessionLabel(item.session, state.sessions) : undefined
+    const session = label ? ` · ${label === item.session ? "saved session" : label}` : ""
+    return truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}${session}`, width)
   })
 }
 
@@ -170,12 +171,12 @@ export function askSessionLabel(sessionId: string, sessions: readonly SessionInf
   return `${number}. ${session.title || session.id}`
 }
 
-/** Status line when an ask arrives for a session this TUI does not have open: which session, and how to go answer it. */
+/** Status line when an ask arrives for another session: F4 opens its normal prompt. */
 export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[]): string {
   const sessionId = interaction.session ?? ""
   const kind = interaction.type?.includes("QUESTION") ? "Question" : "Permission needed"
-  const target = sessionNumber(sessionId, sessions) ?? sessionId
-  return `${kind} in ${askSessionLabel(sessionId, sessions)} · /open ${target} to answer there`
+  const label = askSessionLabel(sessionId, sessions)
+  return `${kind} in ${label === sessionId ? "a saved session" : label} · F4 to review`
 }
 
 /** The sidebar's context box: the open session, its agent and model, message count, context occupancy and session tokens (when known), directory, server. */
@@ -425,9 +426,9 @@ export function todosText(items: { content: string; status: string }[]): string 
 
 export function mainTitle(view: View): string { return titles[view] }
 
-export function mainContent(state: AppState): string {
+export function mainContent(state: AppState, view: View = state.view): string {
   if (!state.ready) return ""
-  switch (state.view) {
+  switch (view) {
     case "chat":
       // The transcript itself is rendered per message (components/Transcript.tsx).
       return state.messages.length || state.overlay.length || state.queued.length ? "" : "No messages yet. Type a prompt below."

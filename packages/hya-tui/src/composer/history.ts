@@ -1,6 +1,6 @@
 /**
- * Input history for the composer: every submitted input (prompts, `!shell`
- * commands, slash commands), oldest first, kept for the life of the TUI
+ * Input history for one input surface (message composer or command pane):
+ * every submitted entry, oldest first, kept for the life of the TUI
  * process (not persisted). Up on the input's first line steps to older
  * entries; Down on its last line steps back and, past the newest entry,
  * restores the draft that was in the input when navigation began.

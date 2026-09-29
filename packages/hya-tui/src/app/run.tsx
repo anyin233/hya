@@ -38,6 +38,7 @@ import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { render } from "@opentui/solid"
 import type { Options } from "../cli"
 import { HyaClient } from "../client"
+import { GrpcHyaClient } from "../grpc_client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
 import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
@@ -58,6 +59,7 @@ export async function run(options: Options): Promise<void> {
   let serverToken = options.server ? envToken : undefined
   let renderer: CliRenderer | undefined
   let controller: Controller | undefined
+  let grpcClient: GrpcHyaClient | undefined
   const store = createAppStore()
   let stopping = false
   const shutdown = async (code: number, mode: ExitMode): Promise<void> => {
@@ -70,20 +72,21 @@ export async function run(options: Options): Promise<void> {
       // The terminal is being torn down anyway.
     }
     await controller?.close(mode).catch(() => undefined)
+    grpcClient?.close()
     process.exit(code)
   }
   // A signal is never a graceful exit: the session keeps running (no archive).
   for (const [signal, code] of Object.entries(exitSignals)) process.on(signal, () => void shutdown(code, "signal"))
 
-  // The database whose daemon this TUI uses: `--db`, or the default without `--server`.
-  const db = options.db ?? (options.server ? undefined : defaultDatabase(process.env))
+  // The database whose daemon this TUI uses: `--db`, or the default without an explicit transport.
+  const db = options.grpc ? undefined : options.db ?? (options.server ? undefined : defaultDatabase(process.env))
   const connect = (): Promise<Connection> => {
     const binary = resolveHyaBinary({ flag: options.hya, env: process.env })
     return connectOrStart({ bin: binary.path, directory: options.directory, db: db! })
   }
   const daemonInfo = (connection: Connection): BackendInfo => ({ pid: connection.pid, db: connection.db, startedAt: connection.startedAt })
 
-  let server = options.server
+  let server = options.grpc ? `grpc://${options.grpc}` : options.server
   let backend: BackendInfo | undefined
   try {
     if (server && db && !(await probeHealth(server, fetch, undefined, serverToken))) {
@@ -119,19 +122,23 @@ export async function run(options: Options): Promise<void> {
   }
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
-  const client = new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
+  grpcClient = options.grpc ? new GrpcHyaClient(options.grpc, options.remote ? "" : options.directory) : undefined
+  const client = grpcClient ?? new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)
   store.setBackend(backend)
   if (options.web) store.setWeb(options.web)
   if (options.webTab) store.setWebTab(true)
   if (loaded.preferences.vim) store.setVim(true)
+  if (loaded.preferences.paneLayout) store.setPaneLayout(loaded.preferences.paneLayout)
   controller = createController({
     client, store, directory: options.directory, remote: options.remote === true,
     quit: (mode) => void shutdown(0, mode),
     startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}), ...(options.resume ? { resume: options.resume } : {}) },
     connectionHint: db
       ? `the hya server daemon of ${db} did not answer · hya serve status`
+      : options.grpc
+        ? `the gRPC listener ${options.grpc} did not answer · check hya serve and HYA_GRPC_BIND`
       : options.serverLabel
         ? "the remote backend did not answer · check the link and that its hya serve --relay runs"
         : "start hya serve or drop --server",
@@ -144,6 +151,14 @@ export async function run(options: Options): Promise<void> {
             return { url: connection.url, pid: connection.pid, started: connection.started, generation: `${connection.pid}:${connection.startedAt}`, version: connection.version, startedAt: connection.startedAt }
           },
         }
+      : options.grpc && !options.remote
+        ? {
+            home: async () => {
+              await client.request("GET", "/v1/health")
+              store.setBackend({ explicit: true })
+              return { url: `grpc://${options.grpc}`, pid: 0, started: false }
+            },
+          }
       : options.server && !options.remote
         ? {
             home: async () => {
@@ -171,6 +186,7 @@ export async function run(options: Options): Promise<void> {
         }
       : {}),
     preferencesPath: prefsPath,
+    preferredPermissionMode: loaded.preferences.permissionMode,
     // The renderer exists once the first frame is due; these run on user actions after that.
     terminal: {
       copy: (text) => renderer?.copyToClipboardOSC52(text) ?? false,
