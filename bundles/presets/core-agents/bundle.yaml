@@ -1,7 +1,7 @@
 kind: AgentSetBundle
 identity:
   id: hya/core-agents
-  version: 0.43.24
+  version: 0.43.25
   publisher: hya
 extensions:
   files:

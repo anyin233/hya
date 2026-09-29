@@ -387,6 +387,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Add, list, or remove model providers (`hya provider add` walks
+    /// through base URL, protocol, and API key, and checks the model list).
+    Provider {
+        #[command(subcommand)]
+        command: crate::provider_cmd::ProviderCommand,
+    },
     /// Manage agents.
     Agent {
         #[command(subcommand)]
