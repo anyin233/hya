@@ -108,16 +108,16 @@ detect_target() {
       ;;
     Darwin)
       case $arch in
-        arm64 | aarch64) arch=aarch64 ;;
+        arm64 | aarch64) ;;
         x86_64)
           # An x86_64 shell under Rosetta on Apple silicon still gets the native build.
-          if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = 1 ]; then
-            arch=aarch64
+          if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" != 1 ]; then
+            die "no hya release for Intel Macs (Apple silicon is published)"
           fi
           ;;
         *) die "no hya release for macOS on $arch" ;;
       esac
-      printf '%s-apple-darwin\n' "$arch"
+      printf 'aarch64-apple-darwin\n'
       ;;
     *) die "no hya release for $os (Linux and macOS are published)" ;;
   esac
