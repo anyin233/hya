@@ -642,9 +642,7 @@ pub(crate) async fn restart_by_handoff(
     // otherwise erases the only durable evidence of a quick ready-then-stop.
     if let Some(state) = db_lock::read_handoff(&journal) {
         match state.stage() {
-            db_lock::HandoffStage::Requested
-            | db_lock::HandoffStage::Queued
-            | db_lock::HandoffStage::Released => {
+            db_lock::HandoffStage::Requested | db_lock::HandoffStage::Queued => {
                 let requester_alive = state
                     .stage_pid(db_lock::HandoffStage::Requested)
                     .is_some_and(|pid| pid != std::process::id() && process_alive(pid));
@@ -656,13 +654,30 @@ pub(crate) async fn restart_by_handoff(
                     );
                 }
             }
-            db_lock::HandoffStage::Ready => {
+            db_lock::HandoffStage::Released | db_lock::HandoffStage::Ready => {
+                // A resumed turn can request another restart while the
+                // previous journal still says `released`. Wait for the
+                // successor's ready evidence before replacing that journal.
+                let ready = if state.stage() == db_lock::HandoffStage::Released {
+                    db_lock::wait_handoff(&journal, db_lock::HandoffStage::Ready, HANDOFF_ACK_WAIT)
+                        .await
+                        .ok()
+                } else {
+                    Some(state)
+                };
+                let Some(ready) =
+                    ready.filter(|ready| ready.stage() != db_lock::HandoffStage::Failed)
+                else {
+                    anyhow::bail!(
+                        "the previous handoff is not ready (journal {}); wait for it to finish",
+                        journal.display()
+                    );
+                };
                 // The successor may receive SIGTERM immediately after ready.
                 // Its transfer watcher then disappears with that process, so
-                // `transferred` is not required evidence. Wait for the
-                // predecessor that still owns staged descriptors to exit;
-                // the predecessor's ready evidence makes releasing safe.
-                let predecessor = state.released_pid();
+                // `transferred` is not required evidence. The predecessor's
+                // exit makes replacing the journal safe.
+                let predecessor = ready.released_pid();
                 let deadline = tokio::time::Instant::now() + HANDOFF_ACK_WAIT;
                 while predecessor.is_some_and(process_alive)
                     && tokio::time::Instant::now() < deadline
@@ -671,7 +686,7 @@ pub(crate) async fn restart_by_handoff(
                 }
                 if predecessor.is_some_and(process_alive) {
                     anyhow::bail!(
-                        "the previous handoff predecessor is still alive (journal {}, stage Ready); wait for it to finish",
+                        "the previous handoff predecessor is still alive (journal {}); wait for it to finish",
                         journal.display()
                     );
                 }

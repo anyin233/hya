@@ -91,11 +91,11 @@ test("an @ token at the cursor is a file mention", () => {
   expect(mentionAt("see @main.ts now", 7)).toEqual({ start: 4, end: 12, query: "ma" })
   expect(mentionAt("@r", 2)).toEqual({ start: 0, end: 2, query: "r" })
   expect(mentionAt("line one\n@x", 11)).toEqual({ start: 9, end: 11, query: "x" })
-  // A bare @, an e-mail address, a token before the cursor, and slash commands do not count.
+  // A bare @, an e-mail address, and a token before the cursor do not count.
   expect(mentionAt("hi @", 4)).toBeUndefined()
   expect(mentionAt("mail me@host", 12)).toBeUndefined()
   expect(mentionAt("@abc def", 8)).toBeUndefined()
-  expect(mentionAt("/api GET @x", 11)).toBeUndefined()
+  expect(mentionAt("/api GET @x", 11)).toEqual({ start: 9, end: 11, query: "x" })
 })
 
 test("inserting a mention keeps the @ and adds one trailing space", () => {

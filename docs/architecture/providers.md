@@ -457,10 +457,15 @@ earlier assistant message. The route's replay policy is
 `{"type": "reasoning_content"}` are resent on every turn as the wire
 message's `reasoning_content`. Once a transcript holds any such part, every
 assistant wire message carries `reasoning_content`; it is `""` when that
-message had none. Reasoning from other protocols (for example Anthropic
-thinking before a model switch) is never sent, and a transcript without
-chat-native reasoning is encoded without the field. Example second request of
-a tool round:
+message had none. For `deepseek-*` model ids (any `provider/` prefix) every
+assistant wire message carries it even when the transcript holds no
+chat-native reasoning, because DeepSeek requires the field after a tool call
+whose reply streamed no reasoning delta. Reasoning from other protocols (for
+example Anthropic thinking before a model switch) is never sent, and a
+non-DeepSeek transcript without chat-native reasoning is encoded without the
+field. The upstream requirement is described in
+[DeepSeek's thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode/).
+Example second request of a tool round:
 
 ```json
 {"role": "assistant", "content": "I'll start by finding your slides draft.",

@@ -46,6 +46,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
   }
   const registry = createCommandRegistry()
   const clientWithDefaults = {
+    listSessions: async () => store.state.sessions,
     setAgentModel: async () => ({}),
     setAgentEffort: async (agent: string, effort: string) => ({ agentId: agent, effort }),
     ...client,
@@ -475,7 +476,7 @@ test("/sessions opens a picker with a New session row first, then the tree, the 
   await run("/sessions")
   expect(calls).toContain("refresh")
   const picker = pickers.at(-1)!
-  expect(picker.title).toBe("Sessions")
+  expect(picker.title).toBe("Sessions · archived included")
   expect(picker.rows.map((row) => row.id)).toEqual(["__new__", "hysec_1", "hysec_2"])
   expect(picker.rows[1]?.current).toBe(true)
   expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete", "archived", "allProjects"])

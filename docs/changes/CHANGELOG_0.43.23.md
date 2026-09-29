@@ -19,4 +19,8 @@
 
 ## Fixes
 
+- **Daemon startup survives the runtime-owner handover.** `hya serve start` now retries when the previous server has released its database lock but still holds the store's runtime-owner lock during shutdown. The temporary daemon exits with the existing retry code 75, and the starter continues until a healthy server appears or its start deadline expires.
+- **Consecutive daemon restarts complete from one agent turn.** A restart requested by a resumed shell turn now waits for the previous handoff to reach `ready` and for its predecessor to exit before replacing the handoff journal. The old server also quiesces turns before it acknowledges `queued`, so a tool result cannot begin another model round ahead of the checkpoint.
 - **Sessions with an empty thinking block open again in the TUI.** A model can open a thinking block and write no text into it. For example, Anthropic-style extended thinking can send a signature-only block. The API then returns that part as `reasoning: {}`, because protojson omits empty strings. Rendering the session's messages threw `TypeError … text.split`, so the TUI showed `Refresh failed` and stopped updating the transcript and context panel. Such a part now renders as `Thinking · 0 words`. Empty text parts are skipped as well.
+
+The previous 0.43.22 notes are archived in `docs/changes/CHANGELOG_0.43.22.md`.

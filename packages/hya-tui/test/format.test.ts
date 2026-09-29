@@ -25,8 +25,8 @@ test("renders the header, the sidebar session list, and pending lines", () => {
   expect(headerText(store.state, server)).toContain("hya-main hya/offline:default")
   expect(sessionListText(store.state)).toBe("▸ 1. hysec_1\n   hya-main\n\n  2. Second\n   hya-plan · running")
   expect(sessionListText(store.state, 10)).toBe("▸ 1. hyse…\n   hya-ma…\n\n  2. Seco…\n   hya-pl…")
-  expect(pendingLines(store.state)).toEqual(["? Pick one · req_1"])
-  expect(pendingLines(store.state, 10)).toEqual(["? Pick on…"])
+  expect(pendingLines(store.state)).toEqual(["? Pick one"])
+  expect(pendingLines(store.state, 10)).toEqual(["? Pick one"])
   expect(mainContent(store.state)).toBe("No messages yet. Type a prompt below.")
 })
 
@@ -177,7 +177,7 @@ test("asks of the open session tree are prompts, not pending lines; the sidebar 
     models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(parent)
-  expect(pendingLines(store.state)).toEqual(["? Why? · 1. Other · que_o"])
+  expect(pendingLines(store.state)).toEqual(["? Why? · 1. Other"])
   expect(sessionListText(store.state)).toBe([
     "  1. Other", "   hya-plan · ◌ waiting", "",
     "▸ 2. Parent", "   hya-main",
@@ -223,12 +223,12 @@ test("pending asks of other sessions name the session they belong to (its /open 
     models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(selected)
-  expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work · perm_x", "? Which one? · hysec_9 · que_y"])
+  expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work", "? Which one? · saved session"])
   expect(askSessionLabel("hysec_2", store.state.sessions)).toBe("2. Other work")
   expect(askSessionLabel("hysec_1", store.state.sessions)).toBe("1. hysec_1")
   expect(askSessionLabel("hysec_9", store.state.sessions)).toBe("hysec_9")
-  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions)).toBe("Permission needed in 2. Other work · /open 2 to answer there")
-  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions)).toBe("Question in hysec_9 · /open hysec_9 to answer there")
+  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions)).toBe("Permission needed in 2. Other work · F4 to review")
+  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions)).toBe("Question in a saved session · F4 to review")
 })
 
 test("the context box names the session a fork came from", () => {

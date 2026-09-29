@@ -29,10 +29,19 @@ impl Protocol for OpenAiChatProtocol {
         // Thinking-mode routes (DeepSeek, Kimi) reject a later request whose
         // assistant message lacks `reasoning_content`, so once the transcript
         // holds chat-native reasoning every assistant message carries it.
-        let thinking = req.messages.iter().any(|m| {
-            matches!(m, Message::Assistant { parts, .. }
-                if parts.iter().any(replays_reasoning))
-        });
+        // `deepseek-*` models require it even before any reasoning streamed
+        // (a tool turn whose reply had no reasoning delta).
+        let deepseek = req
+            .model
+            .as_str()
+            .rsplit('/')
+            .next()
+            .is_some_and(|model| model.starts_with("deepseek-"));
+        let thinking = deepseek
+            || req.messages.iter().any(|m| {
+                matches!(m, Message::Assistant { parts, .. }
+                    if parts.iter().any(replays_reasoning))
+            });
         if let Some(system) = &req.system {
             messages.push(json!({"role": "system", "content": system}));
         }

@@ -4,7 +4,7 @@
 // shows live, an Agent-level effort does not swallow it, and the choice
 // survives a TUI restart against the same daemon/database. The narrow resize,
 // picker escape, and exit paths remain covered below.
- 
+
 import type { Tui } from "./harness"
 import { expect, hangStep, hyaTui, test, textStep, type FakeModel } from "./hya"
 

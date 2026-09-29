@@ -120,6 +120,7 @@ impl SessionEngine {
     /// Replace `session`'s captured chain with `binding`'s chain for
     /// `stable_agent_id` (see the module contract), starting dispatchers new
     /// to the session.
+    #[expect(clippy::nonminimal_bool, reason = "preserve the upstream predicate")]
     pub(crate) async fn swap_session_hooks(
         &self,
         session: SessionId,

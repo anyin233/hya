@@ -2,7 +2,7 @@
  * TUI preferences (docs/tui.md "Preferences file"): a small JSON object in
  * `$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
  * `~/.config/hya/tui.json`. The TUI reads it once at start and writes it
- * when a preference changes (`/theme`, `/vim`).
+ * when a preference changes (`/theme`, `/vim`, `/permissions`).
  *
  * - Missing file: no preferences, no warning.
  * - Unreadable or corrupt file (not a JSON object): no preferences, and a
@@ -17,6 +17,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { parsePaneLayout, type PaneLayout } from "./state/panes"
 
 /** The known preference keys. Every key is optional; unset means the built-in default. */
 export interface TuiPreferences {
@@ -26,6 +27,10 @@ export interface TuiPreferences {
   vim?: boolean
   /** Desktop notifications when unfocused (`/notifications`; src/notify.ts); default on. */
   notifications?: boolean
+  /** Default permission mode for sessions this TUI creates; unset defaults to manual. */
+  permissionMode?: string
+  /** Versioned whole-workspace split tree; exactly one conversation pane. */
+  paneLayout?: PaneLayout
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -34,6 +39,8 @@ const validators: Validators = {
   theme: (value): value is string => typeof value === "string" && value.length > 0,
   vim: (value): value is boolean => typeof value === "boolean",
   notifications: (value): value is boolean => typeof value === "boolean",
+  permissionMode: (value): value is string => typeof value === "string" && value.trim().length > 0,
+  paneLayout: (value): value is PaneLayout => parsePaneLayout(value) !== undefined,
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */
@@ -80,8 +87,10 @@ export function loadPreferences(path: string): LoadedPreferences {
   if (raw === null) return { preferences: {}, warning: `Ignored unreadable TUI preferences ${path}` }
   const preferences: Record<string, unknown> = {}
   for (const [key, valid] of Object.entries(validators) as [string, (value: unknown) => boolean][]) {
-    if (!(key in raw) || !valid(raw[key])) continue
-    preferences[key] = raw[key]
+    if (key === "paneLayout") {
+      const layout = parsePaneLayout(raw[key])
+      if (layout) preferences[key] = layout
+    } else if (key in raw && valid(raw[key])) preferences[key] = raw[key]
   }
   return { preferences: preferences as TuiPreferences }
 }

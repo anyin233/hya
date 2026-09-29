@@ -74,7 +74,7 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
   await term.press("Escape")
   await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL -- · /)
   await keys(term, "dd")
-  await expect.poll(() => composerText(term)).toBe("Message, /command, !shell, or @file")
+  await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
   await term.press("u")
   await expect.poll(() => composerText(term)).toBe("alpha gamma")
 
@@ -95,13 +95,13 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
 
   // Enter in normal mode sends; the next input starts in insert mode.
   await term.press("Enter")
-  await expect.poll(() => composerText(term)).toBe("Message, /command, !shell, or @file")
+  await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
   expect(await term.find("next line")).not.toBeNull()
   await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
 
   // A restarted TUI reads `vim: true` and starts in insert mode.
   term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
-  await term.waitForText("Connected to hya")
+  await term.waitForText("next line")
   await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
   await term.type("/vim off")
   await term.press("Enter")
@@ -154,6 +154,6 @@ test.describe("Esc precedence with vim on", () => {
     expect(await composerText(term)).toBe("draft")
     // No turn now: Esc in normal mode clears the input (the usual last meaning).
     await term.press("Escape")
-    await expect.poll(() => composerText(term)).toBe("Message, /command, !shell, or @file")
+    await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
   })
 })

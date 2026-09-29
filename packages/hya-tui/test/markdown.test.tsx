@@ -120,6 +120,23 @@ test("partial markdown while streaming: an unclosed fence and unclosed emphasis 
   expect(span("bold")!.attributes & 1).toBe(1)
 })
 
+test("streamed heading prefixes never render their raw hash markers", async () => {
+  const [text, setText] = createSignal("")
+  await render(text, () => true)
+  const raw: string[] = []
+  for (const prefix of ["### ", "### Stream", "### Streaming heading", "### Streaming heading\n\nAfter"]) {
+    setText(prefix)
+    await setup!.renderOnce()
+    if (frame().some((line) => /^###(?:\s|$)/.test(line.trimStart()))) raw.push(prefix)
+  }
+  expect(raw).toEqual([])
+})
+
+test("a hash line in a streaming fenced code block remains visible", async () => {
+  await render(() => "```md\n### ", () => true)
+  await until(() => frame().some((line) => line.trim() === "###"), "hashes in a code block")
+})
+
 test("a reply whose stream ends with the last delta re-parses: an unclosed fence from a delta never splits the block", async () => {
   const reply = "Intro\n\n- item\n\n```ts\nconst answer = \"forty-two\"\n```\n\nDone."
   for (const order of ["same update", "streaming ends first"] as const) {

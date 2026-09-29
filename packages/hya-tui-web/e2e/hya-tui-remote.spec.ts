@@ -104,14 +104,24 @@ test.describe("/connect-remote", () => {
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
     await term.waitForText(/Project remote-project/)
+    // Keep /status in command history before /layout: the recall sequence
+    // below checks that neither command includes the secret relay link.
+    await prompt(term, "/status")
+    await term.waitForText(`remote: ${remote.relay}`)
+    await prompt(term, "/layout show")
     // A prompt over the relay, answered by the remote's offline model.
     await prompt(term, "hello over the relay")
     await term.waitForText("No live provider is available", 20_000)
     await term.attach(testInfo, "remote-session")
 
-    // Up recalls the command without its link.
-    await term.press("ArrowUp")
-    await term.press("ArrowUp")
+    // The command pane has its own history; Shift+Up recalls the command
+    // without its link, while the message composer keeps only prompt history.
+    await term.type("/")
+    await term.press("Shift+ArrowUp")
+    await term.waitForText("/layout show")
+    await term.press("Shift+ArrowUp")
+    await term.waitForText("/status")
+    await term.press("Shift+ArrowUp")
     await term.waitForText("/connect-remote")
     expect(await term.find(secretOf(remote.link))).toBeNull()
     // Run again, the recalled command asks for the link in the concealed entry; Esc cancels it.

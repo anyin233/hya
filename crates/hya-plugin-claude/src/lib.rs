@@ -45,7 +45,12 @@ mod tests {
 
     #[test]
     fn pinned_constants_match_adapter_package() {
-        assert!(!CLAUDE_ADAPTER_VERSION.is_empty());
+        let Ok(package) =
+            serde_json::from_str::<serde_json::Value>(include_str!("../adapter/package.json"))
+        else {
+            panic!("Claude adapter package.json must be valid JSON");
+        };
+        assert_eq!(package["version"].as_str(), Some(CLAUDE_ADAPTER_VERSION));
         assert_eq!(CLAUDE_PLUGIN_KIND, "claude");
         assert_eq!(PLUGIN_MANIFEST_FILE, "plugin.json");
     }

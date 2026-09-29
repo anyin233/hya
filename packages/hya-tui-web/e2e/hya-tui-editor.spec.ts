@@ -51,7 +51,7 @@ test("Ctrl+X Ctrl+E edits the input in $EDITOR and puts the result back, unsent"
   // Enter sends the edited text as usual.
   await term.press("Enter")
   await term.waitForText("edited: draft words")
-  await expect.poll(() => composerText(term)).toBe("Message, /command, !shell, or @file")
+  await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
 })
 
 test("/editor with $VISUAL (arguments allowed) wins over $EDITOR", async ({ tui, backend }) => {

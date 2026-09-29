@@ -4,10 +4,11 @@
 // - `POST /v1/chat/completions` — OpenAI Chat Completions, for hya's
 //   `openai-compatible` provider kind. hya only decodes what
 //   `crates/hya-provider/src/openai/decoder.rs` (`OpenAiChatDecoder`) reads
-//   from each SSE chunk: `choices[0].delta.content`, `choices[0].delta.tool_calls`
+//   from each SSE chunk: `choices[0].delta.content`,
+//   `choices[0].delta.reasoning_content`, `choices[0].delta.tool_calls`
 //   (`index`/`id`/`function.name`/`function.arguments`), `choices[0].finish_reason`,
-//   and a trailing `usage` object. It does not read `reasoning_content`, so a
-//   `reasoningStep` on this protocol streams only its answer text.
+//   and a trailing `usage` object. This fake model sends only answer text for
+//   a `reasoningStep` on this protocol.
 // - `POST /v1/responses` — the OpenAI Responses API, for hya's
 //   `openai-response` provider kind. `OpenAiResponsesDecoder`
 //   (`crates/hya-provider/src/openai/response_decoder.rs`) reads
@@ -42,8 +43,8 @@ export type TextStep = {
 
 /**
  * Stream reasoning (thinking) text, then the answer text, then finish `stop`.
- * Reasoning is only decoded by hya on the Responses protocol; the chat
- * protocol streams just `text`.
+ * This fake model sends reasoning only on the Responses protocol; its chat
+ * route streams just `text`.
  */
 export type ReasoningStep = {
   type: "reasoning"

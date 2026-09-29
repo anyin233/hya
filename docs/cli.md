@@ -944,6 +944,21 @@ after the action. The path is made absolute.
 | `check [--json]` | Compose the complete runtime a daemon start would (configuration without the offline fallback, providers, first-party and installed bundles, native tool libraries, plugins, startup recovery) against a private `VACUUM INTO` snapshot of the database (an in-memory store when the file does not exist), then shut it down and delete the snapshot. Binds no port, takes no lock of the live database, publishes nothing; safe beside a running daemon. | `hya <version> composes its runtime (<exe>)`; `--json`: `{"ok": true, "version", "exe"}` or `{"ok": false, "version", "exe", "error"}` | **0** composes; **1** otherwise |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
 
+`start` also retries a brief runtime-owner lock race after the previous daemon
+releases its database lock. A retrying child exits with status **75**; the
+`start` command keeps waiting up to its normal 60-second deadline and returns
+the healthy daemon's URL and pid. For example, `hya serve start --db s.db`
+can follow a `hya serve stop --db s.db` while the old process is finishing
+shutdown.
+
+The `restart` response means the old daemon has queued the handoff and is
+already refusing new turns. If a resumed shell turn immediately runs
+`hya serve restart --db s.db` again, the second request waits up to 10 seconds
+for the previous handoff to reach `ready` and for its predecessor to exit.
+Then it records its own request and returns the same queued response. The
+handoff journal stages remain `requested`, `queued`, `released`, `ready`, and
+`transferred`; `hya serve status --db s.db` reports the current generation.
+
 `start` and `restart` accept the relay flags of plain `hya serve`
 (`--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`,
 `--relay-heartbeat`). The daemon joins the relay at start but never prints

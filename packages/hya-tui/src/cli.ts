@@ -2,15 +2,17 @@
 import { resolve } from "node:path"
 
 export interface Options {
-  /** Base URL of a running `hya serve`; unset = the TUI finds or starts its database's daemon (src/launch.ts). */
+  /** Base URL of a running `hya serve`; unset with no `--grpc` = the TUI finds or starts its database's daemon (src/launch.ts). */
   server?: string
+  /** Direct hya.v1 gRPC listener (`--grpc HOST:PORT`); no daemon is started. */
+  grpc?: string
   /** Workspace directory: the `directory` scope of every scoped request (a started daemon runs in the home directory, not here). */
   directory: string
   /** `hya` binary that starts the daemon (`--hya`); else `HYA_BIN`, else `hya` on PATH. */
   hya?: string
   /**
    * The database whose daemon the TUI uses (`--db`); default
-   * `$XDG_STATE_HOME/hya/sessions.db` without `--server`. With `--server` it
+   * `$XDG_STATE_HOME/hya/sessions.db` without `--server` or `--grpc`. With `--server` it
    * names the database behind that URL, so the TUI can find or restart its
    * daemon when the server goes away; without it, `--server` is fixed.
    */
@@ -56,7 +58,7 @@ export interface WebInfo {
 
 export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
 
-Without --server the TUI uses the backend daemon of --db: the server already
+Without --server or --grpc the TUI uses the backend daemon of --db: the server already
 running on it (its <db>.server.json answers), else a new one it starts with
 \`hya serve start\` (detached, in the home directory). The daemon keeps
 running after the TUI exits; \`hya serve stop\` stops it, and the TUI then
@@ -67,11 +69,13 @@ Options:
   --server URL      Connect to this hya server instead of the database's
                     daemon; with --db, a lost server is replaced by the
                     database's daemon
+  --grpc HOST:PORT  Connect directly to a hya.v1 gRPC listener; cannot be
+                    combined with --server or --db
   --dir PATH        Workspace directory (default: the current directory)
   --hya PATH        hya binary that starts the daemon; lookup order: --hya,
                     then HYA_BIN, then hya on PATH
   --db PATH         SQLite database whose daemon to use
-                    (default without --server: $XDG_STATE_HOME/hya/sessions.db,
+                    (default without --server or --grpc: $XDG_STATE_HOME/hya/sessions.db,
                     else ~/.local/state/hya/sessions.db)
   -c, --continue    Open the most recent top-level session of the Project
                     that contains --dir (not archived)
@@ -96,13 +100,14 @@ Options:
   -h, --help        Show this help
 
 Environment:
-  HYA_TUI_CONFIG    TUI preferences file (theme); default
+  HYA_TUI_CONFIG    TUI preferences file (theme, permission mode); default
                     $XDG_CONFIG_HOME/hya/tui.json, else ~/.config/hya/tui.json
 `
 
 /** Parse the flags above; returns null for `--help`. */
 export function parseArguments(argv: string[], cwd = process.cwd()): Options | null {
   let server: string | undefined
+  let grpc: string | undefined
   let directory = cwd
   let hya: string | undefined
   let db: string | undefined
@@ -128,6 +133,7 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     }
     else if (value === undefined) throw new Error(`Unknown or incomplete option: ${arg}`)
     else if (arg === "--server") server = argv[++index]!
+    else if (arg === "--grpc") grpc = argv[++index]!
     else if (arg === "--dir") directory = argv[++index]!
     else if (arg === "--hya") hya = argv[++index]!
     else if (arg === "--db") db = argv[++index]!
@@ -139,7 +145,16 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
   if (reopen && (resume || session)) throw new Error("--resume cannot be combined with --continue or --session")
+  if (grpc !== undefined && (server !== undefined || db !== undefined)) throw new Error("--grpc cannot be combined with --server or --db")
   const options: Options = { directory: resolve(directory), continue: resume }
+  if (grpc !== undefined) {
+    const address = grpc.replace(/^grpc:\/\//, "")
+    const url = new URL(`http://${address}`)
+    if (!url.hostname || !url.port || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
+      throw new Error("--grpc needs a host:port without a path or credentials")
+    }
+    options.grpc = url.host
+  }
   if (server !== undefined) {
     const url = new URL(server)
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("--server needs an HTTP URL")

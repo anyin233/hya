@@ -30,7 +30,7 @@ async function at(term: Tui, needle: string) {
 async function promptShown(term: Tui, title: RegExp | string = "Permission"): Promise<void> {
   await term.waitForText(title, 20_000)
   const box = typeof title === "string" ? await at(term, title) : undefined
-  const input = await at(term, "Message, /command, !shell, or @file")
+  const input = await at(term, "Message, !shell, or @file · / commands")
   if (box) expect(box.row).toBeLessThan(input.row)
 }
 
@@ -345,7 +345,7 @@ test.describe("asks of other sessions", () => {
   test.use({ model: { steps: [toolStep("bash", { command: "echo from-elsewhere" }), textStep("Elsewhere done.")] } })
 
   for (const [name, viewport] of [["default", undefined], ["about 80 columns", { width: 690, height: 480 }]] as const) {
-    test(`an ask raised in another session shows live with its session; /open jumps there to answer (${name})`, async ({ tui, backend }, testInfo) => {
+    test(`an ask raised in another session shows live; F4 opens its numbered prompt (${name})`, async ({ tui, backend }, testInfo) => {
       const proxy = await startProxy(backend.url)
       const term = await tui(hyaTui({ ...backend, url: proxy.url }), viewport ? { viewport } : {})
       await term.waitForText("Connected to hya")
@@ -360,17 +360,16 @@ test.describe("asks of other sessions", () => {
       await term.waitForText(/Pending \(1\)/, 20_000)
       const shown = Date.now()
       await term.waitForText(new RegExp(`! bash echo from-elsewhere · \\d+\\. ${other.slice(0, 12)}`))
-      await term.waitForText(/Permission needed in \d+\. hysec_\w+ · \/open \d+ to answer there/)
-      await term.waitForText("/open <n> answers there")
+      await term.waitForText(/Permission needed in \d+\. hysec_\w+ · F4 to review/)
+      await term.waitForText("F4 review request")
       // Pushed, not polled: no interactions listing between the other turn and the ask showing up.
       expect(proxy.log.filter((entry) => entry.at >= started && entry.at <= shown && entry.path.startsWith("/v1/interactions"))).toEqual([])
       // The open session's own prompt dock does not take another session's ask.
       expect(await term.find("asked by hya-main")).toBeNull()
       await term.attach(testInfo, "other-session-ask")
 
-      // Jump there: its prompt shows, and answering it finishes that turn.
-      const target = /\/open (\d+) to answer there/.exec(await term.text())![1]!
-      await prompt(term, `/open ${target}`)
+      // F4 opens the request's session: its normal numbered prompt answers it.
+      await term.press("F4")
       await term.waitForText("asked by hya-main", 20_000)
       await term.waitForText("│ $ echo from-elsewhere")
       await term.waitForText(`hya · ${other}`)

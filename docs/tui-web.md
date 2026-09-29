@@ -274,13 +274,14 @@ protocol, so the same steps work on either:
 
 | Route | Protocol | hya provider kind | What hya decodes |
 | --- | --- | --- | --- |
-| `POST /v1/chat/completions` | `chat` (default) | `openai-compatible` | `delta.content`, `delta.tool_calls`, `finish_reason`, trailing `usage` (`crates/hya-provider/src/openai/decoder.rs`). No reasoning: `reasoning_content` is ignored. |
+| `POST /v1/chat/completions` | `chat` (default) | `openai-compatible` | `delta.content`, `delta.reasoning_content`, `delta.tool_calls`, `finish_reason`, trailing `usage` (`crates/hya-provider/src/openai/decoder.rs`). |
 | `POST /v1/responses` | `responses` | `openai-response` | `response.reasoning_summary_text.delta`, `response.output_item.added/done` (reasoning and `function_call` items), `response.function_call_arguments.delta`, `response.output_text.delta/done`, and the typed terminal `response.completed` or `response.incomplete` (`crates/hya-provider/src/openai/response_decoder.rs`). The stream never sends `[DONE]`. |
 
 It mirrors the process-level Rust reference (`crates/hya-e2e/src/fake_llm.rs`)
 but runs inside the Playwright/Node process, so a spec needs no extra binary.
-Reasoning only reaches the TUI on the `responses` protocol; on `chat` a
-`reasoningStep` streams just its answer text.
+The fake model emits reasoning only on the `responses` protocol; on `chat` a
+`reasoningStep` streams just its answer text. A Chat provider that sends
+`delta.reasoning_content` produces reasoning parts in the TUI.
 
 Step types (`e2e/fake-model.ts`):
 

@@ -5,6 +5,7 @@ import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from 
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
+import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -62,11 +63,11 @@ export function backendText(backend: BackendInfo | undefined, serverPid?: number
  * Open the `/sessions` picker (C13): a `New session` row first, then the
  * tree, scoped to the active Project unless F3's "all projects" toggle is on
  * (state/store.ts `sessionsPickerAllProjects`); Enter opens, F2 renames,
- * Ctrl+D deletes with confirmation, Ctrl+A shows or hides archived sessions
- * (listed with `includeArchived`, tagged `archived`; opening one unarchives
+ * Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions
+ * (listed with `includeArchived` by default, tagged `archived`; opening one unarchives
  * it, like `/resume`).
  */
-async function openSessionsPicker(context: CommandContext, showArchived = false): Promise<void> {
+async function openSessionsPicker(context: CommandContext, showArchived = true): Promise<void> {
   const { store, client, actions } = context
   const allProjects = store.state.sessionsPickerAllProjects
   // The sidebar keeps the default listing; the archived view is this picker's own.
@@ -306,6 +307,69 @@ const runEffort = (context: CommandContext, { args }: CommandInvocation): Promis
   args[0] ? selectEffort(context, args[0]) : openEffortPicker(context)
 
 export const nativeCommandSpecs: CommandSpec[] = [
+  {
+    name: "/layout",
+    description: "Edit workspace panes: split, assign, focus, resize, close, reset, or show",
+    argumentHint: "[split|assign|focus|resize|close|reset|show]",
+    complete: ({ words, current, head }) => {
+      if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
+      if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
+      if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation"))
+      if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
+      if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down"])
+      return []
+    },
+    run: ({ store, actions }, { args }) => {
+      const current = store.state.paneLayout
+      const command = args[0] ?? "show"
+      let next: PaneLayout = current
+      switch (command) {
+        case "show": break
+        case "split": {
+          const axis = args[1]
+          const kind = args[2] ?? "jobs"
+          if ((axis !== "horizontal" && axis !== "vertical") || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout split <horizontal|vertical> [job]")
+          next = splitPane(current, axis as PaneAxis, kind as PaneKind)
+          break
+        }
+        case "assign": {
+          const kind = args[1]
+          if (!kind || !paneKinds.includes(kind as PaneKind)) throw new Error(`Usage: /layout assign <${paneKinds.join("|")}>`)
+          next = setPaneKind(current, kind as PaneKind)
+          break
+        }
+        case "focus": {
+          const target = args[1]
+          if (!target) throw new Error("Usage: /layout focus <left|right|up|down|pane-id>")
+          if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection).active }
+          else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target)) next = { ...current, active: target }
+          else throw new Error(`Unknown pane ${target}`)
+          break
+        }
+        case "resize": {
+          const percent = args[1]
+          if (!percent || !/^[+-]\d{1,2}$/.test(percent) || Number(percent) === 0) throw new Error("Usage: /layout resize <+10|-10> (percentage points)")
+          next = resizePane(current, Number(percent) / 100)
+          break
+        }
+        case "close": next = closePane(current); break
+        case "reset": next = defaultPaneLayout(); break
+        default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reset|show]")
+      }
+      store.setView("chat")
+      const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
+      store.setProjectsSidebarFocus(command === "focus" && active?.kind === "projects")
+      if (next !== current) {
+        store.setPaneLayout(next)
+        try { actions.savePreferences({ paneLayout: next }) }
+        catch (error) {
+          store.setStatus(`Layout changed, not saved: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+      }
+      store.setStatus(`Layout · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reset`)
+    },
+  },
   {
     name: "/help",
     description: "Show every key and command in a filterable overlay (also ? on an empty input)",

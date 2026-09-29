@@ -45,6 +45,30 @@ test.describe("streamed reply", () => {
   })
 })
 
+test.describe("streamed Markdown heading", () => {
+  test.use({ model: { steps: [textStep("Intro.\n\n### Streaming heading\n\nAfter heading.", { chunkSize: 4, delayMs: 200 })] } })
+
+  test("keeps a heading styled without exposing markers between streamed chunks", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "show a heading")
+
+    let rawHeadingFrame = ""
+    let unstyledHeadingFrame = ""
+    await expect.poll(async () => {
+      const screen = await term.text()
+      if (/^\s*###(?:\s|$)/m.test(screen)) rawHeadingFrame = screen
+      const heading = await term.find("Stre")
+      if (heading && (await term.cell(heading.row, heading.col))?.fg !== "#73c8e8") unstyledHeadingFrame = screen
+      return screen.includes("After heading.")
+    }, { intervals: [10], timeout: 20_000 }).toBe(true)
+    await term.waitForText(readyLine)
+    await term.attach(testInfo, "settled-heading")
+    expect(rawHeadingFrame, "the streamed heading briefly exposed its Markdown markers").toBe("")
+    expect(unstyledHeadingFrame, "the streamed heading briefly lost its accent color").toBe("")
+  })
+})
+
 test.describe("queued prompt", () => {
   test.use({ model: { steps: [hangStep(), textStep("second reply marker q2")] } })
 
