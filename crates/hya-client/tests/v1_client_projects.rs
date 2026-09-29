@@ -35,7 +35,7 @@ async fn serve() -> String {
     let app = router(AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
-            name: AgentName::new("build"),
+            name: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
             workdir: std::env::temp_dir(),
@@ -83,7 +83,7 @@ async fn client_manages_projects() {
 
     let session = client
         .create_session(&pb::CreateSessionRequest {
-            agent: "build".into(),
+            agent: "hya-main".into(),
             model: "fake".into(),
             workdir: Some("/client/repo/src".into()),
             kind: pb::SessionKind::Project as i32,

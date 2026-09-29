@@ -8,7 +8,7 @@ const ask: Interaction = { id: "que_1", session: "hysec_1", type: "INTERACTION_T
 
 function harness(respond: (id: string, body: unknown) => Promise<unknown>) {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setInteractions([perm, ask])
   const sent: [string, unknown][] = []
   let listed = 0

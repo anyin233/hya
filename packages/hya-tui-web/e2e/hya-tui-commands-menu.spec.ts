@@ -294,7 +294,7 @@ test.describe("/status", () => {
     await term.waitForText("Server      http")
     await term.waitForText("Directory   ")
     await term.waitForText("Session     hysec_")
-    await term.waitForText("Agent       build")
+    await term.waitForText("Agent       hya-main")
     await term.waitForText("Model       hya/offline")
     await term.waitForText("Mode        manual")
   })

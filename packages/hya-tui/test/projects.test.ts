@@ -82,7 +82,7 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
   const client = {
     get directory() { return directory },
     setDirectory(next: string) { directory = next; calls.push(["setDirectory", next]) },
-    bootstrap: async () => ({ location: { version: "test" }, agents: [{ name: "build" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] }),
+    bootstrap: async () => ({ location: { version: "test" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] }),
     ensureProjectForPath: async (path: string) => {
       calls.push(["ensureProjectForPath", path])
       return { project: work, created: false }
@@ -108,7 +108,7 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
     listSessions: async (filter?: { projectId?: string }) => sessions.filter((row) => !filter?.projectId || row.projectId === filter.projectId),
     listInteractions: async () => [],
     listModels: async () => [{ id: "hya/echo", providerId: "hya", modelId: "echo", reasoning: true, reasoningVariants: ["low", "medium"] }],
-    listAgents: async () => [{ name: "build" }],
+    listAgents: async () => [{ name: "hya-main" }],
     listWorkflows: async () => [],
     listProviders: async () => [],
     listCommands: async () => [],
@@ -205,10 +205,10 @@ test("newTemporarySession creates a SESSION_KIND_TEMPORARY session", async () =>
 test("switchProject sets the active Project and scope, opens its newest root session, and restarts the stream", async () => {
   const h = harness({
     sessions: [
-      { id: "w1", agent: "build", workdir: "/work", projectId: "prj_work", timeUpdated: "2026-09-25T10:00:00Z" },
-      { id: "o1", agent: "build", workdir: "/other", projectId: "prj_other", timeUpdated: "2026-09-25T09:00:00Z" },
-      { id: "o2", agent: "build", workdir: "/other/x", projectId: "prj_other", timeUpdated: "2026-09-25T11:00:00Z" },
-      { id: "o2-kid", agent: "explore", workdir: "/other/x", projectId: "prj_other", parent: "o2", timeUpdated: "2026-09-25T12:00:00Z" },
+      { id: "w1", agent: "hya-main", workdir: "/work", projectId: "prj_work", timeUpdated: "2026-09-25T10:00:00Z" },
+      { id: "o1", agent: "hya-main", workdir: "/other", projectId: "prj_other", timeUpdated: "2026-09-25T09:00:00Z" },
+      { id: "o2", agent: "hya-main", workdir: "/other/x", projectId: "prj_other", timeUpdated: "2026-09-25T11:00:00Z" },
+      { id: "o2-kid", agent: "hya-scout", workdir: "/other/x", projectId: "prj_other", parent: "o2", timeUpdated: "2026-09-25T12:00:00Z" },
     ],
   })
   await h.controller.start()
@@ -230,9 +230,9 @@ test("--continue opens the newest root session of the ensured Project, whatever 
   const h = harness({
     startup: { continue: true },
     sessions: [
-      { id: "old", agent: "build", workdir: "/work/sub", projectId: "prj_work", timeUpdated: "2026-09-25T10:00:00Z" },
-      { id: "newer", agent: "build", workdir: "/docs", projectId: "prj_work", timeUpdated: "2026-09-25T11:00:00Z" },
-      { id: "foreign", agent: "build", workdir: "/work/sub", projectId: "prj_other", timeUpdated: "2026-09-25T12:00:00Z" },
+      { id: "old", agent: "hya-main", workdir: "/work/sub", projectId: "prj_work", timeUpdated: "2026-09-25T10:00:00Z" },
+      { id: "newer", agent: "hya-main", workdir: "/docs", projectId: "prj_work", timeUpdated: "2026-09-25T11:00:00Z" },
+      { id: "foreign", agent: "hya-main", workdir: "/work/sub", projectId: "prj_other", timeUpdated: "2026-09-25T12:00:00Z" },
     ],
   })
   await h.controller.start()

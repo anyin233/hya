@@ -65,7 +65,7 @@ async function reachable(url: string): Promise<boolean> {
  * `pgrep`, to match the full argv on macOS and Linux).
  */
 function pids(needle: string, except?: string): number[] {
-  return execFileSync("ps", ["-axo", "pid=,command="]).toString().split("\n")
+  return execFileSync("ps", ["-axo", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 }).toString().split("\n")
     .filter((line) => line.includes(needle) && !(except && line.includes(except)))
     .map((line) => Number(line.trim().split(/\s+/)[0]))
 }

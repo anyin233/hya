@@ -199,7 +199,7 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
 
     let old_binding = engine.bind_runtime(&workdir).expect("bind old catalog");
     let old_generation = old_binding.generation();
-    assert!(old_binding.resolve_agent("general").is_some());
+    assert!(old_binding.resolve_agent("hya-task").is_some());
     assert!(old_binding.resolve_agent("installed-agent").is_none());
 
     let installed = prepare_package(installed_source()).expect("prepare installed bundle");
@@ -869,7 +869,7 @@ for line in sys.stdin:
         .unwrap();
     refresh.refresh_if_changed(&runtime).await.unwrap();
     let binding = runtime.bind_turn(&root).unwrap();
-    let retained_hooks = binding.bundle_hooks_for_agent("build");
+    let retained_hooks = binding.bundle_hooks_for_agent("hya-main");
     assert_eq!(retained_hooks.len(), 1);
     drop(binding);
     registry.uninstall("acme/hook-files").await.unwrap();

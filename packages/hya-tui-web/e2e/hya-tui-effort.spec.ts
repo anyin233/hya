@@ -191,7 +191,7 @@ test.describe("hya TUI /effort", () => {
   })
 
   test("an Agent-level effort does not swallow /effort: the switch applies and survives a restart", async ({ tui, backend, fakeModel }) => {
-    const response = await fetch(`${backend.url}/v1/agent-efforts/build`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ effort: "high" }) })
+    const response = await fetch(`${backend.url}/v1/agent-efforts/hya-main`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ effort: "high" }) })
     expect(response.ok).toBe(true)
     const first = await tui(hyaTui(backend))
     await first.waitForText("Connected to hya")

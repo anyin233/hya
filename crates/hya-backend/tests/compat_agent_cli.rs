@@ -18,7 +18,7 @@ fn agent_list_prints_compat_native_agent_shape() -> Result<(), Box<dyn std::erro
     assert_eq!(
         String::from_utf8(output.stdout)?,
         concat!(
-            "build (primary)\n",
+            "hya-main (primary)\n",
             "  [\n",
             "  {\n",
             "    \"permission\": \"read\",\n",
@@ -194,19 +194,19 @@ fn exec_records_the_callers_working_directory_as_the_session_workdir()
 fn exec_starts_the_root_session_under_the_configured_default_agent()
 -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-exec-default-agent")?;
-    write_config_with_default_agent(&env, "plan")?;
+    write_config_with_default_agent(&env, "hya-plan")?;
 
     let output = hya_command(&env)
         .args(["exec", "--json", "hello"])
         .output()?;
-    assert_success("exec --json (default_agent: plan)", &output);
+    assert_success("exec --json (default_agent: hya-plan)", &output);
 
     let stdout = String::from_utf8(output.stdout)?;
     let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
     assert_eq!(
-        agent, "plan",
+        agent, "hya-plan",
         "hya exec must start the root session under the configured `default_agent`, \
-         not the built-in `build` agent:\n{stdout}"
+         not the built-in `hya-main` agent:\n{stdout}"
     );
 
     Ok(())
@@ -288,7 +288,7 @@ fn exec_fails_clearly_when_default_agent_is_unselectable() -> Result<(), Box<dyn
     assert!(
         !output.status.success(),
         "exec should fail clearly on an unselectable default_agent instead of \
-         silently falling back to `build`:\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+         silently falling back to `hya-main`:\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

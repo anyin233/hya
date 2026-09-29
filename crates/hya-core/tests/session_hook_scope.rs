@@ -248,7 +248,7 @@ async fn create(engine: &SessionEngine, root: &Path, project: ProjectId) -> Sess
     engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: root.to_string_lossy().into_owned(),
             project: Some(project),

@@ -162,7 +162,7 @@ async fn t2_29_bundle_apis_serve_session_and_global_endpoints() {
                     json!({
                         "description": "apis child",
                         "prompt": "do the child work",
-                        "subagent_type": "general",
+                        "subagent_type": "hya-task",
                         "inline_agent": {
                             "description": "",
                             "category": "",

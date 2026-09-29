@@ -153,7 +153,7 @@ test("task: the child agent, description, and the child session from the output"
   })
   expect(card.summary).toBe("scout · survey the repo")
   expect(card.task).toEqual({ agent: "scout", description: "survey the repo", child: "hysec_child" })
-  expect(toolCard({ tool: "task", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: json({ description: "x", prompt: "p" }) }).task).toEqual({ agent: "general", description: "x" })
+  expect(toolCard({ tool: "task", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: json({ description: "x", prompt: "p" }) }).task).toEqual({ agent: "hya-task", description: "x" })
 })
 
 test("MCP and other tools show the name and compact arguments", () => {

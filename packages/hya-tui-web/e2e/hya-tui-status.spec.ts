@@ -73,8 +73,8 @@ test.describe("streaming assistant header spinner", () => {
     await prompt(term, "hello")
     // Before the first chunk lands, the assistant header's marker (column 0
     // of its row) is the spinner, not ●: distinguish it from the top header
-    // line's `· build …`, which has no spinner glyph before the name.
-    const running = new RegExp(`${spinner.source} build`)
+    // line's `· hya-main …`, which has no spinner glyph before the name.
+    const running = new RegExp(`${spinner.source} hya-main`)
     await term.waitForText(running, 20_000)
     const header = await match(term, running)
     expect((await term.cell(header.row, header.col))?.char).toMatch(spinner)

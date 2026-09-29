@@ -7,7 +7,7 @@ const context = {
   sessions: ["hysec_1"],
   workflows: ["release"],
   interactions: ["req_1"],
-  agents: ["build"],
+  agents: ["hya-main"],
   apiOperations: ["GET /v1/health", "GET /v1/models"],
 }
 

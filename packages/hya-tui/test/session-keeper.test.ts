@@ -9,7 +9,7 @@ function exitServer(sessions: Record<string, Partial<SessionInfo>>, archiveFails
   const client = {
     getSession: async (id: string): Promise<SessionInfo> => {
       reads.push(id)
-      return { id, agent: "build", workdir: "/w", ...sessions[id] }
+      return { id, agent: "hya-main", workdir: "/w", ...sessions[id] }
     },
     archiveSession: async (id: string): Promise<void> => {
       if (archiveFails) throw new Error("offline")

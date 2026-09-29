@@ -381,7 +381,7 @@ subagent's ``Finish your task with `report` `` (see
 ```ts
 test.use({ model: { steps: [] } })
 test("subagent", async ({ fakeModel }) => {
-  fakeModel!.route("NEVER call `report`", [toolStep("task", { description: "survey", prompt: "list files", subagent_type: "general" }), textStep("spawned")])
+  fakeModel!.route("NEVER call `report`", [toolStep("task", { description: "survey", prompt: "list files", subagent_type: "hya-task" }), textStep("spawned")])
   fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
   // …
 })

@@ -192,7 +192,7 @@ test.describe("subagents", () => {
     await writeFile(join(backend.dir, "notes.txt"), "alpha\n")
     // The parent's and the child's requests are told apart by their system prompts.
     fakeModel!.route("NEVER call `report`", [
-      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "general" }),
+      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "hya-task" }),
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
@@ -200,7 +200,7 @@ test.describe("subagents", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
-    await term.waitForText(/task\s+general · survey the repo/)
+    await term.waitForText(/task\s+hya-task · survey the repo/)
     // The child is still working (its model request hangs): running, with its latest tool call.
     await term.waitForText(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running/, 15_000)
     await term.waitForText("↳ read notes.txt", 15_000)
@@ -208,13 +208,13 @@ test.describe("subagents", () => {
     expect((await term.cell(status.row, status.col))?.fg).toBe(colors.accent)
     expect((await term.cell(status.row, status.col + 2))?.fg).toBe(colors.accent)
     // The sidebar nests the child session under its parent.
-    await term.waitForText(/↳ 2\. general · running/)
+    await term.waitForText(/↳ 2\. hya-task · running/)
     await term.attach(testInfo, "task-running")
 
     // A click on the card opens the child read-only.
-    const card = await at(term, "general · survey the repo")
+    const card = await at(term, "hya-task · survey the repo")
     await click(term, card.row, card.col + 2)
-    await term.waitForText("Viewing subagent general · Esc returns")
+    await term.waitForText("Viewing subagent hya-task · Esc returns")
     await term.waitForText("Read-only subagent view · Esc returns to the parent")
     await term.waitForText("┃ list the files")
     await term.waitForText(/✓ read\s+notes\.txt/)
@@ -240,7 +240,7 @@ test.describe("subagents", () => {
     const child = /hysec_\w+/.exec((await term.text()).split("\n").find((line) => line.includes("/open hysec_")) ?? "")?.[0]
     expect(child).toBeTruthy()
     await prompt(term, `/open ${child}`)
-    await term.waitForText("Viewing subagent general · Esc returns")
+    await term.waitForText("Viewing subagent hya-task · Esc returns")
     await term.press("Escape")
     await term.waitForText("Spawned a helper.")
   })

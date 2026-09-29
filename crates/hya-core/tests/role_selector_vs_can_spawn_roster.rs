@@ -31,11 +31,11 @@ async fn a_builtin_caller_reaches_every_ordinary_agent_but_no_reserved_one() {
     let binding = engine.bind_runtime(workdir.path()).unwrap();
 
     let roster = engine
-        .agent_roster_for_binding(&binding, "build")
+        .agent_roster_for_binding(&binding, "hya-main")
         .expect("caller roster");
     let names: Vec<&str> = roster.iter().map(|agent| agent.name.as_str()).collect();
     assert!(names.contains(&"research"), "ordinary roster: {names:?}");
-    assert!(names.contains(&"plan"), "ordinary roster: {names:?}");
+    assert!(names.contains(&"hya-plan"), "ordinary roster: {names:?}");
     assert_eq!(
         roster
             .iter()
@@ -45,9 +45,9 @@ async fn a_builtin_caller_reaches_every_ordinary_agent_but_no_reserved_one() {
         "role maps to mode on roster entries"
     );
 
-    for reserved in ["compaction", "title", "summary"] {
+    for reserved in ["hya-compaction", "hya-title", "hya-summary"] {
         assert!(!names.contains(&reserved));
-        assert!(binding.resolve_spawn("build", reserved).is_err());
+        assert!(binding.resolve_spawn("hya-main", reserved).is_err());
         assert!(
             binding.resolve_agent(reserved).is_some(),
             "{reserved} remains exact-lookup available"
@@ -55,7 +55,7 @@ async fn a_builtin_caller_reaches_every_ordinary_agent_but_no_reserved_one() {
     }
 
     // Selector visibility is role/mode: main agents are primary, subagents are not.
-    let build = binding.resolve_agent("build").expect("build");
+    let build = binding.resolve_agent("hya-main").expect("hya-main");
     let research = binding.resolve_agent("research").expect("research");
     assert_eq!(build.role, AgentRole::Main);
     assert_eq!(research.role, AgentRole::Subagent);

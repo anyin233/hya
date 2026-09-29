@@ -10,7 +10,7 @@ const open = (extra: Record<string, unknown> = {}) => {
     sessions: [], interactions: [], workflows: [], providers: [], commands: [],
     models: [{ id: "fake/model", contextLimit: "1000" }, { id: "fake/nolimit" }],
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", ...extra })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", ...extra })
   return store
 }
 
@@ -57,7 +57,7 @@ test("live: the newest tokensRecorded with a message wins; side calls (empty mes
   store.applyEvent({ seq: "6", session: "hysec_1", tokensRecorded: { message: "", model: "fake/model", usage: { input: "10" } } })
   expect(contextUsage(store.state)?.tokens).toBe(950)
   // A session switch forgets the live round.
-  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w" })
   expect(contextUsage(store.state)).toBeUndefined()
 })
 

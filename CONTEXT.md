@@ -161,8 +161,8 @@ define Agent metadata and native tool exposure. Trusted origin, not manifest ide
 establishes their reserved privileges. Ordinary installed bundles cannot become presets.
 
 **subagent bundle**:
-An AgentSetBundle of spawnable transient/resident definitions. `hya/subagents` is the
-first-party reference; the engine owns admission, sessions, mailbox, and replay.
+An installed AgentSetBundle of spawnable subagent definitions. No first-party one ships;
+the engine owns admission, sessions, mailbox, and replay.
 
 **agent channel bundle**:
 An AgentSetBundle of unit/parent-DM policy templates. `hya/agent-channels` supplies trusted

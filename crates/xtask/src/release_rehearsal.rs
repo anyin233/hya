@@ -20,10 +20,11 @@ const BUN_VERSION: &str = "1.4.2";
 /// Highest text-lockfile version [`BUN_VERSION`] can read.
 const BUN_LOCKFILE_VERSION: u64 = 2;
 /// Targets the release matrix builds; a rehearsal runs on one of these hosts.
-const RELEASE_TARGETS: [&str; 3] = [
+const RELEASE_TARGETS: [&str; 4] = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
 ];
 
 /// Require the rehearsal target to be the machine it runs on.
@@ -108,6 +109,12 @@ const WORKFLOW_TUI_WEB_INSTALL: &str =
 const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
 const WORKFLOW_CHECKSUMS: &str =
     "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")";
+/// The pinned Bun ships inside the archive, so an installed `hya` needs no
+/// separately installed Bun.
+const WORKFLOW_BUN_RUNTIME_COPY: &str =
+    "install -m 0755 \"$HOME/.bun/bin/bun\" \"dist/$package_dir/lib/hya/bin/bun\"";
+/// Package-relative path of the bundled Bun executable.
+const PACKAGED_BUN: &str = "lib/hya/bin/bun";
 
 /// One Bun program the archive ships under `lib/hya` with production dependencies.
 struct BunRuntime {
@@ -181,6 +188,7 @@ fn opentui_native_package(target: &str) -> Result<&'static str> {
         "x86_64-unknown-linux-gnu" => Ok("@opentui/core-linux-x64"),
         "aarch64-unknown-linux-gnu" => Ok("@opentui/core-linux-arm64"),
         "aarch64-apple-darwin" => Ok("@opentui/core-darwin-arm64"),
+        "x86_64-apple-darwin" => Ok("@opentui/core-darwin-x64"),
         _ => bail!("no OpenTUI native package is known for release target `{target}`"),
     }
 }
@@ -461,14 +469,48 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
     ensure_workflow_run_contract(
         &run_blocks,
         WORKFLOW_FIRST_PARTY_STAGE,
-        "stage the twelve first-party bundles into the archive and as release assets",
+        "stage the eleven first-party bundles into the archive and as release assets",
+    )?;
+    ensure_workflow_run_contract(
+        &run_blocks,
+        WORKFLOW_BUN_RUNTIME_COPY,
+        "ship the pinned Bun in the archive",
     )?;
     ensure_workflow_run_contract(
         &run_blocks,
         WORKFLOW_CHECKSUMS,
         "checksum the archive and every first-party bundle asset",
     )?;
+    validate_first_party_lists(&run_blocks)?;
     Ok(run_blocks)
+}
+
+/// Require every `first_party=(…)` list in the workflow to name exactly
+/// [`hya_bundle::FIRST_PARTY_BUNDLES`], in order, so the smoke counts and
+/// per-bundle checks follow the bundle set instead of a stale copy.
+fn validate_first_party_lists(run_blocks: &[String]) -> Result<()> {
+    let names: Vec<&str> = hya_bundle::FIRST_PARTY_BUNDLES
+        .iter()
+        .map(|identity| identity.trim_start_matches("hya/"))
+        .collect();
+    let expected = format!("first_party=({})", names.join(" "));
+    let lists: Vec<&str> = run_blocks
+        .iter()
+        .flat_map(|run| run.lines())
+        .map(str::trim)
+        .filter(|line| line.starts_with("first_party=("))
+        .collect();
+    ensure!(
+        !lists.is_empty(),
+        "release workflow must declare the first-party bundle set: `{expected}`"
+    );
+    for list in lists {
+        ensure!(
+            list == expected,
+            "release workflow first-party list `{list}` must be `{expected}`"
+        );
+    }
+    Ok(())
 }
 
 /// Require the build job to run one native job per release target.
@@ -941,6 +983,13 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     copy_file(&backend_source, &backend_destination)?;
     set_executable(&backend_destination)?;
     copy_file(&root.join("README.md"), &package_root.join("README.md"))?;
+    copy_file(
+        &root.join("THIRD_PARTY_NOTICES"),
+        &package_root.join("THIRD_PARTY_NOTICES"),
+    )?;
+    let packaged_bun = package_root.join(PACKAGED_BUN);
+    copy_file(&bun_on_path()?, &packaged_bun)?;
+    set_executable(&packaged_bun)?;
 
     for runtime in PACKAGED_RUNTIMES {
         let destination = package_root.join(runtime.destination);
@@ -1036,6 +1085,7 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     verify_package_layout(&extracted, target)?;
     verify_archive_listing(root, &archive, &package_name, &scratch)?;
     smoke_packaged_release(&extracted, &scratch, version)?;
+    smoke_release_installer(root, &dist, &archive_name, target, version, &scratch)?;
     for bundle in &staged {
         let asset = bundle
             .asset
@@ -1147,6 +1197,7 @@ fn verify_example_listing(listing: &str) -> Result<()> {
 /// Verify required runtime files before archiving.
 fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
     require_file(&package_root.join("bin").join("hya"), "packaged binary")?;
+    require_file(&package_root.join(PACKAGED_BUN), "packaged Bun")?;
 
     let bun_adapter = package_root.join("lib/hya/bun-adapter");
     for path in ["package.json", "bun.lock", "src/main.ts"] {
@@ -1241,6 +1292,7 @@ fn verify_archive_listing(
         .with_context(|| format!("write archive listing {}", listing_path.display()))?;
     for path in [
         "bin/hya",
+        PACKAGED_BUN,
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
         "lib/hya/bun-adapter/src/main.ts",
@@ -1312,6 +1364,19 @@ fn smoke_packaged_release(
     )
     .context("smoke packaged hya --help")?;
     smoke_first_party_bundles(&backend, scratch, version)?;
+    let bun = package_root.join(PACKAGED_BUN);
+    let bun_version = run_checked(
+        bun.as_os_str(),
+        &arg_list(&["--version"]),
+        scratch.path(),
+        &[],
+        &[],
+    )
+    .context("smoke the packaged Bun")?;
+    ensure!(
+        String::from_utf8_lossy(&bun_version.stdout).trim() == BUN_VERSION,
+        "packaged Bun must report version {BUN_VERSION}"
+    );
 
     smoke_bun_adapter(&package_root.join("lib/hya/bun-adapter"), scratch)?;
     smoke_tui_runtime(package_root, scratch)?;
@@ -1349,6 +1414,90 @@ fn smoke_first_party_bundles(
             "packaged bundle list lacks `{identity}` at {version}"
         );
     }
+    Ok(())
+}
+
+/// Find the pinned Bun on `PATH` ([`prepare_and_build`] checked its version).
+fn bun_on_path() -> Result<PathBuf> {
+    let path = std::env::var_os("PATH").context("PATH is not set")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("bun"))
+        .find(|candidate| candidate.is_file())
+        .context("bun is not on PATH")
+}
+
+/// Install the archive with `scripts/hya-install.sh` from a file:// release
+/// tree like the workflow, then require bare `hya update` to find it current.
+fn smoke_release_installer(
+    root: &Path,
+    dist: &Path,
+    archive_name: &str,
+    target: &str,
+    version: &str,
+    scratch: &ScratchDirectory,
+) -> Result<()> {
+    let releases = scratch.path().join("releases");
+    let sums = dist.join(format!("SHA256SUMS-{target}"));
+    for directory in [
+        releases.join(format!("download/v{version}")),
+        releases.join("latest/download"),
+    ] {
+        copy_file(&sums, &directory.join("SHA256SUMS"))?;
+    }
+    copy_file(
+        &dist.join(archive_name),
+        &releases.join(format!("download/v{version}/{archive_name}")),
+    )?;
+    let home = scratch.path().join("installer-home");
+    let installed = scratch.path().join("installed");
+    let envs = [
+        ("HOME", home.as_os_str().to_os_string()),
+        ("XDG_CONFIG_HOME", home.join("config").into_os_string()),
+        ("XDG_DATA_HOME", home.join("data").into_os_string()),
+        ("XDG_STATE_HOME", home.join("state").into_os_string()),
+        ("XDG_CACHE_HOME", home.join("cache").into_os_string()),
+        (
+            "HYA_RELEASES_URL",
+            OsString::from(format!("file://{}", releases.display())),
+        ),
+    ];
+    run_checked(
+        OsStr::new("sh"),
+        &[
+            root.join("scripts/hya-install.sh").display().to_string(),
+            "--prefix".to_owned(),
+            installed.display().to_string(),
+        ],
+        scratch.path(),
+        &envs,
+        &[],
+    )
+    .context("install the archive with scripts/hya-install.sh")?;
+    verify_package_layout(&installed, target)?;
+    let backend = installed.join("bin/hya");
+    let version_output = run_checked(
+        backend.as_os_str(),
+        &arg_list(&["--version"]),
+        scratch.path(),
+        &envs,
+        &[],
+    )?;
+    ensure!(
+        combined_output(&version_output).trim() == format!("hya {version}"),
+        "installed hya --version did not report {version}"
+    );
+    let update = run_checked(
+        backend.as_os_str(),
+        &arg_list(&["update"]),
+        scratch.path(),
+        &envs,
+        &[],
+    )
+    .context("run bare hya update against the installed release")?;
+    ensure!(
+        combined_output(&update).contains(&format!("hya {version} is already installed")),
+        "bare hya update did not find the installed {version} current"
+    );
     Ok(())
 }
 
@@ -1830,6 +1979,7 @@ mod tests {
     /// Exact-line packaging contracts that must stay in the checked-in workflow.
     const WORKFLOW_CONTRACTS: &[&str] = &[
         WORKFLOW_BUN_SOURCE_COPY,
+        WORKFLOW_BUN_RUNTIME_COPY,
         WORKFLOW_TUI_SOURCE_COPY,
         WORKFLOW_TUI_INSTALL,
         WORKFLOW_TUI_WEB_SOURCE_COPY,
@@ -1855,7 +2005,7 @@ mod tests {
     fn validate_workflow_rejects_a_target_outside_the_matrix() -> Result<()> {
         let workflow: Value =
             serde_norway::from_str(&canonical_workflow_source()?).context("parse workflow")?;
-        let error = validate_workflow(&workflow, "x86_64-apple-darwin")
+        let error = validate_workflow(&workflow, "x86_64-pc-windows-msvc")
             .expect_err("unlisted target accepted");
         assert!(error.to_string().contains("matrix"), "{error:#}");
         Ok(())
@@ -1903,6 +2053,10 @@ mod tests {
         assert_eq!(
             opentui_native_package("aarch64-apple-darwin")?,
             "@opentui/core-darwin-arm64"
+        );
+        assert_eq!(
+            opentui_native_package("x86_64-apple-darwin")?,
+            "@opentui/core-darwin-x64"
         );
         assert!(opentui_native_package("x86_64-pc-windows-msvc").is_err());
         Ok(())

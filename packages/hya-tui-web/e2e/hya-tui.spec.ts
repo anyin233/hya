@@ -20,7 +20,7 @@ test.describe("hya TUI in the browser", () => {
     await term.waitForText("Connected to hya")
     await term.type("hello from the browser")
     await term.press("Enter")
-    await term.waitForText("● build · hya/offline", 20_000)
+    await term.waitForText("● hya-main · hya/offline", 20_000)
     await term.waitForText("No live provider is available")
     const text = await term.text()
     // The user's prompt is a block with the accent bar, not a `user · stop` header.
@@ -30,7 +30,7 @@ test.describe("hya TUI in the browser", () => {
     // The offline model echoes the prompt back, so it shows up in both messages.
     expect(text.match(/hello from the browser/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
     // The header names the session: its id, or the generated title once the backend's title task ran (the echo model echoes the prompt).
-    expect(text).toMatch(/hya · (hysec_\w+|hello from the browser) · build hya\/offline/)
+    expect(text).toMatch(/hya · (hysec_\w+|hello from the browser) · hya-main hya\/offline/)
   })
 
   test("Tab completes slash commands", async ({ tui, backend }) => {

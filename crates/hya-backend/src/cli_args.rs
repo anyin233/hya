@@ -432,10 +432,15 @@ pub(crate) enum Command {
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,
-    /// Verify, stage, activate, or recover signed hya releases (update TCB).
+    /// Update hya: bare `hya update` reinstalls the latest GitHub release into
+    /// this hya's prefix (docs/install.md); the subcommands verify, stage,
+    /// activate, or recover signed releases (update TCB, docs/self-update.md).
+    #[command(args_conflicts_with_subcommands = true)]
     Update {
         #[command(subcommand)]
-        command: hya_updater::cli::UpdateCommand,
+        command: Option<hya_updater::cli::UpdateCommand>,
+        #[command(flatten)]
+        install: hya_updater::release_install::ReleaseInstallArgs,
     },
     /// Run the relay proxy: a blind Noise rendezvous between a backend and a
     /// client (docs/relay.md). No config, providers, or database.
@@ -714,6 +719,25 @@ mod tests {
     #[test]
     fn executable_is_named_hya() {
         assert_eq!(Cli::command().get_name(), "hya");
+    }
+
+    /// Bare `hya update` (with its options) is the release reinstall, not a
+    /// signed-TCB subcommand; mixing both is rejected.
+    #[test]
+    fn parses_bare_update_as_release_install() {
+        let cli = parse_slice(&["hya", "update", "--version", "v1.2.3", "--force"]);
+        let Some(super::Command::Update { command, install }) = cli.command else {
+            panic!("`hya update --version` must parse as `hya update`");
+        };
+        assert!(command.is_none());
+        assert_eq!(install.version.as_deref(), Some("v1.2.3"));
+        assert!(install.force);
+        let cli = parse_slice(&["hya", "update"]);
+        assert!(matches!(
+            cli.command,
+            Some(super::Command::Update { command: None, .. })
+        ));
+        assert!(Cli::try_parse_from(["hya", "update", "--force", "version"]).is_err());
     }
 
     #[test]

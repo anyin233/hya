@@ -351,10 +351,10 @@ agents:
         "installed Plugin chat.params must reach the bundle agent: {team_request}; {}",
         env.diagnostics()
     );
-    let build_request = fake_requests_from(&requests, 1);
+    let main_request = fake_requests_from(&requests, 1);
     assert!(
-        build_request.contains("LINEAGE agent=build root_is_self=True"),
-        "{build_request}; {}",
+        main_request.contains("LINEAGE agent=hya-main root_is_self=True"),
+        "{main_request}; {}",
         env.diagnostics()
     );
     std::fs::remove_dir_all(root).unwrap();

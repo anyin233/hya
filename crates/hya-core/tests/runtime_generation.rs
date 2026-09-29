@@ -59,12 +59,12 @@ fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
     tools
         .register_with_permission(MarkerTool::new("mcp__stable__marker"), ToolPermission::Mcp)
         .expect("register stable marker tool");
-    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]));
 
     let old_binding = registry.bind_turn(workdir.path()).unwrap();
     let old_generation = old_binding.generation();
     let candidate = test_catalog(&[
-        ("general", AgentRole::Main, &[]),
+        ("hya-task", AgentRole::Main, &[]),
         ("installed-agent", AgentRole::Main, &[]),
     ]);
 
@@ -75,7 +75,7 @@ fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
     assert_eq!(fresh_binding.generation(), published);
     assert!(old_binding.resolve_agent("installed-agent").is_none());
     assert!(fresh_binding.resolve_agent("installed-agent").is_some());
-    assert!(old_binding.resolve_agent("general").is_some());
+    assert!(old_binding.resolve_agent("hya-task").is_some());
     assert!(tool_names(&old_binding).contains("mcp__stable__marker"));
     assert!(skill_names(&old_binding).contains("stable_skill"));
     assert_eq!(tool_names(&old_binding), tool_names(&fresh_binding));
@@ -90,7 +90,7 @@ fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
 fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
     let workdir = TestDir::new("agent-resolution");
     let catalog = test_catalog(&[
-        ("general", AgentRole::Main, &[]),
+        ("hya-task", AgentRole::Main, &[]),
         ("lead", AgentRole::Main, &["worker"]),
         ("worker", AgentRole::Main, &[]),
     ]);
@@ -99,7 +99,7 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
 
     assert_eq!(
         binding.resolve_requested_agent(None).unwrap().stable_id,
-        "general"
+        "hya-task"
     );
     assert!(matches!(
         binding.resolve_requested_agent(Some("missing")),
@@ -114,7 +114,7 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
         ["worker"]
     );
     assert!(matches!(
-        binding.resolve_spawn("lead", "compaction"),
+        binding.resolve_spawn("lead", "hya-compaction"),
         Err(hya_bundle::BundleError::AgentSpawnNotAllowed { .. })
     ));
 }
@@ -126,7 +126,7 @@ fn in_flight_turn_retains_generation_while_post_publish_turn_sees_next() {
     tools
         .register_with_permission(MarkerTool::new("generation_n"), ToolPermission::Mcp)
         .unwrap();
-    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]));
 
     let in_flight = registry.bind_turn(workdir.path()).unwrap();
     let generation_n = in_flight.generation();
@@ -162,7 +162,7 @@ fn one_turn_cannot_mix_tool_skill_or_mcp_members_across_generations() {
     tools
         .register_with_permission(MarkerTool::new("mcp__n__lookup"), ToolPermission::Mcp)
         .expect("register generation N MCP tool");
-    let registry = RuntimeRegistry::new(tools, test_catalog(&[("general", AgentRole::Main, &[])]));
+    let registry = RuntimeRegistry::new(tools, test_catalog(&[("hya-task", AgentRole::Main, &[])]));
     let generation_n = registry.bind_turn(workdir.path()).unwrap();
 
     workdir.remove_skill("skill_n");

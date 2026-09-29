@@ -1,6 +1,6 @@
 //! T2.26 — the packaged `hya-extra/zvec-grep` Plugin bundle installs, spawns
 //! its stdio MCP server through a fake `zg` on `PATH`, and a full-plane agent
-//! (`build`) calls the resulting namespaced tool and sees the server's result.
+//! (`hya-main`) calls the resulting namespaced tool and sees the server's result.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};

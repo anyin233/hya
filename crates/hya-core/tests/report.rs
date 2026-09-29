@@ -113,7 +113,7 @@ async fn engine_with_channel_restriction(channels: &str) -> Arc<SessionEngine> {
 
 fn agent_spec() -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("explore"),
+        name: AgentName::new("hya-scout"),
         model: ModelRef::new("fake"),
         system_prompt: String::new(),
         workdir: PathBuf::from("."),
@@ -125,7 +125,7 @@ async fn root_team(engine: &SessionEngine) -> SessionId {
     engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
             project: None,
@@ -137,14 +137,14 @@ async fn root_team(engine: &SessionEngine) -> SessionId {
 
 async fn ensure_main(supervisor: &ResidentSupervisor, engine: &SessionEngine, root: SessionId) {
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: String::new(),
         workdir: PathBuf::from("."),
         reasoning: None,
     };
     let binding = engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy("build").unwrap();
+    let resources = binding.agent_resource_policy("hya-main").unwrap();
     supervisor
         .ensure_main(root, agent, (binding, Arc::from([]), resources), None, None)
         .await
@@ -558,7 +558,7 @@ async fn submit_report_archives_an_idle_agent_after_the_turn() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     // The tool-shaped entry: gate feedback now, archive once the actor is at
     // rest (here: immediately, since the resident is idle).
@@ -917,7 +917,7 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
     mail_main_from_peer(&engine, root, "steer payload for main").await;
 
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: String::new(),
         workdir: PathBuf::from("."),
@@ -976,7 +976,7 @@ async fn channel_read_returns_history_and_marks_inbox_seen() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     // Two broadcasts on the unit group channel; the child reads it.
     for body in ["first note", "second note"] {
@@ -1046,7 +1046,7 @@ async fn channel_read_normalizes_channel_id_spellings_with_warning() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     engine
         .mail_announce(root, "broadcast body".to_string())
@@ -1108,7 +1108,7 @@ async fn channel_read_by_member_handle_opens_the_callers_dm_with_it() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     let projection = engine.read_projection(root).await.unwrap();
     let dm = projection
         .team
@@ -1161,7 +1161,7 @@ async fn resident_turn_boundaries_leave_a_heartbeat_on_the_roster() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     // The work-start boundary heartbeat fired (emission is async; poll briefly).
     let mut heartbeat_ms = 0;
@@ -1251,7 +1251,7 @@ async fn steer_notice_carries_the_channel_id_for_handle_mail() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     // The persistent DM pair minted at the child's registration.
     let projection = engine.read_projection(root).await.unwrap();
@@ -1307,7 +1307,7 @@ async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     let mut steer = engine.steer_mailbox_snapshot(root).await;
     engine
@@ -1352,7 +1352,7 @@ async fn report_gate_counts_mail_the_current_wake_delivered_as_read() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     engine
         .mail_send(
             root,
@@ -1391,7 +1391,7 @@ async fn steer_policy_denial_keeps_real_mail_out_of_the_turn_notice() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     engine
         .mail_send(
             child,
@@ -1420,7 +1420,7 @@ async fn report_policy_denial_rejects_the_real_lifecycle_request() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     let (plane, rx) = hya_tool::LifecyclePlane::new();
     tokio::spawn(run_lifecycle_service(engine, supervisor, rx));
 
@@ -1443,7 +1443,7 @@ async fn resident_mail_policy_denial_does_not_wake_an_idle_resident() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     let before = engine
         .read_projection(child)
         .await
@@ -1490,7 +1490,7 @@ async fn public_mail_send_uses_the_session_captured_channel_policy() {
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (_, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
     let result = engine
         .mail_send(
@@ -1575,7 +1575,7 @@ async fn resident_mail_without_follow_up_is_not_delivered_after_idle_recovery() 
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
     let before = engine
         .read_projection(child)
         .await

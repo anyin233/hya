@@ -444,8 +444,8 @@ cargo run -p xtask -- release-rehearsal \
   and checksum file.
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can require manual approval.
-- Within the release archive, the payload includes the shipped `hya`
-  binary, the twelve first-party bundles under `bundles/`, the production
+- Within the release archive, the payload includes the shipped `hya` binary,
+  the eleven first-party bundles under `bundles/`, the production
   `lib/hya/bun-adapter`, and the generated member
   `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
 - Platform-independent bundles must be byte-identical across targets; the

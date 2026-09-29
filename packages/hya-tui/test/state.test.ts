@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createMemo, createRoot } from "solid-js"
 import { createAppStore } from "../src/state/store"
 
-const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, agent: "build", workdir: "/work", ...extra })
+const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, agent: "hya-main", workdir: "/work", ...extra })
 
 test("starts in the chat view with the startup status and no data", () => {
   const store = createAppStore()
@@ -128,13 +128,13 @@ test("opens, updates, and closes the Provider View state", () => {
 
 test("builds the completion context from the current catalogs", () => {
   const store = createAppStore()
-  store.applyBootstrap({ agents: [{ name: "build" }], models: [{ id: "hya/offline" }], interactions: [] })
+  store.applyBootstrap({ agents: [{ name: "hya-main" }], models: [{ id: "hya/offline" }], interactions: [] })
   store.applyCatalog({
     sessions: [session("hysec_1")], interactions: [], models: [{ id: "hya/offline" }], workflows: [{ name: "release" }],
     providers: [{ id: "openai" }], commands: [{ name: "compact" }],
   })
   const context = store.completionContext()
-  expect(context.agents).toEqual(["build"])
+  expect(context.agents).toEqual(["hya-main"])
   expect(context.sessions).toEqual(["hysec_1"])
   expect(context.backendCommands).toEqual(["compact"])
   expect(context.apiOperations).toContain("GET /v1/health")

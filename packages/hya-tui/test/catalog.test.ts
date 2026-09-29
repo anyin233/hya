@@ -54,7 +54,7 @@ test("relativeTime formats seconds/minutes/hours/days, and is empty for unset or
 })
 
 const sessions: SessionInfo[] = [
-  { id: "hysec_1", agent: "build", workdir: "/w", title: "Refactor auth", timeUpdated: "2026-09-25T11:00:00Z" },
+  { id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Refactor auth", timeUpdated: "2026-09-25T11:00:00Z" },
   { id: "hysec_2", agent: "review", workdir: "/w", parent: "hysec_1", busy: true, timeUpdated: "2026-09-25T11:55:00Z" },
 ]
 

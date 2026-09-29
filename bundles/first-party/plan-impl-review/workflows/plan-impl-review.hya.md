@@ -8,7 +8,7 @@ on_failure: collect_all
 nodes:
   plan:
     title: Plan the change
-    agent: plan-impl-review-planner
+    agent: hya-pir-planner
     directive: |
       Analyze the requested change and produce a concise implementation plan.
       Identify the observable behavior, affected boundaries, and verification
@@ -18,7 +18,7 @@ nodes:
       {{input.request}}
   implement:
     title: Implement the plan
-    agent: plan-impl-review-implementer
+    agent: hya-pir-implementer
     directive: |
       Implement the requested change using the plan evidence from the previous
       Stage. Keep the change scoped, preserve established project patterns, and
@@ -28,7 +28,7 @@ nodes:
       {{input.request}}
   review:
     title: Review the result
-    agent: plan-impl-review-reviewer
+    agent: hya-pir-reviewer
     directive: |
       Review the implementation against the request and the plan. Check
       behavior, edge cases, regressions, and maintainability. Report concrete

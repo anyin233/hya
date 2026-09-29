@@ -86,7 +86,7 @@ async fn run_turn(
     model: &str,
 ) -> hya_proto::SessionId {
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new(model),
         system_prompt: "x".to_string(),
         workdir: dir.to_path_buf(),
@@ -141,7 +141,7 @@ async fn ledger_records_provider_reported_usage() {
     assert_eq!(row.prompt_tokens, 135, "input + cache_read + cache_write");
     assert_eq!(row.model.as_deref(), Some("fake"), "the serving model");
     assert_eq!(row.completion_tokens, 34);
-    assert_eq!(row.role, "build");
+    assert_eq!(row.role, "hya-main");
 }
 
 #[tokio::test]

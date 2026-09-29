@@ -39,7 +39,7 @@ impl SessionEngine {
             .session
             .agent
             .as_ref()
-            .map_or("build", hya_proto::AgentName::as_str)
+            .map_or(crate::MAIN_AGENT_ID, hya_proto::AgentName::as_str)
             .to_string();
         // Every session records its workdir at creation; there is no
         // process-level fallback (ADR-0024).

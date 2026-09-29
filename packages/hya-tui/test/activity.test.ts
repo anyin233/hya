@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { activityText, formatElapsed, workingLineText } from "../src/state/activity"
 import { createAppStore } from "../src/state/store"
 
-const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, agent: "build", workdir: "/work", ...extra })
+const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, agent: "hya-main", workdir: "/work", ...extra })
 
 test("formats elapsed time as m:ss, and h:mm:ss past an hour", () => {
   expect(formatElapsed(0)).toBe("0:00")

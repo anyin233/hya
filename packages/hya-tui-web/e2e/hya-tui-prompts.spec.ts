@@ -46,7 +46,7 @@ test.describe("bash permission prompt", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "run the command")
     await promptShown(term)
-    await term.waitForText("asked by build")
+    await term.waitForText("asked by hya-main")
     await term.waitForText("│ $ echo prompt-once")
     await term.waitForText(/▸ 1 {2}Allow once/)
     await term.waitForText(/2 {2}Always allow {2}bash: /)
@@ -77,7 +77,7 @@ test.describe("bash permission prompt", () => {
     await term.waitForText("Clear the input to answer with 1-3")
     await term.waitForText("│ draft 3")
     // The prompt is still there: 3 went into the input, it did not deny.
-    await term.waitForText("asked by build")
+    await term.waitForText("asked by hya-main")
     for (let index = 0; index < 7; index++) await term.press("Backspace")
     await term.waitForText(/1-3 or ↑↓ Enter/)
     await term.press("ArrowDown")
@@ -179,7 +179,7 @@ test.describe("queued asks", () => {
   // The session's own tool calls ask one after another; a subagent's ask can wait at the same time.
   test("two pending asks show one at a time with 1 of 2", async ({ tui, backend, fakeModel }, testInfo) => {
     fakeModel!.route("NEVER call `report`", [
-      toolStep("task", { description: "helper", prompt: "run a command", subagent_type: "general" }),
+      toolStep("task", { description: "helper", prompt: "run a command", subagent_type: "hya-task" }),
       toolStep("bash", { command: "echo parent-ask" }),
       textStep("Parent done."),
     ])
@@ -266,7 +266,7 @@ test.describe("subagent asks", () => {
 
   test("a subagent's ask shows in the parent, labelled with the subagent; its card and the sidebar say it waits", async ({ tui, backend, fakeModel }, testInfo) => {
     fakeModel!.route("NEVER call `report`", [
-      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "general" }),
+      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "hya-task" }),
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
@@ -275,10 +275,10 @@ test.describe("subagent asks", () => {
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
     await promptShown(term)
-    await term.waitForText(/asked by subagent general/)
+    await term.waitForText(/asked by subagent hya-task/)
     await term.waitForText("│ $ echo from-child")
     await term.waitForText("◌ waiting for approval", 15_000)
-    await term.waitForText(/↳ 2\. general · ◌ waiting/)
+    await term.waitForText(/↳ 2\. hya-task · ◌ waiting/)
     await term.attach(testInfo, "subagent-ask")
     await term.press("1")
     await promptGone(term)
@@ -288,7 +288,7 @@ test.describe("subagent asks", () => {
 
   test("a subagent's ask arrives on the parent's stream (includeDescendants), not by polling the interactions listing", async ({ tui, backend, fakeModel }) => {
     fakeModel!.route("NEVER call `report`", [
-      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "general" }),
+      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "hya-task" }),
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
@@ -297,7 +297,7 @@ test.describe("subagent asks", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "delegate the survey")
     await promptShown(term)
-    await term.waitForText(/asked by subagent general/)
+    await term.waitForText(/asked by subagent hya-task/)
     const shown = Date.now()
     const turn = proxy.log.findIndex((entry) => entry.method === "POST" && /\/turns$/.test(entry.path))
     expect(turn).toBeGreaterThan(0)
@@ -365,12 +365,12 @@ test.describe("asks of other sessions", () => {
       // Pushed, not polled: no interactions listing between the other turn and the ask showing up.
       expect(proxy.log.filter((entry) => entry.at >= started && entry.at <= shown && entry.path.startsWith("/v1/interactions"))).toEqual([])
       // The open session's own prompt dock does not take another session's ask.
-      expect(await term.find("asked by build")).toBeNull()
+      expect(await term.find("asked by hya-main")).toBeNull()
       await term.attach(testInfo, "other-session-ask")
 
       // F4 opens the request's session: its normal numbered prompt answers it.
       await term.press("F4")
-      await term.waitForText("asked by build", 20_000)
+      await term.waitForText("asked by hya-main", 20_000)
       await term.waitForText("│ $ echo from-elsewhere")
       await term.waitForText(`hya · ${other}`)
       await term.press("1")

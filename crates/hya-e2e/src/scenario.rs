@@ -60,7 +60,7 @@ impl Default for E2eEnvBuilder {
             scripts: Vec::new(),
             routes: Vec::new(),
             yolo: true,
-            agent: "build".into(),
+            agent: "hya-main".into(),
             binary: None,
             permission_model: "allow".into(),
             mcp: Vec::new(),
@@ -75,7 +75,7 @@ impl Default for E2eEnvBuilder {
 }
 
 impl E2eEnvBuilder {
-    /// Empty builder with YOLO on, `allow` permissions, and agent `build`.
+    /// Empty builder with YOLO on, `allow` permissions, and agent `hya-main`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

@@ -5,9 +5,8 @@
 //! A session whose recorded AgentName is absent from the current catalog must:
 //! - replay and project the exact AgentName bytes unchanged (no catalog lookup);
 //! - allow read-only fork/copy with identity preserved (no catalog lookup);
-//! - fail closed with AGENT_DEFINITION_MISSING before any provider call when
-//!   the original or forked session is actually continued — never rewrite to
-//!   general/base.
+//! - continue as the general-purpose task agent (`hya-task`) when the original
+//!   or forked session is actually continued, recording the switch durably.
 
 mod support;
 
@@ -284,7 +283,7 @@ async fn historical_agent_name_survives_read_only_fork_copy_without_catalog_look
 }
 
 #[tokio::test]
-async fn historical_agent_continue_fails_definition_missing_before_provider_no_general_rewrite() {
+async fn historical_agent_continue_falls_back_to_the_task_agent() {
     let workdir = support::TestDir::new("hist-continue");
     let provider = Arc::new(CaptureProvider {
         requests: Mutex::new(Vec::new()),
@@ -296,49 +295,26 @@ async fn historical_agent_continue_fails_definition_missing_before_provider_no_g
         .await
         .unwrap();
 
-    // Identity still exact after admit (no rewrite on write path).
+    // Identity still exact after admit (no rewrite on the write path).
     let before = engine.read_projection(session).await.unwrap();
     assert_eq!(
         before.session.agent.as_ref().map(AgentName::as_str),
         Some(HISTORICAL_BYTES)
     );
 
-    let err = engine
+    engine
         .run_turn(
             session,
             &base_agent(workdir.path()),
             CancellationToken::new(),
         )
         .await
-        .expect_err("missing historical definition must fail on continue");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        err.to_string().contains(HISTORICAL_AGENT),
-        "error must name the recorded historical id, got {err}"
-    );
-    assert!(
-        !err.to_string().contains("general") || err.to_string().contains(HISTORICAL_AGENT),
-        "must not rewrite failure to general/base"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "continue must not call provider after definition miss"
-    );
-
-    // Projection identity still unchanged after failed continue.
-    let after = engine.read_projection(session).await.unwrap();
-    assert_eq!(
-        after.session.agent.as_ref().map(AgentName::as_str),
-        Some(HISTORICAL_BYTES),
-        "failed continue must not rewrite durable AgentName"
-    );
+        .expect("a missing recorded agent continues as the task agent");
+    assert_continued_as_task_agent(&engine, session, &provider).await;
 }
 
 #[tokio::test]
-async fn forked_historical_session_continue_fails_definition_missing_before_provider() {
+async fn forked_historical_session_continue_falls_back_to_the_task_agent() {
     let workdir = support::TestDir::new("hist-fork-continue");
     let provider = Arc::new(CaptureProvider {
         requests: Mutex::new(Vec::new()),
@@ -374,33 +350,37 @@ async fn forked_historical_session_continue_fails_definition_missing_before_prov
         .await
         .unwrap();
 
-    let err = engine
+    engine
         .run_turn(
             forked,
             &base_agent(workdir.path()),
             CancellationToken::new(),
         )
         .await
-        .expect_err("forked historical continue must fail closed");
-    assert!(
-        err.to_string().contains("AGENT_DEFINITION_MISSING"),
-        "expected AGENT_DEFINITION_MISSING, got {err}"
-    );
-    assert!(
-        err.to_string().contains(HISTORICAL_AGENT),
-        "error must name the recorded historical id, got {err}"
-    );
-    assert!(
-        provider.requests.lock().unwrap().is_empty(),
-        "forked continue must not call provider"
-    );
-    let forked_projection = engine.read_projection(forked).await.unwrap();
+        .expect("a forked session with a missing agent continues as the task agent");
+    assert_continued_as_task_agent(&engine, forked, &provider).await;
+}
+
+/// The continued turn reached the provider as `hya-task`, the switch is durable
+/// (`AgentSwitched`), and `SessionCreated` still holds the historical bytes.
+async fn assert_continued_as_task_agent(
+    engine: &SessionEngine,
+    session: hya_proto::SessionId,
+    provider: &CaptureProvider,
+) {
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+    let projection = engine.read_projection(session).await.unwrap();
     assert_eq!(
-        forked_projection
-            .session
-            .agent
-            .as_ref()
-            .map(AgentName::as_str),
-        Some(HISTORICAL_BYTES)
+        projection.session.agent.as_ref().map(AgentName::as_str),
+        Some(hya_core::TASK_AGENT_ID)
     );
+    let events = engine.replay(session).await.unwrap();
+    assert!(events.iter().any(|envelope| matches!(
+        &envelope.event,
+        Event::AgentSwitched { agent, .. } if agent.as_str() == hya_core::TASK_AGENT_ID
+    )));
+    assert!(events.iter().any(|envelope| matches!(
+        &envelope.event,
+        Event::SessionCreated { agent, .. } if agent.as_str() == HISTORICAL_BYTES
+    )));
 }

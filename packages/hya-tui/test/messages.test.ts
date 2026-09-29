@@ -3,7 +3,7 @@ import type { MessageInfo } from "../src/client"
 import { dividerView, finishNotice, lastReplyText, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
 import { createAppStore } from "../src/state/store"
 
-const fallback = { agent: "build", model: "fake/model" }
+const fallback = { agent: "hya-main", model: "fake/model" }
 
 test("user and assistant messages get distinct roles; assistants carry agent and model", () => {
   const user = messageView({ id: "u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p", text: { text: "hi" } }] }, fallback)
@@ -13,7 +13,7 @@ test("user and assistant messages get distinct roles; assistants carry agent and
 
   const assistant = messageView({ id: "a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p", text: { text: "**yo**" } }] }, fallback)
   expect(assistant.role).toBe("assistant")
-  expect(assistant.agent).toBe("build")
+  expect(assistant.agent).toBe("hya-main")
   expect(assistant.model).toBe("fake/model")
   expect(assistant.streaming).toBe(false)
   // A plain stop is not noteworthy: no finish text anywhere.
@@ -21,8 +21,8 @@ test("user and assistant messages get distinct roles; assistants carry agent and
 })
 
 test("the message's own agent and model win over the session fallback", () => {
-  const view = messageView({ id: "a", role: "ROLE_ASSISTANT", agent: "plan", model: "openai/gpt", parts: [] }, fallback)
-  expect(view.agent).toBe("plan")
+  const view = messageView({ id: "a", role: "ROLE_ASSISTANT", agent: "hya-plan", model: "openai/gpt", parts: [] }, fallback)
+  expect(view.agent).toBe("hya-plan")
   expect(view.model).toBe("openai/gpt")
 })
 
@@ -80,7 +80,7 @@ test("views are cached per message object so unchanged messages keep their ident
   const message: MessageInfo = { id: "a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [] }
   expect(messageView(message, fallback)).toBe(messageView(message, fallback))
   // A different fallback (session model switch) rebuilds the view.
-  expect(messageView(message, { agent: "plan", model: "x/y" }).agent).toBe("plan")
+  expect(messageView(message, { agent: "hya-plan", model: "x/y" }).agent).toBe("hya-plan")
 })
 
 test("queued prompts are dim user views tagged queued", () => {
@@ -91,7 +91,7 @@ test("queued prompts are dim user views tagged queued", () => {
 test("the transcript merges the overlay and appends only waiting queued prompts", () => {
   const store = createAppStore()
   store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
   store.setMessages("hysec_1", [{ id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: "hi" } }] }])
   store.applyEvent({ seq: "5", session: "hysec_1", messageStarted: { message: "m_a", role: "ROLE_ASSISTANT" } })
   store.applyEvent({ session: "hysec_1", partStarted: { message: "m_a", part: "p_a", kind: "text" } })
@@ -103,7 +103,7 @@ test("the transcript merges the overlay and appends only waiting queued prompts"
   const views = transcriptViews(store.state)
   expect(views.map((view) => [view.role, view.queued, view.blocks[0]?.kind === "text" ? view.blocks[0].text : ""]))
     .toEqual([["user", false, "hi"], ["assistant", false, "Hel"], ["user", true, "later"]])
-  expect(views[1]).toMatchObject({ agent: "build", model: "fake/model", streaming: true })
+  expect(views[1]).toMatchObject({ agent: "hya-main", model: "fake/model", streaming: true })
 })
 
 test("an engine system message gets the system role, not assistant", () => {
@@ -118,7 +118,7 @@ test("a divider view carries its text as a single text block under the divider r
 
 test("a compaction divider is spliced right after the message that was newest when it fired", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setMessages("hysec_1", [
     { id: "m1", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p1", text: { text: "hi" } }] },
     { id: "m2", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p2", text: { text: "hello" } }] },
@@ -140,7 +140,7 @@ const summary = (id: string, body = "Summary so far."): MessageInfo => text(id, 
 
 test("an opened session shows a divider before every compaction summary already in its history", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", lastSeq: "40" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", lastSeq: "40" })
   store.setMessages("hysec_1", [
     text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello"), summary("s1"),
     text("m3", "ROLE_USER", "more"), text("m4", "ROLE_ASSISTANT", "sure"), summary("s2"),
@@ -159,7 +159,7 @@ test("an opened session shows a divider before every compaction summary already 
 
 test("a live CompactionApplied for a summary in the history replaces its divider instead of adding a second", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", lastSeq: "10" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", lastSeq: "10" })
   store.setMessages("hysec_1", [text("m1", "ROLE_USER", "hi"), text("m2", "ROLE_ASSISTANT", "hello"), summary("s1")])
   store.applyEvent({ seq: "11", session: "hysec_1", compactionApplied: { untilSeq: "11", strategy: "local_summarizer", message: "s1", foldedCount: 2, manual: true } })
   const views = transcriptViews(store.state)
@@ -167,7 +167,7 @@ test("a live CompactionApplied for a summary in the history replaces its divider
   expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · 2 messages · manual · local summary ──" })
   // The live event arrived before its summary message reached the transcript: still one divider, before it.
   const live = createAppStore()
-  live.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })
+  live.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w" })
   live.setMessages("hysec_2", [text("m1", "ROLE_USER", "hi")])
   live.applyEvent({ seq: "3", session: "hysec_2", compactionApplied: { untilSeq: "3", strategy: "SnapCompact", message: "s9", foldedCount: 1 } })
   live.setMessages("hysec_2", [text("m1", "ROLE_USER", "hi"), summary("s9")])
@@ -204,20 +204,20 @@ test("tool cards are collapsed by default; /tools and a click expand them; shell
 
 test("member frames and SessionInfo.members fold into the store", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", members: [{ member: "mbr_1", child: "hysec_c", agent: "scout", status: "MEMBER_STATUS_SPAWNING" }] })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", members: [{ member: "mbr_1", child: "hysec_c", agent: "scout", status: "MEMBER_STATUS_SPAWNING" }] })
   expect(store.state.members).toHaveLength(1)
   const effect = store.applyEvent({ seq: "4", session: "hysec_1", memberUpdated: { member: "mbr_1", status: "MEMBER_STATUS_DONE", summary: "ok" } })
   expect(effect.durable).toBe(true)
   expect(store.state.members[0]).toMatchObject({ agent: "scout", status: "MEMBER_STATUS_DONE", summary: "ok" })
   store.setChild("hysec_c", { busy: true, activity: "read a.txt" })
   expect(store.state.children.get("hysec_c")).toEqual({ busy: true, activity: "read a.txt" })
-  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w" })
   expect(store.state.members).toEqual([])
 })
 
 test("a shell turn run from this TUI shows its command on both messages", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setMessages("hysec_1", [
     { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
     { id: "m_a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_OK" } }] },
@@ -230,7 +230,7 @@ test("a shell turn run from this TUI shows its command on both messages", () => 
 
 test("a recorded shell turn shows its command from the tool input after a reload", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setMessages("hysec_1", [
     { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
     { id: "m_a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\":\"pwd\"}" } }] },
@@ -242,7 +242,7 @@ test("a recorded shell turn shows its command from the tool input after a reload
 
 test("the running shell turn shows its command before CreateTurn returns", () => {
   const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setPendingShell("sleep 5")
   store.setMessages("hysec_1", [
     { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },

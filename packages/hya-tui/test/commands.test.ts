@@ -57,7 +57,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
 
 test("/model persists an agent model and explicit effort", async () => {
   const writes: string[] = []
-  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
+  const session = { id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
   const h = harness({
     updateSessionModel: async (id, model) => {
       writes.push(`session ${id}=${model}`)
@@ -79,14 +79,14 @@ test("/model persists an agent model and explicit effort", async () => {
   await h.run("/model openai/gpt#high")
   expect(writes).toEqual([
     "session hysec_1=openai/gpt#high",
-    "agent-model build=openai/gpt session=hysec_1",
-    "agent-effort build=high",
+    "agent-model hya-main=openai/gpt session=hysec_1",
+    "agent-effort hya-main=high",
   ])
 })
 
 test("/model on a config-pinned agent switches only the session", async () => {
   const writes: string[] = []
-  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
+  const session = { id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
   const h = harness({
     updateSessionModel: async (id, model) => {
       writes.push(`session ${id}=${model}`)
@@ -95,7 +95,7 @@ test("/model on a config-pinned agent switches only the session", async () => {
       return { ...session, model: { providerId, modelId, ...(variant ? { variant } : {}) } }
     },
     setAgentModel: async () => {
-      throw new HttpError(409, "PUT", "/v1/agent-models/build", "conflict: Agent `build` has a configured model")
+      throw new HttpError(409, "PUT", "/v1/agent-models/hya-main", "conflict: Agent `hya-main` has a configured model")
     },
     setAgentEffort: async (agent, effort) => {
       writes.push(`agent-effort ${agent}=${effort}`)
@@ -123,7 +123,7 @@ test("registers every native slash command with a description", () => {
 
 test("/effort saves the choice on the layer that decides the session's effort", async () => {
   const writes: string[] = []
-  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
+  const session = { id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
   // The session's effort as the server resolves it after each write.
   let resolved: { effectiveEffort?: string; effortSource?: string } = { effectiveEffort: "high", effortSource: "EFFORT_SOURCE_AGENT" }
   const h = harness({
@@ -146,12 +146,12 @@ test("/effort saves the choice on the layer that decides the session's effort", 
   // A `#high` suffix outranks everything: it is dropped, then the Agent's effort (which decides next) takes the choice.
   h.store.openSession({ ...session, model: { ...session.model, variant: "high" }, effectiveEffort: "high", effortSource: "EFFORT_SOURCE_SUFFIX" })
   await h.run("/effort low")
-  expect(writes).toEqual(["session hysec_1=openai/gpt-6-astra", "agent build=low"])
+  expect(writes).toEqual(["session hysec_1=openai/gpt-6-astra", "agent hya-main=low"])
   expect(h.store.state.selected?.effectiveEffort).toBe("low")
   // `default` clears both remembered layers.
   writes.length = 0
   await h.run("/effort default")
-  expect(writes).toEqual(["agent build=", "model openai/gpt-6-astra="])
+  expect(writes).toEqual(["agent hya-main=", "model openai/gpt-6-astra="])
   // No Agent effort: the per-model preference takes the choice.
   writes.length = 0
   await h.run("/effort high")
@@ -177,7 +177,7 @@ test("view commands switch the main panel; /help opens the help overlay", async 
 
 test("/open resolves list numbers and /key opens the Provider View", async () => {
   const { store, calls, run } = harness()
-  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "build", workdir: "/w" }, { id: "hysec_b", agent: "build", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   await run("/open 2")
   await run("/open hysec_x")
   await run("/key")
@@ -207,7 +207,7 @@ test("unknown slash commands become backend command turns", async () => {
       return { id: "msg_c", state: "TURN_STATE_RUNNING" }
     },
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/deploy  now please")
   expect(sent).toEqual(["hysec_1 deploy now please"])
   expect(store.state.turnId).toBe("msg_c")
@@ -219,7 +219,7 @@ test("a backend command turn's user message shows the /name args the user typed"
   const { store, run } = harness({
     createCommandTurn: async () => ({ id: "msg_u1", state: "TURN_STATE_RUNNING" }),
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/review  src/main.ts")
   expect(store.state.commandDisplay.get("msg_u1")).toBe("/review  src/main.ts")
 })
@@ -228,9 +228,9 @@ test("/model with no argument opens a picker of the catalog, the session's curre
   const { store, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
-    agents: [{ name: "build", description: "Default agent" }], workflows: [], providers: [], commands: [],
+    agents: [{ name: "hya-main", description: "Default agent" }], workflows: [], providers: [], commands: [],
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt" } })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "openai", modelId: "gpt" } })
   await run("/model")
   expect(pickers.at(-1)?.title).toBe("Model")
   expect(pickers.at(-1)?.rows).toEqual([{ id: "openai/gpt", label: "gpt", tag: "openai", detail: "", current: true }])
@@ -254,10 +254,10 @@ test("/model and /agent <name> with no session remember the choice for the next 
 
 test("/model and /agent with an argument switch the session", async () => {
   const { store, run } = harness({
-    updateSessionModel: async (session, model) => ({ id: session, agent: "build", workdir: "/w", model: { providerId: model.split("/")[0], modelId: model.split("/")[1] } }),
-    updateSession: async (session, patch) => ({ id: session, agent: patch.agent ?? "build", workdir: "/w" }),
+    updateSessionModel: async (session, model) => ({ id: session, agent: "hya-main", workdir: "/w", model: { providerId: model.split("/")[0], modelId: model.split("/")[1] } }),
+    updateSession: async (session, patch) => ({ id: session, agent: patch.agent ?? "hya-main", workdir: "/w" }),
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/model anthropic/claude")
   expect(store.state.selected?.model).toEqual({ providerId: "anthropic", modelId: "claude" })
   await run("/agent review")
@@ -272,7 +272,7 @@ function modelSwitchingHarness() {
       updates.push(`${session}:${model}`)
       const [base, variant] = model.split("#", 2)
       const [providerId, modelId] = base!.split("/", 2)
-      return { id: session, agent: "build", workdir: "/w", model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+      return { id: session, agent: "hya-main", workdir: "/w", model: { providerId, modelId, ...(variant ? { variant } : {}) } }
     },
   })
   return { ...h, updates }
@@ -288,7 +288,7 @@ function effortContext(events: string[], store: AppStore): CommandContext {
         events.push(`model ${model}`)
         const [base, variant] = model.split("#", 2)
         const [providerId, modelId] = base!.split("/", 2)
-        return { id: session, agent: "build", workdir: "/w", model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+        return { id: session, agent: "hya-main", workdir: "/w", model: { providerId, modelId, ...(variant ? { variant } : {}) } }
       },
     } as unknown as HyaClient,
     actions: {
@@ -312,9 +312,9 @@ test("/think aliases /effort and wins any backend name clash", async () => {
 
 test("/rename updates the session title", async () => {
   const { store, run } = harness({
-    updateSession: async (session, patch) => ({ id: session, agent: "build", workdir: "/w", title: patch.title }),
+    updateSession: async (session, patch) => ({ id: session, agent: "hya-main", workdir: "/w", title: patch.title }),
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/rename New title")
   expect(store.state.selected?.title).toBe("New title")
   expect(store.state.status).toBe("Renamed to New title")
@@ -326,7 +326,7 @@ test("/compact shows a compacting status then the outcome", async () => {
   const { store, run } = harness({
     compactSession: async () => ({ compactedUntilSeq: "10", strategy: "shake" }),
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   const original = store.setStatus
   store.setStatus = (text: string) => { statuses.push(text); original(text) }
   await run("/compact")
@@ -337,7 +337,7 @@ test("/summarize refreshes messages after summarizing", async () => {
   const { store, calls, run } = harness({
     summarizeSession: async () => ({ summaryMessage: "msg_s" }),
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/summarize")
   expect(store.state.status).toBe("Summarized")
   expect(calls).toEqual(["refreshMessages"])
@@ -347,7 +347,7 @@ test("/todos loads the session todo list into the todos view", async () => {
   const { store, run } = harness({
     getSessionTodo: async () => [{ id: "t1", content: "Write tests", status: "TODO_STATUS_PENDING" }],
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/todos")
   expect(store.state.view).toBe("todos")
   expect(store.state.todos).toEqual([{ id: "t1", content: "Write tests", status: "TODO_STATUS_PENDING" }])
@@ -356,13 +356,13 @@ test("/todos loads the session todo list into the todos view", async () => {
 test("/status shows server, version, directory, session, agent, model, and mode", async () => {
   const { store, run } = harness()
   store.applyBootstrap({ location: { version: "0.42.0" } })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Fix bug", model: { providerId: "openai", modelId: "gpt" }, permissionMode: "yolo" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Fix bug", model: { providerId: "openai", modelId: "gpt" }, permissionMode: "yolo" })
   await run("/status")
   expect(store.state.view).toBe("status")
   const text = store.state.statusText
   expect(text).toContain("Version     0.42.0")
   expect(text).toContain("Session     Fix bug")
-  expect(text).toContain("Agent       build")
+  expect(text).toContain("Agent       hya-main")
   expect(text).toContain("Model       openai/gpt")
   expect(text).toContain("Thinking    default")
   expect(text).toContain("Mode        yolo")
@@ -447,7 +447,7 @@ test("/permissions opens the mode picker from the backend listing; /permissions 
     { id: "acme/approver/careful", title: "Careful", description: "Read-only commands", source: "acme/approver" },
   ]
   const { store, calls, pickers, run } = harness({ listPermissionModes: async () => modes })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", permissionMode: "acme/approver/careful" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", permissionMode: "acme/approver/careful" })
   await run("/permissions")
   expect(store.state.permissionModes).toEqual(modes)
   expect(pickers).toHaveLength(1)
@@ -465,10 +465,10 @@ test("/permissions opens the mode picker from the backend listing; /permissions 
 
 test("/sessions opens a picker with a New session row first, then the tree, the open session marked", async () => {
   const { store, calls, pickers, run } = harness()
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" })
   store.applyCatalog({
     sessions: [
-      { id: "hysec_1", agent: "build", workdir: "/w", title: "Top" },
+      { id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" },
       { id: "hysec_2", agent: "review", workdir: "/w", parent: "hysec_1" },
     ],
     interactions: [], models: [], workflows: [], providers: [], commands: [],
@@ -491,12 +491,12 @@ test("/sessions row actions: F2 renames (UpdateSession title), Ctrl+D deletes (D
   const updateCalls: Array<{ id: string; patch: unknown }> = []
   const deleteCalls: string[] = []
   const { store, pickers, run } = harness({
-    updateSession: async (id, patch) => { updateCalls.push({ id, patch }); return { id, agent: "build", workdir: "/w", title: (patch as { title?: string }).title } },
+    updateSession: async (id, patch) => { updateCalls.push({ id, patch }); return { id, agent: "hya-main", workdir: "/w", title: (patch as { title?: string }).title } },
     deleteSession: async (id) => { deleteCalls.push(id) },
   })
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" })
   store.applyCatalog({
-    sessions: [{ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" }],
+    sessions: [{ id: "hysec_1", agent: "hya-main", workdir: "/w", title: "Top" }],
     interactions: [], models: [], workflows: [], providers: [], commands: [],
   })
   await run("/sessions")
@@ -551,7 +551,7 @@ test("/copy copies the last assistant reply's text through OSC 52 and says how m
   await run("/copy")
   expect(calls).toEqual([])
   expect(store.state.status).toBe("Nothing to copy: no assistant reply yet")
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setMessages("hysec_1", [
     { id: "u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p1", text: { text: "hi" } }] },
     { id: "a1", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p2", text: { text: "first" } }] },
@@ -564,7 +564,7 @@ test("/copy copies the last assistant reply's text through OSC 52 and says how m
 
 test("/copy reports a terminal without OSC 52", async () => {
   const { store, run } = harness({}, false)
-  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   store.setMessages("hysec_1", [{ id: "a1", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p", text: { text: "x" } }] }])
   await run("/copy")
   expect(store.state.status).toBe("Copy failed: this terminal does not accept OSC 52 clipboard writes")
@@ -617,8 +617,8 @@ test("/undo, /redo, and /fork run the revert actions", async () => {
 
 test("/status names the session a fork came from", async () => {
   const { store, run } = harness()
-  store.setSessions([{ id: "hysec_src", agent: "build", workdir: "/w", title: "Parser" }])
-  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", forkedFrom: { session: "hysec_src" } })
+  store.setSessions([{ id: "hysec_src", agent: "hya-main", workdir: "/w", title: "Parser" }])
+  store.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w", forkedFrom: { session: "hysec_src" } })
   await run("/status")
   expect(store.state.statusText).toContain("Forked      from Parser")
 })

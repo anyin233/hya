@@ -1253,7 +1253,7 @@ A `task` call spawns a subagent in its own child session. Its card shows the
 child's status and what it last did, and it always shows these lines:
 
 ```text
-✓ task  general · survey the repo                                  7ms
+✓ task  hya-task · survey the repo                                  7ms
 │ ⠹ running  ↳ read notes.txt · lines 1-1 of 1
 │ click to view · /open hysec_…
 ```
@@ -1340,7 +1340,7 @@ A failed assistant message also shows its error in the transcript, as a line
 under its header, in the error color:
 
 ```text
-● build · openai/gpt-5
+● hya-main · openai/gpt-5
 ✗ provider_error: http status 400: bad request
 ```
 
@@ -1440,7 +1440,7 @@ with one `bash` tool call. The transcript shows the user message as
 ```text
 ┃ !echo hello
 
-● build · openai/gpt-5
+● hya-main · openai/gpt-5
 ◌ bash  echo hello · awaiting approval
 ```
 
@@ -1847,7 +1847,7 @@ without typing its id. The agent's turn waits until you answer.
 ```text
 ┌─Permission · 1 of 2──────────────────────────────────────────┐
 │edit  src/main.rs · +1 -1                                     │
-│asked by build                                                │
+│asked by hya-main                                                │
 ││ - let x = 1;                                                │
 ││ + let x = 2;                                                │
 │▸ 1  Allow once                                               │
@@ -1888,7 +1888,7 @@ without typing its id. The agent's turn waits until you answer.
 ```text
 ┌─Question─────────────────────────────────────────────────────┐
 │Color: Which color do you want?                               │
-│asked by build                                                │
+│asked by hya-main                                                │
 │▸ 1  red                                                      │
 │  2  blue                                                     │
 │  3  Other…  type the answer in the input, Enter sends        │
@@ -2266,7 +2266,7 @@ Thinking effort controls how hard the model reasons on each request. The TUI
 exists, between turns, or while a turn runs — and always shows the effort in
 use right after the model name, as `<model>:<effort>`:
 
-- the header: `hya · <title> · build openai/gpt-6-astra:max · <server>`;
+- the header: `hya · <title> · hya-main openai/gpt-6-astra:max · <server>`;
 - the status bar, right after the mode: `mode manual · gpt-6-astra:max · …`
   (kept at 80 columns, where the header truncates);
 - `/status`: `Thinking    max (pref)`, with the layer that chose it (`pref`,
@@ -2283,7 +2283,7 @@ advertised variants such as `low`, `high`, `xhigh`, `max`):
 
 ```text
 /model openai/gpt-6-astra
-/effort max        → Thinking effort → max   header: … build openai/gpt-6-astra:max …
+/effort max        → Thinking effort → max   header: … hya-main openai/gpt-6-astra:max …
 /effort default    → Thinking effort → default   header: … openai/gpt-6-astra:default …
 ```
 
@@ -2356,8 +2356,8 @@ with no loading state.
 ┌─Sessions──────────────────────────────────────────────────────────────┐
 │ Filter ▏  3 of 3                                                      │
 │ ▸   New session          [new]       Create a session with the curr… │
-│   ● Fix the flaky test              build · fake/model · 3m           │
-│       ↳ Explore the auth code [subagent]  explore · fake/model · 1m  │
+│   ● Fix the flaky test              hya-main · fake/model · 3m       │
+│       ↳ Explore the auth code [subagent]  hya-scout · fake/model · 1m│
 │ F2 rename · Ctrl+D del · Ctrl+A hides archived · F3 all · Esc closes  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -2695,9 +2695,9 @@ next matching call asks again.
 sections, each under a titled divider rule:
 
 - **Primary agents** (`mode: primary`): the agents a session runs on, such as
-  `build`, `hya-main`, and `plan`.
+  `hya-main` and `hya-plan`.
 - **Subagents** (`mode: subagent`): the agents the main agent starts with
-  `task`, such as `explore` and `hya-reviewer`.
+  `task`, such as `hya-scout` and `hya-reviewer`.
 - **System agents** (`hidden: true`): `compaction`, `summary`, and `title`,
   which the harness runs for context compaction, summaries, and session
   titles.

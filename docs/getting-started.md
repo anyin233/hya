@@ -57,7 +57,7 @@ Failures are easiest to diagnose if you know the order of operations
 2. **Bun preflight.** `bun --version` must succeed or the install aborts.
 3. **Cargo build.** Builds the locked `hya` binaries and the five
    tool-family libraries for the selected profile.
-4. **Stage runtimes.** Stages the `hya` binary, packages the twelve
+4. **Stage runtimes.** Stages the `hya` binary, packages the eleven
    first-party bundles with `cargo run -p xtask -- stage-first-party-bundles`,
    and stages the Bun programs `lib/hya/bun-adapter`, `lib/hya/tui`, and
    `lib/hya/tui-web`, each with its pinned lockfile, by running

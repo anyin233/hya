@@ -182,7 +182,7 @@ test.describe("pending interactions", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "run something")
     // The open session's ask: the permission prompt docked above the composer, no pending block.
-    await term.waitForText("asked by build", 20_000)
+    await term.waitForText("asked by hya-main", 20_000)
     const dock = (await term.find("Permission"))!
     const input = (await term.find("Message, !shell, or @file · / commands"))!
     expect(dock.row).toBeLessThan(input.row)
@@ -196,7 +196,7 @@ test.describe("pending interactions", () => {
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)
     await term.waitForText("F4 review request")
-    expect(await term.find("asked by build")).toBeNull()
+    expect(await term.find("asked by hya-main")).toBeNull()
   })
 })
 

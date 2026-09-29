@@ -85,25 +85,28 @@ one. It applies uniformly across every path that creates a root Session:
 
 Precedence: an explicit per-invocation agent id (a request field on `serve`;
 no CLI flag yet on the headless commands) outranks `default_agent`, which
-outranks the built-in `build` agent used when `default_agent` is unset. A
+outranks the built-in `hya-main` agent used when `default_agent` is unset. A
 `default_agent` that does not name a selectable agent in the bound catalog is
 a hard error (`UnknownAgentId`) at session-creation time — it does not
-silently fall back to `build`.
+silently fall back to `hya-main`. An existing session whose recorded agent no
+longer resolves in its binding instead switches to `hya-task` on its next root
+turn; the switch is durable (`AgentSwitched`). Explicit spawns of unknown
+agents still fail.
 
 ```yaml
 # Optional: agent profile selected when a workdir does not specify one.
-# Falls back to the built-in `build` agent when omitted.
-default_agent: build
+# Falls back to the built-in `hya-main` agent when omitted.
+default_agent: hya-main
 ```
 
 ## Remembered Agent Models
 
 Agent model selection covers primary Agents, ordinary subagents, and hidden
-`title`, `summary`, and `compaction` Agents. Defaults and temporary choices have
-separate owners: user configuration files, remembered defaults in the backend
-Session database, and temporary overrides in the root Session event stream.
-Attached and remote clients update the backend's state, not the client's files.
-The `title` Agent's model is the one that titles new root sessions after
+`hya-title`, `hya-summary`, and `hya-compaction` Agents. Defaults and temporary
+choices have separate owners: user configuration files, remembered defaults in
+the backend Session database, and temporary overrides in the root Session
+event stream. Attached and remote clients update the backend's state, not the
+client's files. The `hya-title` Agent's model titles new root sessions after
 their first prompt (see [Runtime — Session Titles](architecture/runtime.md#session-titles));
 with no model chosen for it, the session's own model is used.
 
@@ -171,10 +174,9 @@ and effort the default for every new session, pin them on the default Agent:
 
 ```yaml
 agents:
-  build:
+  hya-main:
     model: anthropic/claude-sonnet-4-6
     reasoning: high
-```
 
 The TUI's `/agent` view changes a pinned model without editing the file by hand:
 `m` on a pinned Agent calls `PUT /v1/agent-models/{agent}/configuration`, which
@@ -248,7 +250,7 @@ bundle-owned setting (`review.strict`), write
 
 ```yaml
 agents:
-  plan-impl-review-reviewer:
+  hya-pir-reviewer:
     model: openai/gpt-4.1
 review:
   strict: true
@@ -293,8 +295,8 @@ default_model: anthropic/claude-sonnet-4-6
 reasoning: medium
 
 # Optional: agent profile selected when a workdir does not specify one.
-# Falls back to the built-in `build` agent when omitted.
-default_agent: build
+# Falls back to the built-in `hya-main` agent when omitted.
+default_agent: hya-main
 
 # Nested subagent caps (optional; defaults shown).
 # Recursion depth is NOT configurable: it is hardcoded to two subagent
@@ -744,10 +746,9 @@ explicit suffix and the per-model preference, so `scout` can think `low` and
 
 ```yaml
 agents:
-  explore:
+  hya-scout:
     model: anthropic/claude-sonnet-4-5
     reasoning: low
-```
 
 An unknown label in `agents.<id>.reasoning` fails startup with
 `configuration agents.<id>.reasoning in <path> is not a thinking effort`.
@@ -1976,10 +1977,9 @@ Optional YAML frontmatter:
 ```markdown
 ---
 description: Create a component
-agent: build
+agent: hya-main
 model: claude-sonnet-4-6
 subtask: true
----
 Create $1 in $2.
 
 All args: $ARGUMENTS
@@ -2015,7 +2015,7 @@ replaces the built-in `/review`.
     "review": {
       "template": "Review $ARGUMENTS with a focus on correctness.",
       "description": "Code review pass",
-      "agent": "build",
+      "agent": "hya-main",
       "subtask": false
     }
   }

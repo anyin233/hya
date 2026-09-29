@@ -117,7 +117,7 @@ test.describe("desktop notifications: another session's ask", () => {
     await focusTerminal(term)
     await term.type(`/open ${other}`)
     await term.press("Enter")
-    await term.waitForText("asked by build", 20_000)
+    await term.waitForText("asked by hya-main", 20_000)
     expect(await osc9Payloads(term)).toHaveLength(1)
     await term.press("1")
     await term.waitForText("Done elsewhere.", 20_000)

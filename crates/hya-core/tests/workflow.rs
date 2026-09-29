@@ -386,7 +386,7 @@ async fn start_lead(engine: &Arc<SessionEngine>) -> SessionId {
     engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
             project: None,
@@ -410,7 +410,7 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
 
     let report = run_workflow(
@@ -419,7 +419,7 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::from([("target".to_string(), "the retry paths".to_string())]),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -489,7 +489,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
 
     let report = run_workflow(
@@ -498,7 +498,7 @@ flowchart TD
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -560,7 +560,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let report = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -570,7 +570,7 @@ flowchart TD
             &workflow,
             hya_core::WorkflowRunContext {
                 binding,
-                caller: "build".to_string(),
+                caller: "hya-main".to_string(),
                 base_agent: base,
                 inputs: BTreeMap::new(),
                 resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -629,7 +629,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
 
     let report = run_workflow(
@@ -638,7 +638,7 @@ flowchart TD
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -702,7 +702,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
 
     let report = run_workflow(
@@ -711,7 +711,7 @@ flowchart TD
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -745,7 +745,7 @@ flowchart TD
 
 fn base_spec() -> hya_core::AgentSpec {
     hya_core::AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: String::new(),
         workdir: PathBuf::from("/tmp"),
@@ -782,7 +782,7 @@ async fn run_def(
 ) -> Result<hya_core::WorkflowRunReport, hya_core::WorkflowError> {
     let base = run
         .engine
-        .agent_spec_for_binding(&run.binding, &base_spec(), "build")
+        .agent_spec_for_binding(&run.binding, &base_spec(), "hya-main")
         .unwrap();
     run_workflow(
         run.engine.clone(),
@@ -790,7 +790,7 @@ async fn run_def(
         def,
         hya_core::WorkflowRunContext {
             binding: run.binding.clone(),
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs,
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(run.engine.clone())),
@@ -841,7 +841,7 @@ flowchart TD
         &workflow,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base_spec(),
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(run.engine.clone())),
@@ -927,7 +927,7 @@ flowchart TD
         .await
         .expect_err("unknown agent must fail");
     assert!(
-        error.to_string().contains("not spawnable by `build`")
+        error.to_string().contains("not spawnable by `hya-main`")
             && error.to_string().contains("ghost-agent-not-installed"),
         "{error}"
     );
@@ -970,7 +970,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let error = run_workflow(
         engine.clone(),
@@ -978,7 +978,7 @@ flowchart TD
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -1069,7 +1069,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let report = run_workflow(
         engine.clone(),
@@ -1077,7 +1077,7 @@ flowchart TD
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -1162,7 +1162,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let cancel = CancellationToken::new();
     let run_cancel = cancel.clone();
@@ -1173,7 +1173,7 @@ flowchart TD
             &def,
             hya_core::WorkflowRunContext {
                 binding,
-                caller: "build".to_string(),
+                caller: "hya-main".to_string(),
                 base_agent: base,
                 inputs: BTreeMap::new(),
                 resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -1228,7 +1228,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let routing = hya_core::WorkflowRoutingContext::new(
         Arc::new(hya_core::CategoryRegistry::default()),
@@ -1248,7 +1248,7 @@ flowchart TD
         &mismatched,
         hya_core::WorkflowRunContext {
             binding: binding.clone(),
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base.clone(),
             inputs: BTreeMap::new(),
             resident_supervisor: Some(supervisor.clone()),
@@ -1277,7 +1277,7 @@ flowchart TD
             &workflow,
             hya_core::WorkflowRunContext {
                 binding,
-                caller: "build".to_string(),
+                caller: "hya-main".to_string(),
                 base_agent: base,
                 inputs: BTreeMap::new(),
                 resident_supervisor: Some(supervisor),
@@ -1370,7 +1370,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let cancel = CancellationToken::new();
     let run_cancel = cancel.clone();
@@ -1383,7 +1383,7 @@ flowchart TD
                 &workflow,
                 hya_core::WorkflowRunContext {
                     binding,
-                    caller: "build".to_string(),
+                    caller: "hya-main".to_string(),
                     base_agent: base,
                     inputs: BTreeMap::new(),
                     resident_supervisor: Some(supervisor),
@@ -1453,7 +1453,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let report = run_workflow(
         engine.clone(),
@@ -1461,7 +1461,7 @@ flowchart TD
         &workflow,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(supervisor),
@@ -1514,7 +1514,7 @@ flowchart TD
     let lead = start_lead(&engine).await;
     let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let report = run_workflow(
         engine.clone(),
@@ -1522,7 +1522,7 @@ flowchart TD
         &workflow,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(supervisor),
@@ -1756,11 +1756,11 @@ flowchart TD
     let workdir = support::TestDir::new("workflow-roster");
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
     let make_ctx = || hya_core::WorkflowRunContext {
         binding: binding.clone(),
-        caller: "build".to_string(),
+        caller: "hya-main".to_string(),
         base_agent: base.clone(),
         inputs: BTreeMap::new(),
         resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
@@ -1769,7 +1769,9 @@ flowchart TD
 
     // Parent authority control: the caller's OWN roster spans every target, so
     // declaring either agent as a workflow stage is admittable.
-    let caller_roster = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let caller_roster = engine
+        .agent_roster_for_binding(&binding, "hya-main")
+        .unwrap();
     assert!(
         caller_roster.iter().any(|agent| agent.name == "worker")
             && caller_roster.iter().any(|agent| agent.name == "helper")
@@ -1777,8 +1779,8 @@ flowchart TD
         "caller roster must authorize all targets: {:?}",
         caller_roster
     );
-    binding.resolve_spawn("build", "worker").unwrap();
-    binding.resolve_spawn("build", "delegate").unwrap();
+    binding.resolve_spawn("hya-main", "worker").unwrap();
+    binding.resolve_spawn("hya-main", "delegate").unwrap();
 
     // Stage with empty can_spawn: the member sees NO spawnable agents even
     // though its caller could spawn several — deeper derivation is closed.
@@ -2031,7 +2033,7 @@ flowchart TD
     let workdir = support::TestDir::new("workflow-sidecar");
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let base = engine
-        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .agent_spec_for_binding(&binding, &base_spec(), "hya-main")
         .unwrap();
 
     let report = run_workflow(
@@ -2040,7 +2042,7 @@ flowchart TD
         &def,
         hya_core::WorkflowRunContext {
             binding,
-            caller: "build".to_string(),
+            caller: "hya-main".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),

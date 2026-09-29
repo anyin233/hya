@@ -10,44 +10,21 @@ use hya_core::builtin_agents::{BuiltinAgent, SpawnScope, builtin_agent, builtin_
 
 /// Every built-in id, in the order the roster must expose them.
 const EXPECTED_IDS: &[&str] = &[
-    "build",
-    "compaction",
-    "explore",
-    "general",
-    "hya-docs",
-    "hya-explorer",
-    "hya-implementer",
+    "hya-compaction",
     "hya-main",
-    "hya-planner",
-    "hya-release",
+    "hya-plan",
     "hya-reviewer",
-    "hya-tester",
-    "plan",
-    "summary",
-    "title",
+    "hya-scout",
+    "hya-summary",
+    "hya-task",
+    "hya-title",
 ];
 
 /// Ids that ordinary agents must never be able to spawn.
-const RESERVED_IDS: &[&str] = &["compaction", "summary", "title"];
-
-/// Ids that carry a compiled-in prompt body.
-const PROMPTED_IDS: &[&str] = &[
-    "compaction",
-    "explore",
-    "hya-docs",
-    "hya-explorer",
-    "hya-implementer",
-    "hya-main",
-    "hya-planner",
-    "hya-release",
-    "hya-reviewer",
-    "hya-tester",
-    "summary",
-    "title",
-];
+const RESERVED_IDS: &[&str] = &["hya-compaction", "hya-summary", "hya-title"];
 
 /// Ids the selector must present as primary agents.
-const MAIN_IDS: &[&str] = &["build", "hya-main", "plan"];
+const MAIN_IDS: &[&str] = &["hya-main", "hya-plan"];
 
 #[test]
 fn roster_holds_every_builtin_id_in_sorted_order() {
@@ -111,33 +88,38 @@ fn roles_match_the_retired_builtin_bundles() {
 }
 
 #[test]
-fn prompted_agents_carry_non_empty_compiled_in_bodies() {
+fn every_builtin_carries_a_non_empty_compiled_in_prompt() {
     for agent in builtin_agents() {
-        let has_prompt = PROMPTED_IDS.contains(&agent.id);
-        assert_eq!(
-            agent.prompt.is_some(),
-            has_prompt,
-            "`{}` prompt presence is wrong",
+        let prompt = agent
+            .prompt
+            .unwrap_or_else(|| panic!("`{}` needs a prompt body", agent.id));
+        assert!(
+            !prompt.trim().is_empty(),
+            "`{}` prompt body must not be empty",
             agent.id
         );
-        if let Some(prompt) = agent.prompt {
-            assert!(
-                !prompt.trim().is_empty(),
-                "`{}` prompt body must not be empty",
-                agent.id
-            );
-        }
     }
 }
 
 #[test]
-fn ordinary_agents_are_the_twelve_non_reserved_ids() {
+fn every_builtin_id_carries_the_hya_prefix() {
+    for agent in builtin_agents() {
+        assert!(
+            agent.id.starts_with("hya-"),
+            "`{}` lacks the hya- prefix",
+            agent.id
+        );
+    }
+}
+
+#[test]
+fn ordinary_agents_are_the_five_non_reserved_ids() {
     let ordinary = builtin_agents()
         .iter()
         .filter(|agent| !agent.system_reserved)
         .map(|agent| agent.id)
         .collect::<Vec<_>>();
-    assert_eq!(ordinary.len(), 12);
+    assert_eq!(ordinary.len(), 5);
     for reserved in RESERVED_IDS {
         assert!(!ordinary.contains(reserved));
     }
@@ -163,9 +145,9 @@ fn descriptions_exist_for_every_selector_visible_agent() {
 
 #[test]
 fn definition_view_reports_builtin_origin() {
-    let agent: &BuiltinAgent = builtin_agent("build").expect("build");
+    let agent: &BuiltinAgent = builtin_agent("hya-main").expect("hya-main");
     let definition = agent.definition();
-    assert_eq!(definition.stable_id, "build");
+    assert_eq!(definition.stable_id, "hya-main");
     assert_eq!(definition.role, AgentRole::Main);
     assert!(definition.origin.is_builtin());
 }
