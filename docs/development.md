@@ -34,30 +34,64 @@ For multi-step work, use planning-with-files under
 
 ## Build and Quality Gate
 
-Run the standard gate before publishing code changes:
+Local verification is **per component**: run the checks for the crates and
+packages a change touches, plus the components that consume a changed public
+contract. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs the full workspace
+suite, Track P, and every TUI check on each push and pull request, so do not
+repeat the full suite locally. Run `cargo test --workspace`,
+`cargo clippy --workspace`, the whole `hya-e2e` matrix, or the whole Playwright
+suite only when asked, or for a cross-cutting change that touches most crates
+(for example a workspace-wide dependency or lint bump).
+
+### Choosing the affected components
+
+| Change | Verify |
+| --- | --- |
+| Private to one crate or package (internal functions, tests, non-`pub` items) | That crate or package only |
+| Public API, wire types, or behavior other crates rely on | The crate and its direct workspace dependents that use the changed items |
+| `proto/hya/v1` | Regenerate with `cargo run -p xtask -- gen-api`, then `hya-api`, `hya-server`, `hya-sdk-v1`, `hya-client`, and `packages/hya-tui` when its generated catalog or protobuf definitions change |
+| Version bump ([Version bumps](#version-bumps)) | `cargo test -p xtask` and `cargo test -p hya-bundle` |
+| `crates/hya-e2e/matrix.toml` or a new Track P test | `cargo run -p xtask -- matrix-check` |
+| Documentation only | No build or tests; check links and that no repository-private process notes leaked into project docs |
+| CI only (`.github/`) | A syntax check of the edited workflow |
+
+List a crate's direct workspace dependents with:
+
+```sh
+cargo tree --workspace -i <crate> --depth 1 -e normal,dev --prefix none
+```
+
+Foundation crates (`hya-proto`, `hya-api`, `hya-tool`) have many dependents;
+test only the ones that use the changed items (find them through references),
+not the whole list.
+
+### Rust components
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --exclude hya-e2e
+cargo clippy -p <crate> [-p <dependent> ...] --all-targets -- -D warnings
+cargo test -p <crate> [-p <dependent> ...]
+cargo build -p hya-backend --bin hya
 ```
 
-`--exclude hya-e2e` matches CI and [Testing](testing/README.md): Track P spawns
-real backend processes and must not run multi-threaded under the default suite.
-Run process E2E separately (below).
+`cargo fmt --all --check` is cheap and stays workspace-wide. While iterating,
+narrow further with `cargo test -p <crate> --test <name>` or a test-name
+filter; run the affected crates' full tests before landing.
 
-For docs-only changes, at least run a local Markdown link check and a scan for
-accidental references to repository-private process notes that do not belong in
-project docs.
+Any workspace-wide `cargo test` must pass `--exclude hya-e2e` (as CI does):
+Track P spawns real backend processes and must not run multi-threaded.
 
 ### Process agent E2E (Track P)
 
-Product-path coverage lives in `crates/hya-e2e` (real `hya` + FakeLlm).
-It needs a built backend binary and should run single-threaded:
+Product-path coverage lives in `crates/hya-e2e` (real `hya` + FakeLlm). Run it
+only when a change touches `crates/hya-e2e` or an agent surface the PR matrix
+covers (permissions, skills, MCP, subagents, hyabundle), and run the scenario
+files for that surface rather than the whole matrix. It needs a built backend
+binary and always runs single-threaded:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e -- --test-threads=1
+cargo test -p hya-e2e --test <pNN_scenario> -- --test-threads=1
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 
@@ -78,7 +112,8 @@ cd bundles/extra/jev-model-router && bun test
 
 ### OpenTUI frontend
 
-The Bun/OpenTUI frontend in `packages/hya-tui` has its own gate:
+When you change `packages/hya-tui`, run from that directory (`bun test <file>`
+narrows it while iterating):
 
 ```sh
 cd packages/hya-tui
@@ -86,22 +121,50 @@ bun run typecheck
 bun test
 ```
 
+When you change the Bun adapter, run `bun run typecheck && bun test` from
+`crates/hya-plugin-bun/adapter`.
+
 ### Browser-rendered TUI tests
 
 `packages/hya-tui-web` renders a terminal frontend in Chromium through a real
-PTY and xterm.js. When you change it or a TUI it drives, run from that
-directory:
+PTY and xterm.js. When you change it, run its unit tests; when you make a
+user-visible TUI change, also run the Playwright specs that cover it (the new or
+changed spec and the specs for the screens it touches), not the whole suite:
 
 ```sh
+cd packages/hya-tui-web
 bun run typecheck
 bun test ./test
-bunx playwright test
+bunx playwright test e2e/<spec>.ts
 ```
 
-See [Browser-rendered TUI](tui-web.md) for the harness API. CI runs this same
-gate (plus the `packages/hya-tui` typecheck/test above) in the `tui` job of
-[`ci.yml`](../.github/workflows/ci.yml); see
+See [Browser-rendered TUI](tui-web.md) for the harness API. CI runs the full
+suite (plus the `packages/hya-tui` and adapter typecheck/test above) in the
+`tui` job of [`ci.yml`](../.github/workflows/ci.yml); see
 [tui-web.md#ci](tui-web.md#ci).
+
+## Version bumps
+
+Every change to shipped behavior bumps `[workspace.package].version` in
+`Cargo.toml`, together with every coupled version: the first-party and extra
+`bundle.yaml` identity versions, `packages/hya-tui/package.json`,
+`packages/hya-tui-web/package.json`, the `README.md` status paragraph, and a new
+root `CHANGELOG.md` (the previous one moves to `docs/changes/`). Shipped
+behavior means Rust crates, `proto/`, `bundles/`, `packages/hya-tui`,
+`packages/hya-tui-web`, the Bun adapter, and anything else in the release
+archive or source install.
+
+These changes do **not** bump the version or write a new root changelog:
+
+- documentation only: `docs/`, `*.md` files, code comments, `AGENTS.md`,
+  `.planning/`;
+- CI only: `.github/`, CI scripts and config;
+- tests only, when no shipped code changes.
+
+A mixed change follows its shipped part: if any file affects shipped behavior,
+bump the version once for the whole atomic change. See the
+[Workspace Version Bump](spec/backend/quality-guidelines.md#scenario-workspace-version-bump)
+scenario for the file list and the tests that enforce it.
 
 ## Dev tasks (`xtask` package)
 
