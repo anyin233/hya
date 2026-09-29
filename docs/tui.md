@@ -6,10 +6,11 @@ database's backend daemon, which `hya` starts when none runs (see
 [Start it](#start-it)); from a source checkout it can also be run directly, or
 connect to a server you name with `--server`. It uses OpenTUI for
 display and input while the backend remains the owner of sessions, event
-history, tool execution, and permissions. The screen is one main column (the transcript of the open
-session, pending interactions, the status line, and the input) plus a
-sidebar with the session list, todos, and session context that you can show
-or hide (see [Layout](#layout)). Assistant replies render as Markdown with
+history, tool execution, and permissions. The default screen places Projects
+on the left, the conversation and its input in the middle, and separate
+Sessions, Todos, and Context panes on the right. The full layout is editable,
+and the side panes follow terminal width unless pinned (see [Layout](#layout)).
+Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
 tool call is a card with its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
@@ -672,32 +673,21 @@ list as plain text instead.
 ## Layout
 
 ```text
-hya · <session> · <agent> <provider/model> · <server>   ┌─Sessions───────────┐
-mode manual · …/work · ⎇ main                           │▸ 1. Review         │
-                                                        │   build · ◌ waiting│
-┃ your prompt                                           │                    │
-                                                        └────────────────────┘
-● build · fake/model                                    ┌─Todos──────────────┐
-◌ bash  cargo test · awaiting approval                  │○ write tests       │
-⠹ 0:07 · Running bash cargo test · Esc to interrupt     │◐ fix the bug       │
-                                                        └────────────────────┘
-┌─Permission─────────────────────────────────────────┐  ┌─Context────────────┐
-│bash  cargo test                                    │  │Session  hysec_…    │
-│asked by build                                      │  │Agent    build      │
-││ $ cargo test                                      │  │Model    fake/model │
-│▸ 1  Allow once                                     │  │Messages 2          │
-│  2  Always allow  bash: cargo test                 │  │Dir      …/work     │
-│  3  Deny                                           │  │Server   127.0.0.1:…│
-│1-3 or ↑↓ Enter · Esc denies · perm_… · mode manual │  └────────────────────┘
-└────────────────────────────────────────────────────┘
-Connected to hya 0.41.0 · /help for commands
-┌────────────────────────────────────────────────────┐
-│ Message, !shell, or @file · / commands             │
-└────────────────────────────────────────────────────┘
-Enter a prompt · /new creates a session · /sessions history · F4 requests · / commands
+┌─Projects───┐┌─Conversation──────────────────┐┌─Sessions──────┐
+│ ▸ hya     ││ hya · <session> · <model>      ││ ▸ 1. Review   │
+│   app     ││ mode manual · …/work          ││              │
+│           ││ ┃ your prompt                 │├─Todos─────────┤
+│           ││ ● build · fake/model          ││ ○ write tests│
+│           ││ ◌ bash · awaiting approval    │├─Context───────┤
+│           ││ ┌─Permission───────────────┐ ││ Agent  build │
+│           ││ │ 1 Allow · 2 Always · 3 Deny│ ││ Model  fake/…│
+│           ││ └──────────────────────────┘ ││              │
+│           ││ ┌─Message or / commands────┐ ││              │
+│           ││ └──────────────────────────┘ ││              │
+└───────────┘└───────────────────────────────┘└──────────────┘
 ```
 
-The main column holds, from top to bottom: the header line (session, agent,
+The Conversation pane holds, from top to bottom: the header line (session, agent,
 model, server, in the accent color), the status bar (permission mode,
 directory, git branch, a compact todo count while the sidebar is hidden,
 connection state — see
@@ -722,8 +712,8 @@ the bordered input, and the instruction line. The permission mode picker
   live todo list — see
   [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
   and `Context` (session, agent, model, the merged transcript's message
-  count, directory, server). It is 32 columns wide (at most 40% of a narrow
-  terminal, at least 20). By default it follows the width: shown at 110
+  count, directory, server). These are three independent panes in the right
+  branch of the editable layout tree. By default they follow the width: shown at 110
   columns or more, hidden below, so an 80-column terminal gets the full
   width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
   any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
@@ -731,7 +721,7 @@ the bordered input, and the instruction line. The permission mode picker
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
   [Projects](#projects) and [Pickers](#pickers)).
-- **Left Projects sidebar.** A second, narrower (16–28 columns) titled box on
+- **Left Projects sidebar.** A narrower titled pane on
   the left: one row per Project (`ListProjects`, live via `projectsUpdated`
   the same as the Project view), the active one marked `▸`, a busy marker
   `●` while a session of it runs a turn, and its session count. It needs
@@ -763,55 +753,58 @@ the bordered input, and the instruction line. The permission mode picker
   keyboard layouts often remap them to accented or symbol characters instead
   of delivering a plain modified keypress, in a browser and in a native
   terminal alike.)
-- **Focus.** The input keeps the keyboard focus. Mouse clicks (on the
-  transcript, a `Thinking` line, a tool card, or the sidebar) never move it (the renderer
-  runs with `autoFocus: false`). In a tiled workspace, clicking a pane selects
-  its scroll target; the message composer remains the text input.
+- **Focus.** The message composer remains the text input when a read-only
+  pane is selected; its PgUp/PgDn and Ctrl+Home/Ctrl+End keys scroll that
+  pane. Clicking Projects selects it and routes Up/Down to the project
+  highlight and Enter to opening it. Alt+arrows move between panes. The
+  renderer runs with `autoFocus: false`.
 
 ### Tiled workspace
 
-The central workspace can be split into nested rectangles. One pane always
-shows the current conversation; auxiliary panes show read-only views of the
-same server projection. This lets you keep jobs, sessions, todos, context,
-models, Workflows, interactions, status, or the API output beside the chat.
-The global header, permission prompts, command input, and message composer
-stay outside the split tree. The default single-conversation layout keeps the
-usual sidebars; splitting hides those sidebars to give the panes the full
-width. `/layout reset` restores the default screen.
+The complete screen is one editable tree of nested rectangles. The default
+tree has Projects on the left, Conversation in the middle, and Sessions,
+Todos, and Context stacked on the right. Conversation contains the header,
+transcript, prompts, command input, message composer, and footer, so moving
+it moves the whole interactive surface. Each other rectangle has an assigned
+job; you can split, resize, reassign, or close any auxiliary rectangle.
+Additional jobs include jobs, models, Workflows, interactions, status, and
+API output. The global modal and full-screen overlays cover the tree.
+`/layout reset` restores the five-pane arrangement.
 
 Open the command pane with `/` on an empty message, then enter a layout
 command. For example:
 
 ```text
-/layout split vertical jobs       # conversation left, jobs right
-Alt+Left                          # select the conversation pane
-/layout split horizontal todos    # split that pane into top and bottom
-/layout assign conversation       # move conversation to the selected pane
-/layout resize +10                # grow the selected pane by 10 percentage points
-/layout close                     # close a selected auxiliary pane
-/layout reset                     # restore the default single pane
+/layout focus pane-2              # select Projects on a wide terminal
+/layout resize +5                 # widen Projects by five percentage points
+/layout focus pane-3              # select Sessions
+/layout assign jobs               # show Jobs in the former Sessions rectangle
+/layout split horizontal todos    # split Jobs into top and bottom rectangles
+/layout focus pane-1              # select Conversation
+/layout reset                     # restore Projects | Conversation | right stack
 ```
 
 `vertical` divides left/right; `horizontal` divides top/bottom. A new pane
-starts selected. The selected pane has an accent border and `▸` in its title.
+starts selected. The selected pane has an accent border; generic auxiliary
+panes also show `▸` and their pane id in the title.
 Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
 also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
 `/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
-pane. In a tiled workspace Alt+Left/Right are pane keys, so use plain arrow
-keys for cursor movement in the message editor. Commands still use the
-single [command pane](#command-pane). Existing main views such as `/models`
-temporarily replace the tiled area; full-screen views and modal pickers
-cover it. `/layout show` returns to the tiles.
+pane. Alt+Left/Right are pane keys, so use plain arrow keys for cursor
+movement in the message editor. Commands still use the single
+[command pane](#command-pane). Existing main views such as `/models` appear
+in the Conversation rectangle; full-screen views and modal pickers cover the
+tree. `/layout show` returns Conversation to chat.
 
 | Command | Effect |
 | --- | --- |
 | `/layout` or `/layout show` | Show the pane count and selected pane; return from another main view. |
-| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to eight panes. |
+| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to 16 panes. |
 | `/layout assign <job>` | Change the selected pane's job. Assigning `conversation` swaps it with the current conversation pane; the sole conversation cannot be removed. |
 | `/layout focus <left\|right\|up\|down\|pane-id>` | Select a neighboring pane or a stable id such as `pane-2`. Alt+arrows use this action. |
-| `/layout resize <+N\|-N>` | Grow or shrink the selected pane against its nearest sibling by N percentage points, clamped to 20–80%. |
+| `/layout resize <+N\|-N>` | Grow or shrink the selected pane against its nearest sibling by N percentage points, clamped to 10–90%. |
 | `/layout close` | Close the selected auxiliary pane and give its rectangle to its sibling. |
-| `/layout reset` | Restore one conversation pane and the normal sidebars. |
+| `/layout reset` | Restore the five-pane left/middle/right layout. |
 
 Jobs are derived from the TUI's current projection: busy sessions, live
 subagent members of the open session, queued prompts, and pending requests.
@@ -819,18 +812,31 @@ The open session's turn and member activity update through its stream; busy
 state for other sessions follows their catalog updates or `/refresh`. This
 layout does not start another session stream or create another chat input.
 
+The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
+Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
+Projects is hidden unless `/projects-sidebar on` pins it open. Below 110
+columns, Sessions, Todos, and Context are hidden unless `/sidebar on` pins
+them open. These modes filter the matching pane jobs in any layout; the
+saved tree remains intact. `Ctrl+P` opens and selects a Projects pane;
+`Ctrl+B` toggles panes assigned Sessions, Todos, and Context, wherever they
+are placed.
+Resizing the terminal or toggling a sidebar keeps unsent message and command
+drafts, including their in-process input histories.
+
 The layout is saved automatically in the TUI preferences file and restored
 on the next start. TUI processes sharing that file (including WebUI tabs)
 each keep their loaded layout in memory; the last layout edit saved wins for
-the next start. Its exact JSON contract is `paneLayout: {version: 1,
+the next start. Its exact JSON contract is `paneLayout: {version: 2,
 root: PaneNode, active: string}`. A `PaneNode` is either
 `{type: "pane", id: "pane-N", kind: PaneKind}` or
 `{type: "split", axis: "horizontal"|"vertical", weight: number,
 first: PaneNode, second: PaneNode}`. `weight` is the first child's fraction
-and stays between `0.2` and `0.8`. `PaneKind` is `conversation`, `jobs`,
+and stays between `0.1` and `0.9`. `PaneKind` is `conversation`, `projects`, `jobs`,
 `sessions`, `todos`, `context`, `models`, `workflows`, `interactions`,
 `status`, or `api`. Saved trees with duplicate ids, no conversation,
-unknown jobs, invalid weights, or more than eight panes are ignored. Layout
+unknown jobs, invalid weights, or more than 16 panes are ignored. Saved
+version-1 center-only trees are migrated by placing them between editable
+Projects and right-side panes. Layout
 editing uses no new backend route: each pane reads the existing session,
 catalog, interaction, and stream data already held by the TUI.
 
@@ -908,7 +914,7 @@ interface TuiPreferences {
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
   permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
-  paneLayout?: PaneLayout // versioned central split tree; see Tiled workspace above
+  paneLayout?: PaneLayout // versioned full-workspace split tree; see Tiled workspace above
 }
 ```
 
@@ -2748,8 +2754,8 @@ together.
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
-| `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()` (right sidebar), `projectsSidebarVisible()`, `toggledProjectsSidebar()`, `projectsSidebarWidth()` (left Projects sidebar), and `parseSwitch()` for `on`/`off` arguments. |
-| `src/state/panes.ts`, `src/components/PaneWorkspace.tsx` | Versioned split tree, validation, focus geometry, assignment, close/resize reducers, and the recursive central-pane renderer. |
+| `src/state/layout.ts` | Sidebar visibility modes and width breakpoints, plus `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned full-screen split tree, visibility filtering, migration, focus geometry, assignment, close/resize reducers, and the recursive renderer. |
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
 | `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
@@ -2757,7 +2763,7 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
-| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
+| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root split-tree mount and overlays, startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
 | `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the message `<textarea>`, history, shell mode, file list, global key routing), `CommandPane` (separate `<input>`, suggestions, completion, command history), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command pane's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |

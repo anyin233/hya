@@ -12,14 +12,14 @@ import { projectSidebarRows } from "../state/projectsSidebar"
 import { truncate } from "../state/format"
 import { colors } from "../theme"
 
-export function ProjectsSidebar(props: { width: number }) {
+export function ProjectsSidebar(props: { width: number; active?: boolean }) {
   const { store } = useApp()
   const inner = () => Math.max(1, props.width - 4)
   const rows = () => projectSidebarRows(store.state.projects, store.state.activeProjectId)
   const highlighted = () => store.state.projectSidebarHighlight ?? store.state.activeProjectId
   return (
     <box
-      width={props.width}
+      width="100%"
       height="100%"
       flexShrink={0}
       flexDirection="column"
@@ -29,7 +29,7 @@ export function ProjectsSidebar(props: { width: number }) {
         width="100%"
         flexGrow={1}
         border
-        borderColor={store.state.projectsSidebarFocus ? colors.accent : colors.border}
+        borderColor={props.active || store.state.projectsSidebarFocus ? colors.accent : colors.border}
         title="Projects"
         backgroundColor={colors.panel}
         flexDirection="column"

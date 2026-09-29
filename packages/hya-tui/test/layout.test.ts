@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import {
   layoutBreakpoints, parseSwitch,
-  projectsSidebarVisible, projectsSidebarWidth, toggledProjectsSidebar,
-  sidebarVisible, sidebarWidth, toggledSidebar, wrapLineCount,
+  projectsSidebarVisible, toggledProjectsSidebar,
+  sidebarVisible, toggledSidebar, wrapLineCount,
 } from "../src/state/layout"
 import { createAppStore } from "../src/state/store"
 
@@ -21,13 +21,6 @@ test("toggling flips what is visible now, at any width", () => {
   expect(toggledSidebar("auto", 130)).toBe("closed")
   expect(toggledSidebar("open", 80)).toBe("closed")
   expect(toggledSidebar("closed", 130)).toBe("open")
-})
-
-test("the sidebar is at most 32 columns and never takes more than 40% of a narrow screen", () => {
-  expect(sidebarWidth(130)).toBe(32)
-  expect(sidebarWidth(80)).toBe(32)
-  expect(sidebarWidth(60)).toBe(24)
-  expect(sidebarWidth(30)).toBe(20)
 })
 
 test("on/off arguments set a switch; no argument toggles it", () => {
@@ -80,12 +73,6 @@ test("toggling the left sidebar flips what is visible now, at any width", () => 
   expect(toggledProjectsSidebar("auto", 200)).toBe("closed")
   expect(toggledProjectsSidebar("open", 80)).toBe("closed")
   expect(toggledProjectsSidebar("closed", 200)).toBe("open")
-})
-
-test("the left sidebar is narrower than the right one", () => {
-  expect(projectsSidebarWidth(200)).toBeLessThanOrEqual(28)
-  expect(projectsSidebarWidth(200)).toBeLessThan(sidebarWidth(200))
-  expect(projectsSidebarWidth(30)).toBeGreaterThanOrEqual(16)
 })
 
 test("the store tracks the left Projects sidebar mode and focus", () => {
