@@ -1,10 +1,11 @@
 import type { InputRenderable, KeyEvent } from "@opentui/core"
-import { createSignal, For, onCleanup, Show } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp, type CommandPaneHandle } from "../app/context"
 import { historyEntry } from "../bridge"
-import { suggestCommandInput, type CommandSuggestion } from "../commands"
+import { commandSuggestionLimit, suggestCommandInput, type CommandSuggestion } from "../commands"
 import { InputHistory } from "../composer/history"
 import { projectsSidebarVisible } from "../state/layout"
+import { pickerWindow } from "../state/picker"
 import { isShiftTab } from "../state/modes"
 import { colors } from "../theme"
 
@@ -20,6 +21,12 @@ export function CommandPane() {
   let editor: InputRenderable | undefined
   const [active, setActive] = createSignal(ui.commandInput?.active ?? false)
   const [menu, setMenu] = createSignal<CommandMenu | undefined>()
+  const visibleMenu = createMemo(() => {
+    const shown = menu()
+    if (!shown) return undefined
+    const { start, end } = pickerWindow(shown.items.length, shown.index, commandSuggestionLimit)
+    return { items: shown.items.slice(start, end), index: shown.index - start }
+  })
   const history = ui.commandHistory ??= new InputHistory()
   let originSidebar = ui.commandInput?.originSidebar ?? false
   let replaced: string | undefined
@@ -152,7 +159,7 @@ export function CommandPane() {
 
   return (
     <box width="100%" flexShrink={0} border borderColor={colors.accent} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
-      <Show when={menu()}>
+      <Show when={visibleMenu()}>
         {(shown) => (
           <For each={shown().items}>
             {(entry, row) => (
