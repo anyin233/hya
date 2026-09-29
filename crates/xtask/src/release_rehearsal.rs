@@ -481,7 +481,36 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         WORKFLOW_CHECKSUMS,
         "checksum the archive and every first-party bundle asset",
     )?;
+    validate_first_party_lists(&run_blocks)?;
     Ok(run_blocks)
+}
+
+/// Require every `first_party=(…)` list in the workflow to name exactly
+/// [`hya_bundle::FIRST_PARTY_BUNDLES`], in order, so the smoke counts and
+/// per-bundle checks follow the bundle set instead of a stale copy.
+fn validate_first_party_lists(run_blocks: &[String]) -> Result<()> {
+    let names: Vec<&str> = hya_bundle::FIRST_PARTY_BUNDLES
+        .iter()
+        .map(|identity| identity.trim_start_matches("hya/"))
+        .collect();
+    let expected = format!("first_party=({})", names.join(" "));
+    let lists: Vec<&str> = run_blocks
+        .iter()
+        .flat_map(|run| run.lines())
+        .map(str::trim)
+        .filter(|line| line.starts_with("first_party=("))
+        .collect();
+    ensure!(
+        !lists.is_empty(),
+        "release workflow must declare the first-party bundle set: `{expected}`"
+    );
+    for list in lists {
+        ensure!(
+            list == expected,
+            "release workflow first-party list `{list}` must be `{expected}`"
+        );
+    }
+    Ok(())
 }
 
 /// Require the build job to run one native job per release target.

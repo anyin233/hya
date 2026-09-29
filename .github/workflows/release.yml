@@ -180,6 +180,8 @@ jobs:
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
           (cd dist && shasum -a 256 -c "SHA256SUMS-$TARGET")
+          # The first-party set (hya_bundle::FIRST_PARTY_BUNDLES; the rehearsal checks it).
+          first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
           asset_count=0
           for asset in dist/hya-*.hyabundle; do
             name="$(basename "$asset" .hyabundle)"
@@ -189,14 +191,14 @@ jobs:
             cmp "$asset" "$scratch/$package_dir/bundles/hya-$name.hyabundle"
             asset_count=$((asset_count + 1))
           done
-          test "$asset_count" -eq 12
-          test "$(find "$scratch/$package_dir/bundles" -name 'hya-*.hyabundle' | wc -l)" -eq 12
+          test "$asset_count" -eq "${#first_party[@]}"
+          test "$(find "$scratch/$package_dir/bundles" -name 'hya-*.hyabundle' | wc -l)" -eq "${#first_party[@]}"
           smoke_home="$scratch/smoke-home"
           mkdir -p "$smoke_home"
           HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
             XDG_STATE_HOME="$smoke_home/state" XDG_CACHE_HOME="$smoke_home/cache" \
             "$packaged_binary" bundle list > "$scratch/bundle-list.txt"
-          for bundle in base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
+          for bundle in "${first_party[@]}"; do
             grep -E "^hya/$bundle $version " "$scratch/bundle-list.txt"
           done
           bun_adapter="$scratch/$package_dir/lib/hya/bun-adapter"
@@ -279,7 +281,7 @@ jobs:
           grep -Fx "$package_dir/lib/hya/tui-web/src/main.ts" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/tui-web/web/index.html" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/tui-web/node_modules/@xterm/xterm/" "$scratch/archive.txt" >/dev/null
-          for bundle in base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
+          for bundle in "${first_party[@]}"; do
             grep -Fx "$package_dir/bundles/hya-$bundle.hyabundle" "$scratch/archive.txt"
           done
           grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
@@ -352,6 +354,9 @@ jobs:
           set -euo pipefail
 
           mkdir -p dist
+          # The first-party set (hya_bundle::FIRST_PARTY_BUNDLES); the five
+          # tool-family bundles are per target, the others are shared.
+          first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
           targets=0
           for directory in artifacts/release-assets-*; do
             targets=$((targets + 1))
@@ -368,7 +373,7 @@ jobs:
           done
           test "$targets" -eq 4
           test "$(find dist -name '*.tar.gz' | wc -l)" -eq "$targets"
-          test "$(find dist -name 'hya-*.hyabundle' | wc -l)" -eq $((5 * targets + 7))
+          test "$(find dist -name 'hya-*.hyabundle' | wc -l)" -eq $((5 * targets + ${#first_party[@]} - 5))
           (cd dist && for file in *.tar.gz hya-*.hyabundle; do shasum -a 256 "$file"; done > SHA256SUMS)
           (cd dist && shasum -a 256 -c SHA256SUMS)
           # The curl-pipe installer `hya update` also runs (docs/install.md).
