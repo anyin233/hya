@@ -1,10 +1,10 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, Match, onCleanup, Show, Switch } from "solid-js"
 import { useApp } from "../app/context"
 import { mainContent, modelReference, shownServer } from "../state/format"
 import type { AppState } from "../state/store"
-import { visiblePaneLayout, type PaneKind, type PaneLeaf, type PaneNode } from "../state/panes"
+import { paneLeaves, visiblePaneRoot, type PaneKind, type PaneLeaf, type PaneNode } from "../state/panes"
 import { pageStep } from "../state/scroll"
 import { colors } from "../theme"
 import { ConversationPane } from "./ConversationPane"
@@ -131,13 +131,14 @@ function PaneNodeView(props: { node: PaneNode; width: number }) {
 export function PaneWorkspace() {
   const { store } = useApp()
   const size = useTerminalDimensions()
-  const visible = () => visiblePaneLayout(store.state.paneLayout, size().width, store.state.sidebar, store.state.projectsSidebar)
+  const visibleRoot = createMemo(() => visiblePaneRoot(store.state.paneLayout.root, size().width, store.state.sidebar, store.state.projectsSidebar))
   createEffect(() => {
-    const active = visible().active
-    if (active !== store.state.paneLayout.active) {
+    const leaves = paneLeaves(visibleRoot())
+    if (!leaves.some((pane) => pane.id === store.state.paneLayout.active)) {
+      const active = leaves.find((pane) => pane.kind === "conversation")?.id ?? leaves[0]!.id
       store.setPaneLayout({ ...store.state.paneLayout, active })
       store.setProjectsSidebarFocus(false)
     }
   })
-  return <PaneNodeView node={visible().root} width={size().width} />
+  return <PaneNodeView node={visibleRoot()} width={size().width} />
 }

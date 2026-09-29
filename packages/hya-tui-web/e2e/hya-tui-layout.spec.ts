@@ -1,6 +1,5 @@
-// The single-column layout (header, transcript, status line, composer,
-// footer) and the toggleable sidebar (sessions, todos, context), at the
-// default viewport and at about 80 columns. See docs/tui.md "Layout".
+// The editable Projects/Conversation/right-side split tree at default and
+// narrow widths, including focus and viewport behavior. See docs/tui.md "Layout".
 
 import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep, toolStep } from "./hya"
@@ -153,6 +152,25 @@ test.describe("layout", () => {
     await prompt(term, "/sidebar off")
     await expect.poll(() => sidebarShown(term)).toBe(false)
     await term.waitForText("Sidebar hidden · Ctrl+B toggles")
+  })
+})
+
+test.describe("pane focus", () => {
+  const longReply = `${Array.from({ length: 140 }, (_, index) => `scroll line ${index.toString().padStart(3, "0")}`).join("\n\n")}\n\nEND OF LONG REPLY`
+  test.use({ model: { steps: [textStep(longReply)] } })
+
+  test("switching panes keeps the conversation viewport where the user left it", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "show a long reply")
+    await term.waitForText("END OF LONG REPLY", 20_000)
+    await term.press("PageUp")
+    await expect.poll(() => term.find("END OF LONG REPLY")).toBeNull()
+    await term.press("Alt+ArrowRight")
+    await term.waitForText(/Layout · 5 panes · pane-[345] (sessions|todos|context)/)
+    await term.press("Alt+ArrowLeft")
+    await term.waitForText("pane-1 conversation")
+    expect(await term.find("END OF LONG REPLY")).toBeNull()
   })
 })
 

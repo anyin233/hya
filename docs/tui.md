@@ -790,8 +790,13 @@ panes also show `▸` and their pane id in the title.
 Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
 also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
 `/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
-pane. Alt+Left/Right are pane keys, so use plain arrow keys for cursor
-movement in the message editor. Commands still use the single
+pane. Focus changes keep each pane mounted, including its scroll position;
+for example, scroll up in Conversation, press Alt+Right to inspect a side pane,
+then Alt+Left to return to the same part of the transcript. The visible tree
+is recalculated when the layout, terminal width, or sidebar visibility changes,
+while live session and todo data still update their panes. Alt+Left/Right are
+pane keys, so use plain arrow keys for cursor movement in the message editor.
+Commands still use the single
 [command pane](#command-pane). Existing main views such as `/models` appear
 in the Conversation rectangle; full-screen views and modal pickers cover the
 tree. `/layout show` returns Conversation to chat.

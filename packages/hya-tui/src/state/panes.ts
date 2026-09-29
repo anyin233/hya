@@ -48,8 +48,8 @@ export function isDefaultPaneTree(layout: PaneLayout): boolean {
   return JSON.stringify(layout.root) === JSON.stringify(defaultPaneLayout().root)
 }
 
-/** Keep the same tree for every width, pruning sidebar jobs when their existing modes hide them. */
-export function visiblePaneLayout(layout: PaneLayout, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneLayout {
+/** Filter pane jobs by viewport without depending on the currently focused pane. */
+export function visiblePaneRoot(root: PaneNode, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneNode {
   const right = sidebarVisible(sidebar, columns)
   const left = projectsSidebarVisible(projectsSidebar, columns)
   const keep = (node: PaneNode): PaneNode | undefined => {
@@ -62,9 +62,15 @@ export function visiblePaneLayout(layout: PaneLayout, columns: number, sidebar: 
     const second = keep(node.second)
     if (!first) return second
     if (!second) return first
+    if (first === node.first && second === node.second) return node
     return { ...node, first, second }
   }
-  const root = keep(layout.root) ?? { type: "pane", id: "pane-1", kind: "conversation" }
+  return keep(root) ?? { type: "pane", id: "pane-1", kind: "conversation" }
+}
+
+/** Keep focus on a pane that remains visible after responsive filtering. */
+export function visiblePaneLayout(layout: PaneLayout, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneLayout {
+  const root = visiblePaneRoot(layout.root, columns, sidebar, projectsSidebar)
   const leaves = paneLeaves(root)
   return { ...layout, root, active: leaves.some((pane) => pane.id === layout.active) ? layout.active : leaves.find((pane) => pane.kind === "conversation")?.id ?? leaves[0]!.id }
 }
