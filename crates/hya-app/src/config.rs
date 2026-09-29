@@ -1052,6 +1052,75 @@ pub fn remove_model_entry(
     Ok(true)
 }
 
+/// Remove `providers.<provider_id>` from `config.yaml`, keeping every other
+/// key. Returns whether the provider was declared.
+///
+/// # Errors
+/// [`ConfigEditError::Io`] for read/parse/write failures.
+pub fn remove_provider_entry(
+    config_path: &Path,
+    provider_id: &str,
+) -> Result<bool, ConfigEditError> {
+    if !config_path.exists() {
+        return Ok(false);
+    }
+    let source = read_config_source(config_path)?;
+    let mut root = source.root.clone();
+    if providers_mapping(&mut root)?
+        .remove(key(provider_id))
+        .is_none()
+    {
+        return Ok(false);
+    }
+    write_config_value(config_path, &source, &root)?;
+    Ok(true)
+}
+
+/// Dotted paths of config values outside `providers` that name a model of
+/// `provider_id` (`default_model: <id>/…`, `agents.<agent>.model`, …), so a
+/// removal can warn about references it leaves dangling.
+///
+/// # Errors
+/// Returns read or YAML parse failures.
+pub fn provider_model_references(provider_id: &str) -> anyhow::Result<Vec<String>> {
+    fn walk(value: &Value, path: &str, prefix: &str, out: &mut Vec<String>) {
+        match value {
+            Value::String(text) if text.trim().starts_with(prefix) => out.push(path.to_string()),
+            Value::Mapping(map) => {
+                for (name, child) in map {
+                    let Some(name) = name.as_str() else { continue };
+                    if path.is_empty() && name == "providers" {
+                        continue;
+                    }
+                    let child_path = if path.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{path}.{name}")
+                    };
+                    walk(child, &child_path, prefix, out);
+                }
+            }
+            Value::Sequence(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    walk(child, &format!("{path}[{index}]"), prefix, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(path) = config_path() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    walk(
+        &read_config_value(&path)?,
+        "",
+        &format!("{provider_id}/"),
+        &mut out,
+    );
+    Ok(out)
+}
+
 /// Non-secret provider declarations from the active `config.yaml` (empty
 /// when there is no config file).
 ///
@@ -2624,6 +2693,15 @@ impl DiscoveryResult {
         }
     }
 
+    /// Ids of the fetched models, in endpoint order (empty unless fetched).
+    #[must_use]
+    pub fn model_ids(&self) -> Vec<&str> {
+        match &self.cache {
+            CacheAction::Replace(rows) => rows.iter().map(|row| row.id.as_str()).collect(),
+            CacheAction::Keep => Vec::new(),
+        }
+    }
+
     fn timed_out(auth: ProviderAuthState) -> Self {
         Self {
             auth,
@@ -2719,6 +2797,76 @@ async fn apply_discovery(
         }
         CacheAction::Keep => cached,
     }
+}
+
+/// Fetch the model list of a provider that is not saved yet, with `api_key`
+/// as its credential, exactly as a saved provider would be fetched. Nothing
+/// is written; pass the result to [`store_discovery`] once the provider is
+/// saved.
+///
+/// # Errors
+/// [`ConfigEditError::Invalid`] for an unknown `kind` label or a bad base URL.
+pub async fn probe_provider(
+    provider_id: &str,
+    kind: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<DiscoveryResult, ConfigEditError> {
+    let kind: ProviderKindConfig = serde_norway::from_value(Value::String(kind.to_string()))
+        .map_err(|_| {
+            ConfigEditError::Invalid(format!(
+                "unknown provider kind `{kind}` (expected one of {})",
+                PROVIDER_KIND_LABELS.join(", ")
+            ))
+        })?;
+    validate_base_url(base_url).map_err(ConfigEditError::Invalid)?;
+    let provider = ParsedProvider {
+        id: provider_id.to_string(),
+        kind: kind.into(),
+        base_url: base_url.to_string(),
+        api_key: None,
+        models: Vec::new(),
+        retry: hya_provider::RetryConfig::default(),
+        prompt_cache: None,
+    };
+    let credential = ProviderCredential {
+        token: api_key
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string),
+        use_grok_session: false,
+        use_codex_session: false,
+        account_id: None,
+        use_oauth_refresh: false,
+    };
+    Ok(discover_provider(&provider, &credential).await)
+}
+
+/// Persist a [`probe_provider`] result as `provider_id`'s model cache rows
+/// (a failed fetch leaves the cache untouched).
+pub async fn store_discovery(provider_id: &str, discovery: &DiscoveryResult) {
+    apply_discovery(provider_id, Vec::new(), discovery).await;
+}
+
+/// Validate an `http(s)://host…` provider base URL without credentials.
+///
+/// # Errors
+/// Returns a user-facing message naming what is wrong.
+pub fn validate_base_url(base_url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(base_url)
+        .map_err(|error| format!("invalid base URL `{base_url}`: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(format!(
+            "invalid base URL `{base_url}`: use http:// or https:// with a host"
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(
+            "invalid base URL: credentials in the URL are not allowed (save an API key instead)"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Build one provider's route, catalog rows, and status from its cached rows

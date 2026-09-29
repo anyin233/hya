@@ -229,7 +229,7 @@ fn read_stdin_line() -> anyhow::Result<String> {
     if stdin.is_terminal() {
         eprint!("Relay link (input hidden): ");
         let _ = std::io::stderr().flush();
-        let echo = EchoOff::new();
+        let echo = crate::prompt::EchoOff::new();
         let read = stdin.lock().read_line(&mut line);
         drop(echo);
         eprintln!();
@@ -244,39 +244,6 @@ fn read_stdin_line() -> anyhow::Result<String> {
         anyhow::bail!("no relay link on stdin");
     }
     Ok(line)
-}
-
-/// Terminal echo off for its lifetime (best effort).
-struct EchoOff(Option<libc::termios>);
-
-impl EchoOff {
-    fn new() -> Self {
-        // SAFETY: `termios` is plain data; `tcgetattr`/`tcsetattr` only read
-        // and write it for fd 0, which is open (it is our stdin).
-        unsafe {
-            let mut saved: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(libc::STDIN_FILENO, &mut saved) != 0 {
-                return Self(None);
-            }
-            let mut quiet = saved;
-            quiet.c_lflag &= !libc::ECHO;
-            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &quiet) != 0 {
-                return Self(None);
-            }
-            Self(Some(saved))
-        }
-    }
-}
-
-impl Drop for EchoOff {
-    fn drop(&mut self) {
-        if let Some(saved) = self.0 {
-            // SAFETY: restores the attributes read in `new` on the same fd.
-            unsafe {
-                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &saved);
-            }
-        }
-    }
 }
 
 /// Parse `--listen`: a socket address, `localhost:PORT`, or a bare port

@@ -25,8 +25,8 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.43.24`,
-`MIT OR Apache-2.0`). The latest public binary release is `v0.43.23`; install it
+hya is under active development (workspace version `0.43.25`,
+`MIT OR Apache-2.0`). The latest public binary release is `v0.43.24`; install it
 as described below, or build this checkout from source. It is not published to
 crates.io. APIs, config, and command surfaces may still change between versions.
 
@@ -95,8 +95,19 @@ bun packages/hya-tui/src/main.ts --dir "$PWD" --continue # the TUI alone; starts
 
 ## Configure a Provider and Log In
 
-By default `hya` starts offline. To use a live model, create
-`~/.config/hya/config.yaml` (or `$XDG_CONFIG_HOME/hya/config.yaml`):
+By default `hya` starts offline. The quickest way to add a live model is the
+guided setup. It asks for the base URL, the protocol (`openai-chat`,
+`openai-responses`, or `anthropic-messages`), and the API key. It then fetches
+the model list and saves the provider (see [`hya provider`](docs/cli.md#hya-provider)):
+
+```sh
+hya provider add      # guided: base URL, protocol, key -> model list -> config
+hya provider list     # providers and their models
+hya provider remove <id>
+```
+
+Or declare the provider yourself in `~/.config/hya/config.yaml`
+(or `$XDG_CONFIG_HOME/hya/config.yaml`):
 
 ```yaml
 default_model: claude-sonnet-4-6
