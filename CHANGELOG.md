@@ -16,3 +16,7 @@
   `hya-release` is removed. The `hya/subagents` first-party bundle is removed, so eleven first-party bundles remain. The workflow-private agents are renamed to `hya-goal-guide`, `hya-goal-verifier`, and `hya-pir-planner`, `hya-pir-implementer`, `hya-pir-reviewer`. Rename `agents.<id>` keys and `default_agent` in `config.yaml` to the new ids (see `docs/core-agents.md`).
 - **Read-only agents are enforced at the tool layer.** Built-in agents now honor the core-agents preset's `resource_view`. `hya-plan` has no `write`, `edit`, `apply_patch`, or `bash`. `hya-scout` also lacks `task` and `archive`. `hya-reviewer` has no `write`, `edit`, or `apply_patch`.
 - **Stored sessions keep working.** A session whose recorded agent no longer exists continues as `hya-task` on its next turn. The switch is recorded as `AgentSwitched`, so every client shows it. Explicitly spawning an unknown agent still fails.
+
+## Fixes
+
+- **Sessions with an empty thinking block open again in the TUI.** A model can open a thinking block and write no text into it. For example, Anthropic-style extended thinking can send a signature-only block. The API then returns that part as `reasoning: {}`, because protojson omits empty strings. Rendering the session's messages threw `TypeError … text.split`, so the TUI showed `Refresh failed` and stopped updating the transcript and context panel. Such a part now renders as `Thinking · 0 words`. Empty text parts are skipped as well.
