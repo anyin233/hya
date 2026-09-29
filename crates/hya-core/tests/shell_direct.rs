@@ -81,7 +81,7 @@ async fn direct_shell_runs_command_and_records_tool_part() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -90,7 +90,7 @@ async fn direct_shell_runs_command_and_records_tool_part() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir,
@@ -198,7 +198,7 @@ async fn policy_engine(
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -207,7 +207,7 @@ async fn policy_engine(
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir,
@@ -416,7 +416,7 @@ async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -425,7 +425,7 @@ async fn direct_shell_caps_oversized_post_hook_coding_envelope() {
         .await
         .unwrap();
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: dir.clone(),

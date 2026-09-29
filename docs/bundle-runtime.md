@@ -66,7 +66,7 @@ A bundle update goes live in four steps, each of which can refuse it:
 
 Hya's own tools, agents, Skills, commands, channel policy and workflows are
 bundles that the backend loads when it starts. None of their content is
-compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the twelve
+compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the eleven
 trusted identities:
 
 | Identity | Source | Supplies |
@@ -76,7 +76,9 @@ trusted identities:
 | `hya/core-commands` | `bundles/presets/core-commands` | `/init` and `/review` prompt templates |
 | `hya/core-agents` | `bundles/presets/core-agents` | Builtin agent roster, prompts and reserved ids |
 | `hya/agent-channels` | `bundles/presets/agent-channels` | Default channel capabilities |
-| `hya/goal-loop`, `hya/plan-impl-review`, `hya/subagents` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
+| `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
+
+The former `hya/subagents` bundle and `hya-release` agent have been removed.
 
 `first_party_source` picks one source per identity:
 
@@ -101,7 +103,7 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
 - `hya-<version>-<target>.tar.gz` per target, containing `bin/hya`,
-  `bundles/hya-<name>.hyabundle` for all twelve bundles, and three Bun
+-  `bundles/hya-<name>.hyabundle` for all eleven bundles, and three Bun
   programs with their production `node_modules`: `lib/hya/bun-adapter`,
   `lib/hya/tui` (the OpenTUI terminal UI bare `hya` starts, including the
   target's `@opentui/core-<platform>` native package), and `lib/hya/tui-web`

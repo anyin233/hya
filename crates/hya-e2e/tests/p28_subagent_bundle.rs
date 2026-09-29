@@ -9,7 +9,7 @@ use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
 use serde_json::json;
 
 const ROOT: &str = "You are hya";
-const WORKER: &str = "You are a resident worker spawned by a parent agent";
+const WORKER: &str = "You are hya-task";
 
 #[tokio::test]
 async fn t2_23_default_subagent_bundle_worker_mails_reports_and_archives() {
@@ -33,7 +33,7 @@ async fn t2_23_default_subagent_bundle_worker_mails_reports_and_archives() {
                     json!({
                         "description": "installed worker",
                         "prompt": "mail the parent, then report",
-                        "subagent_type": "hya-worker"
+                        "subagent_type": "hya-task"
                     }),
                 ),
                 text_step("ROOT_SPAWNED_BUNDLE_WORKER"),

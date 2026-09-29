@@ -6,7 +6,7 @@ import type { PickerSpec } from "../src/state/picker"
 import { forkHeadId, forkRows, forkSourceText, revertIndicator, revertSummary, sessionRow } from "../src/state/revert"
 import { createAppStore } from "../src/state/store"
 
-const session = (id: string, extra: Partial<SessionInfo> = {}): SessionInfo => ({ id, agent: "build", workdir: "/work", ...extra })
+const session = (id: string, extra: Partial<SessionInfo> = {}): SessionInfo => ({ id, agent: "hya-main", workdir: "/work", ...extra })
 const user = (id: string, text: string): MessageInfo => ({ id, role: "ROLE_USER", parts: [{ id: `${id}-p`, text: { text } }] })
 const reply = (id: string, text: string): MessageInfo => ({ id, role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: `${id}-p`, text: { text } }] })
 

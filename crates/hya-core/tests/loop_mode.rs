@@ -547,7 +547,7 @@ async fn engine_with(provider: FakeProvider) -> (Arc<hya_core::SessionEngine>, A
         hya_core::EventBus::default(),
     ));
     let agent = AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),

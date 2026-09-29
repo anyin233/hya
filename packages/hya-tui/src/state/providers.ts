@@ -658,7 +658,7 @@ export function defaultModelRef(state: {
   models: readonly ModelSummary[]
 }): string {
   if (state.selected) return modelReference(state.selected)
-  const agent = state.pendingAgent ?? state.agents.find((item) => !item.hidden)?.name ?? "build"
+  const agent = state.pendingAgent ?? state.agents.find((item) => !item.hidden)?.name ?? "hya-main"
   const preferred = state.agents.find((item) => item.name === agent)?.model
   // The agent's configured model keeps its explicit `#variant` (it wins over the remembered effort).
   const preferredRef = preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}${preferred.variant ? `#${preferred.variant}` : ""}` : undefined

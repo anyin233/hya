@@ -2,20 +2,20 @@ import { expect, test } from "bun:test"
 import type { MemberInfo, MessageInfo } from "../src/client"
 import { childActivity, childSessionIds, childStatus, foldMember, taskLink } from "../src/state/members"
 
-const spawn: MemberInfo = { member: "mbr_1", child: "hysec_c", agent: "scout", description: "survey", status: "MEMBER_STATUS_SPAWNING", callId: "call_1", depth: 1 }
+const spawn: MemberInfo = { member: "mbr_1", child: "hysec_c", agent: "hya-scout", description: "survey", status: "MEMBER_STATUS_SPAWNING", callId: "call_1", depth: 1 }
 
 test("member frames fold by member id without clearing known fields", () => {
   let rows = foldMember([], spawn)
   rows = foldMember(rows, { member: "mbr_1", status: "MEMBER_STATUS_RUNNING" })
   expect(rows).toEqual([{ ...spawn, status: "MEMBER_STATUS_RUNNING" }])
   rows = foldMember(rows, { member: "mbr_1", status: "MEMBER_STATUS_DONE", summary: "found 3 crates", child: "hysec_c" })
-  expect(rows[0]).toMatchObject({ agent: "scout", callId: "call_1", status: "MEMBER_STATUS_DONE", summary: "found 3 crates" })
-  rows = foldMember(rows, { member: "mbr_2", child: "hysec_d", agent: "general" })
+  expect(rows[0]).toMatchObject({ agent: "hya-scout", callId: "call_1", status: "MEMBER_STATUS_DONE", summary: "found 3 crates" })
+  rows = foldMember(rows, { member: "mbr_2", child: "hysec_d", agent: "hya-task" })
   expect(rows.map((row) => row.member)).toEqual(["mbr_1", "mbr_2"])
 })
 
 test("a task card links to its member by call id, else by the child session in its output", () => {
-  const members = [spawn, { member: "mbr_2", child: "hysec_d", agent: "general", status: "MEMBER_STATUS_SPAWNING" }]
+  const members = [spawn, { member: "mbr_2", child: "hysec_d", agent: "hya-task", status: "MEMBER_STATUS_SPAWNING" }]
   expect(taskLink({ callId: "call_1" }, members)).toEqual({ child: "hysec_c", member: spawn })
   // Resident spawns may leave `callId` empty: the task output's `metadata.sessionId` links them.
   expect(taskLink({ callId: "call_9", child: "hysec_d" }, members)).toEqual({ child: "hysec_d", member: members[1] })

@@ -36,7 +36,7 @@ async fn state() -> AppState {
     AppState::new(
         Arc::new(engine),
         Arc::new(AgentSpec {
-            name: AgentName::new("build"),
+            name: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             system_prompt: "x".to_string(),
             workdir: std::env::temp_dir(),
@@ -76,7 +76,7 @@ async fn sdk_creates_prompts_and_streams_the_transcript() {
 
     let session = sdk
         .create_session(pb::CreateSessionRequest {
-            agent: "build".into(),
+            agent: "hya-main".into(),
             model: "fake".into(),
             workdir: Some(std::env::temp_dir().to_string_lossy().into_owned()),
             ..Default::default()
@@ -167,7 +167,7 @@ async fn sdk_manages_projects_and_project_sessions() {
 
     let session = sdk
         .create_session(pb::CreateSessionRequest {
-            agent: "build".into(),
+            agent: "hya-main".into(),
             model: "fake".into(),
             project_id: created.id.clone(),
             kind: pb::SessionKind::Project as i32,

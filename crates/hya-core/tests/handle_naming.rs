@@ -113,7 +113,7 @@ async fn team(rng: Option<Box<dyn HandleRng>>) -> Team {
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
             project: None,
@@ -122,9 +122,9 @@ async fn team(rng: Option<Box<dyn HandleRng>>) -> Team {
         .await
         .unwrap();
     let supervisor = ResidentSupervisor::start(engine.clone());
-    let lead = spec("build");
+    let lead = spec("hya-main");
     let binding = engine.bind_runtime(&lead.workdir).unwrap();
-    let resources = binding.agent_resource_policy("build").unwrap();
+    let resources = binding.agent_resource_policy("hya-main").unwrap();
     supervisor
         .ensure_main(root, lead, (binding, Arc::from([]), resources), None, None)
         .await
@@ -146,7 +146,7 @@ async fn spawn(
 ) -> Result<(SessionId, String), CoreError> {
     let agent = spec(agent);
     let binding = team.engine.bind_runtime(&agent.workdir).unwrap();
-    let resources = binding.agent_resource_policy("explore").unwrap();
+    let resources = binding.agent_resource_policy("hya-scout").unwrap();
     let resolved = (binding, Arc::from([]), resources, None);
     match subagent_type {
         Some(subagent_type) => {
@@ -191,8 +191,8 @@ fn assert_named(handle: &str, parent: &str, prefix: &str) {
 #[tokio::test]
 async fn the_default_prefix_is_the_agent_id() {
     let team = team(None).await;
-    let (_, handle) = spawn(&team, team.root, "explore", None).await.unwrap();
-    assert_named(&handle, "main", "explore");
+    let (_, handle) = spawn(&team, team.root, "hya-scout", None).await.unwrap();
+    assert_named(&handle, "main", "hya-scout");
 }
 
 #[tokio::test]
@@ -216,11 +216,11 @@ async fn the_subagent_type_names_the_handle() {
 #[tokio::test]
 async fn a_bundle_agent_id_is_sanitized_into_the_prefix() {
     let team = team(None).await;
-    let (_, handle) = spawn(&team, team.root, "explore", Some("Acme_Scout.v2"))
+    let (_, handle) = spawn(&team, team.root, "hya-scout", Some("Acme_Scout.v2"))
         .await
         .unwrap();
     assert_named(&handle, "main", "acme-scout-v2");
-    let (_, handle) = spawn(&team, team.root, "explore", Some("__"))
+    let (_, handle) = spawn(&team, team.root, "hya-scout", Some("__"))
         .await
         .unwrap();
     assert_named(&handle, "main", "agent");
@@ -229,19 +229,19 @@ async fn a_bundle_agent_id_is_sanitized_into_the_prefix() {
 #[tokio::test]
 async fn a_nested_member_keeps_its_parent_path() {
     let team = team(None).await;
-    let (dev, dev_handle) = spawn(&team, team.root, "explore", Some("dev"))
+    let (dev, dev_handle) = spawn(&team, team.root, "hya-scout", Some("dev"))
         .await
         .unwrap();
-    let (_, nested) = spawn(&team, dev, "general", None).await.unwrap();
+    let (_, nested) = spawn(&team, dev, "hya-task", None).await.unwrap();
     assert_named(&dev_handle, "main", "dev");
-    assert_named(&nested, &dev_handle, "general");
+    assert_named(&nested, &dev_handle, "hya-task");
 }
 
 #[tokio::test]
 async fn an_archived_leaf_is_never_reused_and_its_mail_wakes_the_archived_member() {
     // Every draw picks the same operator name: the second `scout` collides.
     let team = team(Some(Box::new(Fixed(0)))).await;
-    let (first, first_handle) = spawn(&team, team.root, "explore", Some("scout"))
+    let (first, first_handle) = spawn(&team, team.root, "hya-scout", Some("scout"))
         .await
         .unwrap();
     assert_eq!(first_handle, format!("main/scout-{}", operator_names()[0]));
@@ -250,7 +250,7 @@ async fn an_archived_leaf_is_never_reused_and_its_mail_wakes_the_archived_member
         .await
         .unwrap();
 
-    let (second, second_handle) = spawn(&team, team.root, "explore", Some("scout"))
+    let (second, second_handle) = spawn(&team, team.root, "hya-scout", Some("scout"))
         .await
         .unwrap();
     assert_ne!(second, first);
@@ -285,7 +285,7 @@ async fn seeded_spawns_are_reproducible() {
         let team = team(Some(Box::new(SplitMix64::seeded(seed)))).await;
         let mut handles = Vec::new();
         for _ in 0..3 {
-            handles.push(spawn(&team, team.root, "explore", None).await.unwrap().1);
+            handles.push(spawn(&team, team.root, "hya-scout", None).await.unwrap().1);
         }
         handles
     };
@@ -327,7 +327,7 @@ async fn old_counter_handles_keep_resolving_next_to_new_names() {
         .await
         .unwrap();
 
-    let (_, new_handle) = spawn(&team, team.root, "explore", Some("scout"))
+    let (_, new_handle) = spawn(&team, team.root, "hya-scout", Some("scout"))
         .await
         .unwrap();
     assert_named(&new_handle, "main", "scout");

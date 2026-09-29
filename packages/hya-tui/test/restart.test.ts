@@ -87,7 +87,7 @@ function harness() {
       calls.push(["bootstrap"])
       return {
         location: { version: restarted ? "next" : "old", pid: restarted ? nextPid : oldPid },
-        agents: [{ name: "build" }],
+        agents: [{ name: "hya-main" }],
         models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }],
       }
     },
@@ -96,7 +96,7 @@ function harness() {
     listSessions: async () => sessions,
     listInteractions: async (): Promise<Interaction[]> => (restarted ? [ask] : []),
     listModels: async () => [restarted ? { id: "hya/next", providerId: "hya", modelId: "next" } : { id: "hya/echo", providerId: "hya", modelId: "echo" }],
-    listAgents: async () => [{ name: "build" }],
+    listAgents: async () => [{ name: "hya-main" }],
     listWorkflows: async () => [],
     listProviders: async () => [],
     listCommands: async () => [],

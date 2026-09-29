@@ -317,7 +317,11 @@ async fn each_assistant_message_reports_its_own_agent_model_and_times() {
 async fn a_session_model_switch_runs_even_when_the_agent_model_is_pinned() {
     let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()));
     runtime.publish_agent_model_configuration(AgentModelConfiguration {
-        builtin: [("build".to_string(), ModelRef::new("fake/pinned"))].into(),
+        bundles: [(
+            "hya/server-tests-build".to_string(),
+            [("build".to_string(), ModelRef::new("fake/pinned"))].into(),
+        )]
+        .into(),
         ..AgentModelConfiguration::default()
     });
     let app = router(state_on(runtime).await);

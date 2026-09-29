@@ -100,7 +100,7 @@ test.describe("hya TUI Provider View", () => {
       // A session on the offline model.
       await term.type("hello")
       await term.press("Enter")
-      await term.waitForText("● build · hya/offline", 20_000)
+      await term.waitForText("● hya-main · hya/offline", 20_000)
       await openProviders(term)
       await term.type("a")
       await term.waitForText("Add provider · 1/4")
@@ -158,7 +158,7 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+3 models/)
       await term.press("Escape")
       await term.waitForText("Enter a prompt · /new creates a session")
-      await term.waitForText(/build gw\/alpha/)
+      await term.waitForText(/hya-main gw\/alpha/)
       // The new models reached the /model picker without a restart.
       await term.type("/model")
       await term.press("Enter")

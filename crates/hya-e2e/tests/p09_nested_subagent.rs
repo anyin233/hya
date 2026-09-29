@@ -8,39 +8,39 @@ use serde_json::json;
 
 #[tokio::test]
 async fn t2_2_nested_task_tree_depth_at_least_two() {
-    // Non-blocking flow (ADR-0015): the root spawns `explore` and ends its
-    // turn; the explore resident's first episode spawns `plan`; the plan
+    // Non-blocking flow (ADR-0015): the root spawns `hya-task` and ends its
+    // turn; the hya-task resident's first episode spawns `hya-plan`; the hya-plan
     // grandchild runs its own episode last.
     let env = E2eEnvBuilder::new()
         .route(
-            "You are hya,",
+            "hya-main",
             vec![
                 tool_step(
                     "task",
                     json!({
-                        "description": "spawn explore",
-                        "prompt": "spawn a plan child then finish",
-                        "subagent_type": "explore"
+                        "description": "spawn hya-task",
+                        "prompt": "spawn a hya-plan child then finish",
+                        "subagent_type": "hya-task"
                     }),
                 ),
                 text_step("ROOT_OK"),
             ],
         )
         .route(
-            "file search specialist",
+            "You are hya-task",
             vec![
                 tool_step(
                     "task",
                     json!({
-                        "description": "spawn plan",
+                        "description": "spawn hya-plan",
                         "prompt": "report GRANDCHILD_OK",
-                        "subagent_type": "plan"
+                        "subagent_type": "hya-plan"
                     }),
                 ),
                 text_step("CHILD_OK"),
             ],
         )
-        .route("hya-planner", vec![text_step("GRANDCHILD_OK")])
+        .route("hya-plan", vec![text_step("GRANDCHILD_OK")])
         .build()
         .await
         .expect("e2e env");
@@ -82,13 +82,13 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
 
     let kinds = tree_subagent_types(&tree);
     assert!(
-        kinds.iter().any(|k| k == "explore"),
-        "tree must include explore child; kinds={kinds:?}; tree={tree}; {}",
+        kinds.iter().any(|k| k == "hya-task"),
+        "tree must include hya-task child; kinds={kinds:?}; tree={tree}; {}",
         env.diagnostics()
     );
     assert!(
-        kinds.iter().any(|k| k == "plan"),
-        "tree must include plan grandchild; kinds={kinds:?}; tree={tree}; {}",
+        kinds.iter().any(|k| k == "hya-plan"),
+        "tree must include hya-plan grandchild; kinds={kinds:?}; tree={tree}; {}",
         env.diagnostics()
     );
 

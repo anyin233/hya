@@ -277,7 +277,7 @@ async fn engine_with_capture(
 
 fn base_agent(workdir: &std::path::Path) -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("session-model"),
         system_prompt: ROOT_PROMPT.to_string(),
         workdir: workdir.to_path_buf(),
@@ -293,8 +293,8 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
     });
     let engine = engine_with_capture(
         catalog(&[
-            AgentFixture::main("build").can_spawn(&["general"]),
-            AgentFixture::main("general"),
+            AgentFixture::main("hya-main").can_spawn(&["hya-task"]),
+            AgentFixture::main("hya-task"),
         ]),
         provider.clone(),
         false,
@@ -303,7 +303,7 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-fallback-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -327,7 +327,7 @@ async fn auto_title_exact_resolves_title_bundle_prompt_model_and_reasoning() {
     let req = &requests[0];
     assert_eq!(
         req.system.as_deref(),
-        Some(builtin_prompt("title")),
+        Some(builtin_prompt("hya-title")),
         "title must send prepared Bundle system prompt, not hardcoded TITLE_SYSTEM_PROMPT"
     );
     assert!(
@@ -355,20 +355,20 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
         requests: Mutex::new(Vec::new()),
     });
     let engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         provider.clone(),
         false,
     )
     .await;
     engine.runtime_registry().publish_agent_model_preferences(
-        [("title".to_string(), ModelRef::new("remembered/title"))]
+        [("hya-title".to_string(), ModelRef::new("remembered/title"))]
             .into_iter()
             .collect(),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-fallback-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -393,7 +393,10 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
         "remembered/title",
         "eligible title preference must replace the caller/session fallback"
     );
-    assert_eq!(requests[0].system.as_deref(), Some(builtin_prompt("title")));
+    assert_eq!(
+        requests[0].system.as_deref(),
+        Some(builtin_prompt("hya-title"))
+    );
     assert_eq!(requests[0].reasoning, None);
 }
 
@@ -405,8 +408,8 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
     });
     let engine = engine_with_capture(
         catalog(&[
-            AgentFixture::main("build").can_spawn(&["general"]),
-            AgentFixture::main("general"),
+            AgentFixture::main("hya-main").can_spawn(&["hya-task"]),
+            AgentFixture::main("hya-task"),
         ]),
         provider.clone(),
         true,
@@ -414,7 +417,7 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
     .await;
     engine.runtime_registry().publish_agent_model_preferences(
         [(
-            "compaction".to_string(),
+            "hya-compaction".to_string(),
             ModelRef::new("remembered/compaction"),
         )]
         .into_iter()
@@ -423,7 +426,7 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -452,7 +455,7 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
     let requests = provider.requests.lock().unwrap();
     let compaction = requests
         .iter()
-        .find(|req| req.system.as_deref() == Some(builtin_prompt("compaction")))
+        .find(|req| req.system.as_deref() == Some(builtin_prompt("hya-compaction")))
         .expect("compaction completion must use prepared Bundle system prompt");
     assert!(
         !compaction
@@ -482,20 +485,23 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
         requests: Mutex::new(Vec::new()),
     });
     let engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         provider.clone(),
         true,
     )
     .await;
     engine.runtime_registry().publish_agent_model_preferences(
-        [("summary".to_string(), ModelRef::new("remembered/summary"))]
-            .into_iter()
-            .collect(),
+        [(
+            "hya-summary".to_string(),
+            ModelRef::new("remembered/summary"),
+        )]
+        .into_iter()
+        .collect(),
     );
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -516,7 +522,7 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
     let requests = provider.requests.lock().unwrap();
     assert_eq!(requests.len(), 1, "exactly one summary completion");
     let req = &requests[0];
-    assert_eq!(req.system.as_deref(), Some(builtin_prompt("summary")));
+    assert_eq!(req.system.as_deref(), Some(builtin_prompt("hya-summary")));
     assert_eq!(req.model.as_str(), "remembered/summary");
     assert_eq!(
         req.reasoning, None,
@@ -533,9 +539,9 @@ async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
     });
     let engine = engine_with_capture(
         catalog(&[
-            AgentFixture::main("build").can_spawn(&["general", "explore"]),
-            AgentFixture::main("general"),
-            AgentFixture::main("explore"),
+            AgentFixture::main("hya-main").can_spawn(&["hya-task", "hya-scout"]),
+            AgentFixture::main("hya-task"),
+            AgentFixture::main("hya-scout"),
         ]),
         provider,
         false,
@@ -544,18 +550,18 @@ async fn fixed_system_ids_remain_absent_from_ordinary_spawnable_roster() {
 
     let binding = engine.bind_runtime(workdir.path()).unwrap();
     let roster = engine
-        .agent_roster_for_binding(&binding, "build")
+        .agent_roster_for_binding(&binding, "hya-main")
         .expect("ordinary roster");
     let names: Vec<&str> = roster.iter().map(|agent| agent.name.as_str()).collect();
     // Built-ins spawn the whole ordinary set, so the roster is every
     // non-reserved agent rather than a hand-listed pair.
-    assert!(names.contains(&"explore") && names.contains(&"general"));
-    for reserved in ["compaction", "title", "summary"] {
+    assert!(names.contains(&"hya-scout") && names.contains(&"hya-task"));
+    for reserved in ["hya-compaction", "hya-title", "hya-summary"] {
         assert!(
             !names.contains(&reserved),
             "{reserved} must not appear in ordinary spawnable roster"
         );
-        let denied = binding.resolve_spawn("build", reserved);
+        let denied = binding.resolve_spawn("hya-main", reserved);
         assert!(
             denied.is_err(),
             "ordinary spawn of {reserved} must fail: {denied:?}"
@@ -577,7 +583,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
         compact_calls: Mutex::new(Vec::new()),
     });
     let engine = engine_with(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         provider.clone() as Arc<dyn Provider>,
         // Summarizer present only as unused fallback; native compact returns Some.
         true,
@@ -585,7 +591,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     .await;
     engine.runtime_registry().publish_agent_model_preferences(
         [(
-            "compaction".to_string(),
+            "hya-compaction".to_string(),
             ModelRef::new("remembered/native-compaction"),
         )]
         .into_iter()
@@ -594,7 +600,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -628,7 +634,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     let call = &compact_calls[0];
     assert_eq!(
         call.system.as_deref(),
-        Some(builtin_prompt("compaction")),
+        Some(builtin_prompt("hya-compaction")),
         "native compact must exact-resolve the fixed compaction prompt, not root"
     );
     assert_ne!(
@@ -646,7 +652,7 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     assert!(
         stream_requests
             .iter()
-            .all(|req| req.system.as_deref() != Some(builtin_prompt("compaction"))),
+            .all(|req| req.system.as_deref() != Some(builtin_prompt("hya-compaction"))),
         "native path must not also invoke ModelSummarizer with compaction prompt"
     );
 }
@@ -660,7 +666,7 @@ async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
     });
     // No compaction/title/summary definitions in catalog — under threshold must still run.
     let engine = engine_with(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         provider.clone() as Arc<dyn Provider>,
         true,
     )
@@ -668,7 +674,7 @@ async fn under_threshold_turn_does_not_require_or_lookup_fixed_compaction() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -716,7 +722,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         requests: Mutex::new(Vec::new()),
     });
     let title_engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         title_provider.clone(),
         false,
     )
@@ -724,7 +730,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
     let title_session = title_engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -744,7 +750,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         let reqs = title_provider.requests.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         let system = reqs[0].system.as_deref().unwrap_or("");
-        assert_eq!(system, builtin_prompt("title"));
+        assert_eq!(system, builtin_prompt("hya-title"));
         assert!(
             !system.contains(ORDINARY_GUIDANCE_MARKER),
             "title must not include ordinary project guidance: {system}"
@@ -756,7 +762,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         requests: Mutex::new(Vec::new()),
     });
     let summary_engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         summary_provider.clone(),
         true,
     )
@@ -764,7 +770,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
     let summary_session = summary_engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -784,7 +790,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         let reqs = summary_provider.requests.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         let system = reqs[0].system.as_deref().unwrap_or("");
-        assert_eq!(system, builtin_prompt("summary"));
+        assert_eq!(system, builtin_prompt("hya-summary"));
         assert!(
             !system.contains(ORDINARY_GUIDANCE_MARKER),
             "summary must not include ordinary project guidance: {system}"
@@ -796,7 +802,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         requests: Mutex::new(Vec::new()),
     });
     let compaction_engine = engine_with_capture(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         compaction_provider.clone(),
         true,
     )
@@ -804,7 +810,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
     let compaction_session = compaction_engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -833,7 +839,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
         let reqs = compaction_provider.requests.lock().unwrap();
         let compaction = reqs
             .iter()
-            .find(|r| r.system.as_deref() == Some(builtin_prompt("compaction")))
+            .find(|r| r.system.as_deref() == Some(builtin_prompt("hya-compaction")))
             .expect("compaction completion must use fixed Bundle prompt");
         let system = compaction.system.as_deref().unwrap_or("");
         assert!(
@@ -841,7 +847,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
             "compaction must not include ordinary project guidance: {system}"
         );
         assert!(
-            !system.contains(ROOT_PROMPT) || system == builtin_prompt("compaction"),
+            !system.contains(ROOT_PROMPT) || system == builtin_prompt("hya-compaction"),
             "compaction must stay on fixed Bundle prompt only"
         );
     }
@@ -858,7 +864,7 @@ async fn reserved_system_agents_are_always_resolvable_from_the_embedded_preset()
     let engine = engine_with_capture(catalog(&[]), provider, false).await;
     let binding = engine.bind_runtime(workdir.path()).unwrap();
 
-    for reserved in ["compaction", "title", "summary"] {
+    for reserved in ["hya-compaction", "hya-title", "hya-summary"] {
         let definition = binding
             .resolve_agent(reserved)
             .unwrap_or_else(|| panic!("`{reserved}` must always resolve"));
@@ -957,7 +963,7 @@ async fn side_call_records(
 async fn title_generation_usage_is_attributed_to_the_session_with_title_purpose() {
     let workdir = support::TestDir::new("fixed-title-usage");
     let engine = engine_with(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         Arc::new(UsageReportingProvider),
         false,
     )
@@ -965,7 +971,7 @@ async fn title_generation_usage_is_attributed_to_the_session_with_title_purpose(
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,
@@ -1016,7 +1022,7 @@ async fn title_generation_usage_is_attributed_to_the_session_with_title_purpose(
 async fn compaction_usage_is_attributed_with_compaction_purpose() {
     let workdir = support::TestDir::new("fixed-compaction-usage");
     let engine = engine_with(
-        catalog(&[AgentFixture::main("build")]),
+        catalog(&[AgentFixture::main("hya-main")]),
         Arc::new(UsageReportingProvider),
         true,
     )
@@ -1024,10 +1030,13 @@ async fn compaction_usage_is_attributed_with_compaction_purpose() {
     engine.runtime_registry().publish_agent_model_preferences(
         [
             (
-                "compaction".to_string(),
+                "hya-compaction".to_string(),
                 ModelRef::new("remembered/compaction"),
             ),
-            ("summary".to_string(), ModelRef::new("remembered/summary")),
+            (
+                "hya-summary".to_string(),
+                ModelRef::new("remembered/summary"),
+            ),
         ]
         .into_iter()
         .collect(),
@@ -1035,7 +1044,7 @@ async fn compaction_usage_is_attributed_with_compaction_purpose() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
             project: None,

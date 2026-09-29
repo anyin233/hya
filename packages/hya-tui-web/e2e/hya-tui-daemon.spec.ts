@@ -79,7 +79,7 @@ test.describe("backend daemon", () => {
     await prompt(term, "first prompt")
     await term.waitForText("Before the stop.", 20_000)
     await term.waitForText(/^Ready/m)
-    const session = /hya · (\S+) · build/.exec(await term.text())![1]!
+    const session = /hya · (\S+) · hya-main/.exec(await term.text())![1]!
     const before = await statusPid(term)
 
     const stopped = await daemon(workspace, ["stop"])
@@ -118,7 +118,7 @@ test.describe("backend daemon", () => {
     await prompt(term, "first prompt")
     await term.waitForText("Before the stop.", 20_000)
     await term.waitForText(/^Ready/m)
-    const session = /hya · (\S+) · build/.exec(await term.text())![1]!
+    const session = /hya · (\S+) · hya-main/.exec(await term.text())![1]!
     const initial = await daemonStatus(workspace)
     expect(initial?.pid).toBeDefined()
     const before = initial!.pid
@@ -188,7 +188,7 @@ test.describe("backend daemon", () => {
 
       // Both still share live state: the second follows the first's session.
       await prompt(first, "shared after the move")
-      const session = /hya · (\S+) · build/.exec(await first.text())![1]!
+      const session = /hya · (\S+) · hya-main/.exec(await first.text())![1]!
       await prompt(second, `/open ${session}`)
       await second.waitForText("shared after the move", 20_000)
     } finally {

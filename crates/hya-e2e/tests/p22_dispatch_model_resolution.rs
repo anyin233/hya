@@ -10,7 +10,7 @@ fn spawn(marker: &str, model: &str) -> ScriptStep {
     let mut task = json!({
         "description": "dispatch demo",
         "prompt": format!("report {marker}"),
-        "subagent_type": "general",
+        "subagent_type": "hya-task",
         "inline_agent": {
             "description": "",
             "category": "",
@@ -85,7 +85,7 @@ async fn t2_17_dispatch_model_resolution_branches() {
             .await
             .expect("e2e env");
         env.put_json(
-            "/v1/agent-models/general",
+            "/v1/agent-models/hya-task",
             &json!({"preference": {"providerId": "fake", "modelId": "pref-target"}}),
         )
         .await
@@ -120,7 +120,7 @@ async fn t2_17_dispatch_model_resolution_branches() {
             .await
             .expect("e2e env");
         env.put_json(
-            "/v1/agent-models/general",
+            "/v1/agent-models/hya-task",
             &json!({"preference": {"providerId": "fake", "modelId": "pref-target"}}),
         )
         .await

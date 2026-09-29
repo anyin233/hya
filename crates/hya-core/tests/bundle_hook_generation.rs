@@ -122,7 +122,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
             project: None,
@@ -153,7 +153,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
     assert_eq!(admitted, "body/old/old");
     assert!(events.load(Ordering::SeqCst) > before_admission_events);
     let old = registry.bind_turn(&workdir).expect("old binding");
-    let old_hooks = old.bundle_hooks_for_agent("build");
+    let old_hooks = old.bundle_hooks_for_agent("hya-main");
     assert_eq!(old_hooks.len(), 1);
 
     registry
@@ -163,7 +163,7 @@ async fn removed_plugin_hooks_leave_fresh_bindings_but_remain_live_on_old_bindin
         })
         .expect("remove hook source");
     let fresh = registry.bind_turn(&workdir).expect("fresh binding");
-    assert!(fresh.bundle_hooks_for_agent("build").is_empty());
+    assert!(fresh.bundle_hooks_for_agent("hya-main").is_empty());
     assert!(old.bundle_hooks_for_agent("acme-bundle-agent").is_empty());
     let fresh_message = engine
         .admit_user_prompt(session, "fresh".to_string())

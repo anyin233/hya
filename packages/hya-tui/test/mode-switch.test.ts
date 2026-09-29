@@ -7,7 +7,7 @@ import { transcriptViews } from "../src/state/messages"
 const key = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; sequence: string }> = {}) =>
   ({ name, ctrl: false, meta: false, shift: false, sequence: name.length === 1 ? name : "", ...extra })
 
-const session: SessionInfo = { id: "hysec_1", agent: "build", workdir: "/w", permissionMode: "manual" }
+const session: SessionInfo = { id: "hysec_1", agent: "hya-main", workdir: "/w", permissionMode: "manual" }
 const ask: Interaction = { id: "perm_1", session: "hysec_1", type: "INTERACTION_TYPE_PERMISSION", title: "bash echo hi" } as Interaction
 
 function harness(options: { interactions?: Interaction[][]; fail?: boolean } = {}) {

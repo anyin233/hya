@@ -16,11 +16,11 @@ import { webTabBackgroundNotice } from "../src/state/format"
 const now = Date.parse("2026-09-26T12:00:00Z")
 
 const sessions: SessionInfo[] = [
-  { id: "old", agent: "build", workdir: "/w", projectId: "prj_w", title: "Old work", timeUpdated: "2026-09-20T12:00:00Z" },
-  { id: "arch", agent: "build", workdir: "/w", projectId: "prj_w", title: "Archived work", archived: true, timeUpdated: "2026-09-26T11:00:00Z" },
-  { id: "child", agent: "explore", workdir: "/w", projectId: "prj_w", parent: "old", timeUpdated: "2026-09-26T11:59:00Z" },
-  { id: "new", agent: "build", workdir: "/w/sub", projectId: "prj_w", timeUpdated: "2026-09-26T11:30:00Z" },
-  { id: "elsewhere", agent: "build", workdir: "/other", projectId: "prj_o", timeUpdated: "2026-09-26T11:58:00Z" },
+  { id: "old", agent: "hya-main", workdir: "/w", projectId: "prj_w", title: "Old work", timeUpdated: "2026-09-20T12:00:00Z" },
+  { id: "arch", agent: "hya-main", workdir: "/w", projectId: "prj_w", title: "Archived work", archived: true, timeUpdated: "2026-09-26T11:00:00Z" },
+  { id: "child", agent: "hya-scout", workdir: "/w", projectId: "prj_w", parent: "old", timeUpdated: "2026-09-26T11:59:00Z" },
+  { id: "new", agent: "hya-main", workdir: "/w/sub", projectId: "prj_w", timeUpdated: "2026-09-26T11:30:00Z" },
+  { id: "elsewhere", agent: "hya-main", workdir: "/other", projectId: "prj_o", timeUpdated: "2026-09-26T11:58:00Z" },
 ]
 
 test("resumeRows: the active Project's root sessions incl. archived, newest first, archived marked", () => {
@@ -44,7 +44,7 @@ test("sessionRows marks archived sessions; --continue never picks an archived on
 test("a sessionUpdated archived frame drops the sidebar row (the open one stays, marked) and an unarchive marks it back", () => {
   const store = createAppStore()
   store.applyCatalog({ sessions: sessions.filter((row) => !row.archived), interactions: [], models: [], workflows: [], providers: [], commands: [] })
-  store.openSession({ id: "new", agent: "build", workdir: "/w" })
+  store.openSession({ id: "new", agent: "hya-main", workdir: "/w" })
   store.applyEvent({ seq: "5", session: "old", sessionUpdated: { archived: true } })
   expect(store.state.sessions.map((row) => row.id)).not.toContain("old")
   store.applyEvent({ seq: "6", session: "new", sessionUpdated: { archived: true } })

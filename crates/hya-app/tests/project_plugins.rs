@@ -195,7 +195,7 @@ impl Harness {
 }
 
 async fn user_text(binding: &TurnBinding, session: SessionId, text: &str) -> String {
-    let chain = HookChain::new(binding.bundle_hooks_for_agent("build"));
+    let chain = HookChain::new(binding.bundle_hooks_for_agent("hya-main"));
     let MessageUserBeforeOutcome::Continue { text } = chain
         .message_user_before(MessageUserBeforeInput {
             session,
@@ -206,7 +206,7 @@ async fn user_text(binding: &TurnBinding, session: SessionId, text: &str) -> Str
 }
 
 async fn permission(binding: &TurnBinding, session: SessionId) -> Option<Decision> {
-    HookChain::new(binding.bundle_hooks_for_agent("build"))
+    HookChain::new(binding.bundle_hooks_for_agent("hya-main"))
         .permission_ask(
             Some(session),
             Action::Bash,
@@ -538,7 +538,7 @@ async fn session_hooks_follow_a_respawn_and_release_on_invalidation() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: hya_proto::AgentName::new("build"),
+            agent: hya_proto::AgentName::new("hya-main"),
             model: hya_proto::ModelRef::new("fake"),
             workdir: root.display().to_string(),
             project: Some(project),

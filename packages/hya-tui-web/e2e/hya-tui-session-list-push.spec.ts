@@ -20,7 +20,7 @@ async function prompt(term: Tui, text: string): Promise<void> {
 
 /** A session made by another client (an API caller, not this TUI's to drop or resume). */
 async function otherSession(backend: Backend, title?: string): Promise<string> {
-  const { session: created } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "build", model: fakeModelRef, workdir: backend.dir })
+  const { session: created } = await api<{ session: { id: string } }>(backend, "POST", "/v1/sessions", { agent: "hya-main", model: fakeModelRef, workdir: backend.dir })
   if (title) await api(backend, "PATCH", `/v1/sessions/${created.id}`, { title })
   return created.id
 }
@@ -43,9 +43,9 @@ test("a session created, renamed, and run by another client shows up live in the
   // Run elsewhere (`sessionUpdated {busy}`, live-only): the row marks running, then idle again.
   await api(backend, "POST", `/v1/sessions/${other}/turns`, { prompt: { text: "a long job" } })
   await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
-  await term.waitForText("build · running", 15_000)
+  await term.waitForText("hya-main · running", 15_000)
   fakeModel!.release()
-  await expect.poll(async () => (await term.text()).includes("build · running")).toBe(false)
+  await expect.poll(async () => (await term.text()).includes("hya-main · running")).toBe(false)
 })
 
 test("a session deleted by another client drops its sidebar row; deleting the open one shows a notice and opens a new session", async ({ tui, backend }, testInfo) => {

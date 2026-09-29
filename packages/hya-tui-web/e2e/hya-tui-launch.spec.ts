@@ -97,7 +97,7 @@ test.describe("one-command launch", () => {
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
     // Created on connect: the header names it before anything is typed.
-    await first.waitForText(/hya · hysec_\w+ · build/)
+    await first.waitForText(/hya · hysec_\w+ · hya-main/)
     await first.waitForText("No messages yet")
     await prompt(first, "remember this")
     await first.waitForText("Launched and replying.", 20_000)

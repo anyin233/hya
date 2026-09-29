@@ -302,18 +302,18 @@ fn a_scope_plugin_hooks_reach_only_bindings_of_that_scope() {
     // `with_hooks` wraps the dispatcher, so identity is checked against the
     // retained source dispatcher: stable per scope, distinct across scopes.
     let a = registry.bind_scoped(&scope_a, root_a.path()).unwrap();
-    let chain_a = a.bundle_hooks_for_agent("build");
+    let chain_a = a.bundle_hooks_for_agent("hya-main");
     assert_eq!(chain_a.len(), 1);
     let again = registry.bind_scoped(&scope_a, root_a.path()).unwrap();
     assert!(Arc::ptr_eq(
-        &again.bundle_hooks_for_agent("build")[0],
+        &again.bundle_hooks_for_agent("hya-main")[0],
         &chain_a[0]
     ));
     let alpha = a.bundle_hooks_for_agent("alpha-agent");
     assert!(alpha.iter().any(|hook| Arc::ptr_eq(hook, &chain_a[0])));
 
     let b = registry.bind_scoped(&scope_b, root_b.path()).unwrap();
-    let chain_b = b.bundle_hooks_for_agent("build");
+    let chain_b = b.bundle_hooks_for_agent("hya-main");
     assert_eq!(chain_b.len(), 1);
     assert!(!Arc::ptr_eq(&chain_b[0], &chain_a[0]));
     assert!(
@@ -326,7 +326,7 @@ fn a_scope_plugin_hooks_reach_only_bindings_of_that_scope() {
         registry
             .bind_turn(root_a.path())
             .unwrap()
-            .bundle_hooks_for_agent("build")
+            .bundle_hooks_for_agent("hya-main")
             .is_empty()
     );
     registry.drop_scope(&scope_a.key());
@@ -334,7 +334,7 @@ fn a_scope_plugin_hooks_reach_only_bindings_of_that_scope() {
         registry
             .bind_scoped(&scope_a, root_a.path())
             .unwrap()
-            .bundle_hooks_for_agent("build")
+            .bundle_hooks_for_agent("hya-main")
             .is_empty()
     );
 }
@@ -346,7 +346,7 @@ fn scope_bundle_model_leaves_shadow_the_user_scope_configuration() {
     let scope = project(&[&root]);
     let bundle_id = "hya/test-alpha-agent".to_string();
     registry.publish_agent_model_configuration(AgentModelConfiguration {
-        builtin: BTreeMap::from([("build".to_string(), ModelRef::new("base-build"))]),
+        builtin: BTreeMap::from([("hya-main".to_string(), ModelRef::new("base-build"))]),
         bundles: BTreeMap::from([(
             bundle_id.clone(),
             BTreeMap::from([("alpha-agent".to_string(), ModelRef::new("user-alpha"))]),
@@ -361,7 +361,7 @@ fn scope_bundle_model_leaves_shadow_the_user_scope_configuration() {
     let binding = registry.bind_scoped(&scope, root.path()).unwrap();
     assert!(binding.configured_agent_model("alpha-agent").is_none());
     assert_eq!(
-        binding.configured_agent_model("build"),
+        binding.configured_agent_model("hya-main"),
         Some(&ModelRef::new("base-build"))
     );
     assert_eq!(

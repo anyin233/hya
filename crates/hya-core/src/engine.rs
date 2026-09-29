@@ -51,9 +51,9 @@ impl FixedSystemAgent {
     /// Stable catalog id for this fixed system operation.
     const fn stable_id(self) -> &'static str {
         match self {
-            Self::Compaction => "compaction",
-            Self::Title => "title",
-            Self::Summary => "summary",
+            Self::Compaction => "hya-compaction",
+            Self::Title => "hya-title",
+            Self::Summary => "hya-summary",
         }
     }
 }

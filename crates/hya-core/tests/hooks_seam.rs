@@ -45,7 +45,7 @@ fn tempdir() -> PathBuf {
 
 fn agent(dir: &Path) -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new("hya-main"),
         model: ModelRef::new("fake"),
         system_prompt: "you are build".to_string(),
         workdir: dir.to_path_buf(),
@@ -171,7 +171,7 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -286,7 +286,7 @@ async fn hooks_fire_once_per_event_and_pass_through() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -358,7 +358,7 @@ async fn tool_after_cannot_mask_permission_denial() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -438,7 +438,7 @@ async fn normal_turn_after_hook_rewrite_removes_unpublished_bash_artifact() {
     let session = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -559,7 +559,7 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
     let root = engine
         .create(CreateSession {
             parent: None,
-            agent: AgentName::new("build"),
+            agent: AgentName::new("hya-main"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -570,7 +570,7 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
     let child = engine
         .create(CreateSession {
             parent: Some(root),
-            agent: AgentName::new("explore"),
+            agent: AgentName::new("hya-scout"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -581,7 +581,7 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
     let grandchild = engine
         .create(CreateSession {
             parent: Some(child),
-            agent: AgentName::new("explore"),
+            agent: AgentName::new("hya-scout"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
             project: None,
@@ -603,7 +603,7 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
         .await
         .unwrap();
     let explore = AgentSpec {
-        name: AgentName::new("explore"),
+        name: AgentName::new("hya-scout"),
         ..agent(&dir)
     };
     engine
@@ -614,8 +614,8 @@ async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
     assert_eq!(
         seen.lock().unwrap().as_slice(),
         &[
-            (root, root, Some(AgentName::new("build"))),
-            (grandchild, root, Some(AgentName::new("explore"))),
+            (root, root, Some(AgentName::new("hya-main"))),
+            (grandchild, root, Some(AgentName::new("hya-scout"))),
         ]
     );
 }

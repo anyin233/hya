@@ -739,12 +739,12 @@ prompts, and hooks only after successful preparation; a failed rebind retains
 the current snapshot. Bound child/Workflow activations do not rebind. There is
 no bundle watcher or per-tool-call database check.
 
-Core Agent definitions come from the trusted, runtime-loaded
-[`hya/core-agents` preset](../core-agents.md), and native tool visibility/aliases/
-permission posture come from the [five tool-family presets](../base-tools.md). Public packages
-cannot claim their trusted origin. [`hya/subagents`](../subagent-bundles.md)
-supplies the ordinary `hya-worker` definition (every spawned agent is a
-resident actor); [channel policy bundles](../agent-channels.md)
+Core Agent definitions, including the default `hya-task` subagent, come from
+the trusted, runtime-loaded [`hya/core-agents` preset](../core-agents.md), and
+native tool visibility/aliases/permission posture come from the
+[five tool-family presets](../base-tools.md). Public packages cannot claim
+their trusted origin. The first-party `hya/subagents` package was removed;
+every spawned agent is a resident actor. [Channel policy bundles](../agent-channels.md)
 restrict engine-minted communication topology without owning channel identities
 or introducing separate event/replay state.
 
@@ -1055,7 +1055,7 @@ Default order: `shake, remote, soft, snapcompact, handoff`.
    `/responses/compact`), `soft`/`handoff` when no summarizer is wired,
    `shake` when nothing is left to evict. A failed rung advances the same
    way, so a model-free order still folds.
-3. `remote` resolves the fixed `compaction` system agent (missing definition
+3. `remote` resolves the fixed `hya-compaction` system agent (missing definition
    fails closed with `AgentDefinitionMissing`), calls
    `ProviderRouter::compact_if_supported`, and persists the folded items
    behind `HYA_COMPACTED_CONTEXT` + `<<<RESPONSES_COMPACT_ITEMS>>>` via
@@ -1107,7 +1107,7 @@ user message, and skip before any model call. A title set while the call is
 in flight (a manual rename) wins — the generated one is dropped. A title
 call that failed is not retried on later turns.
 
-It resolves the fixed `title` system agent from the bound catalog and calls
+It resolves the fixed `hya-title` system agent from the bound catalog and calls
 the provider at `temperature: 0.0` with `max_output_tokens: 128`, honoring the
 definition's model and reasoning effort (falling back to the caller's model
 when the definition has none). Then it emits `SessionTitled`.
@@ -1126,9 +1126,9 @@ without a special case.
 
 | Id | Use |
 | --- | --- |
-| `compaction` | Over-threshold context compact |
-| `title` | Auto session title |
-| `summary` | Explicit summarize path |
+| `hya-compaction` | Over-threshold context compact |
+| `hya-title` | Auto session title |
+| `hya-summary` | Explicit summarize path |
 
 Callers cannot pass an arbitrary agent id into these seams.
 
@@ -1414,9 +1414,9 @@ folded by `hya-proto::Projection` (see
 
 Reach is **hierarchy-scoped**: an agent addresses only its parent, its
 same-parent siblings, and its direct reports. Handles are canonical paths
-(`main/hya-planner-amiya/hya-worker-texas`; leaves are `<subagent_type>-<operator>`, see
+(`main/hya-plan-amiya/hya-task-texas`; leaves are `<subagent_type>-<operator>`, see
 [subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410))
-and channels belong to one unit (`main/hya-planner-amiya#build`). The rule itself is pure path arithmetic in
+and channels belong to one unit (`main/hya-plan-amiya#build`). The rule itself is pure path arithmetic in
 `hya-proto::scope`, enforced at a write gate in `hya-store` and a read filter in
 `hya-core` (see
 [ADR 0011](../adr/0011-hierarchy-scoped-mailbox.md)).

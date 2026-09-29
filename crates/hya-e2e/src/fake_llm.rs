@@ -51,7 +51,7 @@ struct Route {
     requests: Vec<Value>,
 }
 
-/// Opening of the fixed `title` agent's system prompt (`core-agents`
+/// Opening of the fixed `hya-title` agent's system prompt (`core-agents`
 /// preset). The backend titles a root session in the background after its
 /// first prompt; those calls are answered here, off the script queues.
 const TITLE_AGENT_MARKER: &str = "You are a title generator.";
@@ -166,7 +166,7 @@ impl FakeLlm {
 
     /// Answer the backend's background title requests with `title`.
     ///
-    /// Title calls (the fixed `title` agent) never consume the shared queue or
+    /// Title calls (the fixed `hya-title` agent) never consume the shared queue or
     /// appear in [`Self::requests`], so scripted scenarios stay deterministic
     /// whenever the title task runs; by default they get an empty reply and
     /// the session stays untitled.

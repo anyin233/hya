@@ -16,7 +16,7 @@ test.describe("hya TUI against the fake model", () => {
     await term.type("say something")
     await term.press("Enter")
     await term.waitForText("hya-fake-b7d2", 20_000)
-    await term.waitForText("● build · fake/model")
+    await term.waitForText("● hya-main · fake/model")
     expect(await term.find("┃ say something")).not.toBeNull()
   })
 })

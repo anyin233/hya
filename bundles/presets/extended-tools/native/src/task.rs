@@ -133,7 +133,7 @@ impl Tool for TaskTool {
                 },
                 "subagent_type": {
                     "type": "string",
-                    "description": "The agent id to spawn (chooses the agent; it also names the member `<subagent_type>-<operator>`). Omitted or empty spawns `general`."
+                    "description": "The agent id to spawn (chooses the agent; it also names the member `<subagent_type>-<operator>`). Omitted or empty spawns `hya-task`."
                 },
                 "category": {
                     "type": "string",
@@ -335,7 +335,7 @@ impl Tool for TaskTool {
 fn normalized_agent_target(value: &str) -> String {
     let value = value.trim();
     if value.is_empty() {
-        "general".to_string()
+        "hya-task".to_string()
     } else {
         value.to_string()
     }

@@ -114,7 +114,7 @@ test.describe("Shift+Tab switching", () => {
     await term.waitForText("Permission mode → manual")
     await expect.poll(() => backendMode(backend)).toBe("manual")
     await prompt(term, "run it under manual")
-    await term.waitForText("asked by build", 20_000)
+    await term.waitForText("asked by hya-main", 20_000)
     // The prompt's hint row names the mode.
     await term.waitForText(/Esc denies · perm_\w+ · mode manual/)
     await term.press("1")
@@ -135,7 +135,7 @@ test.describe("yolo with a pending ask", () => {
     const term = await tui(hyaTui(backend))
     await newSession(term)
     await prompt(term, "run the command")
-    await term.waitForText("asked by build", 20_000)
+    await term.waitForText("asked by hya-main", 20_000)
     await term.waitForText(/◌ bash\s+echo pending-ask · awaiting approval/)
     // Shift+Tab works with the prompt shown; the confirmation takes Enter, not the prompt.
     await term.press("Shift+Tab")
@@ -297,7 +297,7 @@ test.describe("bundle permission mode", () => {
 
     // It defers anything else: the user is asked.
     await prompt(term, "list files")
-    await term.waitForText("asked by build", 20_000)
+    await term.waitForText("asked by hya-main", 20_000)
     await term.waitForText(/Esc denies · perm_\w+ · mode Echo only/)
     await term.attach(testInfo, "bundle-mode-ask")
     await term.press("1")

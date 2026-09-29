@@ -16,13 +16,13 @@ use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
 use serde_json::json;
 
 const ROOT: &str = "You are hya";
-const WORKER: &str = "You are a resident worker spawned by a parent agent";
+const WORKER: &str = "You are hya-task";
 const SEED: u64 = 36;
 
 /// The first handle a backend seeded with [`SEED`] mints for `hya-worker`.
 fn worker_handle() -> String {
     let mut rng = hya_core::handle_naming::SplitMix64::seeded(SEED);
-    let leaf = hya_core::handle_naming::mint_leaf("hya-worker", &BTreeSet::new(), &mut rng);
+    let leaf = hya_core::handle_naming::mint_leaf("hya-task", &BTreeSet::new(), &mut rng);
     format!("main/{leaf}")
 }
 
@@ -32,7 +32,7 @@ fn spawn_worker() -> hya_e2e::ScriptStep {
         json!({
             "description": "worker",
             "prompt": "do the unit",
-            "subagent_type": "hya-worker"
+            "subagent_type": "hya-task"
         }),
     )
 }

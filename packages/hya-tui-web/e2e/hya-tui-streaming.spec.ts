@@ -36,11 +36,11 @@ test.describe("streamed reply", () => {
     expect(partial).not.toMatch(/Running · msg_/)
     await term.attach(testInfo, "streaming-screen")
     await term.waitForText(reply)
-    await term.waitForText("● build · fake/model")
+    await term.waitForText("● hya-main · fake/model")
     await term.waitForText(readyLine)
     const final = await term.text()
     expect(count(final, reply)).toBe(1)
-    expect(count(final, "● build · fake/model")).toBe(1)
+    expect(count(final, "● hya-main · fake/model")).toBe(1)
     expect(final).not.toContain("turn_state_running")
   })
 })
@@ -88,7 +88,7 @@ test.describe("failed turn", () => {
     await term.waitForText("Error · provider_error: http status 400", 20_000)
     // The failed assistant message carries the error line under its header.
     await term.waitForText("✗ provider_error: http status 400")
-    const header = (await term.find("● build · fake/model"))!
+    const header = (await term.find("● hya-main · fake/model"))!
     expect((await term.find("✗ provider_error"))!.row).toBe(header.row + 1)
     expect(await term.text()).not.toContain("Running ·")
   })

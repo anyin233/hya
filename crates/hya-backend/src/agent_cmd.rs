@@ -102,7 +102,7 @@ fn list_text_for(_workdir: &std::path::Path, all: bool) -> anyhow::Result<String
 
 fn native_agents() -> Vec<AgentInfo> {
     vec![AgentInfo {
-        name: "build",
+        name: "hya-main",
         mode: "primary",
         permission: vec![
             PermissionRule {
@@ -159,15 +159,15 @@ mod tests {
         let all_names = listed_agent_names(&all);
         let default_names = listed_agent_names(&default);
 
-        // Default remains the narrow built-in build row with permission display.
+        // Default remains the narrow built-in hya-main row with permission display.
         assert_eq!(
             default_names,
-            vec!["build".to_string()],
-            "default must list only build:\n{default}"
+            vec!["hya-main".to_string()],
+            "default must list only hya-main:\n{default}"
         );
         assert!(
             default.contains("\"permission\": \"read\""),
-            "default build row must keep permission display:\n{default}"
+            "default hya-main row must keep permission display:\n{default}"
         );
         assert!(
             !default.contains("tester"),
@@ -176,7 +176,7 @@ mod tests {
         assert!(
             !default_names
                 .iter()
-                .any(|n| n == "general" || n == "hya-main"),
+                .any(|n| n == "hya-task" || n == "hya-plan"),
             "default must not expand catalog ordinary agents:\n{default}"
         );
 
@@ -192,19 +192,19 @@ mod tests {
 
         // --all adds ordinary catalog agents (can_spawn reachability), not role filter.
         assert!(
-            all_names.iter().any(|n| n == "build"),
-            "native build agent should list:\n{all}"
-        );
-        assert!(
-            all_names.iter().any(|n| n == "general"),
-            "--all must include catalog ordinary agent general:\n{all}"
-        );
-        assert!(
             all_names.iter().any(|n| n == "hya-main"),
-            "--all must include catalog ordinary agent hya-main:\n{all}"
+            "native hya-main agent should list:\n{all}"
+        );
+        assert!(
+            all_names.iter().any(|n| n == "hya-task"),
+            "--all must include catalog ordinary agent hya-task:\n{all}"
+        );
+        assert!(
+            all_names.iter().any(|n| n == "hya-plan"),
+            "--all must include catalog ordinary agent hya-plan:\n{all}"
         );
         // System compaction/title/summary are not ordinarily reachable.
-        for system in ["compaction", "title", "summary"] {
+        for system in ["hya-compaction", "hya-title", "hya-summary"] {
             assert!(
                 !all_names.iter().any(|n| n == system),
                 "--all must exclude system agent {system} (can_spawn, not role):\n{all}"

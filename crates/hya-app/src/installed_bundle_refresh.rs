@@ -18,8 +18,7 @@ use crate::bundle_config::BundleConfigResolver;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
 /// First-party WorkflowBundle and AgentSetBundle payloads published with the runtime catalog.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] =
-    ["hya/goal-loop", "hya/plan-impl-review", "hya/subagents"];
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 2] = ["hya/goal-loop", "hya/plan-impl-review"];
 
 /// Load every first-party runtime bundle, in deterministic order.
 pub fn first_party_catalogs() -> Result<Vec<PreparedCatalog>, CoreError> {

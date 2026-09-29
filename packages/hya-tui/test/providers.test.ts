@@ -289,11 +289,11 @@ test("the footer hint and the help rows come from one key table", () => {
 })
 
 test("the default model for the next turn: the session's, else the pending choice, the agent's, the first model", () => {
-  const base = { selected: undefined, pendingModel: undefined, pendingAgent: undefined, agents: [{ name: "build", model: { providerId: "hya", modelId: "offline" } }], models }
+  const base = { selected: undefined, pendingModel: undefined, pendingAgent: undefined, agents: [{ name: "hya-main", model: { providerId: "hya", modelId: "offline" } }], models }
   expect(defaultModelRef(base)).toBe("hya/offline")
   expect(defaultModelRef({ ...base, pendingModel: "gw/alpha" })).toBe("gw/alpha")
   expect(defaultModelRef({ ...base, agents: [] })).toBe("hya/offline")
-  expect(defaultModelRef({ ...base, selected: { id: "s", agent: "build", workdir: "/w", model: { providerId: "gw", modelId: "beta" } } })).toBe("gw/beta")
+  expect(defaultModelRef({ ...base, selected: { id: "s", agent: "hya-main", workdir: "/w", model: { providerId: "gw", modelId: "beta" } } })).toBe("gw/beta")
 })
 
 test("server errors show without the method and path", () => {
