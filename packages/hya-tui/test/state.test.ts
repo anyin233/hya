@@ -170,11 +170,14 @@ test("reasoning is collapsed by default; the global switch and per-part toggles 
   expect(reasoningExpanded(store.state, "r1")).toBe(false)
 })
 
-test("submitting a prompt asks the transcript to jump to the newest line", () => {
+test("submitting a prompt shows the transcript and jumps to the newest line", () => {
   const store = createAppStore()
+  store.setView("status")
   const before = store.state.followTick
   store.followTranscript()
   expect(store.state.followTick).toBe(before + 1)
+  // A prompt sent from /status, /models, … must show its reply.
+  expect(store.state.view).toBe("chat")
 })
 
 test("interaction frames add, enrich, and resolve pending asks; answered ids stay hidden", () => {
