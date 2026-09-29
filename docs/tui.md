@@ -1582,6 +1582,14 @@ the pane and keeps its command draft for reopening. Shift+Up/Down walks its own
 last 200 submitted commands. The
 message composer keeps a separate history and draft.
 
+Backspace also closes the pane when it deletes the last character. For example,
+press `/` then Backspace to return to the message composer; its draft stays in
+place. When the pane was opened from Projects, focus returns there instead.
+Backspace at the start of a nonempty command leaves the pane open. Reopening
+an emptied pane starts a fresh `/` input. This uses the existing command-pane
+key handler and focus restoration; no server operation or saved preference is
+added.
+
 After the command name, the same menu shows argument choices at every depth
 that the command can complete. This makes subcommands and their next values
 visible while typing. For example, `/layout ` lists actions including `split`
