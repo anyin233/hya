@@ -2707,6 +2707,9 @@ async fn build_session_engine_with_mcp_defer(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
+    // Providers added or refreshed at runtime replace the engine's router;
+    // model saves must accept their models too.
+    agent_model_control.follow_engine_router(&engine);
     // `agents.<id>.reasoning` defaults load at startup, like model leaves.
     engine
         .runtime_registry()

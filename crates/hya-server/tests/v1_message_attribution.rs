@@ -15,7 +15,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
+use hya_core::{AgentModelConfiguration, AgentSpec, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{
     AgentName, Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, TokenUsage,
 };
@@ -93,12 +93,16 @@ impl Provider for EchoProvider {
 }
 
 async fn state() -> AppState {
+    state_on(support::test_runtime(Arc::new(ToolRegistry::builtins()))).await
+}
+
+async fn state_on(runtime: Arc<RuntimeRegistry>) -> AppState {
     let providers = Arc::new(ProviderRouter::new().with(Arc::new(EchoProvider)));
     let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         providers,
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        runtime,
         perm,
         EventBus::default(),
     );
@@ -305,4 +309,43 @@ async fn each_assistant_message_reports_its_own_agent_model_and_times() {
     assert_eq!(started["message"], assistants[1]["id"]);
     assert_eq!(started["agent"], json!("plan"));
     assert_eq!(started["model"], json!("fake/beta"));
+}
+
+/// `agents.build.model` in config.yaml pins build's default, but an explicit
+/// `UpdateSession {model}` is the session's own choice and must run.
+#[tokio::test]
+async fn a_session_model_switch_runs_even_when_the_agent_model_is_pinned() {
+    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()));
+    runtime.publish_agent_model_configuration(AgentModelConfiguration {
+        builtin: [("build".to_string(), ModelRef::new("fake/pinned"))].into(),
+        ..AgentModelConfiguration::default()
+    });
+    let app = router(state_on(runtime).await);
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        "/v1/sessions",
+        json!({"agent": "build", "workdir": std::env::temp_dir().to_string_lossy()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let session = body["session"]["id"].as_str().unwrap().to_owned();
+    run_turn(&app, &session, "first").await;
+
+    let (status, updated) = call(
+        &app,
+        Method::PATCH,
+        &format!("/v1/sessions/{session}"),
+        json!({"model": "fake/chosen"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    run_turn(&app, &session, "second").await;
+
+    let models: Vec<Value> = assistant_messages(&app, &session)
+        .await
+        .into_iter()
+        .map(|message| message["model"].clone())
+        .collect();
+    assert_eq!(models, vec![json!("fake/pinned"), json!("fake/chosen")]);
 }

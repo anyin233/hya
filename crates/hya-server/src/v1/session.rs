@@ -387,12 +387,12 @@ async fn update_session(
     {
         st.engine.set_title(session, title).await?;
     }
-    if let Some(model) = request.model
-        && !model.is_empty()
-    {
-        st.engine
-            .switch_model(session, hya_proto::ModelRef::new(model))
-            .await?;
+    let model = request
+        .model
+        .filter(|model| !model.is_empty())
+        .map(hya_proto::ModelRef::new);
+    if let Some(model) = &model {
+        st.engine.switch_model(session, model.clone()).await?;
     }
     if let Some(agent) = request.agent
         && !agent.is_empty()
@@ -400,6 +400,23 @@ async fn update_session(
         st.engine
             .switch_agent(session, hya_proto::AgentName::new(agent))
             .await?;
+    }
+    // A pinned agent (`agents.<id>.model`, authored policy) outranks the
+    // persisted session model, so the switch is also recorded as the root
+    // tree's temporary choice for the session's agent, which outranks both.
+    if let Some(model) = model {
+        let agent = st
+            .engine
+            .read_projection_shared(session)
+            .await?
+            .session
+            .agent
+            .clone();
+        if let Some(agent) = agent {
+            st.engine
+                .set_agent_model_override(session, agent, Some(model))
+                .await?;
+        }
     }
     if let Some(mode) = request.permission_mode {
         let root = st

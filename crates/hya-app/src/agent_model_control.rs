@@ -7,11 +7,11 @@
 //! Session creation.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use hya_core::{
-    AgentModelConfiguration, AgentOrigin, CategoryRegistry, RuntimeRegistry, TurnBinding,
-    resolve_configured_agent_model,
+    AgentModelConfiguration, AgentOrigin, CategoryRegistry, RuntimeRegistry, SessionEngine,
+    TurnBinding, resolve_configured_agent_model,
 };
 use hya_proto::now_millis;
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
@@ -118,7 +118,10 @@ pub struct PersistentAgentModelControl {
     store: SessionStore,
     owner: OwnerRunId,
     runtime: Arc<RuntimeRegistry>,
+    /// Startup routes; superseded by `engine` once [`Self::follow_engine_router`] binds it.
     router: Arc<ProviderRouter>,
+    /// The engine whose live routes (providers added or refreshed at runtime) are checked.
+    engine: Arc<OnceLock<Weak<SessionEngine>>>,
     categories: Arc<CategoryRegistry>,
     preferences: Arc<Mutex<BTreeMap<String, ModelRef>>>,
     configuration_files: Option<Arc<AgentModelConfigFiles>>,
@@ -157,11 +160,33 @@ impl PersistentAgentModelControl {
             owner,
             runtime,
             router,
+            engine: Arc::new(OnceLock::new()),
             categories: Arc::new(CategoryRegistry::default()),
             preferences: Arc::new(Mutex::new(preferences)),
             configuration_files: None,
             configuration: Arc::new(Mutex::new(AgentModelConfiguration::default())),
         })
+    }
+
+    /// Check models against `engine`'s live provider routes from now on.
+    ///
+    /// The engine replaces its router when a provider is added, edited, or
+    /// refreshed (`SessionEngine::publish_provider_catalog`); without this the
+    /// control would keep checking the startup routes and reject those models.
+    /// Clones share the binding. Only a weak reference is kept, so the control
+    /// never keeps the engine alive; a dropped engine falls back to the
+    /// startup routes.
+    pub fn follow_engine_router(&self, engine: &Arc<SessionEngine>) {
+        // A second call keeps the first engine: one runtime owns one engine.
+        let _ = self.engine.set(Arc::downgrade(engine));
+    }
+
+    /// The provider routes serving requests now.
+    fn router(&self) -> Arc<ProviderRouter> {
+        self.engine.get().and_then(Weak::upgrade).map_or_else(
+            || Arc::clone(&self.router),
+            |engine| engine.provider_router(),
+        )
     }
 
     /// Install the runtime's model-category registry for root and state resolution.
@@ -248,7 +273,7 @@ impl PersistentAgentModelControl {
             })?;
         Ok(effective_model_for_definition(
             &self.categories,
-            &self.router,
+            &self.router(),
             base_model,
             binding.agent_model_preference(definition.stable_id),
             &definition,
@@ -314,7 +339,7 @@ impl PersistentAgentModelControl {
                         agent_id: stable_id.to_string(),
                     });
                 }
-                if !self.router.catalog().iter().any(|row| {
+                if !self.router().catalog().iter().any(|row| {
                     row.provider_id == identity.provider_id && row.model_id == identity.model_id
                 }) {
                     return Err(AgentModelControlError::ModelUnavailable {
@@ -442,7 +467,7 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
     ) -> hya_server::AgentModelControlFuture<'_, Vec<hya_server::AgentModelState>> {
         Box::pin(async move {
             let mut rows =
-                project_agent_models(&binding, &self.categories, &self.router, &base_model);
+                project_agent_models(&binding, &self.categories, &self.router(), &base_model);
             let resolver = self.configuration_resolver(&binding);
             for row in &mut rows {
                 row.configuration_path = self
@@ -477,11 +502,12 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                         format!("unknown Agent `{agent_id}`"),
                     )
                 })?;
-            let models = self.router.catalog();
+            let router = self.router();
+            let models = router.catalog();
             let mut row = project_agent_model(
                 &binding,
                 &self.categories,
-                &self.router,
+                &router,
                 &models,
                 &base_model,
                 preference.as_ref(),
@@ -516,7 +542,8 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                         agent_id: agent_id.clone(),
                     })
                 })?;
-            let models = self.router.catalog();
+            let router = self.router();
+            let models = router.catalog();
             if let Some(identity) = &preference
                 && !model_is_available(&models, identity)
             {
@@ -583,7 +610,7 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
             let mut row = project_agent_model(
                 &fresh,
                 &self.categories,
-                &self.router,
+                &router,
                 &models,
                 &base_model,
                 fresh.agent_model_preference(&agent_id),
