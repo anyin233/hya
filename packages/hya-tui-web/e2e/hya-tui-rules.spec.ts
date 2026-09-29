@@ -37,7 +37,7 @@ test.describe("hya TUI Saved Rules view", () => {
     await expect.poll(async () => /allow\s+bash/.test(await term.text())).toBe(false)
 
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("Esc during a pending delete cancels it; r refreshes the list", async ({ tui, backend }) => {

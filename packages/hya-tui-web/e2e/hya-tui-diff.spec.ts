@@ -32,7 +32,7 @@ test.describe("hya TUI Diff view", () => {
     await term.waitForText("0 files changed")
     await term.waitForText("Not a git repository")
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("a tracked edit and an untracked file: per-file split, counts, n/p switch, r reload, Esc closes", async ({ tui, backend }) => {
@@ -66,7 +66,7 @@ test.describe("hya TUI Diff view", () => {
     await term.waitForText(/tracked\.txt\s+\+2 -0/)
 
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("a diff long enough to scroll: PgDn/PgUp/Home/End and the mouse wheel move the visible lines", async ({ tui, backend }) => {
@@ -135,7 +135,7 @@ test.describe("hya TUI Diff view", () => {
     await expectLastLineVisible(term)
 
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("~60 changed files: the file list windows around the open file with a N more indicator (T1c)", async ({ tui, backend }) => {
@@ -178,6 +178,6 @@ test.describe("hya TUI Diff view", () => {
     await term.waitForText("Diff › file58.txt")
 
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 })

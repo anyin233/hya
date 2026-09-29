@@ -816,7 +816,7 @@ the bordered input, and the instruction line. The permission mode picker
 The complete screen is one editable tree of nested rectangles. The default
 tree has Projects on the left, Conversation in the middle, and Sessions,
 Todos, and Context stacked on the right. Conversation contains the header,
-transcript, prompts, message composer, and footer, so moving
+transcript, prompts, and message composer, so moving
 it moves the whole interactive surface. Each other rectangle has an assigned
 job; you can split, resize, reassign, or close any auxiliary rectangle.
 Additional jobs include jobs, models, Workflows, interactions, status, and
@@ -1309,7 +1309,7 @@ child's status and what it last did, and it always shows these lines:
 **Child view.** A click on the task card, `/open <child session id>`, or
 `/open <number>` of its sidebar row opens the child session read-only: a
 `Viewing subagent <agent> · Esc returns · read-only` banner sits above its
-transcript, and the input's placeholder and the footer say so. Enter on a
+transcript, and the input's placeholder says so. Enter on a
 prompt or `!command` keeps the text and shows
 `Read-only: this is a subagent's session · Esc returns to the parent`;
 the command pane still runs slash commands. Esc, when the command pane and file list are closed, opens the parent session
@@ -2847,22 +2847,19 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/workflow` | No body | `WorkflowState` |
 | `POST /v1/sessions/{id}/workflow` | `{select: {name: string}}` or `{run: {name: string}}` | `SubmitWorkflowCommandResponse` |
 
-The one-row footer sits directly below the input panel. Its content is selected
-from the current view; it makes no HTTP request (the Provider View draws its
-own key line; see [Provider View](#provider-view)):
+The message input has no surrounding status or footer rows. This keeps the
+bottom of the conversation clear and gives its transcript more room. Layout
+results, command errors, copy notices, and other status feedback use the one-row
+`StatusLine` immediately below `Header` and `StatusBar` at the top of the
+conversation. This is a local display contract over the existing
+`AppState.status: string`, with no new server operation or configuration.
 
-| View or state | Bottom instruction |
-| --- | --- |
-| Chat | `Enter a prompt · /new creates a session · /sessions history · F4 requests · / commands` |
-| Tiled chat | `Alt+arrows select pane · /layout split|assign|resize|close|reset · / commands` |
-| Models | `Next: /model <provider/model> to switch this session · /key opens the Provider View · /help` |
-| Workflows | `Next: /workflow select <name> or /workflow run [name]` |
-| Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
-| Chat in a subagent's session | `Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch` |
-| API | `Next: /api GET /v1/health · /help for command syntax` |
-| Help | `Esc returns · / opens the command pane · Tab completes there` |
-| Todos | `Next: /refresh to reload the list · /help` |
-| Status | `Next: /model, /agent, or /rename to change what's shown · /help` |
+For example, run `/layout show`: its `Layout · 5 panes …` result appears near
+the header, and the input stays at the bottom without the `Alt+arrows select
+pane` instruction. Press `?` on an empty input (or run `/help`) to look up keys;
+Alt+arrows still select panes, and the global command overlay keeps its own
+completion and keyboard hint. Permission prompts and live turn activity retain
+their dedicated displays.
 
 ### Stream frames and the transcript
 
@@ -2980,7 +2977,7 @@ together.
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command pane's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z, and `toggleProjectsSidebar` on Ctrl+P) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
-| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
+| `src/completion.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
 `@opentui/solid/preload` for `bun test` and for `bun src/...` run inside the

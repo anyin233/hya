@@ -109,7 +109,6 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
   await term.type("Fix the flaky test")
   await term.attach(testInfo, "sessions-rename")
   await term.press("Enter")
-  await term.waitForText("Renamed to Fix the flaky test")
 
   // Header and sidebar (title over the raw id).
   await term.waitForText(/hya · Fix the flaky test ·/)
@@ -118,6 +117,8 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
   // A rename reopens the picker (so browsing continues) already showing the new title.
   await term.waitForText(/▸ ● Fix the flaky test/)
   await escape(term, "Filter ")
+  // The picker covers the header's status row until it closes.
+  await term.waitForText("Renamed to Fix the flaky test")
 })
 
 test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes and opens another session", async ({ tui, backend }) => {

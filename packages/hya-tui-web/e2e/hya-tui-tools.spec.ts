@@ -215,7 +215,7 @@ test.describe("subagents", () => {
     const card = await at(term, "hya-task · survey the repo")
     await click(term, card.row, card.col + 2)
     await term.waitForText("Viewing subagent hya-task · Esc returns")
-    await term.waitForText("Read-only subagent view · Esc returns to the parent")
+    await term.waitForText("Read-only subagent view · / opens commands · Esc returns")
     await term.waitForText("┃ list the files")
     await term.waitForText(/✓ read\s+notes\.txt/)
     await term.attach(testInfo, "child-view")

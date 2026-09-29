@@ -1,5 +1,5 @@
-# 0.43.31
+# 0.43.32
 
 ## Features
 
-- Slash commands now open a global overlay centered near the top of the whole terminal, like help. Its input and history survive pane reassignment and responsive layout changes. Slash opens it from any non-conversation workspace pane even when a message draft exists; Ctrl+X then slash opens it while drafting in the conversation.
+- The message input no longer has a status line above it or a contextual footer below it. Command results and errors now appear directly beneath the conversation header; help and command overlays retain their keyboard instructions.

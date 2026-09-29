@@ -126,7 +126,7 @@ test.describe("fork", () => {
     await expect.poll(() => term.find("Second reply.")).toBeNull()
     // The sidebar names the source session.
     await term.waitForText(/Forked\s+from hysec_/)
-    const input = await term.find("beta question")
+    const input = await term.find("│ beta question")
     expect(input).not.toBeNull()
     expect(input!.row).toBeGreaterThan((await term.find("First reply."))!.row)
     await term.attach(testInfo, "fork-at-message")

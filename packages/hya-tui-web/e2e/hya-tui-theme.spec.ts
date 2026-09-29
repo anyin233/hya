@@ -99,10 +99,8 @@ test.describe("/theme", () => {
     const row = lines.findIndex((line, index) => index > 1 && line.trim() === "")
     expect((await term.cell(row, cols - 1))?.bg).toBe(light.bg)
     expect((await term.cell(row, 0))?.bg).toBe(light.bg)
-    // The status line and the footer instruction sit on the themed background.
-    const footer = await term.find("Enter a prompt")
+    // The status line near the header sits on the themed background.
     const status = await term.find("Theme → Light")
-    expect(await term.cell(footer!.row, footer!.col + 1)).toMatchObject({ fg: light.muted, bg: light.bg })
     expect(await term.cell(status!.row, status!.col + 1)).toMatchObject({ fg: light.muted, bg: light.bg })
   })
 })
