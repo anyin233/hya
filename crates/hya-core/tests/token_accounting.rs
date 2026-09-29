@@ -456,6 +456,32 @@ fn estimate_counts_only_reasoning_the_route_replays() {
     );
 }
 
+/// Chat routes resend `reasoning_content` from every turn, and only the
+/// reasoning a chat route streamed.
+#[test]
+fn chat_estimate_counts_reasoning_content_from_every_turn() {
+    use hya_provider::ReasoningReplayPolicy;
+    let chat = |text: &str| Part::Reasoning {
+        id: PartId::new(),
+        text: text.to_string(),
+        provider_data: Some(serde_json::json!({"type": "reasoning_content"})),
+    };
+    let accounting = TokenAccounting::new(TokenAccountingMode::Estimate);
+    let mut messages = replay_fixture();
+    messages.insert(2, assistant(vec![chat(&"p".repeat(400))]));
+    messages.push(assistant(vec![chat(&"n".repeat(400))]));
+    let none = accounting.estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::None);
+    let replayed = accounting.estimate(&[
+        assistant(vec![chat(&"p".repeat(400))]),
+        assistant(vec![chat(&"n".repeat(400))]),
+    ]);
+    assert_eq!(
+        accounting
+            .estimate_with_reasoning_policy(&messages, ReasoningReplayPolicy::ReasoningContent),
+        none + replayed,
+    );
+}
+
 /// The Anthropic encoder and the estimator use one predicate: the thinking
 /// blocks the encoder emits are exactly the parts the estimator counts.
 #[test]

@@ -581,6 +581,118 @@ fn openai_encodes_tool_call_and_result() {
     assert_eq!(msgs[2]["content"], "hello");
 }
 
+#[tokio::test]
+async fn openai_chat_decodes_reasoning_content_and_closes_parts_in_order() {
+    let fixture = [
+        r#"{"choices":[{"delta":{"role":"assistant","reasoning_content":"find "},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{"reasoning_content":"slides"},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{"content":"I'll look."},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"glob","arguments":"{}"}}]},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+    ];
+    let events = decode_all(&OpenAiChatProtocol, &fixture);
+    // Text and reasoning persist at their end event, so each must end before
+    // the next part starts or the stored message is reordered.
+    assert_eq!(
+        summarize(&events),
+        vec![
+            "reasoning_start",
+            "reasoning_delta:find ",
+            "reasoning_delta:slides",
+            "reasoning_end",
+            "text_start",
+            "text_delta:I'll look.",
+            "text_end",
+            "tool_start:glob",
+            "tool_input_delta",
+            "tool_call:glob:{}",
+            "finish:ToolCalls",
+        ]
+    );
+    let provider_data = events.iter().find_map(|event| match event {
+        Event::ReasoningEnd { provider_data, .. } => provider_data.clone(),
+        _ => None,
+    });
+    assert_eq!(provider_data, Some(json!({"type": "reasoning_content"})));
+}
+
+fn chat_reasoning(text: &str) -> Part {
+    Part::Reasoning {
+        id: PartId::new(),
+        text: text.into(),
+        provider_data: Some(json!({"type": "reasoning_content"})),
+    }
+}
+
+#[test]
+fn openai_chat_replays_reasoning_content_on_every_assistant_message() {
+    let mut req = assistant_tool_request(json!({"path": "a"}));
+    // An earlier turn whose tool call carried no reasoning, then the current
+    // turn with chat-native reasoning before its text and tool call.
+    let earlier = req.messages[1].clone();
+    req.messages.insert(1, earlier);
+    req.messages.insert(
+        2,
+        Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: "again".into(),
+            }],
+        },
+    );
+    let Message::Assistant { parts, .. } = &mut req.messages[3] else {
+        panic!("assistant fixture");
+    };
+    parts.insert(0, chat_reasoning("think"));
+    parts.push(chat_reasoning("wrap"));
+    parts.push(Part::Text {
+        id: PartId::new(),
+        text: "done".into(),
+    });
+
+    let body = OpenAiChatProtocol.encode(&req).unwrap();
+    let msgs = body["messages"].as_array().unwrap();
+    let roles: Vec<&str> = msgs.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(
+        roles,
+        vec![
+            "user",
+            "assistant",
+            "tool",
+            "user",
+            "assistant",
+            "tool",
+            "assistant"
+        ]
+    );
+    assert_eq!(msgs[1]["reasoning_content"], "", "thinking transcripts pad");
+    assert_eq!(msgs[4]["reasoning_content"], "think");
+    assert_eq!(msgs[4]["content"], "ok");
+    assert_eq!(msgs[4]["tool_calls"][0]["function"]["name"], "read");
+    assert_eq!(msgs[6]["reasoning_content"], "wrap");
+    assert_eq!(msgs[6]["content"], "done");
+}
+
+#[test]
+fn openai_chat_omits_reasoning_content_without_chat_native_reasoning() {
+    let mut req = assistant_tool_request(json!({"path": "a"}));
+    let Message::Assistant { parts, .. } = &mut req.messages[1] else {
+        panic!("assistant fixture");
+    };
+    // Reasoning from another protocol (after a model switch) is not resent.
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: "think".into(),
+            provider_data: Some(json!({"type":"thinking","signature":"sig"})),
+        },
+    );
+    let body = OpenAiChatProtocol.encode(&req).unwrap();
+    assert!(body["messages"][1].get("reasoning_content").is_none());
+}
+
 fn decode_all_google(protocol: &GoogleProtocol, lines: &[&str]) -> Vec<Event> {
     let s = SessionId::new();
     let m = MessageId::new();
