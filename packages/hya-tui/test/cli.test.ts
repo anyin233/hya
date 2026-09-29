@@ -11,6 +11,14 @@ test("parses --server and --dir and rejects unknown flags", () => {
   expect(() => parseArguments(["--server", "ftp://x"], "/cwd")).toThrow("--server needs an HTTP URL")
 })
 
+test("--grpc selects a direct listener without starting a daemon or combining HTTP", () => {
+  expect(parseArguments(["--grpc", "127.0.0.1:22104", "--dir", "/work"], "/cwd")).toEqual({
+    grpc: "127.0.0.1:22104", directory: "/work", continue: false,
+  })
+  expect(() => parseArguments(["--grpc", "127.0.0.1:22104", "--server", "http://127.0.0.1:22103"], "/cwd")).toThrow()
+  expect(usage).toContain("--grpc")
+})
+
 test("without --server the TUI starts its own backend (no server URL is set)", () => {
   expect(parseArguments([], "/cwd")).toEqual({ directory: "/cwd", continue: false })
   expect(parseArguments(["--hya", "/opt/hya", "--db", "/tmp/s.db"], "/cwd")).toEqual({

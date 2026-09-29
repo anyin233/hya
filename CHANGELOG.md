@@ -1,8 +1,8 @@
-# 0.43.23
+# 0.43.24
 
 ## Fixes
 
-- **Daemon startup survives the runtime-owner handover.** `hya serve start` now retries when the previous server has released its database lock but still holds the store's runtime-owner lock during shutdown. The temporary daemon exits with the existing retry code 75, and the starter continues until a healthy server appears or its start deadline expires.
-- **Consecutive daemon restarts complete from one agent turn.** A restart requested by a resumed shell turn now waits for the previous handoff to reach `ready` and for its predecessor to exit before replacing the handoff journal. The old server also quiesces turns before it acknowledges `queued`, so a tool result cannot begin another model round ahead of the checkpoint.
+- **The `ert` checkout includes the upstream merge and its TUI features.** Reconciled the old `ert` history with the current 0.43.x frontend, preserving the branch's commits and the older release notes under `docs/changes/ert/`.
+- **Direct gRPC connections work in the current OpenTUI frontend.** `bun packages/hya-tui/src/main.ts --grpc HOST:PORT --dir PATH` connects to a `hya.v1` listener without starting a daemon. Sessions, turns, event streams, and the API command view use the same gRPC contract; the package carries its protobuf definitions for installed releases.
 
-The previous 0.43.22 notes are archived in `docs/changes/CHANGELOG_0.43.22.md`.
+The previous 0.43.23 notes are archived in `docs/changes/CHANGELOG_0.43.23.md`.

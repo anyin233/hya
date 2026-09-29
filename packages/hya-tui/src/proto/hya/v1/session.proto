@@ -1,0 +1,377 @@
+// hya API v1 — session lifecycle: create, read, list, update, delete,
+// fork, compact, summarize, and revert.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hya/v1/catalog.proto";
+import "hya/v1/common.proto";
+import "hya/v1/message.proto";
+
+// Session lifecycle surface. Sessions are the durable event-sourced roots;
+// every turn, message, and projection read hangs off a session id.
+service Session {
+  // Create a session, optionally as a child of an existing session and
+  // optionally running the directory init turn.
+  //
+  // hya.http: POST /v1/sessions
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // Fetch one session's projection summary.
+  //
+  // hya.http: GET /v1/sessions/{session}
+  rpc GetSession(GetSessionRequest) returns (SessionInfo);
+
+  // List sessions, optionally scoped under one parent (subagent tree).
+  // Archived root sessions are left out unless `include_archived` or
+  // `archived_only` is set.
+  //
+  // hya.http: GET /v1/sessions
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // Update mutable session fields: title, agent, model, background flag,
+  // permission mode, and the archived flag of a root session.
+  //
+  // hya.http: PATCH /v1/sessions/{session}
+  rpc UpdateSession(UpdateSessionRequest) returns (SessionInfo);
+
+  // Delete a session and its event log.
+  //
+  // hya.http: DELETE /v1/sessions/{session}
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+
+  // Fork a session into a new session id. The fork copies the source's
+  // visible messages (never those hidden by a pending revert): all of them
+  // (the head), or those before `message_id`, or those started at or before
+  // `until_seq`. The new session records its source (`SessionInfo
+  // .forked_from`).
+  //
+  // hya.http: POST /v1/sessions/{session}/fork
+  rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
+
+  // Compact a session's context using the configured method ladder.
+  //
+  // hya.http: POST /v1/sessions/{session}/compact
+  rpc CompactSession(CompactSessionRequest) returns (CompactSessionResponse);
+
+  // Produce a summary message for a session (titles, handoffs).
+  //
+  // hya.http: POST /v1/sessions/{session}/summarize
+  rpc SummarizeSession(SummarizeSessionRequest) returns (SummarizeSessionResponse);
+
+  // Revert a session to just before a user message (default: the last
+  // one), or undo the pending revert (`undo`). A revert hides that user
+  // message and every later message and restores the files their tool
+  // calls changed; the next prompt or shell turn commits it. Fails with
+  // `session_busy` while a turn runs.
+  //
+  // hya.http: POST /v1/sessions/{session}/revert
+  rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
+}
+
+// Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on
+// input; canonical form on output).
+message SessionRef {
+  // Session identifier.
+  string session = 1;
+}
+
+// Projection summary of one session.
+message SessionInfo {
+  // Canonical session id.
+  string id = 1;
+  // Parent session id when this is a subagent/team child.
+  string parent = 2;
+  // Human-editable title; empty when unset.
+  string title = 3;
+  // Agent name bound to this session.
+  string agent = 4;
+  // Model the session currently runs on.
+  ModelRef model = 5;
+  // Absolute working directory of the session.
+  string workdir = 6;
+  // Whether the session is flagged as background work.
+  bool background = 7;
+  // When the session was created.
+  google.protobuf.Timestamp time_created = 8;
+  // When the session projection last changed.
+  google.protobuf.Timestamp time_updated = 9;
+  // Highest event sequence number recorded for this session.
+  uint64 last_seq = 10;
+  // Whether a run currently owns the session's admission slot (derived
+  // from the process run registry, not the durable log).
+  bool busy = 11;
+  // Effective permission mode of the session tree: `manual`, `yolo`, or
+  // `<bundle-id>/<mode-id>`. Recorded on the root session (children report
+  // the root's mode); the process default (`yolo` under `--yolo` or
+  // `permission.model: danger`, else `manual`) when none was set.
+  string permission_mode = 12;
+  // Subagents this session spawned, in spawn order, with their latest
+  // status (folded from the session's own log). The live counterpart is
+  // the `memberUpdated` stream event.
+  repeated MemberInfo members = 13;
+  // Billed usage of the session: every provider call made for it (turn
+  // rounds plus title/summarizer side calls), summed. Never decreases
+  // (compaction, revert, and deletion keep billed usage). Unset when none.
+  TokenUsage usage = 14;
+  // Source of a forked session; unset for sessions that are not forks.
+  ForkSource forked_from = 15;
+  // Pending revert (`RevertSession`): its messages are hidden from
+  // `ListMessages` until an undo restores them or the next prompt or shell
+  // turn commits the revert. Unset when nothing is pending.
+  SessionRevert revert = 16;
+  // Whether this root session is archived: hidden from `ListSessions`
+  // unless requested. Subagent child sessions are never archived; they
+  // follow their root. Archiving does not cancel a running turn.
+  bool archived = 17;
+  // When the session was archived; unset when it is not archived.
+  google.protobuf.Timestamp archived_at = 18;
+  // Whether this root session was created `ephemeral` and is still unused
+  // (no message, title, archive, or fork from it yet): the server deletes
+  // it once no client has a `StreamSessionEvents` stream open on it.
+  bool ephemeral = 19;
+  // Project the session belongs to (a subagent session carries its root's);
+  // empty for a temporary session or one created before Projects existed.
+  // The id may name a Project that was deleted since.
+  string project_id = 20;
+  // Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`.
+  SessionKind kind = 21;
+  // Effective reasoning effort selected for the current model. Empty means no effort.
+  string effective_effort = 22;
+  // Precedence layer that selected effective_effort.
+  EffortSource effort_source = 23;
+}
+
+// Source of a session's effective reasoning effort.
+enum EffortSource {
+  EFFORT_SOURCE_UNSPECIFIED = 0;
+  EFFORT_SOURCE_SUFFIX = 1;
+  EFFORT_SOURCE_AGENT = 2;
+  EFFORT_SOURCE_PREFERENCE = 3;
+  EFFORT_SOURCE_MODEL_DEFAULT = 4;
+  EFFORT_SOURCE_GLOBAL_DEFAULT = 5;
+  EFFORT_SOURCE_NONE = 6;
+}
+
+// Kind of a session (ADR-0024).
+enum SessionKind {
+  // Unset. On `CreateSessionRequest` it means `SESSION_KIND_PROJECT`; the
+  // server never reports it.
+  SESSION_KIND_UNSPECIFIED = 0;
+  // A session of a Project: its workdir lies inside the Project's roots
+  // (sessions created before Projects existed have no Project).
+  SESSION_KIND_PROJECT = 1;
+  // A session of no Project, working in its own fresh scratch directory
+  // `$XDG_CACHE_HOME/hya/scratch/<session id>` (fallback
+  // `$HOME/.cache/hya/scratch/<session id>`), which hya never deletes.
+  SESSION_KIND_TEMPORARY = 2;
+}
+
+// Where a forked session came from.
+message ForkSource {
+  // Source session id.
+  string session = 1;
+  // Source user message the fork was cut before (the fork holds the
+  // messages strictly before it); empty for a head fork.
+  string message_id = 2;
+}
+
+// A pending revert of a session.
+message SessionRevert {
+  // The reverted user message (the first hidden message).
+  string message_id = 1;
+  // Text of that user message, e.g. to put it back in the composer.
+  string text = 2;
+  // Number of hidden messages (the reverted message and every later one).
+  uint32 hidden_messages = 3;
+  // Files the revert restored, each as the revert left it.
+  repeated RevertedFile files = 4;
+}
+
+// Where a new root session works is chosen by the client (ADR-0024):
+//
+// - `kind = SESSION_KIND_TEMPORARY`: no Project; the server creates the
+//   session's scratch directory and uses it as the workdir. `project_id` and
+//   `workdir` must be unset (`invalid_argument`).
+// - `project_id` set (kind `SESSION_KIND_PROJECT` or unset): the Project must
+//   exist (`not_found`). `workdir`, when set, must lie inside one of its roots
+//   (`invalid_argument` otherwise); unset means the primary root.
+// - no `project_id`, `workdir` set (kind `SESSION_KIND_PROJECT` or unset): the
+//   Project is found or created as by `EnsureProjectForPath(workdir)` and the
+//   session works in `workdir` (a local client passes its cwd).
+// - neither: `invalid_argument`.
+//
+// A child session (`parent` set) always joins its parent's Project and kind:
+// `project_id` and `kind` must be unset (`invalid_argument`); `workdir`
+// defaults to the parent's. `workdir` must be absolute without `..`
+// components.
+message CreateSessionRequest {
+  // Agent name or catalog id to bind as the session's default agent.
+  // Empty: the server's default agent (config `default_agent`, else the
+  // built-in agent).
+  string agent = 1;
+  // Model reference the session starts on (`provider/model[#variant]`).
+  // Empty: that agent's effective model.
+  string model = 2;
+  // Absolute workdir for tools and relative paths in this session; see the
+  // rules above.
+  optional string workdir = 3;
+  // When set, marks the new session as a child of this parent id.
+  string parent = 4;
+  // When true, run the directory initialization turn after creation.
+  bool initialize = 5;
+  // Initial title; empty lets the backend derive one.
+  string title = 6;
+  // Create the session ephemeral: the server deletes it while it is still
+  // unused (no message, title, archive, or fork from it) once no client has
+  // a `StreamSessionEvents` stream open on it, after a short grace. For
+  // sessions a client opens before the user asked for one (the TUI's
+  // session on connect). Ignored with `parent` or `title` set.
+  bool ephemeral = 7;
+  // Project of the new root session.
+  string project_id = 8;
+  // Kind of the new root session; unset means `SESSION_KIND_PROJECT`.
+  SessionKind kind = 9;
+}
+
+message CreateSessionResponse {
+  // Projection summary of the new session.
+  SessionInfo session = 1;
+}
+
+message GetSessionRequest {
+  // Session identifier.
+  string session = 1;
+}
+
+message ListSessionsRequest {
+  reserved 1;
+  reserved "directory";
+  // Restrict to direct children of this session id when non-empty.
+  string parent = 2;
+  // Standard pagination controls.
+  PageRequest page = 3;
+  // Also list archived root sessions (default: they are left out).
+  bool include_archived = 4;
+  // List only archived root sessions (implies `include_archived`).
+  bool archived_only = 5;
+  // Restrict to the sessions (root and subagent) of this Project when
+  // non-empty; an id that names no Project lists nothing.
+  string project_id = 6;
+}
+
+message ListSessionsResponse {
+  // Session summaries in reverse-creation order.
+  repeated SessionInfo sessions = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message UpdateSessionRequest {
+  // Session identifier.
+  string session = 1;
+  // New title when set.
+  optional string title = 2;
+  // New model reference string when set.
+  optional string model = 3;
+  // New agent name when set.
+  optional string agent = 4;
+  // New background flag when set.
+  optional bool background = 5;
+  // New permission mode for the whole session tree when set: `manual`,
+  // `yolo`, or a `<bundle-id>/<mode-id>` listed by `ListPermissionModes`.
+  // Unknown or unavailable modes are rejected with `invalid_argument`.
+  // Switching to `yolo` also allows (once) every pending permission ask of
+  // the tree.
+  optional string permission_mode = 6;
+  // Archive (`true`) or unarchive (`false`) a root session when set.
+  // Idempotent: archiving an archived session keeps its first `archived_at`.
+  // Archiving a subagent child session is `invalid_argument`; unarchiving
+  // one is a no-op. Archiving does not cancel a running turn. A new prompt,
+  // command, or shell turn unarchives the session implicitly.
+  optional bool archived = 7;
+}
+
+message DeleteSessionRequest {
+  // Session identifier.
+  string session = 1;
+}
+
+message DeleteSessionResponse {}
+
+message ForkSessionRequest {
+  // Session identifier to fork from.
+  string session = 1;
+  // Copy the messages whose start was recorded at or before this sequence
+  // number; 0 forks at the current head. Ignored when `message_id` is set.
+  uint64 until_seq = 2;
+  // Fork before this user message of the source: the new session holds
+  // every message strictly before it. Empty forks at `until_seq` (or the
+  // head). A message that is not a visible user message of the source is
+  // `invalid_argument` (not a user message) or `not_found`.
+  string message_id = 3;
+}
+
+message ForkSessionResponse {
+  // Projection summary of the forked session.
+  SessionInfo session = 1;
+  // Text of the user message the fork was cut before (`message_id`), e.g.
+  // to prefill the composer; empty for a head or `until_seq` fork.
+  string prompt_text = 2;
+}
+
+message CompactSessionRequest {
+  // Session identifier to compact.
+  string session = 1;
+  // Deprecated and ignored: a manual compaction always folds the whole
+  // transcript at the head. The response's `compacted_until_seq` reports
+  // the watermark actually reached.
+  uint64 until_seq = 2;
+}
+
+message CompactSessionResponse {
+  // Watermark the context was compacted up to.
+  uint64 compacted_until_seq = 1;
+  // Compaction strategy that ran, the same name the recorded
+  // `CompactionApplied.strategy` carries. A manual compaction is always
+  // `local_summarizer`.
+  string strategy = 2;
+}
+
+message SummarizeSessionRequest {
+  // Session identifier to summarize.
+  string session = 1;
+}
+
+message SummarizeSessionResponse {
+  // Id of the generated summary message.
+  string summary_message = 1;
+}
+
+message RevertSessionRequest {
+  // Session identifier to revert.
+  string session = 1;
+  // Deprecated: sequence targets are not supported; a nonzero value is
+  // `invalid_argument`. Use `message_id`.
+  uint64 until_seq = 2;
+  // When true, undo the pending revert (`/redo`): the hidden messages come
+  // back and the files are written back to their state before the revert.
+  // `invalid_argument` when no revert is pending (none, or committed by a
+  // later prompt).
+  bool undo = 3;
+  // User message to revert to (it and every later message are hidden).
+  // Empty reverts the last visible user message (`/undo`); repeating it
+  // reverts further back. `not_found` when the message is not in the
+  // session, `invalid_argument` when it is not a user message or already
+  // reverted.
+  string message_id = 4;
+}
+
+message RevertSessionResponse {
+  // Projection summary after the revert (`revert` set after a revert,
+  // unset after an undo).
+  SessionInfo session = 1;
+  // Files this call wrote (or could not restore).
+  repeated RevertedFile files = 2;
+}
