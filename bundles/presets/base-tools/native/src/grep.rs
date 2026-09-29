@@ -121,7 +121,7 @@ impl Tool for GrepTool {
                     "glob": {
                         "type": "string",
                         "maxLength": MAX_GLOB_BYTES,
-                        "description": "Filename/path glob filter, for example **/*.rs"
+                        "description": "File path filter, for example **/*.rs; a directory name matches files under that directory"
                     },
                     "ignoreCase": {
                         "type": "boolean",
@@ -927,12 +927,23 @@ fn glob_allows(pattern: Option<&str>, path: &Path, base: &Path) -> bool {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/");
+    let directory_pattern = pattern.trim_end_matches('/');
+    let directory_literal = !directory_pattern.is_empty()
+        && !directory_pattern
+            .chars()
+            .any(|character| matches!(character, '*' | '?' | '['))
+        && base.join(directory_pattern).is_dir();
+    let pattern = if directory_literal {
+        format!("{directory_pattern}/**")
+    } else {
+        pattern.to_string()
+    };
     let candidate = if pattern.contains('/') {
         relative.as_str()
     } else {
         relative.rsplit('/').next().unwrap_or(relative.as_str())
     };
-    let matched = wildcard_match(pattern, candidate);
+    let matched = wildcard_match(&pattern, candidate);
     if excluded.is_some() {
         !matched
     } else {
@@ -1446,6 +1457,29 @@ mod tests {
         let message = regex_input_error(true, &compile_error).to_string();
         assert!(!message.contains("hya's grep"), "{message}");
         assert!(!message.contains("backreferences"), "{message}");
+    }
+
+    #[test]
+    fn literal_directory_glob_matches_descendants_and_file_literal_still_matches()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "hya-grep-glob-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let directory = root.join("src");
+        let nested_dir = directory.join("nested");
+        let nested_file = nested_dir.join("main.rs");
+        let literal_file = root.join("README.md");
+        fs::create_dir_all(&nested_dir)?;
+        fs::write(&nested_file, "match")?;
+        fs::write(&literal_file, "match")?;
+
+        assert!(glob_allows(Some("src"), &nested_file, &root));
+        assert!(glob_allows(Some("README.md"), &literal_file, &root));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

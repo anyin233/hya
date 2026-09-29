@@ -17,6 +17,9 @@ export interface SessionInfo {
   members?: MemberInfo[]
   /** When the session projection last changed (RFC 3339); the `/sessions` picker's relative time (state/catalog.ts). */
   timeUpdated?: string
+  /** Server-resolved reasoning effort and the precedence source. */
+  effectiveEffort?: string
+  effortSource?: string
   /** Everything billed for the session (turn rounds and side calls); the status bar's token total. */
   usage?: TokenUsage
   /** Where a forked session came from (`ForkSession`); unset for sessions that are not forks. */
@@ -225,8 +228,12 @@ export interface ModelSummary {
   contextLimit?: string
   /** Output ceiling in tokens, a decimal string; "0" or omitted when unknown. */
   outputLimit?: string
-  /** The route takes reasoning effort variants (omitted = false). */
+  /** Whether the model accepts reasoning efforts; omitted when unknown. */
   reasoning?: boolean
+  /** Effort labels accepted by this model, in provider order. */
+  reasoningVariants?: string[]
+  /** Explicit configured effort default; absent means no request effort by default. */
+  reasoningDefault?: string
   /** `false`: the model refuses image attachments (`ModelSummary.imageInput`); absent/unset means unknown, which is allowed. */
   imageInput?: boolean
   /** Where the row comes from: `remote` (model cache), `config` (config.yaml only), `override` (both; config wins per field), `offline`. */
@@ -326,6 +333,14 @@ export interface McpServerStatus {
   authRequired?: boolean
 }
 
+/** `ModelEffortPreference`: durable preference for a base provider/model. */
+export interface ModelEffortPreference {
+  providerId: string
+  modelId: string
+  effort?: string
+  updatedAt?: string
+}
+
 /** `AgentModelSelection`: a concrete provider/model pick. */
 export interface AgentModelSelection {
   providerId?: string
@@ -351,7 +366,13 @@ export interface AgentModelState {
   /** `AGENT_MODEL_SOURCE_SESSION`, `_CONFIGURED`, `_REMEMBERED`, `_DEFAULT`. */
   source?: string
   configuration?: AgentModelSelection
+  /** The owning config file (`config.yaml`, or a bundle's `config.yml`) that `SaveAgentModelConfiguration` writes; absent when none. */
+  configurationPath?: string
   sessionOverride?: AgentModelSelection
+  /** The agent's own default thinking effort; absent: its model's default applies. */
+  effort?: string
+  /** `AGENT_EFFORT_SOURCE_PREFERENCE` (runtime), `_CONFIGURED` (`agents.<id>.reasoning`), `_AUTHORED` (bundle), `_NONE`. */
+  effortSource?: string
 }
 
 export interface CommandSummary {
@@ -370,7 +391,8 @@ export interface TodoItem {
 
 export interface AgentSummary {
   name: string
-  model?: { providerId?: string; modelId?: string }
+  /** The agent's default model; `variant` is the configured `#effort` suffix. */
+  model?: { providerId?: string; modelId?: string; variant?: string }
   /** One-line description shown in the `/agent` picker. */
   description?: string
   hidden?: boolean
@@ -918,6 +940,30 @@ export class HyaClient {
       ...(session ? { session } : {}),
       ...(preference ? { preference } : {}),
     }, signal)
+  }
+
+  /** `SaveAgentModelConfiguration` (`PUT /v1/agent-models/{agentId}/configuration`): write the agent's model into its owning config file; absent `model` clears it. */
+  async saveAgentModelConfiguration(agentId: string, model: AgentModelSelection | undefined, signal?: AbortSignal): Promise<AgentModelState> {
+    return this.request("PUT", `/v1/agent-models/${encodeURIComponent(agentId)}/configuration`, {
+      ...(this.directory ? { directory: this.directory } : {}),
+      ...(model ? { model } : {}),
+    }, signal)
+  }
+
+  /** `ListModelEffortPreferences` (`GET /v1/model-effort-preferences`). */
+  async listModelEffortPreferences(): Promise<ModelEffortPreference[]> {
+    const result = await this.request<{ preferences?: ModelEffortPreference[] }>("GET", this.scoped("/v1/model-effort-preferences"))
+    return result.preferences ?? []
+  }
+
+  /** `SetModelEffortPreference`; an empty effort clears the durable preference. */
+  async setModelEffortPreference(providerId: string, modelId: string, effort: string, signal?: AbortSignal): Promise<ModelEffortPreference> {
+    return this.request("PUT", `/v1/model-effort-preferences/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`, { effort }, signal)
+  }
+
+  /** `SetAgentEffort` (`PUT /v1/agent-efforts/{agentId}`); an empty effort clears the agent's runtime choice. */
+  async setAgentEffort(agentId: string, effort: string, signal?: AbortSignal): Promise<{ agentId: string; effort?: string }> {
+    return this.request("PUT", `/v1/agent-efforts/${encodeURIComponent(agentId)}`, { effort, ...(this.directory ? { directory: this.directory } : {}) }, signal)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

@@ -112,6 +112,7 @@ fn ctx_with_components(workdir: PathBuf, cancel: CancellationToken, rules: Vec<R
         roots: vec![workdir.clone()],
         workdir,
         cancel,
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

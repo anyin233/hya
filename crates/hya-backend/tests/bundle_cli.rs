@@ -134,6 +134,8 @@ fn bundle_command(data_root: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
     command
         .env("XDG_DATA_HOME", data_root)
+        .env("XDG_STATE_HOME", data_root.join("state"))
+        .env("XDG_CONFIG_HOME", data_root.join("config"))
         .env("HOME", data_root)
         .current_dir(data_root);
     command
@@ -1933,6 +1935,172 @@ fn info_reads_a_package_file_given_as_the_positional_argument()
     let stdout = String::from_utf8(info.stdout)?;
     assert!(stdout.lines().any(|line| line == "name: hya/valid-public"));
     assert!(stdout.lines().any(|line| line == "origin: package"));
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// A one-agent package whose manifest declares `check` (a YAML flow list).
+fn checked_package(
+    data_root: &Path,
+    name: &str,
+    check: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let manifest = format!(
+        "kind: AgentBundle\nidentity:\n  id: hya/{name}\n  version: 1.0.0\n  publisher: hya\n\
+         check:\n  command: {check}\n  timeout_secs: 30\nagent:\n  id: {name}\n  role: subagent\n  \
+         prompt: prompts/p.md\n"
+    );
+    let source = hya_bundle::BundleSource::new(
+        name,
+        vec![
+            hya_bundle::SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            hya_bundle::SourceFile::new("prompts/p.md", b"Prove yourself.\n".to_vec()),
+        ],
+    );
+    let package = data_root.join(format!("{name}.hyabundle"));
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+/// The declared self-check runs in a copy of the package sources (cwd and
+/// `HYA_BUNDLE_ROOT`) before install; passing installs and says so.
+#[test]
+fn install_runs_the_bundle_self_check_in_its_sources() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = checked_package(
+        &data_root,
+        "self-proven",
+        r#"[sh, -c, 'test -f prompts/p.md && test -f "$HYA_BUNDLE_ROOT/bundle.yaml" && echo proven-$HYA_BUNDLE_ID']"#,
+    )?;
+    let verify = bundle_command(&data_root)
+        .args(["bundle", "verify"])
+        .arg(&package)
+        .output()?;
+    assert_success("verify", &verify);
+    assert!(String::from_utf8(verify.stdout)?.contains("self-check: passed"));
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    let stdout = String::from_utf8(install.stdout)?;
+    assert!(stdout.contains("self-check: passed"), "{stdout}");
+    assert!(
+        stdout.contains("installed hya/self-proven 1.0.0 scope=user"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("activation: no backend runs"), "{stdout}");
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// A failing self-check refuses install and verify with its output; nothing
+/// is written.
+#[test]
+fn a_failing_self_check_refuses_install() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = checked_package(
+        &data_root,
+        "self-broken",
+        "[sh, -c, 'echo tests-are-red >&2; exit 4']",
+    )?;
+    for action in ["verify", "install"] {
+        let output = bundle_command(&data_root)
+            .args(["bundle", action])
+            .args(if action == "install" {
+                vec!["-y"]
+            } else {
+                vec![]
+            })
+            .arg(&package)
+            .output()?;
+        assert!(!output.status.success(), "{action} must fail");
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("tests-are-red"), "{stderr}");
+        assert!(stderr.contains("nothing was installed"), "{stderr}");
+    }
+    assert!(!data_root.join("hya/bundles/registry.sqlite3").exists());
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn install_without_a_declared_check_says_so() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    assert!(String::from_utf8(install.stdout)?.contains("self-check: none declared"));
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// With a backend running for the database, install proves activation: the
+/// backend refreshes now and publishes the bundle; a bundle whose process
+/// cannot start is refused by the backend, which keeps its bundles, and
+/// install fails loudly.
+#[test]
+fn install_proves_activation_in_the_running_backend() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let db = data_root.join("s.db");
+    let db = db.to_str().ok_or("db path")?;
+    let started = bundle_command(&data_root)
+        .args(["serve", "start", "--json", "--db", db])
+        .output()?;
+    assert_success("serve start", &started);
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let package = checked_package(&data_root, "live-agent", "[true]")?;
+        let install = bundle_command(&data_root)
+            .args(["bundle", "install", "-y", "--db", db])
+            .arg(&package)
+            .output()?;
+        assert_success("install", &install);
+        let stdout = String::from_utf8(install.stdout)?;
+        assert!(
+            stdout.contains("activation: active in the backend"),
+            "{stdout}"
+        );
+
+        let source = hya_bundle::BundleSource::new(
+            "dead-process",
+            vec![
+                hya_bundle::SourceFile::new(
+                    "bundle.yaml",
+                    br#"kind: Plugin
+identity: { id: acme/dead-process, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [sh, -c, 'exit 3'] }
+resources:
+  tools: [{ id: echo, path: tool.json }]
+"#
+                    .to_vec(),
+                ),
+                hya_bundle::SourceFile::new("tool.json", b"{}".to_vec()),
+            ],
+        );
+        let dead = data_root.join("dead-process.hyabundle");
+        fs::write(&dead, hya_bundle::write_public_package(&source)?)?;
+        let install = bundle_command(&data_root)
+            .args(["bundle", "install", "-y", "--db", db])
+            .arg(&dead)
+            .output()?;
+        assert!(
+            !install.status.success(),
+            "a dead process must not activate"
+        );
+        let stderr = String::from_utf8(install.stderr)?;
+        assert!(stderr.contains("installed but not activated"), "{stderr}");
+        // The failure is attributed to the bundle that could not start.
+        assert!(stderr.contains("\n  acme/dead-process: "), "{stderr}");
+        Ok(())
+    })();
+    let _ = bundle_command(&data_root)
+        .args(["serve", "stop", "--db", db])
+        .output();
+    result?;
     fs::remove_dir_all(&data_root)?;
     Ok(())
 }

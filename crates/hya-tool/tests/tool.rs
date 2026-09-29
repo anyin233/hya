@@ -57,6 +57,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 
@@ -518,6 +519,7 @@ async fn bash_happy_and_cancelled() {
             t.cancel();
             t
         },
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
     let err = bash
         .execute(&cancelled, json!({ "command": "echo hi" }))
@@ -552,6 +554,7 @@ async fn task_tool_is_lead_only() {
         roots: vec![dir.clone()],
         workdir: dir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     };
     let reg = ToolRegistry::builtins();
     let tool = reg.get("task").unwrap();

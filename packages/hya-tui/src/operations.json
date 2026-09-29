@@ -1,5 +1,11 @@
 [
   {
+    "method": "PUT",
+    "path": "/v1/agent-efforts/{agent_id}",
+    "operationId": "AgentModels.SetAgentEffort",
+    "streaming": false
+  },
+  {
     "method": "GET",
     "path": "/v1/agent-models",
     "operationId": "AgentModels.ListAgentModels",
@@ -9,6 +15,12 @@
     "method": "PUT",
     "path": "/v1/agent-models/{agent_id}",
     "operationId": "AgentModels.SetAgentModel",
+    "streaming": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/agent-models/{agent_id}/configuration",
+    "operationId": "AgentModels.SaveAgentModelConfiguration",
     "streaming": false
   },
   {
@@ -87,6 +99,12 @@
     "method": "PUT",
     "path": "/v1/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.put",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/bundles:refresh",
+    "operationId": "Catalog.RefreshBundles",
     "streaming": false
   },
   {
@@ -213,6 +231,18 @@
     "method": "POST",
     "path": "/v1/mcp/{name}/disconnect",
     "operationId": "Mcp.DisconnectMcp",
+    "streaming": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/model-effort-preferences",
+    "operationId": "AgentModels.ListModelEffortPreferences",
+    "streaming": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/model-effort-preferences/{provider_id}/{model_id}",
+    "operationId": "AgentModels.SetModelEffortPreference",
     "streaming": false
   },
   {

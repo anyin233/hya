@@ -52,6 +52,7 @@ fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPl
         workdir: PathBuf::from("."),
         roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

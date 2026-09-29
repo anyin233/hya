@@ -15,10 +15,10 @@ use hya_core::agent_catalog::{AgentCatalog, AgentDefinition};
 use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
     BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CompactionConfig, CoreError,
-    DRAIN_DEADLINE, EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
-    RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TaskSpawnOrigin,
-    TokenAccounting, TurnBinding, TurnDrainReport, apply_agent_model_preference,
+    DRAIN_DEADLINE, EventBus, HandoffReadiness, ModelSummarizer, PromptEnv, ResidentSupervisor,
+    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
+    TaskSpawnOrigin, TokenAccounting, TurnBinding, TurnDrainReport, apply_agent_model_preference,
     apply_spawn_model_policy, build_system_prompt, resolve_dispatch_model, run_lifecycle_service,
     run_mailbox_service,
 };
@@ -1059,8 +1059,6 @@ pub struct RuntimeConfig {
     pub catalog: Arc<ProviderCatalogSnapshot>,
     /// Active request model id for new sessions.
     pub model: String,
-    /// Default reasoning effort for the active model, when configured.
-    pub reasoning: Option<ReasoningEffort>,
     /// MCP server configs to connect at engine build.
     pub mcp: BTreeMap<String, McpServerConfig>,
     /// Plugin specs from `config.yaml` (process-wide). Project plugins
@@ -1121,7 +1119,6 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
         router,
         catalog,
         model,
-        reasoning: None,
         mcp: BTreeMap::new(),
         plugins: Vec::new(),
         default_agent: None,
@@ -1141,53 +1138,50 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
 }
 
 /// Resolve providers and the immutable catalog before returning runtime state.
+/// A configuration error falls back to the offline provider (with a notice).
 pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
-    match config::load().await {
-        Ok(Some(cfg)) => {
-            let model = model_override
-                .or_else(|| std::env::var("HYA_MODEL").ok())
-                .unwrap_or_else(|| cfg.default_model.clone());
-            let reasoning = cfg
-                .catalog
-                .models()
-                .iter()
-                .find(|entry| {
-                    entry.model_ref().as_str() == model
-                        || (entry.model_id == model
-                            && cfg
-                                .catalog
-                                .models()
-                                .iter()
-                                .filter(|candidate| candidate.model_id == model)
-                                .count()
-                                == 1)
-                })
-                .and_then(|entry| entry.reasoning_default);
-            let offline_notice = cfg.catalog.notice().map(|_| OfflineNotice {
-                config_path: config::expected_config_path(),
-            });
-            RuntimeConfig {
-                router: cfg.router,
-                catalog: cfg.catalog,
-                model,
-                reasoning,
-                mcp: cfg.mcp,
-                plugins: plugins::resolve(cfg.plugins),
-                default_agent: cfg.default_agent,
-                categories: cfg.categories,
-                offline_notice,
-                permission: cfg.permission,
-                websearch: cfg.websearch,
-                pending_discovery: cfg.pending_discovery,
-                pure: false,
-            }
-        }
-        Ok(None) => offline_runtime(model_override, false),
+    match resolve_runtime_strict(model_override.clone()).await {
+        Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("hya: config error ({error:#}); using the offline provider");
             offline_runtime(model_override, true)
         }
     }
+}
+
+/// [`resolve_runtime`] without the offline fallback: a configuration error
+/// is returned. `hya serve check` uses it so a broken configuration fails the
+/// self-proof instead of composing the offline provider.
+///
+/// # Errors
+///
+/// The configuration could not be loaded.
+pub async fn resolve_runtime_strict(
+    model_override: Option<String>,
+) -> anyhow::Result<RuntimeConfig> {
+    let Some(cfg) = config::load().await? else {
+        return Ok(offline_runtime(model_override, false));
+    };
+    let model = model_override
+        .or_else(|| std::env::var("HYA_MODEL").ok())
+        .unwrap_or_else(|| cfg.default_model.clone());
+    let offline_notice = cfg.catalog.notice().map(|_| OfflineNotice {
+        config_path: config::expected_config_path(),
+    });
+    Ok(RuntimeConfig {
+        router: cfg.router,
+        catalog: cfg.catalog,
+        model,
+        mcp: cfg.mcp,
+        plugins: plugins::resolve(cfg.plugins),
+        default_agent: cfg.default_agent,
+        categories: cfg.categories,
+        offline_notice,
+        permission: cfg.permission,
+        websearch: cfg.websearch,
+        pending_discovery: cfg.pending_discovery,
+        pure: false,
+    })
 }
 
 /// Open a SQLite session store at `db`, or an in-memory store when `db` is empty.
@@ -1467,7 +1461,9 @@ fn resolve_spawn_member(
 /// Branch 1 (exact valid id) and branch 2 (first substring match, bare
 /// vendor ids excluded) replace the request with the resolved id; anything
 /// else clears it so [`apply_spawn_model_policy`] falls through to the
-/// definition/preference chain.
+/// definition/preference chain. A `#effort` suffix on the request is split
+/// off before matching and becomes the member's `effort` unless the call
+/// also passed an explicit `effort`, which wins.
 fn resolve_member_dispatch_model(
     ctx: &ResolveSpawnMemberCtx<'_>,
     mut member: SpawnMember,
@@ -1498,6 +1494,17 @@ fn resolve_member_dispatch_model(
     let Some(requested) = requested else {
         return member;
     };
+    let (requested, suffix) = match requested.rsplit_once('#') {
+        Some((base, effort)) => (base.to_owned(), Some(effort.to_owned())),
+        None => (requested, None),
+    };
+    if member
+        .effort
+        .as_deref()
+        .is_none_or(|effort| effort.trim().is_empty())
+    {
+        member.effort = suffix.filter(|effort| !effort.trim().is_empty());
+    }
     let resolved = resolve_dispatch_model(&requested, &model_ids, &provider_ids)
         .map(|model| model.to_string());
     member.model = resolved.clone();
@@ -1505,6 +1512,52 @@ fn resolve_member_dispatch_model(
         inline.model = resolved;
     }
     member
+}
+
+/// Apply a spawn-time `effort` as the child model's `#effort` suffix.
+///
+/// The suffix is the effort resolver's highest layer, so it outranks the
+/// Agent's configured/remembered default and authored policy. An unknown label,
+/// or one the child's catalog row does not advertise, is rejected (`none` is
+/// always allowed). An absent or empty `effort` leaves the Agent untouched.
+fn apply_spawn_effort(
+    engine: &SessionEngine,
+    mut agent: AgentSpec,
+    effort: Option<&str>,
+) -> Result<AgentSpec, SpawnError> {
+    let Some(label) = effort.map(str::trim).filter(|label| !label.is_empty()) else {
+        return Ok(agent);
+    };
+    let base = agent
+        .model
+        .as_str()
+        .rsplit_once('#')
+        .map_or(agent.model.as_str(), |(base, _)| base)
+        .to_owned();
+    let invalid = || SpawnError::InvalidEffort {
+        effort: label.to_owned(),
+        model: base.clone(),
+    };
+    let parsed = ReasoningEffort::parse(label).ok_or_else(invalid)?;
+    if parsed != ReasoningEffort::Off {
+        let advertised = engine
+            .provider_catalog()
+            .into_iter()
+            .find(|row| {
+                base == format!("{}/{}", row.provider_id, row.model_id) || base == row.model_id
+            })
+            .map(|row| row.reasoning_variants)
+            .filter(|variants| !variants.is_empty());
+        if let Some(variants) = advertised
+            && !variants
+                .iter()
+                .any(|variant| ReasoningEffort::parse(variant) == Some(parsed))
+        {
+            return Err(invalid());
+        }
+    }
+    agent.model = ModelRef::new(format!("{base}#{label}"));
+    Ok(agent)
 }
 
 fn resolve_authorized_spawn_member(
@@ -1542,8 +1595,9 @@ fn resolve_authorized_spawn_member(
     // substring-dispatch). Unresolvable requests defer to the user's
     // configured chain instead of overriding it verbatim.
     let member = resolve_member_dispatch_model(ctx, member);
-    let mut agent =
+    let agent =
         apply_spawn_model_policy(agent, definition, &member, ctx.categories, ctx.is_servable);
+    let mut agent = apply_spawn_effort(ctx.engine, agent, member.effort.as_deref())?;
     if let Some(inline) = member.inline_agent.as_ref() {
         if !inline.prompt.trim().is_empty() {
             agent.system_prompt = inline.prompt.clone();
@@ -1768,6 +1822,10 @@ pub struct BuiltSessionEngine {
     mcp_control: Arc<dyn hya_server::McpControl>,
     plugin_host: Arc<hya_plugin::PluginHost>,
     lifecycle: SpawnSupervisorLifecycle,
+    /// Process base agent identity, for paths that need it outside a turn
+    /// (the restart handoff's in-process continuation of checkpointed
+    /// sessions).
+    agent: AgentSpec,
 }
 
 impl BuiltSessionEngine {
@@ -1849,6 +1907,39 @@ impl BuiltSessionEngine {
     /// Idempotent; the first cause wins.
     pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport {
         self.resident_supervisor.drain(cause, DRAIN_DEADLINE).await
+    }
+
+    /// Durable restart handoff (old process side, see
+    /// [`SessionEngine::handoff_turns`]): quiesce the gate, then give every
+    /// active turn [`DRAIN_DEADLINE`] to reach its round boundary and
+    /// checkpoint itself. Sessions still live at the deadline are reported in
+    /// `stragglers` and the handoff **aborts** — nothing is cancelled or
+    /// terminalized, the quiesce lifts, checkpointed sessions are re-driven
+    /// in-process, and the restart must be rejected so this process keeps
+    /// serving (treat `stragglers` non-empty as the reject gate). Unlike
+    /// [`drain`](Self::drain) this never closes a live turn. A normal stop
+    /// keeps using [`drain`](Self::drain) / [`shutdown`](Self::shutdown);
+    /// only a restart handoff calls this.
+    pub async fn handoff_turns(&self) -> TurnDrainReport {
+        self.engine.handoff_turns(&self.agent, DRAIN_DEADLINE).await
+    }
+
+    /// First step of a restart handoff (see
+    /// [`SessionEngine::begin_handoff_quiesce`]): refuse new turns
+    /// engine-wide, cancel nothing, and keep serving — the restart queues
+    /// until [`handoff_readiness`](Self::handoff_readiness) reports the gate
+    /// idle. Never force-close a session that
+    /// [`HandoffReadiness.pending_asks`](hya_core::HandoffReadiness) lists;
+    /// its user is mid-permission-prompt.
+    pub fn begin_handoff_quiesce(&self) -> Vec<SessionId> {
+        self.engine.begin_handoff_quiesce()
+    }
+
+    /// The restart-handoff cutover picture (see
+    /// [`SessionEngine::handoff_readiness`]).
+    #[must_use]
+    pub fn handoff_readiness(&self) -> HandoffReadiness {
+        self.engine.handoff_readiness()
     }
 
     /// Drain in-flight turns (cause `shutdown` unless an earlier
@@ -2216,6 +2307,7 @@ fn spawn_team_supervisor_with_environment(
                             session: "-".to_string(),
                             status: "failed".to_string(),
                             summary: summary.clone(),
+                            model: None,
                         });
                     }
                 } else {
@@ -2231,6 +2323,7 @@ fn spawn_team_supervisor_with_environment(
                             sidecar_factory,
                             ..
                         } = resolved;
+                        let model = agent.model.to_string();
                         // The handle prefix is the resolved agent id the
                         // call named (not an inline overlay's name).
                         match resident_supervisor
@@ -2256,6 +2349,7 @@ fn spawn_team_supervisor_with_environment(
                                 summary: format!(
                                     "Resident {handle} is live; results arrive as its report."
                                 ),
+                                model: Some(model),
                             }),
                             Err(err) => {
                                 spawn_failed = true;
@@ -2264,6 +2358,7 @@ fn spawn_team_supervisor_with_environment(
                                     session: "-".to_string(),
                                     status: "failed".to_string(),
                                     summary: err.to_string(),
+                                    model: None,
                                 });
                             }
                         }
@@ -2560,8 +2655,12 @@ async fn build_session_engine_with_mcp_defer(
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
     let context_settings = crate::config::load_context_settings();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
-        .with_catalog_refresh(catalog_refresh)
+        // Handoff checkpoints verify the store's runtime-owner claim, and the
+        // successor's resume skips rows this owner recorded.
+        .with_runtime_owner(owner_run_id)
+        .with_global_reasoning(crate::config::load_global_reasoning())
         .with_catalog_scope_cache(crate::config::load_catalog_scope_cache())
+        .with_catalog_refresh(catalog_refresh)
         .with_sidecar_environment(sidecar_environment.clone())
         .with_model_categories(categories.clone())
         // Route `categories:` failover chains into the engine's cross-model
@@ -2608,6 +2707,19 @@ async fn build_session_engine_with_mcp_defer(
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }
     let engine = Arc::new(engine_builder);
+    // Providers added or refreshed at runtime replace the engine's router;
+    // model saves must accept their models too.
+    agent_model_control.follow_engine_router(&engine);
+    // `agents.<id>.reasoning` defaults load at startup, like model leaves.
+    engine
+        .runtime_registry()
+        .publish_agent_effort_configuration(
+            crate::agent_model_config::AgentModelConfigFiles::new(
+                crate::config::active_config_path(),
+            )
+            .load_efforts()
+            .context("load Agent effort configuration before engine readiness")?,
+        );
     let reconciler = Arc::new(RuntimeReconciler::new(engine.runtime_registry()));
     let mcp_control = Arc::new(RuntimeMcpControl::new(reconciler.clone()));
     let plugin_desired = plugin_specs
@@ -2810,6 +2922,7 @@ async fn build_session_engine_with_mcp_defer(
         plugin_host,
         lifecycle,
         agent_model_control,
+        agent: agent.clone(),
     })
 }
 
@@ -2975,7 +3088,7 @@ impl HyaRuntime {
         }
         // Server/TUI AppState: agent base only. Per-turn guidance layers
         // Environment + AGENTS + references once.
-        let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
+        let agent = Arc::new(agent_base_with_model(&runtime.model, None));
         let mut built = build_session_engine(
             store,
             runtime.router,
@@ -3783,6 +3896,33 @@ mod tests {
         built.shutdown().await.unwrap();
     }
 
+    /// The engine carries the owner that claimed the store, so a restart
+    /// handoff can release that claim for its successor. A mismatched owner
+    /// fails the release and every successor with `RUNTIME_OWNER_BUSY`.
+    #[tokio::test]
+    async fn built_engine_can_release_the_runtime_owner_it_claimed() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine(
+            store.clone(),
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+        built.shutdown().await.unwrap();
+        store
+            .release_runtime_owner(built.engine().runtime_owner())
+            .expect("the engine names the claimed owner");
+        store
+            .claim_runtime_owner(OwnerRunId::new())
+            .expect("a successor can claim after the release");
+    }
+
     /// Building a new runtime owner terminalizes persisted Workflow work before
     /// any supervisor can admit a Stage.
     #[tokio::test]
@@ -3962,6 +4102,7 @@ flowchart TD
             roots: vec![workdir.clone()],
             workdir,
             cancel: CancellationToken::new(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
         };
         let run = tokio::spawn(async move {
             let workflow = hya_tool::ToolRegistry::builtins()
@@ -5012,16 +5153,15 @@ You are the installed resident agent.
 
         let runtime = resolve_runtime(None).await;
 
+        // The model default stays in the catalog, where the per-request
+        // resolver reads it; it is not baked into the root Agent, which would
+        // make it outrank a stored user preference.
         assert_eq!(
-            runtime.reasoning,
+            runtime.router.catalog()[0].reasoning_default,
             Some(hya_provider::ReasoningEffort::Medium)
         );
-        assert_eq!(
-            runtime.router.catalog()[0].reasoning_variants,
-            ["low", "medium"]
-        );
-        let agent = agent_with_model(&runtime.model, runtime.reasoning);
-        assert_eq!(agent.reasoning, Some(hya_provider::ReasoningEffort::Medium));
+        let agent = agent_with_model(&runtime.model, None);
+        assert_eq!(agent.reasoning, None);
     }
 
     #[test]
@@ -5202,6 +5342,7 @@ You are the installed resident agent.
             .iter()
             .map(|stable_id| {
                 PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                    check: None,
                     format_version: 2,
                     identity: BundleIdentity {
                         id: format!("hya/recovery-resolution-{stable_id}"),
@@ -5373,6 +5514,7 @@ You are the installed resident agent.
                 hook_refs: Vec::new(),
             };
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                check: None,
                 format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/spawn-model-precedence-{stable_id}"),
@@ -5436,6 +5578,8 @@ You are the installed resident agent.
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -5480,6 +5624,84 @@ You are the installed resident agent.
         );
     }
 
+    /// `task` effort becomes the child's `#effort`, over the Agent's resolved
+    /// model (here its remembered preference); a `#effort` on the `model`
+    /// request is honoured, an explicit `effort` beats it, and an unknown label
+    /// is rejected before anything spawns.
+    #[tokio::test]
+    async fn spawn_effort_becomes_the_child_model_suffix() {
+        let workdir = tempdir();
+        let engine = engine_with_catalog(catalog_with_worker_policy(ModelPolicy::default())).await;
+        engine.runtime_registry().publish_agent_model_preferences(
+            [("worker".to_string(), ModelRef::new("remembered/model"))]
+                .into_iter()
+                .collect(),
+        );
+        let binding = engine.bind_runtime(&workdir).expect("bind");
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base/model"),
+            system_prompt: "lead base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let allowed = [AgentDef {
+            name: "worker".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
+        }];
+        let categories = CategoryRegistry::default();
+        let is_servable = |_: &ModelRef| true;
+        let sidecar_environment = BundleSidecarEnvironment::from_command(
+            vec!["bun".to_string(), "sidecar.js".to_string()],
+            tempdir(),
+        );
+        let resolve = |model: Option<&str>, effort: Option<&str>| {
+            resolve_spawn_member(
+                &ResolveSpawnMemberCtx {
+                    engine: &engine,
+                    binding: &binding,
+                    base: &base,
+                    caller: "build",
+                    allowed_agents: &allowed,
+                    categories: &categories,
+                    is_servable: &is_servable,
+                    guidance: None,
+                    sidecar_environment: &sidecar_environment,
+                },
+                SpawnMember {
+                    prompt: "resolve effort".to_string(),
+                    subagent_type: "worker".to_string(),
+                    model: model.map(str::to_string),
+                    effort: effort.map(str::to_string),
+                    ..SpawnMember::default()
+                },
+            )
+            .map(|resolved| resolved.agent.model.to_string())
+        };
+
+        assert_eq!(resolve(None, None).unwrap(), "remembered/model");
+        assert_eq!(
+            resolve(None, Some("high")).unwrap(),
+            "remembered/model#high"
+        );
+        assert_eq!(
+            resolve(Some("offline#low"), None).unwrap(),
+            "hya/offline#low"
+        );
+        assert_eq!(
+            resolve(Some("offline#low"), Some("high")).unwrap(),
+            "hya/offline#high"
+        );
+        assert!(matches!(
+            resolve(None, Some("ludicrous")),
+            Err(SpawnError::InvalidEffort { effort, .. }) if effort == "ludicrous"
+        ));
+    }
+
     /// Highest-to-lowest spawn model chain, each row selecting the first set layer
     /// while lower layers remain present so the winner is unambiguous.
     #[tokio::test]
@@ -5492,6 +5714,8 @@ You are the installed resident agent.
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let base = AgentSpec {
             name: AgentName::new("build"),
@@ -5616,6 +5840,7 @@ You are the installed resident agent.
                 subagent_type: "worker".to_string(),
                 model: case.spawn_model.map(str::to_string),
                 category: case.spawn_category.map(str::to_string),
+                effort: None,
                 inline_agent: has_inline.then(|| InlineAgent {
                     name: "overlay".to_string(),
                     prompt: "overlay prompt".to_string(),
@@ -5681,6 +5906,8 @@ You are the installed resident agent.
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -6739,6 +6966,8 @@ export default {
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -7125,6 +7354,8 @@ export default {
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -7424,6 +7655,8 @@ for line in sys.stdin:
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -7786,6 +8019,8 @@ for line in sys.stdin:
             description: None,
             category: None,
             mode: "subagent".to_string(),
+            effort: None,
+            effort_source: None,
         }];
         let categories = CategoryRegistry::default();
         let is_servable = |_: &ModelRef| true;
@@ -8202,6 +8437,7 @@ for line in sys.stdin:
         let mut resource_view = ResourceView::default();
         resource_view.allow.push("echo".to_string());
         PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
@@ -8304,6 +8540,7 @@ for line in sys.stdin:
         let beta_hook = materialized_resource(marker, "hook", "tool.execute.before", beta_path);
         let beta_extension = materialized_resource(marker, "extension", "beta", beta_path);
         PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
@@ -8874,6 +9111,7 @@ export default {
             workdir: PathBuf::from("."),
             roots: vec![PathBuf::from(".")],
             cancel: Default::default(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
         };
         let cancel = ctx.cancel.clone();
         let tool = BundleSidecarTool {

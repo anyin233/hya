@@ -50,17 +50,16 @@ contiguous.
 round). Those envelopes are applied by the projection reducer without advancing
 `last_seq` (see [Projection::apply](#projectionapply)).
 
-Assistant text of a provider round is live-only while it streams:
-`text_start`, each `text_delta`, `text_end` (and a `text_replace` when the
-`text_complete` hook rewrote the part) are published with `seq: 0`. When the
-round's stream ends, the engine appends one durable `text_start` +
-`text_replace` (the final text) + `text_end` per text part, with the same
-message and part ids. The v1 streams deliver both (live frames bypass the
-`sinceSeq` filter); `ListEvents` and replay only see the durable ones.
-Reasoning, tool-input, and user-message deltas are durable. The durable text
-part is appended at the end of its round, so its position among the round's
-other parts can differ from the live arrival order; the projection order is
-authoritative.
+Assistant text deltas are live-only while a provider round streams. Each text
+part becomes durable immediately at its own `text_end` (or, if the stream
+fails before `text_end`, with the partial text accumulated so far), preserving
+the model's stream order relative to tool parts. The durable record is one
+`text_start` + `text_replace` (the final or partial text) + `text_end` triple;
+the `text_complete` hook runs only for complete parts and rewrites that
+durable copy. Live `text_replace` publishes the hook rewrite at `seq: 0`.
+The v1 streams deliver both (live frames bypass the `sinceSeq` filter);
+`ListEvents` and replay only see the durable ones. The partial failure path
+intentionally does not invoke `text_complete`, because the part is incomplete.
 
 ## Events and Envelopes
 
@@ -216,9 +215,11 @@ Field name for streaming chunks is **`delta`**, not `text`.
 | `reasoning_delta` | `session`, `message`, `part`, `delta: String` | Fold: append |
 | `reasoning_end` | `session`, `message`, `part`, `provider_data: Option<Value>` | Fold: stores `provider_data` (opaque provider state such as encrypted thinking blocks — must be round-tripped back to the provider verbatim) |
 | `reasoning_replace` | `session`, `message`, `part`, `text: String` | Fold: wholesale overwrite |
-
-Unlike text, reasoning events are **not** re-batched as a durable triple; they
-take the normal durable `emit_for_actor` path inside `collect_stream_round`.
+Reasoning starts are durable immediately to establish stream order. Reasoning
+deltas are live-only; at part end the runtime appends one durable
+`ReasoningReplace` containing the accumulated text followed by `ReasoningEnd`.
+On a stream failure, any open reasoning part is finalized with the same
+snapshot (without provider data), preserving partial thinking for replay.
 
 #### Tool lifecycle
 

@@ -12,12 +12,13 @@
  * after `hya serve stop`). Segments with no data are hidden.
  * Agent, model, session, and server already appear on the header line
  * (components/Header.tsx); this line does not repeat them, so both stay
- * within 80 columns.
+ * within 80 columns. The `model:effort` label is the one repeat: the header
+ * line truncates from the right, so the effort keeps a dedicated segment here.
  */
 import { For } from "solid-js"
 import { useApp } from "../app/context"
 import { sidebarVisible } from "../state/layout"
-import { contextUsage, formatTokens, sessionTokens, statusBarSegments, todosCompactText, truncate, type StatusTone } from "../state/format"
+import { contextUsage, formatTokens, modelEffortLabel, sessionTokens, statusBarSegments, todosCompactText, truncate, type StatusTone } from "../state/format"
 import { effectiveMode, modeDisplay, type ModeTone } from "../state/modes"
 import { colors } from "../theme"
 
@@ -33,6 +34,7 @@ export function StatusBar() {
     const tokens = sessionTokens(state.selected?.usage)
     return statusBarSegments({
       mode: mode().text,
+      ...(state.selected ? { model: modelEffortLabel(state.selected, true) } : {}),
       context: contextUsage(state)?.percent,
       tokens: tokens === undefined ? undefined : `${formatTokens(tokens)} tok`,
       directory: state.selected?.workdir ?? "",

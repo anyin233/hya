@@ -412,6 +412,7 @@ for line in sys.stdin:
             operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
             mailbox: hya_tool::MailboxPlane::disconnected(),
             lifecycle: hya_tool::LifecyclePlane::disconnected(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
             session: None,
             parent_session: None,
             todo: hya_tool::TodoPlane::default(),

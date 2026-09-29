@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use futures::StreamExt;
 use hya_proto::{
     Event, FinishReason, MessageId, ModelRef, PartId, SessionId, TokenUsage, ToolCallId,
@@ -9,6 +11,22 @@ use hya_store::ActorClaim;
 use super::SessionEngine;
 use super::text_complete::TextPartAccumulator;
 use crate::error::CoreError;
+
+pub(super) struct RoundFailure {
+    pub(super) error: CoreError,
+    pub(super) saw_tool_call: bool,
+    pub(super) saw_text: bool,
+}
+
+impl From<CoreError> for RoundFailure {
+    fn from(error: CoreError) -> Self {
+        Self {
+            error,
+            saw_tool_call: false,
+            saw_text: false,
+        }
+    }
+}
 
 pub(super) struct StreamRound {
     pub(super) tool_calls: Vec<ToolCallReq>,
@@ -43,7 +61,7 @@ impl SessionEngine {
         stream: EventStream,
         actor_claim: Option<&ActorClaim>,
         attribution: RoundAttribution,
-    ) -> Result<StreamRound, CoreError> {
+    ) -> Result<StreamRound, RoundFailure> {
         let mut tokens = None;
         let collected = self
             .drain_stream_round(session, message, stream, actor_claim, &mut tokens)
@@ -64,14 +82,18 @@ impl SessionEngine {
                 )
                 .await;
             match (&collected, record) {
-                (Ok(_), Err(error)) => return Err(error),
+                (Ok(_), Err(error)) => return Err(error.into()),
                 (Err(_), Err(error)) => {
                     tracing::warn!(%session, "usage record for a failed round was not appended: {error:#}");
                 }
                 (_, Ok(())) => {}
             }
         }
-        let (tool_calls, finish) = collected?;
+        let (tool_calls, finish) = collected.map_err(|failure| RoundFailure {
+            error: failure.error,
+            saw_tool_call: failure.saw_tool_call,
+            saw_text: failure.saw_text,
+        })?;
         Ok(StreamRound {
             tool_calls,
             finish,
@@ -86,13 +108,58 @@ impl SessionEngine {
         mut stream: EventStream,
         actor_claim: Option<&ActorClaim>,
         tokens: &mut Option<TokenUsage>,
-    ) -> Result<(Vec<ToolCallReq>, FinishReason), CoreError> {
+    ) -> Result<(Vec<ToolCallReq>, FinishReason), RoundFailure> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
+        let mut reasoning_parts: HashMap<PartId, String> = HashMap::new();
+        let mut active_text_part = None;
         let mut finish = FinishReason::Stop;
+        let mut saw_text = false;
         while let Some(item) = stream.next().await {
-            self.validate_actor_claim(actor_claim).await?;
-            let event = item?;
+            if let Err(error) = self.validate_actor_claim(actor_claim).await {
+                return Err(RoundFailure {
+                    error,
+                    saw_tool_call: !tool_calls.is_empty(),
+                    saw_text,
+                });
+            }
+            let event = match item {
+                Ok(event) => event,
+                Err(error) => {
+                    if let Some(part) = active_text_part
+                        && let Some(text) = text_parts.text(part)
+                        && let Err(error) = self
+                            .persist_text_part(actor_claim, session, message, part, text)
+                            .await
+                    {
+                        return Err(RoundFailure {
+                            error,
+                            saw_tool_call: !tool_calls.is_empty(),
+                            saw_text,
+                        });
+                    }
+                    for (part, text) in reasoning_parts {
+                        if let Err(error) = self
+                            .persist_reasoning_part(actor_claim, session, message, part, text, None)
+                            .await
+                        {
+                            return Err(RoundFailure {
+                                error,
+                                saw_tool_call: !tool_calls.is_empty(),
+                                saw_text,
+                            });
+                        }
+                    }
+                    return Err(RoundFailure {
+                        error: error.into(),
+                        saw_tool_call: !tool_calls.is_empty(),
+                        saw_text,
+                    });
+                }
+            };
+            if matches!(&event, Event::TextStart { .. } | Event::TextDelta { .. }) {
+                saw_text = true;
+            }
             if let Event::ToolCallRequested {
                 part,
                 call,
@@ -122,6 +189,9 @@ impl SessionEngine {
                 &event,
                 Event::TextStart { .. } | Event::TextDelta { .. } | Event::TextEnd { .. }
             ) {
+                if let Event::TextStart { part, .. } = &event {
+                    active_text_part = Some(*part);
+                }
                 let completed = if let Some((part, text)) = text_parts.apply(&event) {
                     let text = match self
                         .complete_text_part(session, message, part, text.clone())
@@ -145,43 +215,128 @@ impl SessionEngine {
                 };
                 self.publish_live(event);
                 if let Some((part, text)) = completed {
-                    self.emit_for_actor(
-                        actor_claim,
-                        session,
-                        Event::TextStart {
-                            session,
-                            message,
-                            part,
-                        },
-                    )
-                    .await?;
-                    self.emit_for_actor(
-                        actor_claim,
-                        session,
-                        Event::TextReplace {
-                            session,
-                            message,
-                            part,
-                            text,
-                        },
-                    )
-                    .await?;
-                    self.emit_for_actor(
-                        actor_claim,
-                        session,
-                        Event::TextEnd {
-                            session,
-                            message,
-                            part,
-                        },
-                    )
-                    .await?;
+                    self.persist_text_part(actor_claim, session, message, part, text)
+                        .await?;
+                    active_text_part = None;
                 }
                 continue;
             }
-            self.emit_for_actor(actor_claim, session, event).await?;
+            match event {
+                Event::ReasoningStart { part, .. } => {
+                    reasoning_parts.insert(part, String::new());
+                    self.emit_for_actor(actor_claim, session, event).await?;
+                }
+                Event::ReasoningDelta { part, delta, .. } => {
+                    if let Some(text) = reasoning_parts.get_mut(&part) {
+                        text.push_str(&delta);
+                    }
+                    self.publish_live(Event::ReasoningDelta {
+                        session,
+                        message,
+                        part,
+                        delta,
+                    });
+                }
+                Event::ReasoningEnd {
+                    part,
+                    provider_data,
+                    ..
+                } => {
+                    let text = reasoning_parts.remove(&part).unwrap_or_default();
+                    self.persist_reasoning_part(
+                        actor_claim,
+                        session,
+                        message,
+                        part,
+                        text,
+                        provider_data,
+                    )
+                    .await?;
+                }
+                event => self.emit_for_actor(actor_claim, session, event).await?,
+            }
+        }
+        // A stream that ends without a part's `ReasoningEnd` still keeps the
+        // thinking it streamed: only its deltas were live-only.
+        for (part, text) in reasoning_parts {
+            self.persist_reasoning_part(actor_claim, session, message, part, text, None)
+                .await?;
         }
         Ok((tool_calls, finish))
+    }
+
+    async fn persist_reasoning_part(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+        provider_data: Option<serde_json::Value>,
+    ) -> Result<(), CoreError> {
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::ReasoningReplace {
+                session,
+                message,
+                part,
+                text,
+            },
+        )
+        .await?;
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::ReasoningEnd {
+                session,
+                message,
+                part,
+                provider_data,
+            },
+        )
+        .await
+    }
+
+    async fn persist_text_part(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        text: String,
+    ) -> Result<(), CoreError> {
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+        )
+        .await?;
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TextReplace {
+                session,
+                message,
+                part,
+                text,
+            },
+        )
+        .await?;
+        self.emit_for_actor(
+            actor_claim,
+            session,
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+        )
+        .await
     }
 }
 

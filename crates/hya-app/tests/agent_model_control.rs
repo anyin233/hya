@@ -7,10 +7,11 @@ mod support;
 use std::sync::Arc;
 
 use hya_app::{AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl};
+use hya_core::{EventBus, SessionEngine};
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::{AgentModelPreference, SessionStore};
-use hya_tool::ToolRegistry;
+use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 
 #[tokio::test]
 async fn control_loads_validates_persists_and_publishes_preferences() {
@@ -138,4 +139,51 @@ async fn failed_owner_fenced_mutation_keeps_the_published_snapshot() {
     ));
     let after = runtime.bind_turn(std::path::Path::new(".")).unwrap();
     assert_eq!(after.agent_model_preference("general"), None);
+}
+
+#[tokio::test]
+async fn control_accepts_models_of_routes_the_engine_published_after_startup() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let owner = OwnerRunId::new();
+    store
+        .claim_runtime_owner(owner)
+        .expect("claim runtime owner");
+    let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
+    // Startup has no model routes; a provider is added live later.
+    let startup = Arc::new(ProviderRouter::new());
+    let control =
+        PersistentAgentModelControl::load(store.clone(), owner, runtime.clone(), startup.clone())
+            .await
+            .unwrap();
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    let engine = Arc::new(SessionEngine::new(
+        store,
+        startup,
+        runtime.clone(),
+        permission,
+        EventBus::default(),
+    ));
+    control.follow_engine_router(&engine);
+    let binding = runtime.bind_turn(std::path::Path::new(".")).unwrap();
+    let offline = || Some(AgentModelIdentity::new("hya", "offline"));
+
+    let before = control
+        .set(&binding, "general", offline())
+        .await
+        .expect_err("no route serves hya/offline yet");
+    assert!(matches!(
+        before,
+        AgentModelControlError::ModelUnavailable { .. }
+    ));
+
+    engine.publish_provider_catalog(
+        Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new()))),
+        engine.provider_catalog_snapshot(),
+    );
+    control.set(&binding, "general", offline()).await.unwrap();
+    let after = runtime.bind_turn(std::path::Path::new(".")).unwrap();
+    assert_eq!(
+        after.agent_model_preference("general"),
+        Some(&ModelRef::new("hya/offline"))
+    );
 }

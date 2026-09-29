@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -67,6 +67,7 @@ pub(crate) use mailbox::dm_channel_between;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
+mod restart;
 mod revert;
 mod roots;
 mod scope_binding;
@@ -103,11 +104,40 @@ async fn authorize_tool_call(
         .map_err(ToolError::from)
 }
 
+/// RAII marker for a permission decision in flight on `session`. Held across
+/// the `authorize` await only, so an auto-granted call clears in microseconds
+/// while a prompt waiting for the host keeps the session in
+/// [`SessionEngine::handoff_readiness`]. A restart handoff must never strand
+/// that ask, so the cutover blocks while the session is listed.
+pub(crate) struct PendingAskGuard<'a> {
+    engine: &'a SessionEngine,
+    session: SessionId,
+}
+
+impl Drop for PendingAskGuard<'_> {
+    fn drop(&mut self) {
+        let mut asks = self
+            .engine
+            .pending_asks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match asks.get_mut(&self.session) {
+            Some(count) if *count > 1 => {
+                *count -= 1;
+            }
+            _ => {
+                asks.remove(&self.session);
+            }
+        }
+    }
+}
+
 pub use admission::SpawnAdmissionOutcome;
 pub use file_snapshot::{MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES};
 pub use fork::{ForkAt, ForkError, fork_cut};
+pub use restart::HandoffReadiness;
 pub use revert::{RevertError, RevertOutcome, RevertTarget};
-pub use scope_binding::CatalogScopeCacheConfig;
+pub use scope_binding::{BundleRefresh, CatalogScopeCacheConfig};
 pub use turn::advertise_tool;
 pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};
@@ -396,6 +426,8 @@ pub struct SessionEngine {
     /// candidate chain (the preferred model itself first). Empty by default,
     /// which keeps turn streaming byte-identical to a direct router call.
     model_fallbacks: HashMap<ModelRef, Vec<ModelRef>>,
+    /// Process-wide reasoning fallback applied after model defaults.
+    global_reasoning: Option<ReasoningEffort>,
     /// Configured Agent model categories used by fixed system-Agent calls.
     model_categories: Arc<CategoryRegistry>,
     runtime: Arc<RuntimeRegistry>,
@@ -408,6 +440,7 @@ pub struct SessionEngine {
     spawner: BoundSpawnSender,
     workflows: BoundWorkflowSender,
     mailbox: MailboxPlane,
+    project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
@@ -440,8 +473,24 @@ pub struct SessionEngine {
     mcp_background_after: Option<Duration>,
     /// Monotonic `mcpbg-N` job ids for backgrounded MCP calls.
     background_job_seq: Arc<AtomicU64>,
+    /// Runtime-owner run this process claimed on the store. Every handoff
+    /// checkpoint is written under it (`checkpoint_for_handoff` verifies the
+    /// claim), and the successor's resume skips rows recorded by it.
+    runtime_owner: hya_proto::OwnerRunId,
+    /// Monotonic handoff generation of this process: each handoff checkpoint
+    /// takes the next value, so a successor drains queued resumes oldest
+    /// first. Shared, because engine clones checkpoint turns.
+    handoff_generation: Arc<AtomicU64>,
     /// Single-active-turn registry shared by every clone of this engine.
     turn_gate: Arc<turn_gate::TurnGate>,
+    /// Permission decisions currently in flight, per session (an ask the host
+    /// has not answered yet). A restart handoff must never strand one: the
+    /// cutover blocks while a session sits here. Shared, because engine
+    /// clones run turns.
+    pending_asks: Arc<Mutex<HashMap<SessionId, usize>>>,
+    /// Runtime-only sticky shake placeholders per session, shared by engine
+    /// clones (see [`crate::compaction::apply_sticky_evictions`]).
+    pub(crate) sticky_evictions: Arc<Mutex<HashMap<SessionId, crate::compaction::StickyEvictions>>>,
     #[cfg(test)]
     direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
 }
@@ -462,6 +511,7 @@ impl Clone for SessionEngine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone(),
             ),
+            global_reasoning: self.global_reasoning,
             model_fallbacks: self.model_fallbacks.clone(),
             model_categories: self.model_categories.clone(),
             runtime: self.runtime.clone(),
@@ -472,6 +522,7 @@ impl Clone for SessionEngine {
             spawner: self.spawner.clone(),
             workflows: self.workflows.clone(),
             mailbox: self.mailbox.clone(),
+            project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
             todo: self.todo.clone(),
@@ -497,7 +548,11 @@ impl Clone for SessionEngine {
             ),
             mcp_background_after: self.mcp_background_after,
             background_job_seq: self.background_job_seq.clone(),
+            runtime_owner: self.runtime_owner,
+            handoff_generation: Arc::clone(&self.handoff_generation),
             turn_gate: Arc::clone(&self.turn_gate),
+            pending_asks: Arc::clone(&self.pending_asks),
+            sticky_evictions: Arc::clone(&self.sticky_evictions),
             #[cfg(test)]
             direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
         }
@@ -548,8 +603,9 @@ impl SessionEngine {
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
         let workflows = BoundWorkflowSender::disconnected();
-        let mailbox = MailboxPlane::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
+        let mailbox = MailboxPlane::disconnected();
+        let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
         let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
@@ -561,10 +617,11 @@ impl SessionEngine {
                 None,
             ))
         });
-        Self {
+        let engine = Self {
             store,
             providers: RwLock::new(providers),
             catalog: RwLock::new(catalog),
+            global_reasoning: None,
             model_fallbacks: HashMap::new(),
             model_categories: Arc::new(CategoryRegistry::default()),
             runtime,
@@ -575,6 +632,7 @@ impl SessionEngine {
             spawner,
             workflows,
             mailbox,
+            project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             todo,
@@ -595,9 +653,38 @@ impl SessionEngine {
             reviver: RwLock::new(None),
             mcp_background_after: None,
             background_job_seq: Arc::new(AtomicU64::new(1)),
+            runtime_owner: hya_proto::OwnerRunId::new(),
+            handoff_generation: Arc::new(AtomicU64::new(1)),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
+            pending_asks: Arc::new(Mutex::new(HashMap::new())),
+            sticky_evictions: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
+        };
+        let store_for_activity = engine.store.clone();
+        let gate_for_activity = Arc::clone(&engine.turn_gate);
+        let active = Arc::new(move |session| gate_for_activity.is_active(session));
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(crate::project_activity::serve(
+                store_for_activity,
+                active,
+                activity_rx,
+            ));
+        }
+        engine
+    }
+
+    /// Mark a permission decision as in flight for `session` (see
+    /// [`PendingAskGuard`]). Hold the guard across the `authorize` await.
+    pub(crate) fn pending_ask_guard(&self, session: SessionId) -> PendingAskGuard<'_> {
+        let mut asks = self
+            .pending_asks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *asks.entry(session).or_insert(0) += 1;
+        PendingAskGuard {
+            engine: self,
+            session,
         }
     }
 
@@ -609,6 +696,23 @@ impl SessionEngine {
     pub fn with_mcp_background_after(mut self, budget: Duration) -> Self {
         self.mcp_background_after = Some(budget);
         self
+    }
+
+    /// Record the runtime-owner run this process claimed on the store. Handoff
+    /// checkpoints are written under it and the successor's resume skips rows
+    /// recorded by it, so wire the same id the store claim used
+    /// (`SessionStore::claim_runtime_owner`). Unset (a fresh id) engines —
+    /// tests and embedded hosts that never claimed the store — refuse their
+    /// own checkpoints: the turn keeps running and a restart handoff aborts.
+    #[must_use]
+    pub fn with_runtime_owner(mut self, owner: hya_proto::OwnerRunId) -> Self {
+        self.runtime_owner = owner;
+        self
+    }
+    /// The owner identity associated with this engine's store claim.
+    #[must_use]
+    pub fn runtime_owner(&self) -> hya_proto::OwnerRunId {
+        self.runtime_owner
     }
 
     #[cfg(test)]
@@ -642,6 +746,131 @@ impl SessionEngine {
     pub fn with_model_categories(mut self, categories: Arc<CategoryRegistry>) -> Self {
         self.model_categories = categories;
         self
+    }
+
+    /// Install the process-wide reasoning fallback.
+    #[must_use]
+    pub fn with_global_reasoning(mut self, reasoning: Option<ReasoningEffort>) -> Self {
+        self.global_reasoning = reasoning;
+        self
+    }
+
+    /// An Agent's own default effort and its layer: the user's runtime choice
+    /// (durable, per Agent) > `agents.<id>.reasoning` configuration > the
+    /// bundle Agent's authored `model_policy.reasoning` (`authored`).
+    ///
+    /// # Errors
+    ///
+    /// Store read failure for the runtime choice.
+    pub async fn agent_effort(
+        &self,
+        agent_id: &str,
+        authored: Option<ReasoningEffort>,
+    ) -> Result<Option<(ReasoningEffort, crate::AgentEffortSource)>, CoreError> {
+        let preference = self
+            .store
+            .get_agent_effort_preference(agent_id)
+            .await?
+            .and_then(|row| ReasoningEffort::parse(&row.effort));
+        let configured = self
+            .runtime
+            .agent_effort_configuration()
+            .get(agent_id)
+            .copied();
+        Ok(crate::agent_effort(preference, configured, authored))
+    }
+
+    /// Layer the user's runtime (durable) and configured Agent efforts over a
+    /// roster's authored ones, so `list_agents` shows what each Agent would
+    /// run at. One store read for the whole roster.
+    ///
+    /// # Errors
+    ///
+    /// Store read failure.
+    pub async fn annotate_agent_efforts(
+        &self,
+        agents: Arc<[AgentDef]>,
+    ) -> Result<Arc<[AgentDef]>, CoreError> {
+        let preferences: BTreeMap<String, ReasoningEffort> = self
+            .store
+            .list_agent_effort_preferences()
+            .await?
+            .into_iter()
+            .filter_map(|row| Some((row.agent_id, ReasoningEffort::parse(&row.effort)?)))
+            .collect();
+        let configured = self.runtime.agent_effort_configuration();
+        if preferences.is_empty() && configured.is_empty() {
+            return Ok(agents);
+        }
+        Ok(agents
+            .iter()
+            .map(|agent| {
+                let authored = agent.effort.as_deref().and_then(ReasoningEffort::parse);
+                let mut agent = agent.clone();
+                if let Some((effort, source)) = crate::agent_effort(
+                    preferences.get(&agent.name).copied(),
+                    configured.get(&agent.name).copied(),
+                    authored,
+                ) {
+                    agent.effort = Some(effort.as_str().to_string());
+                    agent.effort_source = Some(
+                        match source {
+                            crate::AgentEffortSource::Preference => "preference",
+                            crate::AgentEffortSource::Configured => "configured",
+                            crate::AgentEffortSource::Authored => "authored",
+                        }
+                        .to_string(),
+                    );
+                }
+                agent
+            })
+            .collect::<Vec<_>>()
+            .into())
+    }
+
+    /// The effort a request for `model` by Agent `agent_id` carries, and
+    /// which layer chose it: `model#variant` > the Agent's own default
+    /// ([`Self::agent_effort`]) > the user's stored per-model preference > the
+    /// model's configured default > the global `reasoning:` default > none.
+    /// The turn loop and the v1 session info both call this, so what clients
+    /// display is what requests send.
+    ///
+    /// # Errors
+    ///
+    /// Store read failure for a preference.
+    pub async fn effective_effort(
+        &self,
+        model: &ModelRef,
+        agent_id: Option<&str>,
+        authored: Option<ReasoningEffort>,
+    ) -> Result<crate::EffectiveEffort, CoreError> {
+        let agent = match agent_id {
+            Some(agent_id) => self
+                .agent_effort(agent_id, authored)
+                .await?
+                .map(|(effort, _)| effort),
+            None => authored,
+        };
+        let base = model
+            .as_str()
+            .rsplit_once('#')
+            .map_or(model.as_str(), |(base, _)| base);
+        let preference = match base.split_once('/') {
+            Some((provider, model_id)) => self
+                .store
+                .get_model_effort_preference(provider, model_id)
+                .await?
+                .and_then(|row| ReasoningEffort::parse(&row.effort)),
+            None => None,
+        };
+        Ok(crate::resolve_effort(
+            model,
+            agent,
+            preference,
+            self.provider_router().reasoning_default(model),
+            self.global_reasoning,
+            None,
+        ))
     }
 
     /// Ordered cross-model candidates for a preferred model (preferred
@@ -788,6 +1017,13 @@ impl SessionEngine {
     /// weakly so the observer may own the engine.
     pub fn set_turn_observer(&self, observer: std::sync::Weak<dyn TurnBoundaryObserver>) {
         self.turn_gate.set_observer(observer);
+    }
+
+    /// Notify the turn-boundary observer that this turn consumed its mail.
+    pub(crate) fn notify_mail_consumed(&self, session: SessionId) {
+        if let Some(observer) = self.turn_gate.observer() {
+            observer.mail_consumed(session);
+        }
     }
 
     /// Claim `session`'s turn, queueing behind an active one. `Ok(None)` when
@@ -2103,12 +2339,18 @@ fn agent_roster(binding: &TurnBinding, caller: &str) -> Result<Arc<[AgentDef]>, 
         .into())
 }
 
+/// A roster row with the Agent's authored effort; the user's runtime and
+/// configured choices are layered on by
+/// [`SessionEngine::annotate_agent_efforts`] where the roster reaches a model.
 fn agent_def(agent: &AgentDefinition<'_>) -> AgentDef {
+    let authored = agent.model_policy.reasoning.clone();
     AgentDef {
         name: agent.stable_id.to_string(),
         description: agent.description.map(str::to_string),
         category: agent.model_policy.category.clone(),
         mode: agent.selector_mode().to_string(),
+        effort_source: authored.as_ref().map(|_| "authored".to_string()),
+        effort: authored,
     }
 }
 

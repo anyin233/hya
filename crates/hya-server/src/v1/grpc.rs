@@ -472,6 +472,13 @@ impl pb::catalog_server::Catalog for V1Grpc {
             .await?,
         )
     }
+    async fn refresh_bundles(
+        &self,
+        request: GrpcRequest<pb::RefreshBundlesRequest>,
+    ) -> Result<GrpcResponse<pb::RefreshBundlesResponse>, Status> {
+        let (ctx, inner) = split(request);
+        into_response(self.post(&ctx, "/v1/bundles:refresh", &inner).await?)
+    }
 
     async fn set_provider_model(
         &self,
@@ -1724,6 +1731,67 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
                 &ctx,
                 "PUT",
                 &format!("/v1/agent-models/{agent_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+
+    async fn save_agent_model_configuration(
+        &self,
+        request: GrpcRequest<pb::SaveAgentModelConfigurationRequest>,
+    ) -> Result<GrpcResponse<pb::AgentModelState>, Status> {
+        let (ctx, inner) = split(request);
+        let agent_id = field(&inner, "agentId");
+        into_response(
+            self.dispatch(
+                &ctx,
+                "PUT",
+                &format!("/v1/agent-models/{agent_id}/configuration"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+    async fn list_model_effort_preferences(
+        &self,
+        request: GrpcRequest<pb::ListModelEffortPreferencesRequest>,
+    ) -> Result<GrpcResponse<pb::ListModelEffortPreferencesResponse>, Status> {
+        get_rpc!(self, "/v1/model-effort-preferences", request)
+    }
+
+    async fn set_model_effort_preference(
+        &self,
+        request: GrpcRequest<pb::SetModelEffortPreferenceRequest>,
+    ) -> Result<GrpcResponse<pb::ModelEffortPreference>, Status> {
+        let (ctx, inner) = split(request);
+        let provider_id = field(&inner, "providerId");
+        let model_id = field(&inner, "modelId");
+        into_response(
+            self.dispatch(
+                &ctx,
+                "PUT",
+                &format!("/v1/model-effort-preferences/{provider_id}/{model_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+
+    async fn set_agent_effort(
+        &self,
+        request: GrpcRequest<pb::SetAgentEffortRequest>,
+    ) -> Result<GrpcResponse<pb::AgentEffort>, Status> {
+        let (ctx, inner) = split(request);
+        let agent_id = field(&inner, "agentId");
+        into_response(
+            self.dispatch(
+                &ctx,
+                "PUT",
+                &format!("/v1/agent-efforts/{agent_id}"),
                 BTreeMap::new(),
                 &inner,
             )

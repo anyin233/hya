@@ -46,6 +46,11 @@ pub struct FileChange {
     pub path: String,
     /// State before the call changed it.
     pub before: FileState,
+    /// Whether the change was inferred from bash's before/after git status.
+    ///
+    /// Older events omit this field and are treated as tool-produced changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observed: bool,
 }
 
 /// A [`FileChange`] folded onto its message, with the call that made it.
@@ -58,6 +63,9 @@ pub struct FileChangeRecord {
     pub path: String,
     /// State before the call changed it.
     pub before: FileState,
+    /// Whether this was inferred from bash's git status rather than a known target.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observed: bool,
 }
 
 /// One file a revert or unrevert wrote.
@@ -69,6 +77,9 @@ pub struct FileRestore {
     pub restored: FileState,
     /// State on disk just before the operation (what an unrevert writes back).
     pub saved: FileState,
+    /// Whether the change came from bash's observational git-status capture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observed: bool,
     /// Why writing `restored` failed, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

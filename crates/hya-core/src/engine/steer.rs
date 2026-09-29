@@ -37,6 +37,7 @@ pub struct SteeredMail {
 /// Per-turn steer state: the backlog plus the live bus tail.
 pub struct SteerMailbox {
     root: SessionId,
+    session: SessionId,
     handle: String,
     queue: Vec<SteeredMail>,
     /// Durable cursor covered so far; `MailConsumed.through` values.
@@ -85,6 +86,7 @@ impl SessionEngine {
         let Ok(root) = self.team_root(session).await else {
             return SteerMailbox {
                 root: session,
+                session,
                 handle: String::new(),
                 queue: Vec::new(),
                 through: 0,
@@ -101,6 +103,7 @@ impl SessionEngine {
         let Ok(handle) = self.resolve_handle(root, session).await else {
             return SteerMailbox {
                 root,
+                session,
                 handle: String::new(),
                 queue: Vec::new(),
                 through: 0,
@@ -117,6 +120,7 @@ impl SessionEngine {
         let Ok(projection) = self.read_projection_shared(root).await else {
             return SteerMailbox {
                 root,
+                session,
                 handle: handle.clone(),
                 queue: Vec::new(),
                 through: 0,
@@ -143,6 +147,7 @@ impl SessionEngine {
         let (channels, dm_by_peer, channel_roles) = topology(&projection, &handle);
         let mut mailbox = SteerMailbox {
             root,
+            session,
             handle,
             queue: Vec::new(),
             through: cursor,
@@ -398,6 +403,7 @@ impl SteerMailbox {
             )
             .await?;
         self.committed_through = through;
+        engine.notify_mail_consumed(self.session);
         if shown.is_empty() {
             return Ok(None);
         }

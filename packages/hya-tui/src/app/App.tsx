@@ -1,7 +1,7 @@
 import type { MouseEvent, Selection } from "@opentui/core"
 import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { createEffect } from "solid-js"
-import { AgentModelsView } from "../components/AgentModelsView"
+import { AgentsView } from "../components/AgentsView"
 import { DiffView } from "../components/DiffView"
 import { McpView } from "../components/McpView"
 import { Picker } from "../components/Picker"
@@ -20,7 +20,7 @@ export { layoutBreakpoints } from "../state/layout"
  * Root layout: one editable split tree owns Projects, Conversation, Sessions,
  * Todos, and Context. The full-screen
  * Provider (`/key`), Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`),
- * and Agent Models (`/agent-models`) views are drawn over both when one of
+ * and Agents (`/agent`) views are drawn over both when one of
  * them is open (at most one at a time), and the modal picker
  * (components/Picker.tsx) over everything.
  *
@@ -49,7 +49,7 @@ export function App() {
       <DiffView />
       <McpView />
       <RulesView />
-      <AgentModelsView />
+      <AgentsView />
       <ProjectView />
       <Picker />
     </box>

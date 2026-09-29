@@ -236,6 +236,20 @@ pub fn abi_digest_v1() -> [u8; 32] {
 }
 
 static LIBRARIES: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
+static LIBRARY_SOURCES: OnceLock<Mutex<HashMap<&'static str, std::path::PathBuf>>> =
+    OnceLock::new();
+
+/// Return the source paths selected for native libraries loaded by this process.
+#[must_use]
+pub fn loaded_library_sources() -> Vec<std::path::PathBuf> {
+    LIBRARY_SOURCES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .values()
+        .cloned()
+        .collect()
+}
 
 pub(crate) fn load_family(stem: &'static str) -> Result<Vec<Arc<dyn Tool>>, String> {
     let libraries = LIBRARIES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -310,7 +324,7 @@ fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Optio
 }
 
 #[cfg(unix)]
-fn open_library(stem: &str) -> Result<usize, String> {
+fn open_library(stem: &'static str) -> Result<usize, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let parent = executable
         .parent()
@@ -322,8 +336,20 @@ fn open_library(stem: &str) -> Result<usize, String> {
         std::env::consts::DLL_SUFFIX
     );
     match library_source(parent, &filename, stem) {
-        Some(LibrarySource::Local(path)) => load_checked(stem, &path),
+        Some(LibrarySource::Local(path)) => {
+            LIBRARY_SOURCES
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(stem, path.clone());
+            load_checked(stem, &path)
+        }
         Some(LibrarySource::Package(package)) => {
+            LIBRARY_SOURCES
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(stem, package.clone());
             let extracted = extract_packaged_library(parent, &package, stem, &filename)?;
             load_extracted(stem, &extracted)
         }

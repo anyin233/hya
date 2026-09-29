@@ -44,6 +44,7 @@ fn ctx_with(mailbox: MailboxPlane, session: SessionId) -> ToolCtx {
         workdir: PathBuf::from("."),
         roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 
@@ -200,5 +201,5 @@ fn send_replaces_dm_and_broadcast_in_the_registry() {
         .collect();
     assert!(!canonical.contains(&"dm".to_string()));
     assert!(!canonical.contains(&"broadcast".to_string()));
-    assert_eq!(canonical.len(), 28);
+    assert_eq!(canonical.len(), 29);
 }

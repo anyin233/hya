@@ -22,11 +22,13 @@ mod db_lock;
 mod db_writer;
 mod exec_stream;
 mod frontend;
+mod generation_pin;
 mod models_cmd;
 mod proxy_cmd;
 mod relay_doctor;
 mod routed;
 mod rpc;
+mod self_check;
 mod serve;
 mod serve_relay;
 mod sessions_cmd;
@@ -185,9 +187,9 @@ async fn cmd_exec(
         .with_yolo(yolo)
         .with_pure(pure);
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -419,9 +421,9 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
         .with_yolo(yolo)
         .with_pure(pure);
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -560,9 +562,9 @@ async fn cmd_goal(
     )
     .to_string();
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -720,9 +722,9 @@ async fn cmd_loop(
     )
     .to_string();
     let mut agent = if pure {
-        agent_with_model_pure(&runtime.model, runtime.reasoning)
+        agent_with_model_pure(&runtime.model, None)
     } else {
-        agent_with_model(&runtime.model, runtime.reasoning)
+        agent_with_model(&runtime.model, None)
     };
     let mut built = if pure {
         build_session_engine_pure(
@@ -936,15 +938,37 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// The synchronous process entry: `--listen-fd` is captured here, before any
+/// Tokio runtime exists, so the supervisor's descriptor is validated and
+/// adopted while the process is still single-threaded startup code — the
+/// runtime's own descriptors (epoll, eventfd, pipes) cannot then precede or
+/// reuse the CLI FD number, and an invalid FD fails closed with a normal
+/// error instead of an IO-safety abort at close time.
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let inherited_listener = serve::capture_cli_listener(&cli)?;
+    let inherited_lock = serve::capture_cli_lock(&cli)?;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("build the Tokio runtime")?
+        .block_on(run(cli, inherited_listener, inherited_lock))
+}
+
+/// The async body of `hya` (the former `#[tokio::main]` `main`); `main`
+/// builds the runtime itself so the supervisor listener can be captured
+/// before it exists.
+async fn run(
+    cli: Cli,
+    inherited_listener: Option<std::net::TcpListener>,
+    inherited_lock: Option<serve::InheritedLock>,
+) -> anyhow::Result<()> {
     let web_port = cli_args::bare_web_port(&cli)?;
     let backend = cli_args::bare_backend(&cli)?;
     let resume = cli_args::bare_resume(&cli)?;
     let connect = cli_args::bare_connect(&cli)?;
     let allow_hosts = cli_args::bare_allow_hosts(&cli)?;
-    let model = cli.model.clone();
+    let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
     let yolo = cli.yolo;
     let pure = cli.pure;
     let db = cli.db.clone();
@@ -1035,8 +1059,12 @@ async fn main() -> anyhow::Result<()> {
             db: command_db,
             relay,
             allow_host,
+            listen_fd,
             ..
         }) => {
+            if listen_fd.is_some() {
+                anyhow::bail!("--listen-fd is only valid for foreground `hya serve`");
+            }
             let path = command_db.unwrap_or_else(|| db.clone());
             serve::cmd_serve_action(
                 action,
@@ -1062,6 +1090,8 @@ async fn main() -> anyhow::Result<()> {
         }) => {
             serve::cmd_serve(
                 cli_args::serve_bind(bind, hostname, port, mdns),
+                inherited_listener,
+                inherited_lock,
                 command_db.unwrap_or_else(|| db.clone()),
                 model,
                 yolo,
@@ -1079,7 +1109,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
-        Some(Command::Bundle { command }) => bundle_cmd::run(command).await,
+        Some(Command::Bundle { command }) => {
+            bundle_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
+        }
         Some(Command::Workflow { command }) => {
             workflow_cmd::run(command, model, &db, yolo, pure).await
         }

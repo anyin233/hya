@@ -34,6 +34,16 @@ pub enum CoreError {
     /// Caller-supplied parameters or preflight checks failed.
     #[error("invalid: {0}")]
     Invalid(String),
+    /// One bundle's runtime generation could not be prepared (its process,
+    /// MCP server, declarations, or configuration); the refresh that hit it
+    /// keeps the previous generation published.
+    #[error("bundle `{bundle_id}`: {source}")]
+    BundleRuntime {
+        /// Stable id of the bundle that failed.
+        bundle_id: String,
+        /// Why it failed.
+        source: Box<CoreError>,
+    },
     /// The session already has an active turn; a session runs at most one
     /// turn at a time (single-active-turn invariant).
     #[error("TURN_ALREADY_ACTIVE: session `{session}` already has an active turn")]

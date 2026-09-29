@@ -256,12 +256,59 @@ impl TokenAccounting {
         self.tokenizer.as_ref()
     }
 
-    /// Estimated tokens for `messages`, ignoring any reported usage.
+    /// Estimated tokens for `messages` as the route's encoder sends them:
+    /// reasoning parts count only when `policy` replays them.
+    #[must_use]
+    pub fn estimate_with_reasoning_policy(
+        &self,
+        messages: &[Message],
+        policy: hya_provider::ReasoningReplayPolicy,
+    ) -> usize {
+        self.estimate_range(messages, 0..messages.len(), Some(policy))
+    }
+
+    /// Estimated tokens for `messages`, ignoring any reported usage and
+    /// counting every reasoning part (no route known: over-count, never under).
     #[must_use]
     pub fn estimate(&self, messages: &[Message]) -> usize {
+        self.estimate_range(messages, 0..messages.len(), None)
+    }
+
+    /// Estimate `messages[range]`. Replay decisions need the whole transcript
+    /// (the current turn starts after its last user text), so the window is
+    /// computed once over `messages` and indices stay absolute.
+    fn estimate_range(
+        &self,
+        messages: &[Message],
+        range: std::ops::Range<usize>,
+        policy: Option<hya_provider::ReasoningReplayPolicy>,
+    ) -> usize {
+        let turn_start = hya_provider::current_turn_start(messages);
+        let replayed = |index: usize, part: &Part| {
+            policy.is_none_or(|policy| policy.replays(turn_start, index, part))
+        };
         messages
+            .get(range.clone())
+            .unwrap_or_default()
             .iter()
-            .map(|message| self.estimate_message(message))
+            .zip(range)
+            .map(|(message, index)| match message {
+                Message::User { parts, .. } | Message::Assistant { parts, .. } => parts
+                    .iter()
+                    .map(|part| match (part, policy) {
+                        (Part::Reasoning { .. }, _) if !replayed(index, part) => 0,
+                        // Responses-style routes resend only the opaque item.
+                        (
+                            Part::Reasoning { provider_data, .. },
+                            Some(hya_provider::ReasoningReplayPolicy::ProviderData),
+                        ) => provider_data
+                            .as_ref()
+                            .map_or(0, |value| self.estimate_json(value)),
+                        _ => self.estimate_part(part),
+                    })
+                    .sum(),
+                Message::System { content, .. } => self.tokenizer.count_text(content),
+            })
             .sum()
     }
 
@@ -275,8 +322,29 @@ impl TokenAccounting {
     /// `usage` safe to use.
     #[must_use]
     pub fn tokens_in_use(&self, messages: &[Message], usage_reporting: bool) -> TokenCount {
+        self.count_in_use(messages, usage_reporting, None)
+    }
+
+    /// [`Self::tokens_in_use`] for a known route: estimates count reasoning
+    /// only where the route's encoder replays it.
+    #[must_use]
+    pub fn tokens_in_use_with_reasoning_policy(
+        &self,
+        messages: &[Message],
+        usage_reporting: bool,
+        policy: hya_provider::ReasoningReplayPolicy,
+    ) -> TokenCount {
+        self.count_in_use(messages, usage_reporting, Some(policy))
+    }
+
+    fn count_in_use(
+        &self,
+        messages: &[Message],
+        usage_reporting: bool,
+        policy: Option<hya_provider::ReasoningReplayPolicy>,
+    ) -> TokenCount {
         let estimated = TokenCount {
-            tokens: self.estimate(messages),
+            tokens: self.estimate_range(messages, 0..messages.len(), policy),
             source: TokenSource::Estimate,
         };
         if self.mode == TokenAccountingMode::Estimate {
@@ -285,9 +353,13 @@ impl TokenAccounting {
         let Some((index, reported)) = last_reported_usage(messages) else {
             return estimated;
         };
+        // The latest round's prompt plus whatever was appended after it.
         let anchored = TokenCount {
-            tokens: reported
-                .saturating_add(self.estimate(messages.get(index + 1..).unwrap_or_default())),
+            tokens: reported.saturating_add(self.estimate_range(
+                messages,
+                index + 1..messages.len(),
+                policy,
+            )),
             source: TokenSource::Provider,
         };
         if self.mode == TokenAccountingMode::Provider {
@@ -298,7 +370,7 @@ impl TokenAccounting {
         }
         // Compare like with like: the reported figure describes the prompt up to
         // and including the message that reported it, not the whole transcript.
-        let prefix = self.estimate(messages.get(..=index).unwrap_or_default());
+        let prefix = self.estimate_range(messages, 0..index + 1, policy);
         if prefix == 0 {
             return anchored;
         }
@@ -310,24 +382,13 @@ impl TokenAccounting {
         }
     }
 
-    /// Estimated tokens for one message, including tool and reasoning payloads.
-    fn estimate_message(&self, message: &Message) -> usize {
-        match message {
-            Message::User { parts, .. } | Message::Assistant { parts, .. } => {
-                parts.iter().map(|part| self.estimate_part(part)).sum()
-            }
-            Message::System { content, .. } => self.tokenizer.count_text(content),
-        }
-    }
-
-    /// Estimated tokens for one part.
+    /// Estimated tokens for one non-reasoning-filtered part.
     ///
     /// Tool input and output dominate a tool-heavy transcript, so they are
     /// counted rather than skipped. Media payloads are base64 blobs whose
     /// byte length, not token structure, is the useful signal.
     fn estimate_part(&self, part: &Part) -> usize {
         match part {
-            Part::Text { text, .. } => self.tokenizer.count_text(text),
             Part::Reasoning {
                 text,
                 provider_data,
@@ -338,6 +399,7 @@ impl TokenAccounting {
                         .as_ref()
                         .map_or(0, |value| self.estimate_json(value))
             }
+            Part::Text { text, .. } => self.tokenizer.count_text(text),
             Part::Media { data, .. } => data.len() / 4,
             Part::Tool { name, state, .. } => {
                 self.tokenizer.count_text(name.as_str())
@@ -381,12 +443,12 @@ impl TokenAccounting {
 fn last_reported_usage(messages: &[Message]) -> Option<(usize, usize)> {
     messages.iter().enumerate().rev().find_map(|(index, m)| {
         let Message::Assistant {
-            tokens: Some(usage),
-            ..
+            last_round, tokens, ..
         } = m
         else {
             return None;
         };
+        let usage = last_round.as_ref().or(tokens.as_ref())?;
         if usage.is_zero() {
             return None;
         }

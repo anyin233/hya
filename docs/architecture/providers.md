@@ -89,7 +89,7 @@ tool result. The upstream requirement is described in
 
 ### Capabilities
 
-`Capabilities` has eight fields:
+`Capabilities` has nine fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -101,7 +101,7 @@ tool result. The upstream requirement is described in
 | `reasoning_request` | Route accepts a reasoning-effort parameter on the request. |
 | `max_context` | Advertised context window (tokens). |
 | `max_output` | Advertised max output tokens (`0` means unspecified / unknown). Participates in identity hashing with the other caps. |
-
+| `prompt_caching` | Anthropic route may emit ephemeral prompt-cache breakpoints. |
 **HTTP default** (`HttpProvider::new`, every kind and model):
 
 - `streaming_tool_calls` = true
@@ -257,6 +257,17 @@ once a provider returns an event stream, model selection is final. A mid-stream
 SSE error is delivered once to the turn, unchanged, and is never retried,
 replayed, or failed over onto another model.
 
+### Provider-level replay versus engine round retry
+
+Provider HTTP retry is a zero-event replay: before the caller receives an event,
+the provider may reopen a request for transient transport or HTTP 429/5xx
+failures. Once an event stream has delivered an event, that no-replay boundary
+protects against duplicated output and tool side effects. The engine has a
+separate, bounded round retry for a stream that fails before any text or tool
+call: it records the failed step, then opens a fresh stream for the same round
+with the next step number. See the runtime retry policy for the exact decode
+diagnostics and cancellation behavior.
+
 ## HTTP Provider
 
 [`http.rs`](../../crates/hya-provider/src/http.rs) is the shared live-provider
@@ -341,7 +352,7 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
   connection but does not return headers fails as a retryable transport error.
 - **Pre-stream retries:** at most `max_attempts` request attempts (default
   three) for transport errors, HTTP 429, and HTTP 5xx. Backoff is exponential
-  with jitter from `backoff_base` (default 100 ms) up to `backoff_max`
+  with jitter from `backoff_base` (default 1 s) up to `backoff_max`
   (default 30 s); a valid `Retry-After` value takes precedence and is capped
   at 30 seconds. Reading a non-success response body for diagnostics is capped
   at 2 seconds so an error body cannot prevent the next retry. The budget is
@@ -512,8 +523,10 @@ Any `Part::Media` in user or assistant history fails encode with
 ### Decoder
 
 `OpenAiResponsesDecoder` keys reasoning, text, and tool assembly by
-`output_index`, and tracks started / ended / requested state per part
-(`PartAsm` / `ToolAsm`).
+`output_index`, tracks reasoning summary parts by `summary_index`, and tracks
+started / ended / requested state per part (`PartAsm` / `ToolAsm`). A paragraph
+separator (`\n\n`) is emitted between consecutive reasoning summary parts so
+their visible text does not run together.
 
 Handled event `type` values include:
 
@@ -579,6 +592,17 @@ Assistant `Part::Media` entries are ignored on encode (not forwarded).
 
 Like the OpenAI decoder, the Anthropic decoder converts provider-specific
 stream events into the same hya event variants.
+
+Anthropic thinking blocks are preserved for replay through the canonical
+`Part::Reasoning.provider_data` envelope. A signed block stores
+`{"type":"thinking","signature":"..."}` at `ReasoningEnd`; a redacted block
+stores `{"type":"redacted_thinking","data":"..."}` and emits no readable
+reasoning delta. During encoding, only reasoning after the latest user message
+containing text is replayed, and only these envelopes are accepted. Replayed
+thinking blocks precede text and `tool_use` blocks in each assistant cluster.
+Legacy histories that place final text after tool calls fold that text back before
+the tool calls in the final assistant cluster to avoid Anthropic treating the
+request as an assistant prefill.
 
 ## Google Protocol
 

@@ -164,6 +164,14 @@ pub enum StoreError {
     /// Malformed or inconsistent Workflow control mutation.
     #[error("workflow control: {0}")]
     WorkflowData(String),
+    /// Corrupt or invalid persisted model effort preference data.
+    #[error("model effort preference {field}: {detail}")]
+    InvalidPreferenceData {
+        /// Field that failed validation.
+        field: &'static str,
+        /// Validation detail.
+        detail: String,
+    },
     /// Mail append rejected by roster / permission / validation rules.
     #[error("mailbox rejected: {0}")]
     MailboxRejected(String),
@@ -204,6 +212,24 @@ pub enum StoreError {
     /// Corrupt `project` / `project_root` row data.
     #[error("project data: {0}")]
     ProjectData(String),
+    /// The session already has an untaken pending resume; a second checkpoint
+    /// would queue a duplicate successor resume.
+    #[error("RESUME_ALREADY_PENDING: session {session} already has an untaken pending resume")]
+    ResumeAlreadyPending {
+        /// Session that already has a live pending resume.
+        session: SessionId,
+    },
+    /// The session's open turn still has pending or running tool parts, so a
+    /// handoff checkpoint here would error them away instead of carrying their
+    /// results: the turn must first reach a boundary with completed tools.
+    #[error("HANDOFF_BOUNDARY_UNSAFE: session {session} still has open tool parts")]
+    HandoffBoundaryUnsafe {
+        /// Session whose turn is not at a safe handoff boundary.
+        session: SessionId,
+    },
+    /// Corrupt or unparseable `pending_resume` row data.
+    #[error("pending resume: {0}")]
+    ResumeData(String),
 }
 
 impl From<sqlx::Error> for StoreError {

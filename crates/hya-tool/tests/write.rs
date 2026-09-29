@@ -103,6 +103,7 @@ fn ctx_with_components(
         roots: vec![workdir.clone()],
         workdir,
         cancel,
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

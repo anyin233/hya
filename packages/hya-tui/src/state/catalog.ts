@@ -1,38 +1,71 @@
 /**
- * Picker row builders for `/model`, `/agent`, and `/sessions` (S9, C11–C13):
- * models tagged by provider, visible (non-hidden) agents with their default
- * model, and sessions as a nested tree (S6's nesting rules, state/format.ts
- * `sessionTree`) with a relative update time and a busy marker. Pure; the
- * commands (`commands/native.ts`) build the current-value id, and
- * `state/picker.ts`/`components/Picker.tsx` render the rows.
+ * Picker row builders for `/model`, `/effort`, and `/sessions` (S9, C11,
+ * C13): models tagged by provider, effort levels, and sessions as a nested
+ * tree (S6's nesting rules, state/format.ts `sessionTree`) with a relative
+ * update time and a busy marker. Pure; the commands (`commands/native.ts`)
+ * build the current-value id, and `state/picker.ts`/`components/Picker.tsx`
+ * render the rows. `/agent` opens the Agents view (state/agentsView.ts).
  */
-import type { AgentSummary, ModelSummary, SessionInfo } from "../client"
+import type { ModelSummary, SessionInfo } from "../client"
 import { modelReference, sessionTree } from "./format"
 import { sessionsInScope } from "./projects"
 import type { PickerRow } from "./picker"
 
-/** `/model` picker rows: one per model, tagged with its provider id; `current` is the session's `provider/model`. */
+/** `/model` picker rows: one per model, tagged by provider; `current` ignores an optional `#effort` suffix. */
 export function modelRows(models: readonly ModelSummary[], current: string): PickerRow[] {
+  const currentBase = current.split("#", 1)[0]
   return models.map((model) => ({
     id: model.id,
     label: model.displayName || model.modelId || model.id,
     tag: model.providerId || model.id.split("/")[0] || "",
     detail: model.contextLimit && model.contextLimit !== "0" ? `${Math.round(Number(model.contextLimit) / 1000)}k ctx` : "",
-    current: model.id === current,
+    current: model.id === currentBase,
   }))
 }
 
-/** `/agent` picker rows: visible agents only, tagged with the default `provider/model`; `current` is the session's agent name. */
-export function agentRows(agents: readonly AgentSummary[], current: string): PickerRow[] {
-  return agents
-    .filter((agent) => !agent.hidden)
-    .map((agent) => ({
-      id: agent.name,
-      label: agent.name,
-      tag: agent.model?.providerId && agent.model.modelId ? `${agent.model.providerId}/${agent.model.modelId}` : "",
-      detail: agent.description ?? "",
-      current: agent.name === current,
-    }))
+/**
+ * The explicit effort labels `model` accepts: `none` is always available
+ * (an explicit off switch — a Responses route sends `none`), followed by the
+ * advertised `reasoningVariants` in provider order. A model with `reasoning:
+ * false` takes only `none`; a model with unknown capabilities (`reasoning`
+ * unset, no variants advertised) still accepts its provider family's labels
+ * at runtime, so nothing is dropped here — the backend validates.
+ */
+export function effortChoices(model: ModelSummary | undefined): string[] {
+  if (model?.reasoning === false) return ["none"]
+  return ["none", ...(model?.reasoningVariants ?? []).filter((variant) => variant !== "none")]
+}
+
+/** Whether `effort` is a valid explicit choice for `model` (`default` means "no suffix"; an unknown model row cannot be checked here). */
+export function isKnownEffort(model: ModelSummary | undefined, effort: string): boolean {
+  return effort === "default" || !model || effortChoices(model).includes(effort)
+}
+
+/**
+ * `/effort` picker rows for the active model: `default` first (no explicit
+ * suffix — the agent's or the model's configured default, else the
+ * provider's own default, applies), then the explicit choices. `explicit` is
+ * the effort the session's requests use now (`SessionInfo.effectiveEffort`),
+ * marked current; without one the `default` row is current and `effective`
+ * names what that default resolves to.
+ */
+export function effortRows(model: ModelSummary | undefined, explicit: string | undefined, effective: string): PickerRow[] {
+  return [
+    {
+      id: "default",
+      label: "default",
+      tag: "default",
+      detail: explicit || effective === "default" ? "no explicit effort" : `effective ${effective}`,
+      current: explicit === undefined,
+    },
+    ...effortChoices(model).map((effort) => ({
+      id: effort,
+      label: effort,
+      tag: effort === "none" ? "off" : "thinking",
+      detail: effort === "none" ? "explicitly disable reasoning" : "model effort",
+      current: explicit === effort,
+    })),
+  ]
 }
 
 const minute = 60

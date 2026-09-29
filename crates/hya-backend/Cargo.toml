@@ -18,6 +18,7 @@ hya-api = { workspace = true }
 hya-core = { workspace = true }
 hya-provider = { workspace = true }
 hya-store = { workspace = true }
+hya-tool = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
 hya-app = { workspace = true }

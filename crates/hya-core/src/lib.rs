@@ -42,6 +42,8 @@ pub mod compaction;
 pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
 mod coordination;
+/// Effective reasoning effort resolution shared by request and display layers.
+pub mod effort;
 /// Session engine, agent specs, and turn admission.
 pub mod engine;
 /// Shared error type for the core runtime.
@@ -60,6 +62,7 @@ mod member_wait;
 pub mod model_tokenizers;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
+pub(crate) mod project_activity;
 
 /// Session permission modes (`manual`, `yolo`, bundle-declared approvers).
 pub mod permission_mode;
@@ -115,13 +118,14 @@ pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
+pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::{
     AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
-    BoundWorkflowSender, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE, ForkAt, ForkError,
-    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
-    ModelProbeReply, RevertError, RevertOutcome, RevertTarget, RuntimeCatalogRefresh,
-    SessionEngine, SpawnAdmissionOutcome, TurnBoundaryObserver, TurnDrainReport, TurnLease,
-    advertise_tool, fork_cut,
+    BoundWorkflowSender, BundleRefresh, CatalogScopeCacheConfig, CreateSession, DRAIN_DEADLINE,
+    ForkAt, ForkError, HandoffReadiness, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES,
+    MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT, ModelProbeReply, RevertError, RevertOutcome,
+    RevertTarget, RuntimeCatalogRefresh, SessionEngine, SpawnAdmissionOutcome,
+    TurnBoundaryObserver, TurnDrainReport, TurnLease, advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{

@@ -127,6 +127,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
         .iter()
         .filter(|agent| !hya_core::is_builtin_id(agent.stable_id))
         .map(|agent| PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: format!("hya/server-tests-{}", agent.stable_id),

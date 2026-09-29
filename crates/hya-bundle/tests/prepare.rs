@@ -1413,3 +1413,41 @@ fn manifest_mcp_resource_files_are_shape_validated() {
         );
     }
 }
+
+#[test]
+fn manifest_self_check_is_prepared_with_default_timeout() {
+    let source = BundleSource::new("self-check", vec![SourceFile::new(
+        "bundle.yaml",
+        b"kind: Plugin\nidentity: { id: acme/check, version: 1.0.0, publisher: acme }\ncheck: { command: [echo, ok] }\n",
+    )]);
+    let prepared = match prepare_package(source) {
+        Ok(prepared) => prepared,
+        Err(error) => panic!("a valid self-check must prepare: {error:?}"),
+    };
+    let Some(check) = prepared.bundles()[0].check() else {
+        panic!("the prepared bundle must carry its check");
+    };
+    assert_eq!(check.command, ["echo", "ok"]);
+    assert_eq!(check.timeout_secs, 120);
+}
+
+#[test]
+fn manifest_self_check_rejects_empty_command_and_out_of_bounds_timeout() {
+    for check in ["{ command: [] }", "{ command: [echo], timeout_secs: 601 }"] {
+        let source = BundleSource::new(
+            "invalid-self-check",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                format!(
+                    "kind: Plugin\nidentity: {{ id: acme/check, version: 1.0.0, publisher: acme }}\ncheck: {check}\n"
+                ),
+            )],
+        );
+        match prepare_package(source) {
+            Err(BundleError::InvalidManifest { detail, .. }) => {
+                assert!(detail.contains("check."), "{check}: {detail}");
+            }
+            other => panic!("invalid check {check} must be rejected: {other:?}"),
+        }
+    }
+}

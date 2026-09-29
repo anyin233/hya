@@ -29,14 +29,16 @@ three write/publish seams:
 1. **`emit`** — appends the event to SQLite, takes the returned sequence
    number, **then** publishes an `Envelope` with that seq. A live observer
    never sees a non-durable event on this path.
-2. **`publish_live`** — publishes an `Envelope` at `seq: 0` with **no** store
-   write. Used only for high-frequency **text** streaming
-   (`TextStart` / `TextDelta` / `TextEnd`, and live `TextReplace` from the
-   `text_complete` hook). At round end those text parts are re-emitted
-   **durably** as a `TextStart` / `TextReplace` / `TextEnd` triple. Reasoning
-   and other non-text stream events are **not** live-only: they go straight to
-   `emit_for_actor` and are durable on first emit (no reasoning re-emission
-   loop).
+2. **`publish_live`** publishes an `Envelope` at `seq: 0` with **no** store
+   write. Used only for high-frequency **text** streaming (`TextStart` /
+   `TextDelta` / `TextEnd`, and live `TextReplace` from the `text_complete`
+   hook). Each text part is committed as a durable `TextStart` /
+   `TextReplace` / `TextEnd` triple immediately at its own `TextEnd`, in
+   stream order; if the stream fails first, the partial text is committed
+   without running `text_complete`. Complete parts run `text_complete` before
+   their durable replacement is appended. Reasoning and other non-text stream
+   events are not live-only: they go straight to `emit_for_actor` and are
+   durable on first emit (no reasoning re-emission loop).
 3. **`emit_for_actor`** — the fencing seam for resident work: when given
    `Some(&ActorClaim)` it routes through `commit_resident_mutation` (fenced
    SQLite commit, publish only after commit); when `None` it falls through to
@@ -402,6 +404,19 @@ Each round runs **in this order** (see `run_turn_rounds` in
 If a provider round produces tool calls, the engine starts another round with
 the updated projection. The turn continues until the provider finishes,
 cancellation is observed, or execution returns an error.
+
+### Provider round retry
+
+If a provider stream fails after opening but before any text part or tool call,
+the engine may retry that round up to **two** times. Eligible failures are
+transport failures, HTTP 429/5xx failures, and decode failures whose diagnostic
+is exactly `error decoding response body`, `unexpected eof`, or `unexpected end
+of file`. Each failed attempt appends `StepFinished { finish: error }`; the
+engine waits approximately 1s then 2s (with a small jitter) before opening a
+fresh stream and emitting the next `StepStarted`. Cancellation is observed
+during the wait. Text, tool calls, cancellation, actor-claim loss, store/tool
+errors, and any other decode/HTTP errors are never retried. Exhausting the
+budget follows the normal terminal error path.
 
 > **Stream permit lifetime (deadlock invariant)**  
 > The governor stream permit is held **only** around provider streaming and is
@@ -1194,9 +1209,10 @@ Before a tool call runs, the engine captures the prior state of the files it
 may change ([`file_snapshot.rs`](../../crates/hya-core/src/engine/file_snapshot.rs));
 after the call it keeps the prior content of each file that actually changed
 as a per-session blob (`file_blob` table, keyed by sha256) and appends one
-`files_changed { message, call, files: [{path, before}] }` after the call's
-`tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
-`omitted {size, reason}`.
+ `files_changed { message, call, files: [{path, before, observed}] }` after the call's
+ `tool_result` / `tool_error`. `before` is `absent`, `stored {hash, size}`, or
+ `omitted {size, reason}`; `observed` is true only for bash changes inferred from
+ git status (and defaults to false when replaying older events).
 
 | Tool | What is captured |
 | --- | --- |
@@ -1225,9 +1241,13 @@ images (see [Prompt Admission](#prompt-admission)) share the table: they are alw
 stored (their own limits are 10 MiB each, 20 MiB per turn), and they count
 toward the 256 MiB session total, so a session with many images keeps fewer
 file snapshots. A
-capture problem never fails the tool call; an `omitted` file is simply not
-restored. The bash capture compares the tree before and after the command,
-so a file some other process changed while the command ran is recorded too.
+ A capture problem never fails the tool call; an `omitted` file is simply not
+ restored. Bash's before/after git-status detector is necessarily observational:
+ it can include a file changed concurrently by another process. Such entries are
+ marked `observed: true` in `FilesChanged`; revert still restores them, but marks
+ the corresponding `FileRestore` so clients can warn that the change may include
+ edits made outside hya. Older events omit the field and retain their historical
+ restore behavior.
 
 ### Revert, unrevert, commit
 

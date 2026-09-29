@@ -7,11 +7,13 @@ a production release or archive payload:
 1. Build `hya` (the `update` subcommand is the updater surface).
 2. Create a temporary updater root and package directory.
 3. Sign fixture metadata with a throwaway key (demo only).
-4. Run `apply` without `--owner-authorized-activation`; this verifies and stages
+4. Run `apply` without `--authorization`; this verifies and stages
    the candidate but does not switch `current` or advance `accepted_floor`.
 5. Run `status`, then **discard** the staged sequence.
-6. Re-run `apply` with `--owner-authorized-activation` under the same temp root;
-   this commits the selector and advances the floor.
+6. Issue the owner capability with `update authorize --sequence 1 --yes` (the
+   demo plays the owner's supervisor), then re-run `apply` with
+   `--authorization <capability>`; this commits the selector and advances the
+   floor.
 
 Do **not** reuse the demo key material for real releases.
 

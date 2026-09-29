@@ -473,7 +473,16 @@ fn resident_effect_terminal_events(
     projection: &Projection,
     reason: &str,
 ) -> Vec<Event> {
-    crate::recovery::open_turn_terminal_events(actor, projection, reason, "STALE_ACTOR_CLAIM", None)
+    // A stale claim means the owning process lost the actor: the same
+    // process-death semantics as crash recovery, so member rows close.
+    crate::recovery::open_turn_terminal_events(
+        actor,
+        projection,
+        reason,
+        "STALE_ACTOR_CLAIM",
+        None,
+        true,
+    )
 }
 
 async fn append_resident_effects_in_transaction(

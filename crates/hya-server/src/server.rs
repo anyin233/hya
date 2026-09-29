@@ -41,8 +41,9 @@ pub fn build(app: AppState) -> Server {
     let hosts = app.allowed_hosts();
     let grpc = V1Grpc::new(app.clone());
     Server {
-        router: crate::router(app),
+        router: crate::router(app.clone()),
         grpc: Some(GrpcHostLayer::new(hosts).layer(grpc.routes())),
+        app: Some(app),
     }
 }
 
@@ -52,13 +53,18 @@ pub fn build(app: AppState) -> Server {
 pub struct Server {
     router: Router,
     grpc: Option<GrpcHostGuard<tonic::service::Routes>>,
+    app: Option<AppState>,
 }
 
 /// An HTTP-only server (gRPC requests reach the router, which does not
 /// route them).
 impl From<Router> for Server {
     fn from(router: Router) -> Self {
-        Self { router, grpc: None }
+        Self {
+            router,
+            grpc: None,
+            app: None,
+        }
     }
 }
 
@@ -75,6 +81,23 @@ impl Server {
     /// The HTTP router (without the gRPC services).
     pub fn router(&self) -> Router {
         self.router.clone()
+    }
+    /// Number of process-local interaction requests waiting for client input.
+    pub async fn pending_interactions(&self) -> usize {
+        if let Some(app) = &self.app {
+            app.pending_interactions().await
+        } else {
+            0
+        }
+    }
+    /// Read pending interaction metadata for successor handoff restoration.
+    pub async fn pending_interaction_rows(
+        &self,
+    ) -> Result<Vec<hya_store::PendingInteraction>, hya_store::StoreError> {
+        match &self.app {
+            Some(app) => app.pending_interaction_rows().await,
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Answer one request: gRPC to the tonic services, anything else to

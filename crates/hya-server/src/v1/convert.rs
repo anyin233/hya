@@ -28,6 +28,7 @@ pub(crate) fn finish_cause(cause: Option<FinishCause>) -> i32 {
         Some(FinishCause::Interrupted) => pb::FinishCause::Interrupted as i32,
         Some(FinishCause::ProviderError) => pb::FinishCause::ProviderError as i32,
         Some(FinishCause::Archived) => pb::FinishCause::Archived as i32,
+        Some(FinishCause::Handoff) => pb::FinishCause::Handoff as i32,
         Some(FinishCause::Other) => pb::FinishCause::Other as i32,
     }
 }
@@ -205,6 +206,8 @@ pub(crate) fn session_info(
             .map(ToString::to_string)
             .unwrap_or_default(),
         kind: session_kind(session.kind) as i32,
+        effective_effort: String::new(),
+        effort_source: pb::EffortSource::None as i32,
     }
 }
 

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 use crate::agent_cmd::AgentCommand;
 use crate::auth_cmd::{AuthCommand, OauthCommand};
@@ -86,6 +87,9 @@ pub(crate) struct Cli {
     /// Model id to use (overrides config `default_model` + `HYA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     pub(crate) model: Option<String>,
+    /// Reasoning effort for the selected model, encoded as a `#effort` suffix.
+    #[arg(long, global = true, value_name = "EFFORT")]
+    pub(crate) effort: Option<String>,
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
@@ -138,6 +142,10 @@ pub(crate) enum ServeAction {
         timeout: u64,
     },
     /// Stop the backend of `--db` (if one runs), then start a new daemon.
+    ///
+    /// Before the running daemon is touched, the new binary must prove
+    /// itself: `hya serve check --db <db>` of the successor executable, then
+    /// every `--verify` command; any failure refuses the restart.
     Restart {
         /// Print the new daemon as JSON (like `start --json`).
         #[arg(long)]
@@ -152,6 +160,24 @@ pub(crate) enum ServeAction {
         /// (by default the new daemon rejoins the old backend's relay).
         #[command(flatten)]
         relay: RelayFlags,
+        /// Self-proof command run with `sh -c` in the current directory
+        /// before the handoff (repeatable, e.g. `--verify 'cargo test -p
+        /// hya-core'`). A non-zero exit refuses the restart.
+        #[arg(long, value_name = "CMD")]
+        verify: Vec<String>,
+        /// The successor executable (default: this `hya`), e.g. a build
+        /// staged elsewhere. It passes the same self-check first.
+        #[arg(long, value_name = "PATH")]
+        exe: Option<std::path::PathBuf>,
+    },
+    /// Compose the complete runtime (configuration, providers, bundles,
+    /// native tools, plugins) exactly as a daemon start would, against a
+    /// private snapshot of `--db`, then exit: 0 when it composes. Binds no
+    /// port and takes no lock of the live database.
+    Check {
+        /// Print `{ok, version, exe}` or `{ok: false, error}` as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Control the secure relay of the running backend of `--db`
     /// (docs/relay.md "Hosting a backend on a relay"). Loopback only.
@@ -249,6 +275,8 @@ pub(crate) enum ServeRelayAction {
     },
 }
 
+// Parsed once per process; boxing a variant would only add indirection.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Compat-compatible alias for headless prompt execution.
@@ -273,8 +301,31 @@ pub(crate) enum Command {
     /// Start the HTTP + SSE server.
     Serve {
         /// Address to bind. Use `127.0.0.1:0` for an ephemeral port.
-        #[arg(long, default_value = "127.0.0.1:8080")]
+        #[arg(long, default_value = "127.0.0.1:8080", conflicts_with = "listen_fd")]
         bind: String,
+        /// Use an already-open Unix listener file descriptor from a supervisor.
+        /// This is foreground-only; the descriptor must be >= 3 and is owned by hya.
+        #[arg(
+            long,
+            value_name = "FD",
+            conflicts_with_all = ["hostname", "port", "mdns"]
+        )]
+        listen_fd: Option<u32>,
+        /// Inherited database lock descriptor supplied by a restart successor.
+        #[arg(long, value_name = "FD", requires = "listen_fd", hide = true)]
+        lock_fd: Option<u32>,
+        /// The restart handoff journal of the successor (a `--lock-fd`
+        /// companion; the successor records its `ready` stage there).
+        #[arg(long, value_name = "PATH", requires = "lock_fd", hide = true)]
+        handoff_journal: Option<PathBuf>,
+        /// Inherit the old generation's status timestamp (`startedAt`, unix
+        /// ms) so status and uptime survive the handoff.
+        #[arg(long, value_name = "MS", requires = "handoff_journal", hide = true)]
+        inherit_status: Option<u64>,
+        /// Inherited extra gRPC listener (`HYA_GRPC_BIND` of the old
+        /// generation), transferred with the handoff.
+        #[arg(long, value_name = "FD", requires = "listen_fd", hide = true)]
+        grpc_listen_fd: Option<u32>,
         /// Hostname to listen on. Compat-compatible alias for the host part of `--bind`.
         #[arg(long)]
         hostname: Option<String>,
@@ -605,6 +656,27 @@ pub(crate) fn bare_resume(cli: &Cli) -> anyhow::Result<Option<crate::frontend::R
     }))
 }
 
+/// Merge a validated `--effort` flag into a model reference.
+pub(crate) fn merge_model_effort(
+    model: Option<String>,
+    effort: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    let Some(effort) = effort
+        .map(|value| value.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return Ok(model);
+    };
+    hya_provider::ReasoningEffort::parse(&effort)
+        .ok_or_else(|| anyhow::anyhow!("invalid effort `{effort}`"))?;
+    let Some(model) = model else {
+        anyhow::bail!("--effort requires --model");
+    };
+    if model.contains('#') {
+        anyhow::bail!("--effort conflicts with a model effort suffix");
+    }
+    Ok(Some(format!("{model}#{effort}")))
+}
 pub(crate) fn serve_bind(
     bind: String,
     hostname: Option<String>,
@@ -671,7 +743,8 @@ mod tests {
                 "pkg",
                 "--platform",
                 "x86_64-unknown-linux-gnu",
-                "--owner-authorized-activation",
+                "--authorization",
+                "auth.json",
             ],
             &[
                 "hya",
@@ -812,6 +885,20 @@ mod tests {
         assert!(
             error.contains("--resume only applies to bare `hya`"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn effort_flag_merges_and_rejects_conflicts() {
+        assert_eq!(
+            super::merge_model_effort(Some("openai/gpt".into()), Some("high".into())).unwrap(),
+            Some("openai/gpt#high".into())
+        );
+        assert!(
+            super::merge_model_effort(Some("openai/gpt#low".into()), Some("high".into())).is_err()
+        );
+        assert!(
+            super::merge_model_effort(Some("openai/gpt".into()), Some("bogus".into())).is_err()
         );
     }
 
@@ -1066,13 +1153,114 @@ mod tests {
                 json: false,
                 force: false,
                 timeout: 30,
-                relay: super::RelayFlags::default()
+                relay: super::RelayFlags::default(),
+                verify: Vec::new(),
+                exe: None,
             })
         );
         // Plain `hya serve` still serves in the foreground.
         assert_eq!(
             action(parse(["hya", "serve", "--bind", "127.0.0.1:0"])).0,
             None
+        );
+    }
+
+    #[test]
+    fn parses_foreground_inherited_listener_fd() {
+        match parse(["hya", "serve", "--listen-fd", "3"]).command {
+            Some(super::Command::Serve {
+                listen_fd, action, ..
+            }) => {
+                assert_eq!(listen_fd, Some(3));
+                assert!(action.is_none());
+            }
+            _ => panic!("expected serve command"),
+        }
+    }
+
+    #[test]
+    fn rejects_listener_fd_with_bind_aliases() {
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--listen-fd", "3", "--port", "8081"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--listen-fd", "3", "--bind", "127.0.0.1:0"])
+                .is_err()
+        );
+    }
+
+    /// The hidden successor flags of a restart handoff: the inherited lock,
+    /// the journal, the inherited status, and the extra gRPC listener. They
+    /// chain on each other and are foreground-only.
+    #[test]
+    fn parses_hidden_handoff_successor_flags() {
+        let cli = parse([
+            "hya",
+            "serve",
+            "--listen-fd",
+            "3",
+            "--lock-fd",
+            "4",
+            "--handoff-journal",
+            "/s.db.server.handoff",
+            "--inherit-status",
+            "1700000000000",
+            "--grpc-listen-fd",
+            "5",
+        ]);
+        match cli.command {
+            Some(super::Command::Serve {
+                listen_fd,
+                action,
+                lock_fd,
+                handoff_journal,
+                inherit_status,
+                grpc_listen_fd,
+                ..
+            }) => {
+                assert_eq!(listen_fd, Some(3));
+                assert!(action.is_none());
+                assert_eq!(lock_fd, Some(4));
+                assert_eq!(
+                    handoff_journal.as_deref(),
+                    Some(std::path::Path::new("/s.db.server.handoff"))
+                );
+                assert_eq!(inherit_status, Some(1_700_000_000_000));
+                assert_eq!(grpc_listen_fd, Some(5));
+            }
+            _ => panic!("expected serve command"),
+        }
+        // The chain: journal needs the lock, status needs the journal, both
+        // need the listener.
+        assert!(
+            Cli::try_parse_from([
+                "hya",
+                "serve",
+                "--listen-fd",
+                "3",
+                "--handoff-journal",
+                "/s.db.server.handoff"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "hya",
+                "serve",
+                "--lock-fd",
+                "4",
+                "--handoff-journal",
+                "/s.db.server.handoff"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--listen-fd", "3", "--inherit-status", "1"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["hya", "serve", "--grpc-listen-fd", "5"]).is_err(),
+            "the gRPC listener is a companion of the main listener"
         );
     }
 

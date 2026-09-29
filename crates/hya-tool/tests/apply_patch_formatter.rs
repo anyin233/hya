@@ -56,6 +56,7 @@ fn ctx_with_formatter(rules: Vec<Rule>, workdir: PathBuf, formatter: FormatterPl
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

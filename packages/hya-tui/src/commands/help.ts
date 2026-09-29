@@ -10,7 +10,7 @@
  */
 import type { TextareaAction } from "@opentui/core"
 import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyAction } from "../keys/bindings"
-import { agentModelsKeyRows } from "../state/agentModels"
+import { agentsViewKeyRows } from "../state/agentsView"
 import { diffKeyRows } from "../state/diff"
 import { mcpKeyRows } from "../state/mcp"
 import type { PickerRow } from "../state/picker"
@@ -19,7 +19,7 @@ import { rulesKeyRows } from "../state/rules"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Rules", "AgentModels", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Rules", "Agents", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -176,14 +176,14 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   }))
   // The Provider View's keys (`/key`; state/providers.ts `providerKeyRows`, also its footer line).
   const providerRows: HelpRow[] = providerKeyRows.map((row) => ({ group: "Providers", keys: row.keys, description: row.description }))
-  // The Diff / MCP / Saved Rules / Agent Models views' keys (also each view's footer line).
+  // The Diff / MCP / Saved Rules / Agents views' keys (also each view's footer line).
   const diffRows: HelpRow[] = diffKeyRows.map((row) => ({ group: "Diff", keys: row.keys, description: row.description }))
   const mcpRows: HelpRow[] = mcpKeyRows.map((row) => ({ group: "Mcp", keys: row.keys, description: row.description }))
   const savedRuleRows: HelpRow[] = rulesKeyRows.map((row) => ({ group: "Rules", keys: row.keys, description: row.description }))
-  const agentModelRows: HelpRow[] = agentModelsKeyRows.map((row) => ({ group: "AgentModels", keys: row.keys, description: row.description }))
+  const agentsViewRows: HelpRow[] = agentsViewKeyRows.map((row) => ({ group: "Agents", keys: row.keys, description: row.description }))
   const rows = [
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
-    ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentModelRows, ...commandRows,
+    ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
   ]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))

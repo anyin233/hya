@@ -18,9 +18,9 @@
 // persisted and never replayed. When the round ends, the durable log
 // records each text part once as `partStarted` + `partReplaced` (full
 // text) + `partCompleted` with the same message and part ids the live
-// frames used, so a client folds both by id: an already-known part id on
-// `partStarted` is not a new part, and `partReplaced` sets the part's text.
-// Reasoning deltas and tool-call argument deltas are durable events.
+// frames used, so a client folds both by id. Reasoning deltas are live-only
+// (`seq = 0`); the durable replay uses one `partReplaced` snapshot followed
+// by `partCompleted` for each reasoning part.
 // A tool call streams durably as `partStarted` (kind `tool_call`, with
 // `tool` and `callId`), `partAppended` argument fragments,
 // `toolStateChanged` RUNNING with the parsed `inputJson`, then
@@ -343,8 +343,8 @@ message PartStarted {
   string call_id = 5;
 }
 
-// Streaming delta appended to a part. Assistant text deltas are live-only
-// (`seq = 0`); reasoning and legacy text deltas are durable.
+// Streaming delta appended to a part. Assistant text and reasoning deltas are
+// live-only (`seq = 0`); legacy durable deltas remain replay-compatible.
 message PartAppended {
   // Owning message identifier.
   string message = 1;

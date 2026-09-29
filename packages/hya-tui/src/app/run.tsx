@@ -58,6 +58,7 @@ export async function run(options: Options): Promise<void> {
   let serverToken = options.server ? envToken : undefined
   let renderer: CliRenderer | undefined
   let controller: Controller | undefined
+  const store = createAppStore()
   let stopping = false
   const shutdown = async (code: number, mode: ExitMode): Promise<void> => {
     // Once: `renderer.destroy()` re-enters here synchronously (its "destroy" event).
@@ -119,7 +120,6 @@ export async function run(options: Options): Promise<void> {
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
   const client = new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
-  const store = createAppStore()
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)
   store.setBackend(backend)
@@ -142,7 +142,7 @@ export async function run(options: Options): Promise<void> {
           home: async () => {
             const connection = await connect()
             store.setBackend(daemonInfo(connection))
-            return { url: connection.url, pid: connection.pid, started: connection.started, version: connection.version, startedAt: connection.startedAt }
+            return { url: connection.url, pid: connection.pid, started: connection.started, generation: `${connection.pid}:${connection.startedAt}`, version: connection.version, startedAt: connection.startedAt }
           },
         }
       : options.server && !options.remote
@@ -160,14 +160,14 @@ export async function run(options: Options): Promise<void> {
           reconnect: async () => {
             const connection = await connect()
             store.setBackend(daemonInfo(connection))
-            return { url: connection.url, pid: connection.pid, started: connection.started, version: connection.version, startedAt: connection.startedAt }
+            return { url: connection.url, pid: connection.pid, started: connection.started, generation: `${connection.pid}:${connection.startedAt}`, version: connection.version, startedAt: connection.startedAt }
           },
           // Never starts one: after `hya serve stop` / `restart` (app/reconnect.ts).
           find: async () => {
             const found = await findRunningServer(db, options.directory)
             if (!found) return undefined
             store.setBackend({ pid: found.pid, db, startedAt: found.startedAt })
-            return { url: found.url, pid: found.pid, started: false, version: found.version, startedAt: found.startedAt }
+            return { url: found.url, pid: found.pid, started: false, generation: `${found.pid}:${found.startedAt}`, version: found.version, startedAt: found.startedAt }
           },
         }
       : {}),

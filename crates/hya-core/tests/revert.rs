@@ -325,6 +325,73 @@ async fn bash_changes_in_a_git_work_tree_are_reverted() {
 }
 
 #[tokio::test]
+async fn concurrent_edit_during_bash_is_reverted_and_reported_as_observed() {
+    let dir = tempdir();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .current_dir(&dir.0)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{status:?}");
+    };
+    git(&["init", "-q"]);
+    let file = dir.0.join("user.txt");
+    std::fs::write(&file, "original").unwrap();
+    git(&["add", "user.txt"]);
+    git(&["commit", "-q", "-m", "init"]);
+    let fx = fixture(&dir.0, Vec::new()).await;
+
+    let shell = fx.engine.run_shell(
+        fx.session,
+        &fx.agent,
+        "touch ready; while [ ! -f release ]; do sleep 0.05; done".to_string(),
+        CancellationToken::new(),
+    );
+    let external_edit = async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !dir.0.join("ready").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        std::fs::write(&file, "user edited during command").unwrap();
+        std::fs::write(dir.0.join("release"), "").unwrap();
+    };
+    let (result, ()) = tokio::join!(shell, external_edit);
+    result.unwrap();
+    let projection = fx.engine.store().read_projection(fx.session).await.unwrap();
+    let changes: Vec<_> = projection
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| &message.file_changes)
+        .collect();
+    assert!(
+        changes
+            .iter()
+            .any(|change| { change.path == file.to_string_lossy() && change.observed })
+    );
+
+    let outcome = fx
+        .engine
+        .revert_session(fx.session, RevertTarget::LastUserMessage)
+        .await
+        .unwrap();
+    let restored = outcome
+        .files
+        .iter()
+        .find(|change| change.path == file.to_string_lossy())
+        .expect("observed file is reported");
+    assert!(restored.observed);
+    assert_eq!(read(&file).as_deref(), Some("original"));
+    fx.engine.unrevert_session(fx.session).await.unwrap();
+    assert_eq!(read(&file).as_deref(), Some("user edited during command"));
+}
+
+#[tokio::test]
 async fn the_next_prompt_commits_the_revert_and_the_model_never_sees_it() {
     let dir = tempdir();
     let script = [text_turn("a"), text_turn("b"), text_turn("c")].concat();

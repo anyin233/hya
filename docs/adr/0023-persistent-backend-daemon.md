@@ -150,6 +150,20 @@ stream was down, backing off, at that moment) treats the stop as a crash and
 starts the next daemon; clients older than this amendment ignore the frame
 and do the same. A SIGKILL (`stop --force` after the timeout) comes after the
 SIGTERM, so the frame was already sent.
+## Amendment (2026-09-28): durable stream recovery and successor startup failure
+
+Provider sockets belong to the server process and are never transferred during
+`restart`. A client may lose live `seq == 0` provider deltas from an in-flight
+round. The durable event log and session projection are the recovery boundary:
+a successor resumes completed round parts and terminal events, but MUST NOT
+replay a provider call or duplicate a tool/file side effect merely because a
+client reconnects. Clients resubscribe with their last durable sequence and
+gap-fill from the log (or re-read the projection).
+
+Starting a successor is a separate bootstrap attempt. If its bootstrap fails,
+the failure is recorded in the daemon startup/log failure surface and the old
+owner remains the one that can be stopped or recovered; a failed successor
+MUST NOT publish a healthy discovery record or strand the database lock.
 
 ## Amendment (2026-09-26): how a client leaves its session
 

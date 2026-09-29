@@ -19,6 +19,12 @@ pub struct UpdaterLayout {
     pub accepted_floor: PathBuf,
     /// Crash-recovery activation journal (`activation.journal`).
     pub journal: PathBuf,
+    /// Advisory OS lock held for updater-root mutations.
+    pub lease: PathBuf,
+    /// Durable capability issuance record used to validate external CLI handoff.
+    pub authorization: PathBuf,
+    /// Durable monotonic active-generation fence.
+    pub generation: PathBuf,
     /// Current generation selector file (`current`).
     pub selector: PathBuf,
     /// Directory of immutable staged generations (`releases/`).
@@ -32,11 +38,13 @@ pub fn layout(root: &Path) -> UpdaterLayout {
         trust_roots: root.join("trust_roots.json"),
         accepted_floor: root.join("accepted_floor"),
         journal: root.join("activation.journal"),
+        lease: root.join("updater.lock"),
+        authorization: root.join("authorization.json"),
+        generation: root.join("generation"),
         selector: root.join("current"),
         releases: root.join("releases"),
     }
 }
-
 /// Path of one immutable staged generation.
 pub fn release_directory(root: &Path, sequence: u64) -> PathBuf {
     layout(root).releases.join(sequence.to_string())
@@ -56,6 +64,8 @@ pub fn assert_tcb_outside_candidate(
         layout.trust_roots.as_path(),
         layout.accepted_floor.as_path(),
         layout.journal.as_path(),
+        layout.authorization.as_path(),
+        layout.generation.as_path(),
         layout.selector.as_path(),
     ];
     for path in protected {

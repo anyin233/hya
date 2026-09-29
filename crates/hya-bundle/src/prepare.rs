@@ -10,9 +10,9 @@ use crate::model::{
     PreparedAgentBundle, PreparedAgentSetBundle, PreparedApi, PreparedBundleApis,
     PreparedBundleIndex, PreparedBundlePermissionModes, PreparedBundleProcess,
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedPermissionMode,
-    PreparedPluginBundle, PreparedProcessExtension, PreparedResource, PreparedSchema,
-    PreparedWorkflow, PreparedWorkflowBundle,
+    PreparedCheck, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
+    PreparedPermissionMode, PreparedPluginBundle, PreparedProcessExtension, PreparedResource,
+    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
@@ -25,6 +25,12 @@ const AGENT_SET_SOURCE_KIND: &str = "AgentSetBundle";
 const WORKFLOW_SOURCE_KIND: &str = "WorkflowBundle";
 const PLUGIN_SOURCE_KIND: &str = "Plugin";
 const PREPARED_FORMAT_VERSION: u32 = 2;
+fn prepared_check(check: &crate::source::SourceCheck) -> PreparedCheck {
+    PreparedCheck {
+        command: check.command.clone(),
+        timeout_secs: check.timeout_secs,
+    }
+}
 
 /// Validate and deterministically prepare one installable package source.
 ///
@@ -1353,6 +1359,14 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
             detail: "bundle.hya.md uses its body as the agent prompt, so the agent must not also name a prompt resource".to_string(),
         });
     }
+    if let Some(check) = match &manifest {
+        SourceManifest::Agent(m) => m.check.as_ref(),
+        SourceManifest::AgentSet(m) => m.check.as_ref(),
+        SourceManifest::Workflow(m) => m.check.as_ref(),
+        SourceManifest::Plugin(m) => m.check.as_ref(),
+    } {
+        check.validate(&name)?;
+    }
     Ok(ParsedSource {
         files,
         manifest,
@@ -1488,6 +1502,7 @@ fn prepare_plugin_bundle(
     files: BTreeMap<String, Vec<u8>>,
     manifest: SourcePluginManifest,
 ) -> Result<PreparedBundleParts, BundleError> {
+    let check = manifest.check.as_ref().map(prepared_check);
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1505,6 +1520,7 @@ fn prepare_plugin_bundle(
     )?;
     let mut bundle = PreparedInstallableBundle::Plugin(Box::new(PreparedPluginBundle {
         format_version: PREPARED_FORMAT_VERSION,
+        check,
         identity: manifest.identity,
         namespace,
         digest: String::new(),
@@ -1592,6 +1608,7 @@ fn prepare_agent_bundle(
     manifest: SourceAgentManifest,
     stable_agent_ids: &mut BTreeSet<String>,
 ) -> Result<PreparedBundleParts, BundleError> {
+    let check = manifest.check.as_ref().map(prepared_check);
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1617,6 +1634,7 @@ fn prepare_agent_bundle(
     validate_resource_views(&bundle_id, &agent, &tools, &skills)?;
     let mut bundle = PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
         format_version: PREPARED_FORMAT_VERSION,
+        check,
         identity: manifest.identity,
         namespace,
         digest: String::new(),
@@ -1636,6 +1654,7 @@ fn prepare_agent_set_bundle(
     manifest: SourceAgentSetManifest,
     stable_agent_ids: &mut BTreeSet<String>,
 ) -> Result<PreparedBundleParts, BundleError> {
+    let check = manifest.check.as_ref().map(prepared_check);
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1691,6 +1710,7 @@ fn prepare_agent_set_bundle(
     let channels = prepare_channel_templates(&bundle_id, manifest.channels, &local_agent_ids)?;
     let mut bundle = PreparedInstallableBundle::AgentSet(Box::new(PreparedAgentSetBundle {
         format_version: PREPARED_FORMAT_VERSION,
+        check,
         identity: manifest.identity,
         namespace,
         digest: String::new(),
@@ -1778,6 +1798,7 @@ fn prepare_workflow_bundle(
     manifest: SourceWorkflowManifest,
     stable_agent_ids: &mut BTreeSet<String>,
 ) -> Result<PreparedBundleParts, BundleError> {
+    let check = manifest.check.as_ref().map(prepared_check);
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1874,6 +1895,7 @@ fn prepare_workflow_bundle(
     }
     let mut bundle = PreparedInstallableBundle::Workflow(Box::new(PreparedWorkflowBundle {
         format_version: PREPARED_FORMAT_VERSION,
+        check,
         identity: manifest.identity,
         namespace,
         digest: String::new(),

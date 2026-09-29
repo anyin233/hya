@@ -16,7 +16,9 @@ use hya_proto::{
 };
 use sqlx::Row as _;
 
-use crate::{SessionStore, StoreError, append_event_in_transaction, replay_projection};
+use crate::{
+    SessionStore, StoreError, append_event_in_transaction, decode_session_key, replay_projection,
+};
 
 /// Reason text written on tool parts and member rows closed by crash recovery.
 pub const INTERRUPTED_REASON: &str = "interrupted: the process stopped before this turn finished";
@@ -33,16 +35,21 @@ pub struct InterruptedTurnRecovery {
 }
 
 /// Terminal events that close every open assistant message of `session`:
-/// `ToolError` for each pending/running tool part, `MemberFinished
-/// { Cancelled }` for each spawning/running member row with no spawning call
-/// or whose spawning call is still open, then one
+/// `ToolError` for each pending/running tool part, then one
 /// `MessageFinished { Cancelled }` per open assistant message carrying `cause`.
+/// With `close_members`, `MemberFinished { Cancelled }` is also emitted for
+/// each spawning/running member row with no spawning call or whose spawning
+/// call is still open — right when the process owning the members is going
+/// away (crash recovery, drain deadline). A handoff checkpoint passes `false`:
+/// its members stay live across the cutover and are revived by the successor's
+/// resident recovery, so their rows must keep running.
 pub(crate) fn open_turn_terminal_events(
     session: SessionId,
     projection: &Projection,
     reason: &str,
     code: &str,
     cause: Option<FinishCause>,
+    close_members: bool,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     // Tool calls the dying turn still had open. A member spawned by a call
@@ -63,21 +70,23 @@ pub(crate) fn open_turn_terminal_events(
             _ => None,
         })
         .collect();
-    for member in &projection.session.members {
-        if matches!(
-            member.status,
-            MemberRunStatus::Spawning | MemberRunStatus::Running
-        ) && member
-            .tool_call
-            .is_none_or(|call| open_calls.contains(&call))
-        {
-            events.push(Event::MemberFinished {
-                session,
-                member: member.member,
-                status: MemberRunStatus::Cancelled,
-                summary: reason.to_string(),
-                child: member.child,
-            });
+    if close_members {
+        for member in &projection.session.members {
+            if matches!(
+                member.status,
+                MemberRunStatus::Spawning | MemberRunStatus::Running
+            ) && member
+                .tool_call
+                .is_none_or(|call| open_calls.contains(&call))
+            {
+                events.push(Event::MemberFinished {
+                    session,
+                    member: member.member,
+                    status: MemberRunStatus::Cancelled,
+                    summary: reason.to_string(),
+                    child: member.child,
+                });
+            }
         }
     }
     for message in &projection.session.messages {
@@ -182,10 +191,10 @@ impl SessionStore {
         self.warm_projection(session).await?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let projection = replay_projection(&self.projections, &mut tx, session).await?;
-        let code = if cause == FinishCause::Interrupted {
-            "INTERRUPTED"
-        } else {
-            "CANCELLED"
+        let code = match cause {
+            FinishCause::Interrupted => "INTERRUPTED",
+            FinishCause::Handoff => "HANDOFF",
+            _ => "CANCELLED",
         };
         let has_open_message = projection
             .session
@@ -193,7 +202,7 @@ impl SessionStore {
             .iter()
             .any(|message| message.role == Role::Assistant && message.finish.is_none());
         let events = if has_open_message {
-            open_turn_terminal_events(session, &projection, reason, code, Some(cause))
+            open_turn_terminal_events(session, &projection, reason, code, Some(cause), true)
         } else {
             Vec::new()
         };
@@ -209,5 +218,36 @@ impl SessionStore {
             .await?;
         tx.commit().await?;
         Ok(envelopes)
+    }
+
+    /// Sessions whose event log carries a `MessageFinished { cause: handoff }`
+    /// row — restart-handoff resume candidates, written only by a runtime
+    /// that handed its sessions to a successor (`SessionEngine::handoff_turns`).
+    ///
+    /// Deliberately over-approximates: a session whose transcript has moved on
+    /// since a historical handoff still matches. The caller filters by the
+    /// folded projection, where the handoff close must still be the transcript
+    /// tail — so a resumed session is picked up exactly once. Read-only, hence
+    /// no runtime-owner claim.
+    ///
+    /// # Errors
+    /// Returns SQLite / decode failures.
+    pub async fn handoff_candidate_sessions(&self) -> Result<Vec<SessionId>, StoreError> {
+        // serde writes the `type` tag first and `cause` is the last optional
+        // field of a `message_finished` row, so this literal only matches
+        // handoff closes.
+        let rows = sqlx::query(
+            "SELECT DISTINCT session_id FROM event_log \
+             WHERE payload LIKE '%\"cause\":\"handoff\"%' ORDER BY session_id",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .filter_map(|row| {
+            let key = row.try_get::<Vec<u8>, _>("session_id").ok()?;
+            decode_session_key(&key)
+        })
+        .collect();
+        Ok(rows)
     }
 }

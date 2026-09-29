@@ -21,8 +21,20 @@
  * close. While a call runs (`busy`) Esc cancels it; other actions wait.
  */
 import { HttpError, type AgentSummary, type DiscoveryOutcome, type ModelSummary, type ProviderModelPatch, type ProviderSummary, type SessionInfo } from "../client"
+import { isKnownEffort } from "./catalog"
 import type { KeyLike } from "../keys/bindings"
 import { modelReference, truncate } from "./format"
+
+
+/** The explicit `#suffix` of `reference` that a known catalog row rejects; `undefined` when the reference is fine (unknown rows are the backend's to validate). */
+export function invalidEffortSuffix(reference: string, models: readonly ModelSummary[]): string | undefined {
+  const hash = reference.indexOf("#")
+  if (hash < 0) return undefined
+  const base = reference.slice(0, hash)
+  const row = models.find((model) => model.id === base)
+  const suffix = reference.slice(hash + 1)
+  return row && !isKnownEffort(row, suffix) ? suffix : undefined
+}
 
 /** The built-in offline provider: no key, no remote list, no config entry. */
 export const offlineProviderId = "hya"
@@ -637,7 +649,7 @@ export function providerViewHint(view: ProviderViewState): string {
 
 // ---- Model selection after adding -----------------------------------------
 
-/** What a turn sent now would run on: the session's model, else what a new session would get (app/controller.ts `newSession`). */
+/** What a turn sent now would run on: the session's model, else what a new session would get. */
 export function defaultModelRef(state: {
   selected: SessionInfo | undefined
   pendingModel: string | undefined
@@ -648,7 +660,10 @@ export function defaultModelRef(state: {
   if (state.selected) return modelReference(state.selected)
   const agent = state.pendingAgent ?? state.agents.find((item) => !item.hidden)?.name ?? "build"
   const preferred = state.agents.find((item) => item.name === agent)?.model
-  return state.pendingModel ?? (preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}` : state.models[0]?.id ?? "")
+  // The agent's configured model keeps its explicit `#variant` (it wins over the remembered effort).
+  const preferredRef = preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}${preferred.variant ? `#${preferred.variant}` : ""}` : undefined
+  const base = state.pendingModel ?? preferredRef ?? state.models[0]?.id ?? ""
+  return base
 }
 
 /** Column titles over `providerLine` rows. */

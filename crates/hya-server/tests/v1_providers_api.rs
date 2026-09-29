@@ -18,7 +18,7 @@ use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{
     Capabilities, FakeProvider, FakeStep, ModelCatalogSource, ProviderAuthState,
     ProviderCatalogResult, ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState,
-    ProviderKind, ProviderModel, ProviderRouter,
+    ProviderKind, ProviderModel, ProviderRouter, ReasoningEffort,
 };
 use hya_server::{
     AppState, PROVIDER_NOT_FOUND, ProviderChange, ProviderControl, ProviderControlError,
@@ -190,7 +190,7 @@ fn row(model: &str, source: ModelCatalogSource, display: Option<&str>) -> Provid
             ..Capabilities::default()
         },
         reasoning_variants: vec!["low".to_string()],
-        reasoning_default: None,
+        reasoning_default: Some(ReasoningEffort::Low),
         reasoning: Some(true),
         display_name: display.map(str::to_string),
         source,
@@ -327,6 +327,24 @@ async fn provider_rows_show_kind_base_url_key_source_and_model_sources() {
 
     let (status, missing) = send(&app, Method::GET, "/v1/providers/nope", Value::Null).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+/// `/v1/models` publishes each model's effort menu and configured default so
+/// clients can render an effort selector without a second contract.
+#[tokio::test]
+async fn model_rows_publish_reasoning_variants_and_default() {
+    let app = router(app_state(None).await);
+
+    let (status, body) = send(&app, Method::GET, "/v1/models", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body["models"].as_array().unwrap();
+    let vendor = rows
+        .iter()
+        .find(|model| model["modelId"] == "vendor/m-1")
+        .unwrap();
+    assert_eq!(vendor["reasoningVariants"], json!(["low"]));
+    assert_eq!(vendor["reasoningDefault"], "low");
+    assert_eq!(vendor["reasoning"], json!(true));
 }
 
 #[tokio::test]

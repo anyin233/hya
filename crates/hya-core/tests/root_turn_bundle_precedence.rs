@@ -639,6 +639,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
         .filter(|agent| !hya_core::is_builtin_id(&agent.stable_id))
         .map(|agent| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                check: None,
                 format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/root-turn-precedence-{}", agent.stable_id),

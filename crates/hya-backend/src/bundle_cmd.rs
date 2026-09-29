@@ -167,7 +167,9 @@ fn parse_search_query(value: &str) -> Result<String, String> {
     }
 }
 
-pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
+/// `db`: the backend database whose running daemon `install` activates the
+/// bundle in.
+pub(crate) async fn run(command: BundleCommand, db: String) -> anyhow::Result<()> {
     match command {
         BundleCommand::Install {
             package,
@@ -175,7 +177,7 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
             overwrite,
             scope,
             yes,
-        } => install_dispatch(package, claude, policy(overwrite), scope.target(), yes).await,
+        } => install_dispatch(package, claude, policy(overwrite), scope.target(), yes, &db).await,
         BundleCommand::List { scope } => list(scope.filter()).await,
         BundleCommand::Search { query, scope } => search(&query, scope.filter()).await,
         BundleCommand::Remove { name, scope, yes } => remove(&name, scope.target(), yes).await,
@@ -220,12 +222,13 @@ async fn install_dispatch(
     policy: NamespaceInstallPolicy,
     scope: Scope,
     yes: bool,
+    db: &str,
 ) -> anyhow::Result<()> {
     match (package, claude) {
-        (Some(package), None) => install(&package, policy, scope, yes).await,
+        (Some(package), None) => install(&package, policy, scope, yes, db).await,
         (None, Some(source)) => {
             let staged = stage_claude_source(&source).await?;
-            let result = install(&staged, policy, scope, yes).await;
+            let result = install(&staged, policy, scope, yes, db).await;
             if let Err(error) = fs::remove_file(&staged) {
                 eprintln!(
                     "hya: could not remove staged claude package {} ({error})",
@@ -379,6 +382,165 @@ fn inspect_installable(package: &Path) -> anyhow::Result<PublicPackageInspection
         .context("validate package against immutable first-party catalog")?;
     Ok(public)
 }
+/// Output lines kept from a failed self-check.
+const CHECK_TAIL_LINES: usize = 40;
+
+/// Run the bundle's declared self-check (`check.command` in its manifest)
+/// in a private copy of the package's source files, before anything is
+/// installed: cwd = that copy, env `HYA_BUNDLE_ID`, `HYA_BUNDLE_VERSION`,
+/// `HYA_BUNDLE_ROOT`, stdin closed, killed at `check.timeout_secs`.
+async fn run_self_check(public: &PublicPackageInspection) -> anyhow::Result<()> {
+    let [bundle] = public.prepared.bundles() else {
+        anyhow::bail!("public package must contain exactly one bundle");
+    };
+    let Some(check) = bundle.check() else {
+        println!("self-check: none declared");
+        return Ok(());
+    };
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let root =
+        std::env::temp_dir().join(format!("hya-bundle-check-{}-{nonce:x}", std::process::id()));
+    let result = run_self_check_in(&root, public, bundle, check).await;
+    let _ = fs::remove_dir_all(&root);
+    result
+}
+
+async fn run_self_check_in(
+    root: &Path,
+    public: &PublicPackageInspection,
+    bundle: &hya_bundle::PreparedInstallableBundle,
+    check: &hya_bundle::PreparedCheck,
+) -> anyhow::Result<()> {
+    fs::create_dir_all(root).context("create the self-check source copy")?;
+    for file in &public.files {
+        let path = root.join(file.path());
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        }
+        fs::write(&path, file.bytes()).with_context(|| format!("write {}", path.display()))?;
+    }
+    let (program, args) = check
+        .command
+        .split_first()
+        .context("check.command is empty")?;
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(root)
+        .env("HYA_BUNDLE_ID", &bundle.identity().id)
+        .env("HYA_BUNDLE_VERSION", &bundle.identity().version)
+        .env("HYA_BUNDLE_ROOT", root)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let shown = check.command.join(" ");
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(check.timeout_secs),
+        command.output(),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "self-check `{shown}` timed out after {} s; nothing was installed",
+            check.timeout_secs
+        )
+    })?
+    .with_context(|| format!("run self-check `{shown}`"))?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = lines[lines.len().saturating_sub(CHECK_TAIL_LINES)..].join("\n");
+    if !output.status.success() {
+        anyhow::bail!(
+            "self-check `{shown}` failed ({}); nothing was installed\n{tail}",
+            output.status
+        );
+    }
+    println!("self-check: passed (`{shown}`)");
+    Ok(())
+}
+
+/// After an install: ask the running backend of `db` to refresh its bundle
+/// catalog now and require the installed bundle (`id` at `digest`) to be
+/// published. Without a running backend it loads at the next start.
+async fn prove_activation(db: &str, scope: Scope, id: &str, digest: &str) -> anyhow::Result<()> {
+    let Some(found) = crate::daemon::running(db).await else {
+        println!("activation: no backend runs for {db}; it loads when one starts");
+        return Ok(());
+    };
+    let directory = match scope {
+        Scope::User => String::new(),
+        Scope::Project => std::env::current_dir()
+            .context("read the current directory")?
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/bundles:refresh", found.url))
+        .json(&serde_json::json!({ "directory": directory }))
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .with_context(|| format!("ask the backend at {} to refresh its bundles", found.url))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("read the bundle refresh response")?;
+    if !status.is_success() {
+        anyhow::bail!("installed but not activated: the backend answered {status}: {body}");
+    }
+    let published = body["bundles"].as_array().is_some_and(|bundles| {
+        bundles.iter().any(|bundle| {
+            bundle["id"].as_str() == Some(id) && bundle["preparedDigest"].as_str() == Some(digest)
+        })
+    });
+    let errors: Vec<String> = body["errors"]
+        .as_array()
+        .map(|errors| {
+            errors
+                .iter()
+                .filter_map(|error| {
+                    let message = error["message"].as_str()?;
+                    Some(
+                        match error["bundleId"].as_str().filter(|id| !id.is_empty()) {
+                            Some(bundle) => format!("{bundle}: {message}"),
+                            None => message.to_owned(),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if published {
+        println!(
+            "activation: active in the backend (pid {}); the next turn uses it",
+            found.pid
+        );
+        return Ok(());
+    }
+    if scope == Scope::Project && body["scope"].as_str() == Some("directory") {
+        println!(
+            "activation: {directory} is not inside a registered Project, so no session loads its \
+             `.hya/bundles`; add it to a Project (TUI `/project`) to activate the bundle"
+        );
+        return Ok(());
+    }
+    if errors.is_empty() {
+        anyhow::bail!(
+            "installed but not activated: the backend (pid {}) does not publish {id} at the installed digest",
+            found.pid
+        );
+    }
+    anyhow::bail!(
+        "installed but not activated; the backend keeps the previous bundles:\n  {}",
+        errors.join("\n  ")
+    )
+}
 
 /// What installing one package into a scope would do.
 struct InstallPreview {
@@ -500,12 +662,15 @@ async fn install(
     policy: NamespaceInstallPolicy,
     scope: Scope,
     yes: bool,
+    db: &str,
 ) -> anyhow::Result<()> {
     let public = inspect_installable(package)?;
+    run_self_check(&public).await?;
     let [bundle] = public.prepared.bundles() else {
         anyhow::bail!("public package must contain exactly one bundle");
     };
     let identity = bundle.identity().clone();
+    let digest = bundle.digest().to_string();
     // One registry handle for plan and install: connecting again right after
     // dropping a handle can race the old pool's close and find the DB locked.
     let registry = match scope {
@@ -520,7 +685,7 @@ async fn install(
             identity.version,
             scope.as_str()
         );
-        return Ok(());
+        return prove_activation(db, scope, &identity.id, &digest).await;
     }
     let mut summary = format!(
         "Install {} {} ({}) into {} scope\n  target: {}\n  action: {}\n",
@@ -582,7 +747,7 @@ async fn install(
             );
         }
     }
-    Ok(())
+    prove_activation(db, scope, &identity.id, &digest).await
 }
 
 /// Check that `package` would install into `scope`, printing what install
@@ -593,6 +758,7 @@ async fn verify(
     scope: Scope,
 ) -> anyhow::Result<()> {
     let public = inspect_installable(package)?;
+    run_self_check(&public).await?;
     let [bundle] = public.prepared.bundles() else {
         anyhow::bail!("public package must contain exactly one bundle");
     };

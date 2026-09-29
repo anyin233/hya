@@ -39,7 +39,7 @@ mod wire;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use hya_proto::{Event, Message, MessageId, ModelRef, SessionId, ToolSchema};
+use hya_proto::{Event, Message, MessageId, ModelRef, Part, SessionId, ToolSchema};
 use thiserror::Error;
 
 pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
@@ -172,6 +172,8 @@ pub struct Capabilities {
     /// when known (config `modalities.input`), `None` when unknown. Prompt
     /// admission rejects image attachments only on `Some(false)`.
     pub image_input: Option<bool>,
+    /// Whether the route supports Anthropic-style prompt cache breakpoints.
+    pub prompt_caching: bool,
 }
 
 pub(crate) fn append_identity_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
@@ -211,6 +213,7 @@ pub(crate) fn append_capabilities_identity(
         u8::from(caps.usage_reporting),
         u8::from(caps.json_output),
         u8::from(caps.reasoning_stream),
+        u8::from(caps.prompt_caching),
         u8::from(caps.reasoning_request),
     ]);
     output.extend_from_slice(&caps.max_context.to_be_bytes());
@@ -252,7 +255,7 @@ impl ProviderModel {
     }
 }
 
-/// Reasoning / thinking effort requested on a completion (ordered for max-pick defaults).
+/// Reasoning / thinking effort requested on a completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReasoningEffort {
     /// No reasoning parameter (alias wire `none` / `off`).
@@ -346,33 +349,6 @@ impl ReasoningEffort {
     }
 }
 
-/// Precedence: explicit config, then last-used (kept if `Off` or supported),
-/// then highest supported. `None` means the model has no reasoning support and
-/// must not show a default.
-#[must_use]
-pub fn resolve_default_reasoning(
-    explicit: Option<ReasoningEffort>,
-    last_used: Option<ReasoningEffort>,
-    supported: &[String],
-) -> Option<ReasoningEffort> {
-    if explicit.is_some() {
-        return explicit;
-    }
-
-    let supported_efforts = supported
-        .iter()
-        .filter_map(|level| ReasoningEffort::parse(level))
-        .collect::<Vec<_>>();
-
-    if let Some(effort) = last_used
-        && (effort == ReasoningEffort::Off || supported_efforts.contains(&effort))
-    {
-        return Some(effort);
-    }
-
-    supported_efforts.into_iter().max()
-}
-
 #[cfg(test)]
 mod provider_error_tests {
     use std::time::Duration;
@@ -446,55 +422,6 @@ mod reasoning_effort_tests {
         assert_eq!(R::High.google_budget("gemini-2.5-flash"), Some(16000));
         assert_eq!(R::Low.google_budget("gemini-2.5-flash"), None);
     }
-
-    #[test]
-    fn default_reasoning_keeps_explicit_off() {
-        let supported = vec!["low".to_string(), "high".to_string()];
-
-        let resolved = super::resolve_default_reasoning(Some(R::Off), Some(R::High), &supported);
-
-        assert_eq!(resolved, Some(R::Off));
-    }
-
-    #[test]
-    fn default_reasoning_uses_supported_last_used_before_highest() {
-        let supported = vec![
-            "minimal".to_string(),
-            "low".to_string(),
-            "xhigh".to_string(),
-        ];
-
-        let resolved = super::resolve_default_reasoning(None, Some(R::Low), &supported);
-
-        assert_eq!(resolved, Some(R::Low));
-    }
-
-    #[test]
-    fn default_reasoning_ignores_unsupported_last_used_and_picks_highest() {
-        let supported = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
-
-        let resolved = super::resolve_default_reasoning(None, Some(R::XHigh), &supported);
-
-        assert_eq!(resolved, Some(R::High));
-    }
-
-    #[test]
-    fn default_reasoning_picks_max_for_google_or_anthropic_variants() {
-        let supported = vec!["high".to_string(), "max".to_string()];
-
-        let resolved = super::resolve_default_reasoning(None, None, &supported);
-
-        assert_eq!(resolved, Some(R::Max));
-    }
-
-    #[test]
-    fn default_reasoning_stays_unset_without_reasoning_support() {
-        let supported = Vec::new();
-
-        let resolved = super::resolve_default_reasoning(None, None, &supported);
-
-        assert_eq!(resolved, None);
-    }
 }
 
 /// Normalized completion request shared by every protocol encoder and provider.
@@ -525,6 +452,64 @@ pub struct CompactedWindow {
     pub items: Vec<serde_json::Value>,
 }
 
+/// Which reasoning parts a route replays into its next request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReasoningReplayPolicy {
+    /// The encoder omits reasoning parts.
+    None,
+    /// The encoder sends only provider-native reasoning payloads.
+    ProviderData,
+    /// The encoder sends signed current-turn reasoning text and metadata.
+    SignedCurrentTurn,
+}
+
+/// Index of the latest user message that carries text: assistant messages
+/// after it form the current turn. Compute once per transcript and pass it to
+/// [`ReasoningReplayPolicy::replays`].
+#[must_use]
+pub fn current_turn_start(messages: &[Message]) -> Option<usize> {
+    messages.iter().rposition(|message| {
+        matches!(message, Message::User { parts, .. }
+            if parts.iter().any(|part| matches!(part, Part::Text { text, .. } if !text.is_empty())))
+    })
+}
+
+impl ReasoningReplayPolicy {
+    /// Whether the route's encoder sends `part` (at `message_index` of the full
+    /// transcript whose [`current_turn_start`] is `turn_start`). Shared by the
+    /// request encoders and token accounting so the two cannot drift.
+    #[must_use]
+    pub fn replays(self, turn_start: Option<usize>, message_index: usize, part: &Part) -> bool {
+        let Part::Reasoning { provider_data, .. } = part else {
+            return false;
+        };
+        match self {
+            Self::None => false,
+            Self::ProviderData => provider_data.is_some(),
+            Self::SignedCurrentTurn => {
+                turn_start.is_some_and(|start| message_index > start)
+                    && provider_data
+                        .as_ref()
+                        .is_some_and(is_signed_anthropic_reasoning)
+            }
+        }
+    }
+}
+
+fn is_signed_anthropic_reasoning(data: &serde_json::Value) -> bool {
+    match data.get("type").and_then(serde_json::Value::as_str) {
+        Some("thinking") => data
+            .get("signature")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|signature| !signature.is_empty()),
+        Some("redacted_thinking") => data
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty()),
+        _ => false,
+    }
+}
+
 /// A configured model route: claims models, streams completions, optional compaction.
 ///
 /// Minimum implement surface: [`Provider::id`], [`Provider::capabilities`], and
@@ -542,6 +527,10 @@ pub trait Provider: Send + Sync {
     /// that distinct from an explicit [`ReasoningEffort::Off`] value.
     fn reasoning_default(&self, _model: &ModelRef) -> Option<ReasoningEffort> {
         None
+    }
+    /// Reasoning replay behavior of this route's request encoder.
+    fn reasoning_replay_policy(&self) -> ReasoningReplayPolicy {
+        ReasoningReplayPolicy::None
     }
     /// Report whether a claimed model supports one typed reasoning effort.
     ///

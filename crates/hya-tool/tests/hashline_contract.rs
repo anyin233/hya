@@ -76,6 +76,7 @@ fn ctx_with_session(workdir: PathBuf, session: Option<SessionId>) -> ToolCtx {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

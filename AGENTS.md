@@ -19,6 +19,20 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
   evidence, not active workflow instructions. Bring relevant unfinished work
   into a planning directory when explicitly resumed.
 
+## Forum Rule
+
+- Agents discuss with each other and keep durable project knowledge on this
+  project's board, `.forum/` at the main checkout's root. Read `.forum/index.md`
+  first. Use the `forum` skill for thread and post formats and for `zg` search.
+- `.planning/` holds one task's working state. `.forum/` holds what other
+  agents and later sessions need: questions, handoffs, decisions and their
+  reasons, and knowledge threads for pitfalls and environment facts about this
+  repository. When a finished plan produces something worth keeping, promote it
+  to the forum.
+- `.forum/` is its own git repository, excluded locally through
+  `.git/info/exclude`. Never stage it or reference it in this repository's
+  commits.
+
 ## Commit Rule
 
 - When the user explicitly asks for commits, create one git commit per atomic change before reporting done; for verified feature work, commit and push the atomic change before reporting done.
@@ -85,7 +99,8 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 
 - Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
 - Every fix or feature change must include an explicit project version number update in `[workspace.package].version` in `Cargo.toml`; keep the release tag and changelog aligned when publishing.
-- The twelve first-party bundles are released with hya: every `bundles/presets/*/bundle.yaml` and `bundles/first-party/*/bundle.yaml` identity `version` must equal `[workspace.package].version`. Bump them together; `stage-first-party-bundles` and the `hya-bundle` first-party test reject a mismatch.
+- The twelve first-party bundles are released with hya: every `bundles/presets/*/bundle.yaml` and `bundles/first-party/*/bundle.yaml` identity `version` must equal `[workspace.package].version`. Bump them together; `stage-first-party-bundles` and the `hya-bundle` first-party test reject a mismatch. The `bundles/extra/*/bundle.yaml` bundles follow the same rule; `crates/hya-bundle/tests/extra_bundles.rs` rejects a mismatch.
+- The same version also appears in `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json`, and the `README.md` status paragraph; `cargo test -p xtask` rejects a mismatch.
 - Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
 - When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
 - Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.
@@ -103,7 +118,7 @@ daemon (found or auto-started; it outlives its clients, ADR-0023).
 `hya-sdk-v1`, `hya-client`, and gRPC are the other supported ways to drive a
 backend.
 
-The server exposes exactly one contract — `hya.v1` (18 services / 99 rpcs in
+The server exposes exactly one contract — `hya.v1` (18 services / 104 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and over gRPC
 through `hya_server::V1Grpc`, which dispatches through the same router. Both
 are served on the same port from one server state (`hya_server::build`,
@@ -141,7 +156,7 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-core` | Agent runtime. Owns `SessionEngine`, turn admission, streaming rounds, shell turns, event bus, prompt construction, compaction, durable Workflow execution/replay, goal/loop drivers, hook dispatch, subagents, team state, worktree/tmux helpers, and session forking. Also the per-Project catalog scope tier (`catalog_scope.rs` `CatalogScope`/`ScopeOverlay`, `RuntimeRegistry` scope overlays with an LRU/TTL cache; ADR-0027): a session's bundle/plugin/skill/command catalog is composed lazily per `Global`/`Directory`/`Project` scope instead of one process-wide snapshot. |
 | `crates/hya-proto` | Shared wire/domain types. Defines newtyped IDs, tagged `Event`/`Envelope`, messages, parts, roles, model/tool schema types, API DTOs, and the deterministic projection reducer. Keep this dependency-light so UI/client crates can reuse it cheaply. |
 | `crates/hya-provider` | Model provider abstraction. Normalizes OpenAI-compatible, OpenAI Responses, OpenAI Codex, Grok Build, Anthropic, Google, dev, and fake routes into one streamed `Event` model; handles protocol encoding/decoding, provider routing, capability metadata, reasoning effort, and preflight checks for tool-capable routes. |
-| `crates/hya-tool` | Tool and permission plane. Provides the `Tool` trait, the 28-name canonical registry (namespaced `ns__tool` names included) plus hidden aliases, allow/ask/deny rules, the multi-root workspace boundary (`ProjectScope`: canonical containment in the session's roots, outside → `ExternalDirectory` ask; bash exempt; ADR-0026), interaction/question requests, spawn/todo/skill/websearch/LSP/Workflow planes, and the lockstep native loader. The builtin tool implementations live in the five tool-family bundles under `bundles/presets/*-tools/native`. |
+| `crates/hya-tool` | Tool and permission plane. Provides the `Tool` trait, the 29-name canonical registry (namespaced `ns__tool` names included) plus hidden aliases, allow/ask/deny rules, the multi-root workspace boundary (`ProjectScope`: canonical containment in the session's roots, outside → `ExternalDirectory` ask; bash exempt; ADR-0026), interaction/question requests, spawn/todo/skill/websearch/LSP/Workflow/project-activity planes, and the lockstep native loader. The builtin tool implementations live in the five tool-family bundles under `bundles/presets/*-tools/native`. |
 | `crates/hya-store` | Persistence. Stores events and token ledger entries in SQLite, runs migrations, lists/deletes sessions, replays event logs, and folds projections on read through `hya-proto::Projection`. Also the Project tables (`project`, `project_root`, `session.project_id`/`kind`; ADR-0024) and project-scoped saved permissions. |
 | `crates/hya-server` | The `/v1` contract surface over `hya-core`: HTTP/JSON+SSE+WebSocket routes generated from the `hya.v1` IDL, plus `V1Grpc` (tonic) dispatching through the same router. Shared catalogs/guidance/PTY/worktree/git helpers live in `support`. Also the Host allowlist guard (`host.rs`, `--allow-host`), the relay host connector (`relay_host/`, driven by the loopback-only `RelayControl` rpcs), Projects and session placement (ADR-0024), and the reaper of unused ephemeral sessions (`ephemeral.rs`). The legacy Compat and native routes are deleted. |
 | `crates/hya-api` | The v1 dual-protocol contract crate: `proto/hya/v1` generated Rust types (prost/tonic/pbjson protojson), stable error-code table mapped to HTTP statuses and gRPC codes, and cursor helpers. Regenerate with `cargo run -p xtask -- gen-api` (vendored protoc; output committed). |

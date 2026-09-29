@@ -66,6 +66,7 @@ fn ctx_with(workdir: PathBuf) -> ToolCtx {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 
@@ -93,6 +94,7 @@ fn ctx_with_rules(workdir: PathBuf, rules: Vec<Rule>) -> ToolCtx {
         roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

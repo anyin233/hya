@@ -5,9 +5,9 @@
 //! metadata and stages/activates immutable runtime generations under a root
 //! directory owned by the updater TCB.
 //!
-//! Production activation remains owner-gated: signatures alone never activate.
-//! Callers must pass `owner_authorized = true` (CLI: `hya update apply
-//! --owner-authorized-activation`, implemented in [`cli`]).
+//! Production activation requires an updater-root OS lease held for the apply.
+//! The lease and durable owner generation prevent caller-controlled activation
+//! and stale commits.
 //! `install.sh` remains break-glass bootstrap/recovery. Network download is
 //! outside this TCB; operators copy a complete local package directory in.
 
@@ -16,6 +16,7 @@ mod error;
 mod fetch;
 mod journal;
 mod layout;
+mod lease;
 mod metadata;
 mod pipeline;
 mod smoke;
@@ -26,13 +27,14 @@ mod verify;
 pub use error::UpdaterError;
 pub use fetch::{FetchedArtifact, fetch_artifacts_from_dir, resolve_package_source};
 pub use journal::{
-    ActivationJournalRecord, ActivationPhase, ActivationSelector, commit_activation,
-    journal_prepare, read_floor, read_selector, recover_activation,
+    ActivationJournalRecord, ActivationPhase, ActivationSelector, read_floor, read_selector,
+    recover_activation,
 };
 pub use layout::{
     UpdaterLayout, assert_no_session_or_secret_reads, assert_tcb_outside_candidate, layout,
     release_directory,
 };
+pub use lease::{ActivationAuthorization, UpdaterOwner};
 pub use metadata::{
     AcceptedFloor, ArtifactDigest, ReleaseMetadata, SUPPORTED_PROTOCOL_VERSION, TrustRoot,
     VerifiedRelease,

@@ -6,6 +6,17 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/agent-efforts/{agent_id}": {
+      "put": {
+        "operationId": "AgentModels.SetAgentEffort",
+        "summary": "Set or clear (empty `effort`) one agent's default thinking effort,",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SetAgentEffort",
+        "x-server-streaming": false
+      }
+    },
     "/v1/agent-models": {
       "get": {
         "operationId": "AgentModels.ListAgentModels",
@@ -25,6 +36,17 @@
           "AgentModels"
         ],
         "x-grpc-method": "hya.v1.AgentModels.SetAgentModel",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/agent-models/{agent_id}/configuration": {
+      "put": {
+        "operationId": "AgentModels.SaveAgentModelConfiguration",
+        "summary": "Set or clear the model in the owning user configuration file. Keeps a",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SaveAgentModelConfiguration",
         "x-server-streaming": false
       }
     },
@@ -164,6 +186,17 @@
         "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
         "x-server-streaming": false,
         "x-hya-any-method": true
+      }
+    },
+    "/v1/bundles:refresh": {
+      "post": {
+        "operationId": "Catalog.RefreshBundles",
+        "summary": "Refresh the installed-bundle catalog and the directory's Project",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.RefreshBundles",
+        "x-server-streaming": false
       }
     },
     "/v1/commands": {
@@ -388,6 +421,28 @@
           "Mcp"
         ],
         "x-grpc-method": "hya.v1.Mcp.DisconnectMcp",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/model-effort-preferences": {
+      "get": {
+        "operationId": "AgentModels.ListModelEffortPreferences",
+        "summary": "",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.ListModelEffortPreferences",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/model-effort-preferences/{provider_id}/{model_id}": {
+      "put": {
+        "operationId": "AgentModels.SetModelEffortPreference",
+        "summary": "Empty effort clears the preference. Emits a live `catalogUpdated` frame",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SetModelEffortPreference",
         "x-server-streaming": false
       }
     },
@@ -1148,6 +1203,79 @@
   },
   "components": {
     "schemas": {
+      "SetAgentEffortRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentEffort": {
+        "type": "object",
+        "description": "One agent's saved runtime effort choice (empty when cleared).",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        }
+      },
+      "ModelEffortPreference": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ListModelEffortPreferencesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "preferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelEffortPreference"
+            }
+          }
+        }
+      },
+      "SetModelEffortPreferenceRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        }
+      },
       "AgentModelSelection": {
         "type": "object",
         "description": "A concrete provider/model selection.",
@@ -1199,6 +1327,15 @@
           },
           "session_override": {
             "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "effort": {
+            "type": "string"
+          },
+          "effort_source": {
+            "$ref": "#/components/schemas/AgentEffortSource"
+          },
+          "configuration_path": {
+            "type": "string"
           }
         }
       },
@@ -1240,6 +1377,24 @@
             "type": "string"
           },
           "preference": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
+      "SaveAgentModelConfigurationRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "model": {
             "$ref": "#/components/schemas/AgentModelSelection"
           }
         }
@@ -1608,6 +1763,15 @@
           },
           "image_input": {
             "type": "boolean"
+          },
+          "reasoning_variants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasoning_default": {
+            "type": "string"
           }
         }
       },
@@ -1749,6 +1913,70 @@
             "type": "string"
           },
           "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshBundlesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshBundlesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bundles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RefreshedBundle"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleRefreshError"
+            }
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshedBundle": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "prepared_digest": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
+      "BundleRefreshError": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "bundle_id": {
+            "type": "string"
+          },
+          "message": {
             "type": "string"
           }
         }
@@ -2446,7 +2674,7 @@
       },
       "PartAppended": {
         "type": "object",
-        "description": "Streaming delta appended to a part. Assistant text deltas are live-only (`seq = 0`); reasoning and legacy text deltas are durable.",
+        "description": "Streaming delta appended to a part. Assistant text and reasoning deltas are live-only (`seq = 0`); legacy durable deltas remain replay-compatible.",
         "properties": {
           "message": {
             "type": "string"
@@ -4329,6 +4557,12 @@
           },
           "kind": {
             "$ref": "#/components/schemas/SessionKind"
+          },
+          "effective_effort": {
+            "type": "string"
+          },
+          "effort_source": {
+            "$ref": "#/components/schemas/EffortSource"
           }
         }
       },
@@ -5085,6 +5319,17 @@
           }
         }
       },
+      "AgentEffortSource": {
+        "type": "string",
+        "description": "Which layer chose an agent's default thinking effort.",
+        "enum": [
+          "AGENT_EFFORT_SOURCE_UNSPECIFIED",
+          "AGENT_EFFORT_SOURCE_PREFERENCE",
+          "AGENT_EFFORT_SOURCE_CONFIGURED",
+          "AGENT_EFFORT_SOURCE_AUTHORED",
+          "AGENT_EFFORT_SOURCE_NONE"
+        ]
+      },
       "AgentModelSource": {
         "type": "string",
         "description": "Which tier resolved an agent's effective base model.",
@@ -5193,7 +5438,8 @@
           "FINISH_CAUSE_INTERRUPTED",
           "FINISH_CAUSE_PROVIDER_ERROR",
           "FINISH_CAUSE_OTHER",
-          "FINISH_CAUSE_ARCHIVED"
+          "FINISH_CAUSE_ARCHIVED",
+          "FINISH_CAUSE_HANDOFF"
         ]
       },
       "Role": {
@@ -5263,6 +5509,19 @@
           "RELAY_STATE_CONNECTING",
           "RELAY_STATE_CONNECTED",
           "RELAY_STATE_BACKOFF"
+        ]
+      },
+      "EffortSource": {
+        "type": "string",
+        "description": "Source of a session's effective reasoning effort.",
+        "enum": [
+          "EFFORT_SOURCE_UNSPECIFIED",
+          "EFFORT_SOURCE_SUFFIX",
+          "EFFORT_SOURCE_AGENT",
+          "EFFORT_SOURCE_PREFERENCE",
+          "EFFORT_SOURCE_MODEL_DEFAULT",
+          "EFFORT_SOURCE_GLOBAL_DEFAULT",
+          "EFFORT_SOURCE_NONE"
         ]
       },
       "SessionKind": {

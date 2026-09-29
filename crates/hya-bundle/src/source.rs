@@ -151,10 +151,44 @@ pub(crate) struct SourceKind {
     pub kind: String,
 }
 
-/// Strict source manifest shape for the unchanged singular AgentBundle grammar.
+/// A bundle-owned argv check run against the source tree before publication.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceCheck {
+    pub command: Vec<String>,
+    #[serde(default = "default_check_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_check_timeout_secs() -> u64 {
+    120
+}
+
+impl SourceCheck {
+    pub(crate) fn validate(&self, source_name: &str) -> Result<(), crate::BundleError> {
+        if self.command.is_empty() || self.command.iter().any(String::is_empty) {
+            return Err(crate::BundleError::InvalidManifest {
+                source_name: source_name.to_string(),
+                detail: "check.command must be non-empty and contain no empty argv entries"
+                    .to_string(),
+            });
+        }
+        if self.timeout_secs == 0 || self.timeout_secs > 600 {
+            return Err(crate::BundleError::InvalidManifest {
+                source_name: source_name.to_string(),
+                detail: "check.timeout_secs must be between 1 and 600".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceAgentManifest {
+    /// Optional source-root self-check.
+    #[serde(default)]
+    pub check: Option<SourceCheck>,
     pub kind: String,
     pub identity: BundleIdentity,
     /// Provider-facing namespace for this bundle's tools and schemas; the
@@ -190,6 +224,9 @@ pub(crate) struct SourceAgentManifest {
 pub(crate) struct SourceAgentSetManifest {
     pub kind: String,
     pub identity: BundleIdentity,
+    /// Optional source-root self-check.
+    #[serde(default)]
+    pub check: Option<SourceCheck>,
     /// Provider-facing namespace for this bundle's tools and schemas.
     #[serde(default)]
     pub namespace: Option<String>,
@@ -219,6 +256,9 @@ pub(crate) struct SourceAgentSetManifest {
 pub(crate) struct SourcePluginManifest {
     pub kind: String,
     pub identity: BundleIdentity,
+    /// Optional source-root self-check.
+    #[serde(default)]
+    pub check: Option<SourceCheck>,
     #[serde(default)]
     pub namespace: Option<String>,
     #[serde(default)]
@@ -241,6 +281,9 @@ pub(crate) struct SourcePluginManifest {
 pub(crate) struct SourceWorkflowManifest {
     pub kind: String,
     pub identity: BundleIdentity,
+    /// Optional source-root self-check.
+    #[serde(default)]
+    pub check: Option<SourceCheck>,
     /// Provider-facing namespace for this bundle's tools and schemas; the
     /// identity name segment is the default.
     #[serde(default)]

@@ -87,6 +87,7 @@ fn context(sink: Arc<CaptureSink>, session: hya_proto::SessionId) -> ToolCtx {
         workdir: std::env::temp_dir(),
         roots: vec![std::env::temp_dir()],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

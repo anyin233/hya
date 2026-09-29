@@ -272,6 +272,29 @@ async fn projection_info_at(
 ) -> Result<pb::SessionInfo, V1Error> {
     let projection = st.engine.read_projection_shared(session).await?;
     let mut info = session_info(&projection, started, updated);
+    if let Some(model) = projection.session.model.as_ref() {
+        // Same resolver as the turn loop, including the session Agent's
+        // runtime/configured effort. An authored bundle `model_policy`
+        // effort is applied per request but not reflected here.
+        let agent = projection
+            .session
+            .agent
+            .as_ref()
+            .map(|agent| agent.as_str());
+        let resolved = st.engine.effective_effort(model, agent, None).await?;
+        let (effort, source) = (resolved.effort, resolved.source);
+        info.effective_effort = effort
+            .map(|value| value.as_str().to_string())
+            .unwrap_or_default();
+        info.effort_source = match source {
+            hya_core::EffortSource::Suffix => pb::EffortSource::Suffix,
+            hya_core::EffortSource::Agent => pb::EffortSource::Agent,
+            hya_core::EffortSource::Preference => pb::EffortSource::Preference,
+            hya_core::EffortSource::ModelDefault => pb::EffortSource::ModelDefault,
+            hya_core::EffortSource::GlobalDefault => pb::EffortSource::GlobalDefault,
+            hya_core::EffortSource::None => pb::EffortSource::None,
+        } as i32;
+    }
     info.busy = st.is_busy(session);
     info.permission_mode = st.engine.permission_mode(session).await?;
     Ok(info)
@@ -364,12 +387,12 @@ async fn update_session(
     {
         st.engine.set_title(session, title).await?;
     }
-    if let Some(model) = request.model
-        && !model.is_empty()
-    {
-        st.engine
-            .switch_model(session, hya_proto::ModelRef::new(model))
-            .await?;
+    let model = request
+        .model
+        .filter(|model| !model.is_empty())
+        .map(hya_proto::ModelRef::new);
+    if let Some(model) = &model {
+        st.engine.switch_model(session, model.clone()).await?;
     }
     if let Some(agent) = request.agent
         && !agent.is_empty()
@@ -377,6 +400,23 @@ async fn update_session(
         st.engine
             .switch_agent(session, hya_proto::AgentName::new(agent))
             .await?;
+    }
+    // A pinned agent (`agents.<id>.model`, authored policy) outranks the
+    // persisted session model, so the switch is also recorded as the root
+    // tree's temporary choice for the session's agent, which outranks both.
+    if let Some(model) = model {
+        let agent = st
+            .engine
+            .read_projection_shared(session)
+            .await?
+            .session
+            .agent
+            .clone();
+        if let Some(agent) = agent {
+            st.engine
+                .set_agent_model_override(session, agent, Some(model))
+                .await?;
+        }
     }
     if let Some(mode) = request.permission_mode {
         let root = st

@@ -277,6 +277,71 @@ async fn quiescence_wakes_main_to_synthesize() {
     );
 }
 
+/// Reports already delivered to the lead during its own turn must not trigger
+/// a second synthesis turn after the lead has answered.
+#[tokio::test]
+async fn reports_consumed_in_lead_turn_do_not_wake_synthesis() {
+    let (engine, agent) = engine_with(SubagentLimits::default()).await;
+    let root = make_root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let lease = engine.try_begin_turn(root).unwrap();
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let agents = engine.agent_roster_for_binding(&binding, "build").unwrap();
+    let resources = engine
+        .agent_resource_policy_for_binding(&binding, "build")
+        .unwrap();
+    supervisor
+        .ensure_main(
+            root,
+            agent.clone(),
+            (binding, agents, resources),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let child = make_child(&engine, root).await;
+    supervisor
+        .register_existing_resident(root, child, "worker-1".to_string(), agent, None)
+        .await
+        .unwrap();
+    engine
+        .mail_send(
+            child,
+            MailEndpoint::Handle("main".to_string()),
+            MailKind::Message,
+            "worker failed; no result".to_string(),
+        )
+        .await
+        .unwrap();
+    supervisor
+        .archive_member(root, "worker-1", "failed")
+        .await
+        .unwrap();
+    let mut steer = engine
+        .steer_mailbox_snapshot_with_policy(
+            root,
+            Some(hya_tool::ChannelPolicySnapshot {
+                unit_leader: u8::MAX,
+                unit_member: u8::MAX,
+                dm_parent: u8::MAX,
+                dm_child: u8::MAX,
+            }),
+        )
+        .await;
+    let notice = steer.drain(&engine).await.unwrap().expect("report notice");
+    assert!(notice.contains("worker failed; no result"));
+    drop(lease);
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        assistant_turns(&engine, root).await,
+        0,
+        "delivered report must not wake a second lead turn"
+    );
+}
+
 /// A mail loop that exceeds the per-team message budget kills the whole team: the
 /// team cancel token fires and every member is marked Failed with a reason.
 #[tokio::test]

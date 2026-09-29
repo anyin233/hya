@@ -925,6 +925,7 @@ mod tests {
             mut extra: Vec<hya_bundle::PreparedInstallableBundle>,
         ) -> Arc<crate::RuntimeRegistry> {
             let bundle = hya_bundle::PreparedAgentBundle {
+                check: None,
                 format_version: 2,
                 identity: hya_bundle::BundleIdentity {
                     id: "hya/mailbox-unit-tests-resident".to_string(),

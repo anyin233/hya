@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -312,7 +312,11 @@ impl Tool for ShellTool {
                         "type": "object",
                         "additionalProperties": { "type": "string" }
                     },
-                    "timeout": { "type": "number", "minimum": 0 },
+                    "timeout": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Timeout in seconds. Defaults to 300 seconds; finite values are clamped to 1-3600 seconds, and 0 disables the deadline."
+                    },
                     "cwd": { "type": "string" },
                     "pty": { "type": "boolean" }
                 },
@@ -979,7 +983,14 @@ fn shape_result(
         .map(validate_output_path)
         .transpose()?;
     let mut truncated = output_path.is_some();
-    let mut prefix = shell_notice_prefix(timeout, displayed_output_path.as_deref(), timed_out);
+    let signaled = matches!(captured.completion, Completion::Finished(None));
+    let mut prefix = shell_notice_prefix(
+        timeout,
+        displayed_output_path.as_deref(),
+        timed_out,
+        exit,
+        signaled,
+    );
 
     // Measure the untruncated lossy preview first.  Rendering applies the
     // inline cap, so measuring its result would hide a late spill condition.
@@ -996,9 +1007,19 @@ fn shape_result(
             .map(validate_output_path)
             .transpose()?;
         truncated = output_path.is_some();
-        prefix = shell_notice_prefix(timeout, displayed_output_path.as_deref(), timed_out);
+        prefix = shell_notice_prefix(
+            timeout,
+            displayed_output_path.as_deref(),
+            timed_out,
+            exit,
+            signaled,
+        );
     }
-    let output = render_shell_output(&prefix, &captured.output.inline);
+    let output = render_shell_output(
+        &prefix,
+        &captured.output.inline,
+        displayed_output_path.as_deref(),
+    );
 
     let mut metadata = Map::new();
     metadata.insert("exit".to_string(), json!(exit));
@@ -1059,6 +1080,8 @@ fn shell_notice_prefix(
     timeout: TimeoutSettings,
     output_path: Option<&str>,
     timed_out: bool,
+    exit: Option<i32>,
+    signaled: bool,
 ) -> String {
     let mut prefix = String::new();
     if timeout.clamped {
@@ -1071,6 +1094,14 @@ fn shell_notice_prefix(
         prefix.push_str(&format!(
             "...output truncated...\n\nFull output saved to: {path}\n\n"
         ));
+    }
+    if let Some(code) = exit.filter(|code| *code != 0) {
+        prefix.push_str(&format!(
+            "<shell_metadata>\nCommand exited with code {code}.\n</shell_metadata>\n\n"
+        ));
+    }
+    if signaled {
+        prefix.push_str("<shell_metadata>\nCommand terminated by signal.\n</shell_metadata>\n\n");
     }
     if timed_out {
         prefix.push_str(&format!(
@@ -1091,18 +1122,73 @@ fn shell_output_len(prefix: &str, inline: &[u8]) -> usize {
     serialized_string_len(prefix).saturating_add(inline_len)
 }
 
-/// Render a notice followed by a UTF-8-safe preview within the serialized cap.
-fn render_shell_output(prefix: &str, inline: &[u8]) -> String {
+/// Render a notice followed by a UTF-8-safe preview, retaining both ends when spilled.
+fn render_shell_output(prefix: &str, inline: &[u8], output_path: Option<&str>) -> String {
     let mut output = prefix.to_owned();
     if inline.is_empty() {
         output.push_str("(no output)");
         return output;
     }
-    let mut text = String::from_utf8_lossy(inline).into_owned();
     let available = MAX_OUTPUT_BYTES.saturating_sub(serialized_string_len(&output));
-    truncate_utf8_for_json(&mut text, available);
-    output.push_str(&text);
+    let mut head = String::from_utf8_lossy(inline).into_owned();
+    let Some(path) = output_path else {
+        truncate_utf8_for_json(&mut head, available);
+        output.push_str(&head);
+        return output;
+    };
+    let total_bytes = std::fs::metadata(path)
+        .map(|metadata| metadata.len().try_into().unwrap_or(usize::MAX))
+        .unwrap_or(inline.len());
+    let mut tail = String::from_utf8_lossy(&read_artifact_tail(path, available.saturating_mul(4)))
+        .into_owned();
+    let mut marker = String::new();
+    let mut head_budget;
+    let mut tail_budget;
+    for _ in 0..2 {
+        let content_budget = available.saturating_sub(serialized_string_len(&marker));
+        head_budget = content_budget / 5;
+        tail_budget = content_budget.saturating_sub(head_budget);
+        truncate_utf8_for_json(&mut head, head_budget);
+        truncate_utf8_tail_for_json(&mut tail, tail_budget);
+        let omitted = total_bytes.saturating_sub(head.len().saturating_add(tail.len()));
+        marker = format!("[… {omitted} bytes omitted; full output: {path}]\n");
+    }
+    output.push_str(&head);
+    output.push_str(&marker);
+    output.push_str(&tail);
     output
+}
+
+fn read_artifact_tail(path: &str, max_bytes: usize) -> Vec<u8> {
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(end) = file.seek(std::io::SeekFrom::End(0)) else {
+        return Vec::new();
+    };
+    let size = (end as usize).min(max_bytes);
+    if file.seek(std::io::SeekFrom::End(-(size as i64))).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::with_capacity(size);
+    let _ = file.take(size as u64).read_to_end(&mut bytes);
+    bytes
+}
+
+fn truncate_utf8_tail_for_json(text: &mut String, max_encoded_bytes: usize) {
+    let mut used = 0usize;
+    let mut start = text.len();
+    for (offset, character) in text.char_indices().rev() {
+        let encoded = json_char_len(character);
+        if used.saturating_add(encoded) > max_encoded_bytes {
+            break;
+        }
+        used += encoded;
+        start = offset;
+    }
+    if start > 0 {
+        text.drain(..start);
+    }
 }
 
 /// Truncate a UTF-8 string by its JSON-encoded content bytes.
@@ -1143,4 +1229,54 @@ fn with_cleanup_error(primary: ToolError, cleanup: Result<(), ToolError>) -> Too
 /// Convert an I/O failure into a typed error with operation context.
 fn contextual_io(operation: &str, error: impl std::fmt::Display) -> ToolError {
     ToolError::Io(io::Error::other(format!("{operation}: {error}")))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn spilled_output_preview_keeps_unique_tail_marker() {
+        let path = std::env::temp_dir().join(format!("hya-shell-test-{}.txt", std::process::id()));
+        let mut file = File::create(&path).expect("create test artifact");
+        let tail_marker = "UNIQUE_FAILURE_SUMMARY_MARKER";
+        let full = format!("{}{}\n", "head\n".repeat(MAX_OUTPUT_BYTES), tail_marker);
+        file.write_all(full.as_bytes())
+            .expect("write test artifact");
+
+        let output = render_shell_output(
+            "Full output saved to: artifact://test\n",
+            b"head\nhead\n",
+            Some(path.to_str().expect("UTF-8 test path")),
+        );
+        std::fs::remove_file(path).expect("remove test artifact");
+
+        assert!(
+            output.contains(tail_marker),
+            "output did not retain tail: {output:?}"
+        );
+        assert!(output.contains("omitted"));
+    }
+
+    #[test]
+    fn completion_notice_only_reports_nonzero_exit() {
+        let timeout = timeout_settings(None).expect("default timeout");
+        let failed = shell_notice_prefix(timeout, None, false, Some(101), false);
+        let succeeded = shell_notice_prefix(timeout, None, false, Some(0), false);
+
+        assert!(failed.contains("Command exited with code 101."));
+        assert!(!succeeded.contains("Command exited"));
+    }
+
+    #[test]
+    fn timeout_schema_describes_seconds_and_bounds() {
+        let schema = ShellTool.schema();
+        let timeout = &schema.input_schema["properties"]["timeout"]["description"];
+        let description = timeout.as_str().expect("timeout description");
+        assert!(description.contains("seconds"));
+        assert!(description.contains("1-3600"));
+        assert!(description.contains("0 disables"));
+    }
 }
