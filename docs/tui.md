@@ -816,7 +816,7 @@ the bordered input, and the instruction line. The permission mode picker
 The complete screen is one editable tree of nested rectangles. The default
 tree has Projects on the left, Conversation in the middle, and Sessions,
 Todos, and Context stacked on the right. Conversation contains the header,
-transcript, prompts, command input, message composer, and footer, so moving
+transcript, prompts, message composer, and footer, so moving
 it moves the whole interactive surface. Each other rectangle has an assigned
 job; you can split, resize, reassign, or close any auxiliary rectangle.
 Additional jobs include jobs, models, Workflows, interactions, status, and
@@ -1558,10 +1558,12 @@ unless pasted as above. Local mode is unchanged: everything is read here.
 ### Command pane
 
 The `Commands` pane has a single-line input separate from the message
-composer. Press `/` while the message composer is empty, or from the Projects
-sidebar, to focus it. While a message draft is open, press Ctrl+X then `/`;
-the draft stays in the composer. The pane appears above the composer, and
-the footer shows its keys. For example, press `/`, type `models`, and press
+composer. It is a global overlay, independent of the tiled layout, so opening
+it never resizes the conversation or side panes. Press `/` while the message
+composer is empty, or from any other workspace pane, to focus it. While a
+message draft is open in the conversation, press Ctrl+X then `/`; the draft
+stays in the composer. Like the help overlay, Commands is centered near the
+top of the whole terminal, and its own hint row shows its keys. For example, press `/`, type `models`, and press
 Enter to open the model catalog. To type `src/main.rs` in a message, keep
 typing in the composer; its slash is literal after the first character.
 
@@ -1619,8 +1621,16 @@ matches its only completion, the menu closes so Enter runs the command.
 
 The command pane builds all selectable rows through
 `suggestCommandInput(input, entries, complete)`, which returns all matching
-rows without a display limit. The renderer uses `pickerWindow(count, index, 8)`
-to display at most eight rows while keeping the selected row visible. Each row
+rows without a display limit. The renderer uses `pickerWindow(count, index, rows)`
+to display at most eight rows, reduced on short terminals, while keeping the
+selected row visible. `App` owns one `CommandPane` for its full lifetime;
+assigning, resizing, or selecting a workspace leaf does not replace its input
+or history. Its absolute box starts at row 2, is centered across the terminal,
+and is at most 96 columns wide (four columns of outside margin on narrower
+terminals), with z-index 90 below the help/picker overlay at 100. `ui.command`
+exposes `active(): boolean`, `open(): void`, `key(KeyEvent): boolean`, and
+`paste(text: string): void`. Closing preserves the selected workspace pane
+and command draft, restoring Projects keyboard focus when opened there. Each row
 is a `CommandSuggestion` with `label: string`, `replacement: string`,
 `kind: "command" | "argument"`, and `runOnEnter: boolean`. A local command's
 `CommandSpec.complete(position, context)` supplies zero or more full-line
