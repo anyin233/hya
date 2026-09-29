@@ -167,8 +167,9 @@ export interface AttachmentPart {
 
 export interface MessagePart {
   id: string
-  text?: { text: string }
-  reasoning?: { text: string }
+  // protojson omits empty strings: an empty text or thinking block has no `text`.
+  text?: { text?: string }
+  reasoning?: { text?: string }
   toolCall?: ToolCallPart
   toolResult?: { output: string; errorMessage?: string }
   attachment?: AttachmentPart
