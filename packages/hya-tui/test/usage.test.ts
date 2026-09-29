@@ -138,9 +138,9 @@ test("a compaction summary message hides the HYA_COMPACTED_CONTEXT marker line",
 
 test("the status bar shows the WebUI address, or a warning when it is unavailable", () => {
   const base = { mode: "manual", directory: "/w", branch: "main", connected: true }
-  expect(statusBarText({ ...base, web: { url: "http://127.0.0.1:3250/" } }, 80)).toBe("mode manual · /w · ⎇ main · WebUI http://127.0.0.1:3250")
+  expect(statusBarText({ ...base, web: { url: "http://127.0.0.1:3250/" } }, 80)).toBe("mode manual · WebUI http://127.0.0.1:3250 · /w · ⎇ main")
   const failed = statusBarSegments({ ...base, web: { error: "port 3250 is in use" } }, 80)
-  expect(failed.at(-1)).toEqual({ text: "WebUI unavailable", tone: "warning" })
+  expect(failed[1]).toEqual({ text: "WebUI unavailable", tone: "warning" })
 })
 
 test("a backend stopped on purpose shows `backend stopped` (error) instead of `reconnecting`", () => {

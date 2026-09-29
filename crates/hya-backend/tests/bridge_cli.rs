@@ -369,6 +369,19 @@ impl BridgeProcess {
         self.stderr.lock().unwrap().clone()
     }
 
+    /// The bridge's stderr once it contains `needle` (or at `WAIT`): the
+    /// bridge logs a failure asynchronously, after the client already saw it.
+    async fn stderr_containing(&self, needle: &str) -> String {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            let stderr = self.stderr();
+            if stderr.contains(needle) || tokio::time::Instant::now() >= deadline {
+                return stderr;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     fn pid(&self) -> i32 {
         i32::try_from(self.child.id().unwrap()).unwrap()
     }
@@ -627,7 +640,7 @@ async fn a_connection_without_the_token_is_refused_before_any_relay_stream() {
         !text.contains(TOKEN_HEADER),
         "the token was forwarded: {text}"
     );
-    let stderr = bridge.stderr();
+    let stderr = bridge.stderr_containing("without the bridge token").await;
     assert!(stderr.contains("without the bridge token"), "{stderr}");
     assert_eq!(
         stderr.matches("without the bridge token").count(),
@@ -724,7 +737,7 @@ async fn an_offline_backend_answers_503_json_and_other_bytes_are_reset() {
         error.map(|e| e.kind()),
         Some(std::io::ErrorKind::ConnectionReset)
     );
-    let stderr = bridge.stderr();
+    let stderr = bridge.stderr_containing("offline").await;
     assert!(stderr.contains("offline"), "{stderr}");
     assert_no_secret(&stderr, &link);
 }
@@ -761,7 +774,7 @@ async fn a_tampered_response_resets_the_client_connection() {
         error.map(|e| e.kind()),
         Some(std::io::ErrorKind::ConnectionReset)
     );
-    let stderr = bridge.stderr();
+    let stderr = bridge.stderr_containing("integrity").await;
     assert!(stderr.contains("integrity"), "{stderr}");
 }
 

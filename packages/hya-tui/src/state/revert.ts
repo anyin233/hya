@@ -80,9 +80,12 @@ export function forkSourceText(source: ForkSource | undefined, sessions: readonl
 /**
  * A fresh read of `current`'s row merged over it: `revert` and
  * `forkedFrom` are the fresh row's (absent there = gone: a redo or a
- * committed revert), everything else is merged.
+ * committed revert), everything else is merged. A row older than `current`
+ * (a smaller `lastSeq`: a list read that started before an `UpdateSession`)
+ * is ignored, so it never rolls the open session back.
  */
 export function sessionRow(current: SessionInfo, row: SessionInfo): SessionInfo {
+  if (current.lastSeq && row.lastSeq && BigInt(row.lastSeq) < BigInt(current.lastSeq)) return current
   const merged: SessionInfo = { ...current, ...row }
   if (!row.revert) delete merged.revert
   if (!row.forkedFrom) delete merged.forkedFrom

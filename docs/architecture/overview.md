@@ -92,9 +92,9 @@ The event log is the source of truth. This gives hya a few useful properties:
   also offers it through a relay; `hya proxy` runs the relay and
   `hya bridge` is the client side (ADR-0025).
 - `hya tail-session` replays JSON envelopes from a persisted SQLite event log.
-- `hya models`, `login`, `auth`/`providers`, `agent`, `sessions`, and
-  `rpc` expose local catalogs, auth tokens, session listing, and JSONL
-  integration modes.
+- `hya models`, `provider` (alias `providers`), `login`, `agent`,
+  `sessions`, and `rpc` expose local catalogs, provider setup and saved
+  keys, session listing, and JSONL integration modes.
 - `hya workflow` and `GET/POST /v1/sessions/{session}/workflow` use
   the same app-owned `WorkflowControl` path; route assignment and bounded
   outcomes remain in the canonical event stream.

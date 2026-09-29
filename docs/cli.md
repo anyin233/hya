@@ -12,7 +12,7 @@ standalone `hya-updater` binary are gone.
 | Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
 | Server and wire protocols | `serve` (and `serve start`/`status`/`stop`/`restart` for the backend daemon), `rpc` |
 | Sessions | `sessions`, `tail-session` |
-| Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
+| Providers and auth | `provider` (alias `providers`: `add`, `list`, `remove`, `logout`), `login`, `oauth`, `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
 | Update | bare `update` (reinstall from the latest release, [`docs/install.md`](install.md)); self-update TCB `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
@@ -120,7 +120,7 @@ URIs are never locked.
 | `sessions` (list), `tail-session` | Durable default or `--db` | Read directly, never write, no lock | Read directly, no lock |
 | `-p` goal mode, `loop`, `rpc` | A private temporary database per run | Not affected (`--db` is ignored) | Not affected |
 | `serve` | `--db`, else in-memory | Exits 75 | Takes the lock (it is the server) |
-| `agent`, `bundle`, `models`, `auth`, `update` | No session store | Not affected | Not affected |
+| `agent`, `bundle`, `models`, `provider`, `update` | No session store | Not affected | Not affected |
 
 The 75 line for a command the server cannot run names the server and the way
 out:
@@ -1055,16 +1055,155 @@ it). See [Protocol guide](protocol/README.md),
 [API reference](protocol/api-reference.md), and
 [Server and Client](architecture/server-client.md).
 
+## `hya provider`
+
+`hya provider` sets up model providers from the command line. `add` is the
+onboarding path. It asks for the base URL, the protocol, and the API key. It
+then fetches the provider's model list with that key, and saves the provider
+only when the list comes back. `list` shows what is configured, and `remove`
+deletes a provider. They write the same files as the TUI Provider View
+(`/key`).
+
+```sh
+hya provider add [--name <id>] [--base-url <url>] [--protocol <protocol>] [--api-key <key>] [-y]
+hya provider list [--refresh]
+hya provider remove <id> [-y]
+hya provider logout <id>
+```
+
+`hya providers` is an alias of `hya provider`. It replaces the removed
+`hya auth list|logout`: `list` shows saved keys and `logout` deletes one.
+
+### `hya provider add`
+
+Any value not given as a flag is asked for on the terminal, in this order:
+
+1. **Base URL**: the API root that lists models at `<base>/models`, for
+   example `https://api.openai.com/v1` or `https://api.anthropic.com/v1`. A
+   trailing `/` is dropped. Only `http(s)` URLs with a host and no credentials
+   are accepted.
+2. **Protocol**: pick a number or type a name. The default is
+   `anthropic-messages` when the URL contains `anthropic`, and `openai-chat`
+   otherwise.
+3. **API key**: typed with echo off on a terminal. Leave it empty for
+   endpoints that need no key.
+4. After the model list is fetched: **Provider name**, the `<id>` in
+   `<id>/<model>`. The default comes from the host: `api.openai.com` gives
+   `openai`, `api.12th.day` gives `12th`, and an IP address or `localhost`
+   gives `local`.
+
+| Protocol | `config.yaml` `kind` | Requests go to |
+| --- | --- | --- |
+| `openai-chat` | `openai` | `<base>/chat/completions`, Bearer key |
+| `openai-responses` | `openai-response` | `<base>/responses`, Bearer key |
+| `anthropic-messages` (alias `anthropic-message`) | `anthropic` | `<base>/messages`, `x-api-key` |
+
+The model list is fetched exactly as it is for a saved provider
+(`GET <base>/models`, bounded to 8 s). The first 20 ids are printed. If the
+fetch fails, for example because the key is rejected, the endpoint is
+unreachable, or it has no `/models`, `add` asks `Save the provider anyway?`.
+A closed stdin answers no, the command exits 1, and nothing is written. If the
+id is already configured, `add` asks before replacing it. With `--name`, it
+asks before any other prompt. `-y` replaces without asking.
+
+Saving writes:
+
+| What | Where |
+| --- | --- |
+| `providers.<id>` with `kind`, `base_url`, and (new) `models: []` | the active `config.yaml` (edited in place; comments and other keys kept) |
+| the API key (`type: api`) | `~/.config/hya/auth/<id>.yaml` (mode 0600), never `config.yaml`. Replacing a provider without a key removes its old saved key. |
+| the fetched model list | the model cache, the same one `hya models --refresh` fills |
+
+If a backend daemon of the database is running, `add` then calls its
+`POST /v1/providers/{id}/refresh`, so the new models are live without a
+restart. A failure there is a warning; `hya serve restart` also applies the
+change.
+
+Example session (input you type is shown after each prompt):
+
+```text
+$ hya provider add
+Base URL (e.g. https://api.openai.com/v1): https://api.12th.day/v1
+Protocol:
+  1) openai-chat         OpenAI Chat Completions  (<base>/chat/completions)
+  2) openai-responses    OpenAI Responses         (<base>/responses)
+  3) anthropic-messages  Anthropic Messages       (<base>/messages)
+Choose [1]: 3
+API key (input hidden; empty for none):
+Fetching models from https://api.12th.day/v1/models …
+Found 127 models:
+  cline-free/deepseek-v4.1-flash, cline-free/muse-spark-1.3-contributor
+  …
+  … and 107 more (`hya provider list`)
+Provider name [12th]:
+Saved provider `12th` (anthropic-messages, https://api.12th.day/v1) to ~/.config/hya/config.yaml
+Saved its key to ~/.config/hya/auth/12th.yaml
+Use a model with `hya --model 12th/cline-free/deepseek-v4.1-flash`, or set `default_model: 12th/cline-free/deepseek-v4.1-flash` in config.yaml
+```
+
+The same without prompts, for scripts:
+
+```sh
+hya provider add --name 12th --base-url https://api.12th.day/v1 \
+  --protocol anthropic-messages --api-key "$KEY" --yes
+```
+
+`--api-key` is visible in process listings. On a shared machine, pipe the key
+instead: `printf '%s\n' "$KEY" | hya provider add --name … --base-url … --protocol …`.
+
+### `hya provider list`
+
+Prints one block per `providers.<id>` in `config.yaml`: the id, the protocol
+(or the raw `kind` for `openai-codex`, `grok-build`, and `google`), the base
+URL, and where the key comes from (`saved key`, `oauth`, `config api_key`, or
+`no key`). Below that it lists every model as `<id>/<model>`. Models come
+from the model cache merged with `models:` entries, the same catalog
+`hya models` prints. `--refresh` fetches every provider's list first.
+
+A `models:` entry that names a fetched model overrides it field by field, and
+unset fields keep the fetched values
+([ADR-0029](adr/0029-config-model-entries-override-the-model-cache.md)). Such
+rows end in `(config override)`. Rows the endpoint does not list, but an entry
+declares, end in `(config only)`. Keys saved for ids that `config.yaml` does
+not declare come last.
+
+```text
+12th  anthropic-messages  https://api.12th.day/v1  saved key
+  12th/MiniMaxAI/MiniMax-M2.5
+  12th/claude-sonnet-5  (config only)
+  12th/glm-5.3  (config override)
+  …
+
+Saved keys without a provider in config.yaml (`hya provider logout <id>` deletes one):
+  old-proxy
+```
+
+### `hya provider logout`
+
+`hya provider logout <id>` deletes the saved key `auth/<id>.yaml` and keeps
+the provider's declaration, which is then used with its inline `api_key` if it
+has one. The provider can also be missing from `config.yaml`, which cleans up
+a leftover key. If no key is saved, it exits 1. A running backend rebuilds the
+provider without the key (`DELETE /v1/auth/{id}`).
+
+### `hya provider remove`
+
+`hya provider remove <id>` asks for confirmation, unless you pass `-y`. It
+then deletes `providers.<id>` from `config.yaml`, the saved key
+`auth/<id>.yaml`, and the provider's model-cache rows. It warns about every
+value outside `providers` that still names a model of the provider, such as
+`default_model: <id>/…` or `agents.<agent>.model`. A running backend of the
+database drops the provider's route and models through
+`DELETE /v1/auth/{id}`. That call rebuilds the provider, and a provider no
+longer in `config.yaml` loses its route. Removing an id that is not
+configured exits 1.
+
 ## Auth and Catalog Commands
 
 ```sh
 hya login <provider> <token>
 hya oauth login --provider <name> --type <openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
 hya oauth status [provider]
-hya auth list
-hya auth logout <provider>
-hya providers list
-hya providers logout <provider>
 hya models [provider] [--verbose] [--refresh]
 hya agent list [--all]
 ```
@@ -1104,8 +1243,9 @@ approval in that window, the command fails and must be rerun. Flags map to
 `no_browser`, `model`, `base_url` (the `auth_dir` / `config_path` fields are
 test-only overrides).
 
-Saved credentials take precedence over inline `api_key` values. `providers` is
-an alias for `auth`.
+Saved credentials take precedence over inline `api_key` values. `hya provider
+list` shows every saved key and `hya provider logout <id>` deletes one (see
+[`hya provider`](#hya-provider)).
 
 **`oauth status [provider]`.** Prints non-secret per-provider status only —
 credential kind (`api` vs oauth), OAuth type when present, `expires` /

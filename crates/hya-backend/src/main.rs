@@ -24,6 +24,8 @@ mod exec_stream;
 mod frontend;
 mod generation_pin;
 mod models_cmd;
+mod prompt;
+mod provider_cmd;
 mod proxy_cmd;
 mod relay_doctor;
 mod routed;
@@ -1107,7 +1109,9 @@ async fn run(
         }
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
-        Some(Command::Auth { command }) => auth_cmd::run(command).await,
+        Some(Command::Provider { command }) => {
+            provider_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
+        }
         Some(Command::Agent { command }) => agent_cmd::run(command),
         Some(Command::Bundle { command }) => {
             bundle_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await

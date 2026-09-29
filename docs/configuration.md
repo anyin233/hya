@@ -496,7 +496,7 @@ Provider View's refresh and add-provider actions). A refresh replaces the
 provider's rows; a 401/403 clears them; a transport, status, or decode failure
 keeps the old rows.
 
-**Merge rule (per model id, field by field).**
+**Merge rule (per model id, field by field; [ADR-0029](adr/0029-config-model-entries-override-the-model-cache.md)).**
 
 | Model is in | Source shown | Metadata |
 | --- | --- | --- |
@@ -559,11 +559,18 @@ unchanged. Every change applies to the running server immediately. See
 change in the file text. Routes and schemas: [Protocol guide — Providers and
 keys](protocol/README.md#providers-and-keys).
 
+From the command line, `hya provider add` does the same as `PUT
+/v1/providers/{id}`: it writes the `kind` and `base_url`, saves the key, and
+fills the model cache. It also fetches the model list before anything is
+written. `hya provider remove` deletes `providers.<id>`, its key, and its
+cached models. See [`hya provider`](cli.md#hya-provider).
+
 ### How hya edits `config.yaml`
 
 Some commands write `config.yaml` for you: the Provider View routes (`PUT
 /v1/providers/{id}`, `PUT /v1/providers/{id}/models`, `DELETE
-/v1/providers/{id}/models`) and OAuth login (`hya login`). These writers
+/v1/providers/{id}/models`), OAuth login (`hya oauth login`), and
+[`hya provider add|remove`](cli.md#hya-provider). These writers
 change only the lines of the entries they touch and keep everything else in
 the file as you wrote it: comments (whole-line and `key: value  # note`),
 blank lines, key order, quoting, indentation, CRLF line endings, and a
@@ -573,6 +580,7 @@ leading byte-order mark.
 | --- | --- |
 | New provider | A `<id>:` block (`kind`, `base_url`, `models: []`) is appended after the last provider. `providers:` is added at the end of the file when missing; `providers: {}` becomes a block. |
 | Existing provider | The `kind` and `base_url` values are replaced on their own lines (a quoted value stays quoted); `models: []` is added when the provider has no `models` key. Other keys are untouched. |
+| Removed provider (`hya provider remove`) | The provider's whole `<id>:` block is deleted; the other providers and keys are untouched. |
 | Set a model field | The field's value is replaced in place, or the field is added after the entry's last field. A plain `- <id>` entry becomes `- id: <id>` with the new fields below it; an inline comment on it stays on the first line. |
 | Clear a model field | The field's lines are removed (`limit:` goes when its last limit is cleared). An entry left with only `id` turns back into `- <id>`. |
 | New model | `- <id>` is appended after the provider's last model entry; `models: []` becomes a block list. |
@@ -1049,9 +1057,9 @@ Saved tokens take precedence over inline `api_key` values:
 ```sh
 hya login anthropic "$ANTHROPIC_API_KEY"
 hya oauth login --provider codex --type openai-codex
-hya auth list
+hya provider list
 hya oauth status
-hya auth logout anthropic
+hya provider logout anthropic
 ```
 
 ### On-disk auth file schema

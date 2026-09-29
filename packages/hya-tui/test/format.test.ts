@@ -103,6 +103,13 @@ test("the status bar keeps the model:effort label visible at 80 columns", () => 
   expect(statusBarText(fields, 24)).toBe("mode manual")
 })
 
+test("under bare hya the WebUI address stays on the status bar at 80 columns, ahead of the directory", () => {
+  const fields = { mode: "manual", model: "offline:default", directory: "/tmp/hya-tui-launch-BJAycL/work", branch: "", web: { url: "http://127.0.0.1:53855/" }, connected: true }
+  // The sidebar (with its WebUI row) is hidden at this width: the bar is the only place left.
+  expect(statusBarText(fields, 80)).toBe("mode manual · offline:default · WebUI http://127.0.0.1:53855")
+  expect(statusBarText(fields, 120)).toBe("mode manual · offline:default · WebUI http://127.0.0.1:53855 · …-tui-launch-BJAycL/work")
+})
+
 test("a compact todo count is `completed/total`, or undefined with no todos", () => {
   expect(todosCompactText([])).toBeUndefined()
   expect(todosCompactText([

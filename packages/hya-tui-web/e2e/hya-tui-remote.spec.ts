@@ -104,12 +104,11 @@ test.describe("/connect-remote", () => {
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
     await term.waitForText(/Project remote-project/)
-    // The header can clip the remote URL after reserving space for effort;
-    // `/status` exposes the complete connected server label.
+    // Keep /status in command history before /layout: the recall sequence
+    // below checks that neither command includes the secret relay link.
     await prompt(term, "/status")
     await term.waitForText(`remote: ${remote.relay}`)
     await prompt(term, "/layout show")
-
     // A prompt over the relay, answered by the remote's offline model.
     await prompt(term, "hello over the relay")
     await term.waitForText("No live provider is available", 20_000)
@@ -130,6 +129,11 @@ test.describe("/connect-remote", () => {
     await term.waitForText("Relay link")
     await term.press("Escape")
     await term.waitForText("Not connected · /connect-remote cancelled")
+    // The header can clip the remote URL after reserving space for effort;
+    // `/status` exposes the complete connected server label. (Run after the
+    // history recall above, so it does not sit between the recalled entries.)
+    await prompt(term, "/status")
+    await term.waitForText(`remote: ${remote.relay}`)
 
     await prompt(term, "/disconnect-remote")
     await term.waitForText("Back on the local backend", 30_000)

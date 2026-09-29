@@ -48,19 +48,7 @@ fn edit_error(error: ConfigEditError) -> ProviderControlError {
 
 /// Validate an `http(s)://host…` base URL.
 fn check_base_url(base_url: &str) -> Result<(), ProviderControlError> {
-    let parsed = reqwest::Url::parse(base_url)
-        .map_err(|error| invalid(format!("invalid base URL `{base_url}`: {error}")))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(invalid(format!(
-            "invalid base URL `{base_url}`: use http:// or https:// with a host"
-        )));
-    }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(invalid(
-            "invalid base URL: credentials in the URL are not allowed (save an API key instead)",
-        ));
-    }
-    Ok(())
+    config::validate_base_url(base_url).map_err(invalid)
 }
 
 fn report(discovery: &config::DiscoveryResult) -> ProviderDiscoveryReport {
