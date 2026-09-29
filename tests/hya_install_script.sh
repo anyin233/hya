@@ -122,4 +122,13 @@ fi
 grep -q riscv64gc-unknown-linux-gnu <<<"$out" || fail "missing target error does not name it: $out"
 [[ "$("$prefix/bin/hya" --version)" == "hya 9.10.0" ]] || fail "failed install changed the binary"
 
+# 7. The PATH hint compares real directories: a PATH entry that reaches
+# <prefix>/bin through a symlink (macOS /tmp -> /private/tmp) needs no hint.
+ln -s "$prefix" "$scratch/prefix-alias"
+out="$(env PATH="$scratch/prefix-alias/bin:$PATH" HYA_RELEASES_URL="file://$releases" HYA_TARGET="$target" \
+  HOME="$scratch/home" sh "$installer" --prefix "$prefix" --force 2>&1)" || fail "forced install failed: $out"
+if grep -q "to PATH" <<<"$out"; then fail "PATH hint shown although PATH reaches $prefix/bin: $out"; fi
+out="$(install --force 2>&1)" || fail "forced install failed: $out"
+grep -q "to PATH" <<<"$out" || fail "PATH hint missing when $prefix/bin is not on PATH: $out"
+
 echo "hya-install.sh contract: ok"

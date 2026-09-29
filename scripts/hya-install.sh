@@ -275,10 +275,23 @@ placed=$(installed_version "$prefix/bin/hya" || true)
 swapping=0
 
 say "Installed hya $release to $prefix/bin/hya"
-case ":${PATH:-}:" in
-  *":$prefix/bin:"*) ;;
-  *) say "Add $prefix/bin to PATH, for example: export PATH=\"$prefix/bin:\$PATH\"" ;;
-esac
+# Compare real directories: a PATH entry may reach <prefix>/bin through a
+# symlink (macOS /tmp is /private/tmp).
+real_bin=$(cd "$prefix/bin" && pwd -P)
+on_path=0
+old_ifs=$IFS
+IFS=:
+set -f
+for dir in ${PATH:-}; do
+  if [ -n "$dir" ] && [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$real_bin" ]; then
+    on_path=1
+  fi
+done
+set +f
+IFS=$old_ifs
+if [ "$on_path" -eq 0 ]; then
+  say "Add $prefix/bin to PATH, for example: export PATH=\"$prefix/bin:\$PATH\""
+fi
 if "$prefix/bin/hya" serve status >/dev/null 2>&1; then
   say "The running hya backend keeps its old version until you run: hya serve restart"
 fi
