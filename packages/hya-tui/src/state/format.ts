@@ -382,10 +382,11 @@ export const contextAlarmPercent = 95
  * `-- NORMAL --` (plus a pending command, `-- NORMAL -- 2d`), `mode <mode>`,
  * `<model>:<effort>` (kept ahead of the dropping tail so the effort stays
  * visible at 80 columns even when the header line truncates), `ctx N%`,
- * `<n> tok`, the directory, `⎇ <branch>`, `WebUI <url>` (or `WebUI
- * unavailable`), `Todos n/m`, `reconnecting` (or `backend stopped`).
- * Segments with no data are omitted; the least essential (from the end) drop
- * first so the line fits `width`.
+ * `<n> tok`, `WebUI <url>` (or `WebUI unavailable`; ahead of the directory,
+ * because at 80 columns the sidebar and its WebUI row are hidden), the
+ * directory, `⎇ <branch>`, `Todos n/m`, `reconnecting` (or `backend
+ * stopped`). Segments with no data are omitted; the least essential (from
+ * the end) drop first so the line fits `width`.
  */
 export function statusBarSegments(fields: StatusBarFields, width: number): StatusSegment[] {
   const context = fields.context
@@ -396,9 +397,9 @@ export function statusBarSegments(fields: StatusBarFields, width: number): Statu
     fields.model ? { text: fields.model, tone: "muted" } : undefined,
     context !== undefined ? { text: `ctx ${context}%`, tone: context >= contextAlarmPercent ? "error" : context >= contextWarnPercent ? "warning" : "muted" } : undefined,
     fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
+    fields.web ? { text: webLabel(fields.web)!, tone: fields.web.url ? "muted" : "warning" } : undefined,
     fields.directory ? { text: truncateStart(fields.directory, 24), tone: "muted" } : undefined,
     fields.branch ? { text: `⎇ ${fields.branch}`, tone: "muted" } : undefined,
-    fields.web ? { text: webLabel(fields.web)!, tone: fields.web.url ? "muted" : "warning" } : undefined,
     fields.todos ? { text: fields.todos, tone: "muted" } : undefined,
     fields.stopped ? { text: "backend stopped", tone: "error" } : fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
   ]
