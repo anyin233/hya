@@ -62,6 +62,16 @@ test("sessionRow takes revert and forkedFrom from the fresh row, dropping them w
   expect(next.title).toBe("t")
 })
 
+test("sessionRow keeps the current row when the read one is older (a list read that started before a model switch)", () => {
+  const switched = session("s", { lastSeq: "12", model: { providerId: "fake", modelId: "slow" } })
+  const stale = session("s", { lastSeq: "11", model: { providerId: "fake", modelId: "fast" } })
+  expect(sessionRow(switched, stale)).toBe(switched)
+  const fresh = session("s", { lastSeq: "13", model: { providerId: "fake", modelId: "fast" } })
+  expect(sessionRow(switched, fresh).model?.modelId).toBe("fast")
+  // Rows without a sequence (older backends) still merge.
+  expect(sessionRow(switched, session("s", { title: "t" })).title).toBe("t")
+})
+
 test("store: a durable sessionReverted drops the stale overlay; the next messageStarted commits (clears) the revert", () => {
   const store = createAppStore()
   store.openSession(session("s", { lastSeq: "5" }))
