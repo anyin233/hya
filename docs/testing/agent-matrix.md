@@ -15,8 +15,11 @@ today; former Track T is retired (see below).
 ## How to run
 
 ```sh
-# Track P — process agent suite
+# Track P — one scenario file (local)
 cargo build -p hya-backend --bin hya
+cargo test -p hya-e2e --test <pNN_scenario> -- --test-threads=1
+
+# Track P — whole matrix (CI; locally only when asked)
 cargo test -p hya-e2e -- --test-threads=1
 ```
 
@@ -214,5 +217,6 @@ carries three, `p03` has one id and two functions.
    `crates/hya-e2e/tests/pNN_*.rs` using `E2eEnvBuilder`.
 3. Register the ID in `matrix.toml` and this page.
 4. Keep oracles honest — see [process-e2e.md](process-e2e.md#oracle-rules-do-not-weaken).
-5. Run `cargo test -p hya-e2e --test pNN_… -- --test-threads=1` then the full
-   crate suite before landing.
+5. Run `cargo test -p hya-e2e --test pNN_… -- --test-threads=1` and
+   `cargo run -p xtask -- matrix-check` before landing; CI runs the full crate
+   suite.

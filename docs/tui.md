@@ -3070,7 +3070,8 @@ bun test
 ```
 
 Then check the rendered TUI in the browser from `packages/hya-tui-web`
-(`bun run typecheck && bun test ./test && bunx playwright test`; see
+(`bun run typecheck && bun test ./test && bunx playwright test e2e/<spec>.ts`
+for the specs covering your change; CI runs the whole suite; see
 [tui-web.md](tui-web.md)). `e2e/hya-tui.spec.ts` and
 `e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
 entry, narrow widths, and Ctrl+C. `e2e/hya-tui-layout.spec.ts` covers the
