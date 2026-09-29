@@ -75,6 +75,25 @@ cd packages/hya-tui
 bun install --frozen-lockfile
 ```
 
+If `node_modules` lives on another disk, keep `node_modules` in its resolved
+path. OpenTUI's Bun preload recognizes Solid's client renderer by that path;
+a link to a directory named only `hya-tui-node-modules` can load Solid's server
+renderer and leave the terminal blank. For a fresh checkout, run this from the
+repository root before `bun install`:
+
+```sh
+mkdir -p "$HOME/data/hya-tui/node_modules"
+ln -s "$HOME/data/hya-tui/node_modules" packages/hya-tui/node_modules
+(cd packages/hya-tui && bun install --frozen-lockfile)
+readlink -f packages/hya-tui/node_modules
+```
+
+The last command should end in `/node_modules`. The TUI command and its
+`--server` and `--grpc` options work the same way with this setup; no server
+API or configuration field changes. If WebUI dependencies also live on another
+disk, use the same layout for `packages/hya-tui-web/node_modules` (for example,
+`$HOME/data/hya-tui-web/node_modules`) so its TypeScript imports resolve.
+
 Then, from the repository root, one command starts the TUI (and, if none
 runs, the backend daemon):
 
