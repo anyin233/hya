@@ -260,7 +260,10 @@ impl BundleRegistry {
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
-        let plan = plan_install(&snapshot, policy, incoming, source_digest)?;
+        let plan = match plan_install(&snapshot, policy, incoming, source_digest) {
+            Ok(plan) => plan,
+            Err(refused) => return refuse(transaction, refused).await,
+        };
 
         for loser in &plan.displaced {
             sqlx::query("DELETE FROM installed_bundle WHERE bundle_id = ?")
@@ -358,9 +361,10 @@ impl BundleRegistry {
             .iter()
             .any(|loaded| loaded.record.bundle_id == bundle_id)
         {
-            return Err(StoreError::BundleNotFound {
+            let missing = StoreError::BundleNotFound {
                 bundle_id: bundle_id.to_string(),
-            });
+            };
+            return refuse(transaction, missing).await;
         }
 
         let mut complete = Vec::new();
@@ -370,8 +374,10 @@ impl BundleRegistry {
             }
             complete.push(loaded.prepared.clone());
         }
-        if !complete.is_empty() {
-            BundleCatalog::from_prepared(&complete)?;
+        if !complete.is_empty()
+            && let Err(invalid) = BundleCatalog::from_prepared(&complete)
+        {
+            return refuse(transaction, invalid.into()).await;
         }
 
         let deleted = sqlx::query("DELETE FROM installed_bundle WHERE bundle_id = ?")
@@ -593,6 +599,19 @@ async fn advance_generation(
         ));
     }
     Ok(generation)
+}
+
+/// End a write transaction that refused its change: roll it back now and
+/// return `refused`. A dropped transaction rolls back only when its pooled
+/// connection is returned later, and keeps the `BEGIN IMMEDIATE` write lock
+/// until then; with `busy_timeout(0)` a retry right after the refusal (for
+/// example `install --overwrite`) would fail as `BundleRegistryBusy`.
+async fn refuse<T>(
+    transaction: Transaction<'_, Sqlite>,
+    refused: StoreError,
+) -> Result<T, StoreError> {
+    transaction.rollback().await?;
+    Err(refused)
 }
 
 fn is_sqlite_busy_or_locked(error: &sqlx::Error) -> bool {
