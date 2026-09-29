@@ -3,13 +3,16 @@ use serde_json::{Value, json};
 
 use crate::media::image_url;
 use crate::wire::{tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
+use crate::{
+    CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort, ReasoningReplayPolicy,
+};
 
 mod decoder;
 mod response_decoder;
 mod responses;
 
 pub use decoder::OpenAiChatDecoder;
+pub(crate) use decoder::REASONING_CONTENT_TYPE;
 pub use response_decoder::OpenAiResponsesDecoder;
 pub(crate) use responses::GrokBuildProtocol;
 pub use responses::{
@@ -17,7 +20,8 @@ pub use responses::{
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
 };
 
-const CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
+/// Marker written by older chat decoders; historical sessions still replay it.
+pub(crate) const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
 
 /// OpenAI Chat Completions request encoder + SSE decoder factory.
 pub struct OpenAiChatProtocol;
@@ -31,6 +35,15 @@ impl Protocol for OpenAiChatProtocol {
             .rsplit('/')
             .next()
             .is_some_and(|model| model.starts_with("deepseek-"));
+        // Thinking-mode routes (DeepSeek, Kimi) reject a later request whose
+        // assistant message lacks `reasoning_content`, so once the transcript
+        // holds chat-native reasoning every assistant message carries it.
+        // DeepSeek also needs an empty field when it supplied no delta.
+        let thinking = deepseek
+            || req.messages.iter().any(|m| {
+                matches!(m, Message::Assistant { parts, .. }
+                if parts.iter().any(replays_reasoning))
+            });
         if let Some(system) = &req.system {
             messages.push(json!({"role": "system", "content": system}));
         }
@@ -45,7 +58,9 @@ impl Protocol for OpenAiChatProtocol {
                         "content": user_content(parts)?,
                     }));
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts, deepseek)?,
+                Message::Assistant { parts, .. } => {
+                    emit_assistant(&mut messages, parts, thinking)?;
+                }
             }
         }
         let tools: Vec<Value> = req
@@ -127,47 +142,43 @@ fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
     }
 }
 
-// Split an assistant message into wire messages: each `[text?, tool_call+]` cluster
-// becomes `assistant(content, tool_calls)` followed by its `role:tool` results, and
-// any trailing text becomes a final tool-free assistant message. This keeps tool
-// results paired with their calls (OpenAI requires it) without scrambling order.
+fn replays_reasoning(part: &Part) -> bool {
+    ReasoningReplayPolicy::ReasoningContent.replays(None, 0, part)
+}
+
+/// One wire assistant message: `reasoning_content` + `content` + `tool_calls`.
+#[derive(Default)]
+struct Cluster<'a> {
+    reasoning: String,
+    text: String,
+    tools: Vec<&'a Part>,
+}
+
+// Split an assistant message into wire messages: each `[reasoning?, text?,
+// tool_call+]` cluster becomes `assistant(reasoning_content, content,
+// tool_calls)` followed by its `role:tool` results, and any trailing text
+// becomes a final tool-free assistant message. This keeps tool results paired
+// with their calls (OpenAI requires it) without scrambling order.
 fn emit_assistant(
     out: &mut Vec<Value>,
     parts: &[Part],
-    requires_reasoning_content: bool,
+    thinking: bool,
 ) -> Result<(), ProviderError> {
-    let mut text = String::new();
-    let mut reasoning = String::new();
-    let mut tools: Vec<&Part> = Vec::new();
+    let mut cluster = Cluster::default();
     for part in parts {
         match part {
-            Part::Text { text: t, .. } => {
-                if !tools.is_empty() {
-                    flush_cluster(out, &text, &reasoning, &tools, requires_reasoning_content);
-                    text.clear();
-                    reasoning.clear();
-                    tools.clear();
+            Part::Text { text, .. } => {
+                if !cluster.tools.is_empty() {
+                    flush_cluster(out, &std::mem::take(&mut cluster), thinking);
                 }
-                text.push_str(t);
+                cluster.text.push_str(text);
             }
-            Part::Tool { .. } => tools.push(part),
-            Part::Reasoning {
-                text: part_text,
-                provider_data,
-                ..
-            } if provider_data
-                .as_ref()
-                .and_then(|value| value.get(CHAT_REASONING_MARKER))
-                .and_then(Value::as_bool)
-                == Some(true) =>
-            {
-                if !tools.is_empty() {
-                    flush_cluster(out, &text, &reasoning, &tools, requires_reasoning_content);
-                    text.clear();
-                    reasoning.clear();
-                    tools.clear();
+            Part::Tool { .. } => cluster.tools.push(part),
+            Part::Reasoning { text, .. } if replays_reasoning(part) => {
+                if !cluster.tools.is_empty() {
+                    flush_cluster(out, &std::mem::take(&mut cluster), thinking);
                 }
-                reasoning.push_str(part_text);
+                cluster.reasoning.push_str(text);
             }
             Part::Reasoning { .. } => {}
             Part::Media { media_type, .. } => {
@@ -177,28 +188,28 @@ fn emit_assistant(
             }
         }
     }
-    if tools.is_empty() {
-        if !text.is_empty() || !reasoning.is_empty() {
-            let mut message = json!({"role": "assistant", "content": text});
-            if requires_reasoning_content || !reasoning.is_empty() {
-                message["reasoning_content"] = json!(reasoning);
-            }
-            out.push(message);
-        }
-    } else {
-        flush_cluster(out, &text, &reasoning, &tools, requires_reasoning_content);
+    if !cluster.tools.is_empty() || !cluster.text.is_empty() || !cluster.reasoning.is_empty() {
+        flush_cluster(out, &cluster, thinking);
     }
     Ok(())
 }
 
-fn flush_cluster(
-    out: &mut Vec<Value>,
-    text: &str,
-    reasoning: &str,
-    tools: &[&Part],
-    requires_reasoning_content: bool,
-) {
-    let tool_calls: Vec<Value> = tools
+fn flush_cluster(out: &mut Vec<Value>, cluster: &Cluster<'_>, thinking: bool) {
+    let content = if cluster.text.is_empty() && !thinking {
+        Value::Null
+    } else {
+        json!(cluster.text)
+    };
+    let mut message = json!({"role": "assistant", "content": content});
+    if thinking {
+        message["reasoning_content"] = json!(cluster.reasoning);
+    }
+    if cluster.tools.is_empty() {
+        out.push(message);
+        return;
+    }
+    let tool_calls: Vec<Value> = cluster
+        .tools
         .iter()
         .filter_map(|&p| {
             let Part::Tool {
@@ -223,17 +234,9 @@ fn flush_cluster(
             }))
         })
         .collect();
-    let content = if text.is_empty() && reasoning.is_empty() && !requires_reasoning_content {
-        Value::Null
-    } else {
-        json!(text)
-    };
-    let mut message = json!({"role": "assistant", "content": content, "tool_calls": tool_calls});
-    if requires_reasoning_content || !reasoning.is_empty() {
-        message["reasoning_content"] = json!(reasoning);
-    }
+    message["tool_calls"] = Value::Array(tool_calls);
     out.push(message);
-    for &p in tools {
+    for &p in &cluster.tools {
         if let Part::Tool { call_id, state, .. } = p {
             let (result, _is_error) = tool_result(state);
             out.push(

@@ -4,10 +4,24 @@ on:
   push:
     tags:
       - "v*.*.*"
+    # A tag run can restore caches saved on the default branch, never those of
+    # another tag. Main therefore keeps one warm dependency cache per target;
+    # it rebuilds it when the dependency set changes, and the daily schedule
+    # catches a new stable toolchain. Path filters do not apply to tag pushes.
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - .github/workflows/release.yml
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
+# A release tag always runs to completion; a newer cache refresh supersedes an
+# older one.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 permissions:
   contents: read
@@ -31,9 +45,6 @@ jobs:
             runner: ubuntu-22.04-arm
           - target: aarch64-apple-darwin
             runner: macos-15
-          # The last Intel macOS image GitHub offers (supported until 2027-08).
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
     env:
       TARGET: ${{ matrix.target }}
     permissions:
@@ -44,12 +55,14 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Bun 1.4.2
+        if: github.ref_type == 'tag'
         shell: bash
         run: |
           curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"
           test "$("$HOME/.bun/bin/bun" --version)" = "1.4.2"
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
       - name: Install 7-Zip for Workflow package smoke test
+        if: github.ref_type == 'tag'
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
@@ -63,11 +76,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      # Only main saves (see `on.push.branches`); a tag's cache could serve no
+      # later tag and would only push main's caches out of the quota.
+      - id: cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Validate tag version and changelog
+        if: github.ref_type == 'tag'
         id: version
         shell: bash
         run: |
@@ -103,15 +121,20 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # A cache refresh whose exact key is already cached has nothing to add.
       - name: Build release binaries
+        if: github.ref_type == 'tag' || steps.cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           cargo build --release --locked -p hya-backend --bins --target "$TARGET"
           cargo build --release --locked -p hya-todo-tools --lib --target "$TARGET"
           cargo build --release --locked -p hya-extended-tools --lib --target "$TARGET"
           cargo build --release --locked -p hya-base-tools -p hya-network-tools -p hya-channel-tools --lib --target "$TARGET"
+          # Packaging runs xtask; building it here puts its dependencies in the cache.
+          cargo build --locked -p xtask
 
       - name: Package release asset
+        if: github.ref_type == 'tag'
         id: package
         shell: bash
         env:
@@ -162,6 +185,7 @@ jobs:
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Smoke test packaged binary
+        if: github.ref_type == 'tag'
         shell: bash
         env:
           ARCHIVE: ${{ steps.package.outputs.archive }}
@@ -226,7 +250,6 @@ jobs:
             x86_64-unknown-linux-gnu) opentui_native=linux-x64 ;;
             aarch64-unknown-linux-gnu) opentui_native=linux-arm64 ;;
             aarch64-apple-darwin) opentui_native=darwin-arm64 ;;
-            x86_64-apple-darwin) opentui_native=darwin-x64 ;;
             *) echo "no OpenTUI native package is known for $TARGET" >&2; exit 1 ;;
           esac
           for path in package.json bun.lock bunfig.toml tsconfig.json src/main.ts \
@@ -309,6 +332,7 @@ jobs:
           grep -F "hya $version is already installed" "$scratch/update.txt"
 
       - name: Attest release assets
+        if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: |
@@ -317,6 +341,7 @@ jobs:
             dist/SHA256SUMS-*
 
       - name: Upload release assets
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets-${{ matrix.target }}
@@ -330,6 +355,7 @@ jobs:
     name: publish GitHub release
     runs-on: ubuntu-22.04
     needs: build
+    if: github.ref_type == 'tag'
     environment: release
     permissions:
       contents: write
@@ -371,7 +397,7 @@ jobs:
               fi
             done
           done
-          test "$targets" -eq 4
+          test "$targets" -eq 3
           test "$(find dist -name '*.tar.gz' | wc -l)" -eq "$targets"
           test "$(find dist -name 'hya-*.hyabundle' | wc -l)" -eq $((5 * targets + ${#first_party[@]} - 5))
           (cd dist && for file in *.tar.gz hya-*.hyabundle; do shasum -a 256 "$file"; done > SHA256SUMS)
