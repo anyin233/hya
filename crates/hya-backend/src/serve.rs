@@ -166,6 +166,12 @@ pub(crate) async fn cmd_serve(
                     None,
                     Some(&format!("{error:#}")),
                 );
+            } else if runtime_owner_busy(&error) {
+                // The previous server released the database lock but is
+                // still releasing its runtime owner: the database is in use,
+                // so a starter waits and tries again (`daemon::start`).
+                eprintln!("hya: {error:#}");
+                std::process::exit(db_lock::EXIT_DB_IN_USE);
             }
             return Err(error);
         }
@@ -1333,9 +1339,46 @@ pub(crate) async fn serve_until(
     }
     relay.shutdown().await;
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
+    // Release the runtime owner (its flock) before the database lock: a
+    // starter spawns the next daemon as soon as the database lock is free,
+    // and that daemon claims the runtime owner first thing. Engine clones in
+    // tasks still winding down would otherwise keep the flock past this point.
+    if let Err(error) = built
+        .engine()
+        .store()
+        .release_runtime_owner(built.engine().runtime_owner())
+    {
+        eprintln!("hya: could not release the runtime owner at shutdown: {error}");
+    }
+    drop(built);
     // Last: remove the discovery file and release the lock.
     drop(lock);
     shutdown_result
+}
+
+/// Whether startup failed because another process still holds the runtime
+/// owner of the database (`RUNTIME_OWNER_BUSY`), e.g. a server shutting down.
+fn runtime_owner_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<hya_store::StoreError>(),
+            Some(hya_store::StoreError::RuntimeOwnerBusy)
+        )
+    })
+}
+
+#[cfg(test)]
+mod runtime_owner_busy_tests {
+    use super::runtime_owner_busy;
+
+    #[test]
+    fn a_held_runtime_owner_anywhere_in_the_chain_is_busy() {
+        let busy = anyhow::Error::new(hya_store::StoreError::RuntimeOwnerBusy)
+            .context("claim runtime owner before startup recovery");
+        assert!(runtime_owner_busy(&busy));
+        let other = anyhow::anyhow!("bind 127.0.0.1:0").context("listen");
+        assert!(!runtime_owner_busy(&other));
+    }
 }
 
 /// Whether the handoff journal still belongs to the handoff with `token`
