@@ -109,9 +109,14 @@ test.describe("bare hya", () => {
     // Titled after its first prompt (the automatic title arrives a moment later).
     await web.waitForText(/hya · hello from the web tab/, 20_000)
     await prompt(term, "/sessions")
+    // The sidebar may already list the web tab's session: wait for the picker
+    // itself, so the Esc below closes it instead of reaching the composer.
+    await term.waitForText("Esc closes")
     await term.waitForText("hello from the web tab")
-    await term.press("Escape")
     await term.attach(testInfo, "terminal-sessions")
+    await term.press("Escape")
+    // Closed before the resize (the TUI reads a lone Esc only after a short wait).
+    await expect.poll(async () => (await term.text()).includes("Esc closes")).toBe(false)
 
     // About 80 columns: the sidebar hides and the status bar still fits the WebUI address.
     await term.resize(690, 640)

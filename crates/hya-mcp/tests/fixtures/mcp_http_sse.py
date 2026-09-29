@@ -13,10 +13,21 @@ Tools: ping, slow, fail_tool, rpc_error.
 """
 import argparse
 import json
+import socketserver
 import queue
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class LoopbackServer(ThreadingHTTPServer):
+    """A loopback HTTP server that skips `HTTPServer.server_bind`'s
+    `socket.getfqdn()`, a reverse DNS lookup that can stall for seconds on
+    some hosts before the port listens."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -180,7 +191,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("port", type=int)
     args = parser.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    server = LoopbackServer(("127.0.0.1", args.port), Handler)
     server.daemon_threads = True
     print("ready", flush=True)
     server.serve_forever()

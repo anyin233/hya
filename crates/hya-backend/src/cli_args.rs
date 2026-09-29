@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::agent_cmd::AgentCommand;
-use crate::auth_cmd::{AuthCommand, OauthCommand};
+use crate::auth_cmd::OauthCommand;
 use crate::bundle_cmd::BundleCommand;
 use crate::proxy_cmd::ProxyArgs;
 use crate::relay_doctor::RelayCommand;
@@ -381,11 +381,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: OauthCommand,
     },
-    /// Inspect or remove saved provider auth tokens.
+    /// Add, list, or remove model providers and their saved keys (`hya
+    /// provider add` walks through base URL, protocol, and API key, and
+    /// checks the model list).
     #[command(alias = "providers")]
-    Auth {
+    Provider {
         #[command(subcommand)]
-        command: AuthCommand,
+        command: crate::provider_cmd::ProviderCommand,
     },
     /// Manage agents.
     Agent {
@@ -1587,14 +1589,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_compat_providers_alias_for_auth_list() {
+    fn providers_is_an_alias_of_provider_and_auth_is_gone() {
         let cli = parse(["hya", "providers", "list"]);
-        match cli.command {
-            Some(super::Command::Auth {
-                command: crate::auth_cmd::AuthCommand::List,
-            }) => {}
-            _ => panic!("expected auth list command"),
-        }
+        assert!(
+            matches!(cli.command, Some(super::Command::Provider { .. })),
+            "`hya providers list` must parse as `hya provider list`"
+        );
+        assert!(Cli::try_parse_from(["hya", "auth", "list"]).is_err());
     }
 
     #[test]

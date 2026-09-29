@@ -16,11 +16,22 @@ extension semantics), tasks_result.
 """
 import argparse
 import json
+import socketserver
 import sys
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class LoopbackServer(ThreadingHTTPServer):
+    """A loopback HTTP server that skips `HTTPServer.server_bind`'s
+    `socket.getfqdn()`, a reverse DNS lookup that can stall for seconds on
+    some hosts before the port listens."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -261,7 +272,7 @@ def main():
     handler.stateless = args.stateless
     handler.malformed = args.malformed
     handler.fail5xx = args.fail5xx
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+    server = LoopbackServer(("127.0.0.1", args.port), handler)
     server.daemon_threads = True
     print("ready", flush=True)
     server.serve_forever()

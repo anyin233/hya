@@ -650,7 +650,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/redo`, Ctrl+X R | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Ctrl+X U is `/undo` and Ctrl+X F is `/fork`; the chord works whatever the input holds. |
 | `/fork` | Pick where to fork the session (the latest message, or before one of its prompts); Enter creates the fork, switches to it, and puts the picked prompt in the input. |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
-| `/status` | Show the server URL, backend version, directory, session (and `Forked from <title>` for a fork), agent, model, permission mode, and the backend daemon (`daemon · pid <pid> · db <db> · started <N>m ago`, or `via --backend/--server` for a fixed URL); under bare `hya` also the WebUI address or why it is unavailable. |
+| `/status` | Show the server URL, backend version, directory, session (and `Forked from <title>` for a fork), agent, model, permission mode, and the backend daemon (`daemon · pid <pid> · db <db> · started <N>m ago`, or `via --backend/--server` for a fixed URL); under bare `hya` also the WebUI address or why it is unavailable. Like `/models`, `/todos`, `/workflows`, and `/api`, it replaces the transcript in the main panel until a prompt or `!shell` command is sent, which brings the transcript back with its reply. |
 | `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
 | `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
 | `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
@@ -1031,13 +1031,15 @@ alive before the working line's own elapsed clock is very interesting.
 `-- NORMAL --` in the accent color, followed by a half-typed command such
 as `2d`); then the permission mode
 (`mode <mode>`, from `SessionInfo.permissionMode`, colored per mode — see
-[Permission modes](#permission-modes)), the context occupancy (`ctx 42%`),
-the session's token total (`12.3k tok`), the workspace directory
-(shortened, keeping the tail), the git branch (`GetVcsStatus`, refreshed
-when a session opens and after a turn ends; omitted when unknown or the
-directory is not a repository), the WebUI that bare `hya` serves
+[Permission modes](#permission-modes)), the session's `<model>:<effort>`
+(see [Thinking effort](#thinking-effort)), the context occupancy (`ctx 42%`),
+the session's token total (`12.3k tok`), the WebUI that bare `hya` serves
 (`WebUI http://127.0.0.1:3250`, or `WebUI unavailable` in the warning color;
-see [Start it](#start-it)), a compact todo count (`Todos <completed>/
+see [Start it](#start-it); ahead of the directory, so at about 80 columns,
+where the sidebar and its `WebUI` row are hidden, the address stays visible),
+the workspace directory (shortened, keeping the tail), the git branch
+(`GetVcsStatus`, refreshed when a session opens and after a turn ends;
+omitted when unknown or the directory is not a repository), a compact todo count (`Todos <completed>/
 <total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
 box already lists them), and `reconnecting` (warning color) while the
 session event stream is down, or `backend stopped` (error color) after

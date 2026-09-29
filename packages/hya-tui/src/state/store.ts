@@ -875,8 +875,16 @@ export function createAppStore() {
       if (value !== state.backendStopped) set("backendStopped", value)
     },
 
-    /** Ask the transcript to jump to its newest line. */
-    followTranscript(): void { set("followTick", state.followTick + 1) },
+    /**
+     * A prompt or shell turn was sent: show the transcript (leaving `/status`,
+     * `/models`, … so its reply is visible) and jump to its newest line.
+     */
+    followTranscript(): void {
+      batch(() => {
+        set("view", "chat")
+        set("followTick", state.followTick + 1)
+      })
+    },
 
     /** A prompt is being admitted: the session counts as running from now on. */
     beginTurn(): void {
