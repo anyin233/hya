@@ -27,7 +27,7 @@ export interface CommandSuggestion {
   runOnEnter: boolean
 }
 
-/** Rows shown at once; the rest are still reachable by typing a longer query. */
+/** Rows shown at once; navigation still visits the complete suggestion list. */
 export const commandSuggestionLimit = 8
 
 /**
@@ -101,11 +101,9 @@ export function suggestCommandInput(input: string, entries: () => CommandEntry[]
   if (/\s/.test(input)) {
     return complete(input)
       .filter((replacement) => replacement !== input)
-      .slice(0, commandSuggestionLimit)
       .map((replacement) => ({ label: replacement, replacement, kind: "argument", runOnEnter: false }))
   }
   return filterCommands(entries(), input.slice(1))
-    .slice(0, commandSuggestionLimit)
     .map((entry) => ({
       label: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}]`,
       replacement: entry.name,

@@ -1573,9 +1573,13 @@ registry), `[command]` (a custom or built-in server command, `/init` and
 [Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
 keep typing the name: an exact match ranks first, then a prefix match, then a
 substring match, then any name whose letters appear in order (a subsequence
-match); ties break alphabetically. Up/Down move the highlight; Shift+Tab moves
-it upward. Esc or Ctrl+C closes the pane and keeps its command draft for
-reopening. Shift+Up/Down walks its own last 200 submitted commands. The
+match); ties break alphabetically. Up/Down move the highlight through every
+matching command, scrolling the visible rows as needed; they wrap only at the
+first and last matching command. Shift+Tab moves it upward with the same
+behavior. For example, press `/` and keep pressing Down past the initial eight
+rows to reach `/layout`, then press Tab to see its actions. Esc or Ctrl+C closes
+the pane and keeps its command draft for reopening. Shift+Up/Down walks its own
+last 200 submitted commands. The
 message composer keeps a separate history and draft.
 
 After the command name, the same menu shows argument choices at every depth
@@ -1586,8 +1590,9 @@ and `assign`; `/layout split ` lists `horizontal` and `vertical`; and
 `conversation` is offered for `/layout assign`, but not for a split because a
 split cannot create a second conversation pane. `/api ` similarly lists HTTP
 methods, then `/api GET /v1/hea` suggests `/api GET /v1/health`. At most eight
-rows are shown; type more of the current argument to narrow the list. Commands
-without an argument completer show their syntax hint in the command-name row
+rows are shown, and navigation reaches all matching argument choices with the
+same scrolling and wrap behavior. Type more of the current argument to narrow
+the list. Commands without an argument completer show their syntax hint in the command-name row
 but do not invent argument values after the name.
 
 Tab always completes the highlighted name and a trailing space, so you keep
@@ -1605,8 +1610,10 @@ the same way as command-name rows. If the typed argument already exactly
 matches its only completion, the menu closes so Enter runs the command.
 
 The command pane builds all selectable rows through
-`suggestCommandInput(input, entries, complete)`. Each row is a
-`CommandSuggestion` with `label: string`, `replacement: string`,
+`suggestCommandInput(input, entries, complete)`, which returns all matching
+rows without a display limit. The renderer uses `pickerWindow(count, index, 8)`
+to display at most eight rows while keeping the selected row visible. Each row
+is a `CommandSuggestion` with `label: string`, `replacement: string`,
 `kind: "command" | "argument"`, and `runOnEnter: boolean`. A local command's
 `CommandSpec.complete(position, context)` supplies zero or more full-line
 replacement strings for any argument depth; `position` contains `words`,

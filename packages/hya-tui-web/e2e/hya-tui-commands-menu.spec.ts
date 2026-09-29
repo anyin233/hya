@@ -75,6 +75,42 @@ async function createSessionViaMenu(term: Tui): Promise<void> {
 }
 
 test.describe("command menu", () => {
+  for (const width of [1100, 700]) {
+    test(`Up/Down reach commands beyond the visible rows and wrap at the full list (${width}px)`, async ({ tui, backend }, testInfo) => {
+      await writeSkill(backend.dir, "zz-navigation-last", "Last navigation choice", "Say hello.")
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await connected(term)
+      await term.type("/")
+      await term.waitForText("▸ /agent")
+      await term.press("ArrowUp")
+      await term.waitForText("▸ /zz-navigation-last")
+      await term.press("ArrowDown")
+      await term.waitForText("▸ /agent")
+
+      const highlighted = async () => (await box(term, "Commands"))?.rows.find((row) => row.startsWith("▸ "))
+      let selected = await highlighted()
+      const visited = new Set([selected])
+      for (let step = 0; step < 40 && !selected?.startsWith("▸ /layout "); step++) {
+        await term.press("ArrowDown")
+        await expect.poll(async () => {
+          const next = await highlighted()
+          return next !== undefined && next !== selected
+        }).toBe(true)
+        selected = await highlighted()
+        expect(visited.has(selected), "navigation wrapped before reaching /layout").toBe(false)
+        visited.add(selected)
+        expect((await box(term, "Commands"))!.rows.filter((row) => row.includes("[local]") || row.includes("[command]") || row.includes("[skill]")).length).toBeLessThanOrEqual(8)
+      }
+      expect(selected).toMatch(/^▸ \/layout /)
+      await term.attach(testInfo, "command-menu-scrolled")
+      await term.press("Tab")
+      await expect.poll(() => commandText(term)).toBe("/layout")
+      await term.waitForText("▸ /layout assign")
+      await term.press("Escape")
+      await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+    })
+  }
+
   test("slash focuses a separate command pane without changing the message draft", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
