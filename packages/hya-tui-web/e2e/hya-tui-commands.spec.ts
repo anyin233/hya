@@ -52,6 +52,20 @@ test.describe("hya TUI commands and look", () => {
     await term.waitForText("Next: /api GET /v1/health · /help for command syntax")
   })
 
+  test("a prompt sent while /status shows goes back to the transcript and shows its reply", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await term.type("/status")
+    await term.press("Enter")
+    await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
+
+    await term.type("hello from the status page")
+    await term.press("Enter")
+    // The offline model's reply is on screen, and the status page is gone.
+    await term.waitForText("No live provider is available", 20_000)
+    await expect.poll(() => term.find("Server      http://")).toBeNull()
+  })
+
   test("narrow terminals hide the sidebar until Ctrl+B shows it", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
     await term.waitForText("Connected to hya")
