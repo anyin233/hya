@@ -22,9 +22,9 @@ test.describe("hya TUI commands and look", () => {
 
     const status = (await term.find("Connected to hya"))!
     expect((await term.cell(status.row, status.col))?.fg).toBe("#9caab9")
-    const footer = (await term.find("Enter a prompt · /new creates a session"))!
-    expect((await term.cell(footer.row, footer.col))?.fg).toBe("#9caab9")
-    expect(footer.row).toBeGreaterThan(status.row)
+    const composer = (await term.find("Message, !shell, or @file · / commands"))!
+    expect(composer.row).toBeGreaterThan(status.row)
+    expect(status.row).toBe(header.row + 2)
   })
 
   test("/help opens the help overlay; /models and /api switch the main panel", async ({ tui, backend }) => {
@@ -43,13 +43,13 @@ test.describe("hya TUI commands and look", () => {
     await term.press("Enter")
     await term.waitForText("Models")
     await term.waitForText("hya/offline")
-    await term.waitForText("Next: /model <provider/model> to switch this session · /key opens the Provider View · /help")
+    await term.waitForText("Message, !shell, or @file · / commands")
 
     await term.type("/api")
     await term.press("Enter")
     await term.waitForText("API commands")
     await term.waitForText("/v1/health")
-    await term.waitForText("Next: /api GET /v1/health · /help for command syntax")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("a prompt sent while /status shows goes back to the transcript and shows its reply", async ({ tui, backend }) => {

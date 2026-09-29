@@ -1,5 +1,4 @@
 import { Composer } from "./Composer"
-import { Footer } from "./Footer"
 import { Header } from "./Header"
 import { MainPanel } from "./MainPanel"
 import { ModeConfirm } from "./ModeConfirm"
@@ -16,14 +15,13 @@ export function ConversationPane(props: { width: number }) {
     <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
       <Header />
       <StatusBar />
+      <StatusLine />
       <MainPanel />
       <WorkingIndicator />
       <PendingBlock width={props.width} />
       <PromptDock />
       <ModeConfirm />
-      <StatusLine />
       <Composer width={props.width} />
-      <Footer />
     </box>
   )
 }

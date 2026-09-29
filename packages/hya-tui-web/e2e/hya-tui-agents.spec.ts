@@ -53,7 +53,7 @@ test.describe("hya TUI Agents view", () => {
     await term.attach(testInfo, "agents-view")
 
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("Enter selects a primary agent for the session; on a subagent it notices why", async ({ tui, backend }) => {

@@ -57,7 +57,7 @@ test.describe("layout", () => {
     await term.waitForText("Commands")
     await term.waitForText("/layout split")
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
@@ -137,7 +137,7 @@ test.describe("layout", () => {
     await prompt(term, "hello narrow")
     await term.waitForText("layout reply marker l1", 20_000)
     expect(await sidebarShown(term)).toBe(false)
-    await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
+    await term.waitForText("Message, !shell, or @file · / commands")
     // Every row fits: no line is wider than the terminal.
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-closed")

@@ -40,7 +40,7 @@ test.describe("hya TUI MCP view", () => {
     await term.press("r")
     await term.waitForText("Refreshed")
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("/mcp shows in the help overlay and command menu, and is listed as a native command", async ({ tui, backend }) => {
@@ -51,7 +51,7 @@ test.describe("hya TUI MCP view", () => {
     await term.type("mcp")
     await term.waitForText(/\/mcp\s+\[local\]\s+Open the MCP view/)
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test.describe("many tools", () => {

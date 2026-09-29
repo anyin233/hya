@@ -9,7 +9,7 @@ import { api, backendConfigDir, expect, hangStep, hyaTui, startFakeModel, test, 
 // itself, so the backend stays on the offline model until one is picked.
 
 async function openProviders(term: Tui): Promise<void> {
-  await term.waitForText("Enter a prompt · /new creates a session")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("/key")
   await term.press("Enter")
   await term.waitForText("changes apply at once, no restart")
@@ -64,7 +64,7 @@ test.describe("hya TUI Provider View", () => {
     await term.type("k")
     await term.waitForText("hya is the built-in offline provider")
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.text()).not.toContain("PROVIDER")
   })
 
@@ -157,7 +157,7 @@ test.describe("hya TUI Provider View", () => {
       await term.press("Escape")
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+3 models/)
       await term.press("Escape")
-      await term.waitForText("Enter a prompt · /new creates a session")
+      await term.waitForText("Message, !shell, or @file · / commands")
       await term.waitForText(/hya-main gw\/alpha/)
       // The new models reached the /model picker without a restart.
       await term.type("/model")
