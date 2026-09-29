@@ -1177,11 +1177,15 @@ async fn run(
         Some(Command::Rpc) => cmd_rpc(model, yolo, pure).await,
         // The update TCB runs without composing any runtime: no config,
         // bundles, providers, plugins, MCP, or session store.
-        Some(Command::Update { command }) => {
-            let mut stdout = std::io::stdout().lock();
-            hya_updater::cli::run(command, &mut stdout)
-                .map_err(|error| anyhow::anyhow!("hya update: {error}"))
-        }
+        Some(Command::Update { command, install }) => match command {
+            Some(command) => {
+                let mut stdout = std::io::stdout().lock();
+                hya_updater::cli::run(command, &mut stdout)
+                    .map_err(|error| anyhow::anyhow!("hya update: {error}"))
+            }
+            None => hya_updater::release_install::run_release_install(&install)
+                .map_err(|error| anyhow::anyhow!("hya update: {error}")),
+        },
         // The proxy composes no runtime either: no config, providers, MCP,
         // or session store — it only opens network connections.
         Some(Command::Proxy { args }) => proxy_cmd::cmd_proxy(args).await,

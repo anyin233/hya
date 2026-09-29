@@ -31,6 +31,9 @@ jobs:
             runner: ubuntu-22.04-arm
           - target: aarch64-apple-darwin
             runner: macos-15
+          # The last Intel macOS image GitHub offers (supported until 2027-08).
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
     env:
       TARGET: ${{ matrix.target }}
     permissions:
@@ -124,10 +127,13 @@ jobs:
           export COPYFILE_DISABLE=1
           rm -rf dist
           bun_adapter="dist/$package_dir/lib/hya/bun-adapter"
-          mkdir -p "dist/$package_dir/bin" "$bun_adapter/src"
+          mkdir -p "dist/$package_dir/bin" "$bun_adapter/src" "dist/$package_dir/lib/hya/bin"
           cp "target/$TARGET/release/hya" "dist/$package_dir/bin/"
-          cp README.md "dist/$package_dir/"
+          cp README.md THIRD_PARTY_NOTICES "dist/$package_dir/"
           chmod 755 "dist/$package_dir/bin/hya"
+          # The pinned Bun runs the TUI, WebUI host, and Bun adapter of an
+          # installed hya, so the archive needs no separately installed Bun.
+          install -m 0755 "$HOME/.bun/bin/bun" "dist/$package_dir/lib/hya/bin/bun"
           cp crates/hya-plugin-bun/adapter/package.json \
             crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
           cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
@@ -218,6 +224,7 @@ jobs:
             x86_64-unknown-linux-gnu) opentui_native=linux-x64 ;;
             aarch64-unknown-linux-gnu) opentui_native=linux-arm64 ;;
             aarch64-apple-darwin) opentui_native=darwin-arm64 ;;
+            x86_64-apple-darwin) opentui_native=darwin-x64 ;;
             *) echo "no OpenTUI native package is known for $TARGET" >&2; exit 1 ;;
           esac
           for path in package.json bun.lock bunfig.toml tsconfig.json src/main.ts \
@@ -261,6 +268,8 @@ jobs:
           fi
           tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
           grep -Fx "$package_dir/bin/hya" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/bin/bun" "$scratch/archive.txt"
+          test "$("$scratch/$package_dir/lib/hya/bin/bun" --version)" = "1.4.2"
           grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/bun.lock" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/src/main.ts" "$scratch/archive.txt"
@@ -278,6 +287,24 @@ jobs:
             echo "release archive must not contain the example source-tree prefix" >&2
             exit 1
           fi
+          # Install the archive with the published installer over file://
+          # URLs, then let the installed hya's bare `hya update` find it current.
+          releases="$scratch/releases"
+          mkdir -p "$releases/download/v$version" "$releases/latest/download"
+          cp "dist/$ARCHIVE" "$releases/download/v$version/"
+          cp "dist/SHA256SUMS-$TARGET" "$releases/download/v$version/SHA256SUMS"
+          cp "dist/SHA256SUMS-$TARGET" "$releases/latest/download/SHA256SUMS"
+          installed="$scratch/installed"
+          export HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
+            XDG_STATE_HOME="$smoke_home/state" XDG_CACHE_HOME="$smoke_home/cache" \
+            HYA_RELEASES_URL="file://$releases"
+          sh scripts/hya-install.sh --prefix "$installed"
+          test "$("$installed/bin/hya" --version)" = "hya $version"
+          test -x "$installed/lib/hya/bin/bun"
+          test -f "$installed/lib/hya/tui/src/main.ts"
+          test "$(find "$installed/bundles" -name 'hya-*.hyabundle' | wc -l)" -eq "$(find "$scratch/$package_dir/bundles" -name 'hya-*.hyabundle' | wc -l)"
+          "$installed/bin/hya" update > "$scratch/update.txt"
+          grep -F "hya $version is already installed" "$scratch/update.txt"
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
@@ -339,20 +366,26 @@ jobs:
               fi
             done
           done
-          test "$targets" -eq 3
+          test "$targets" -eq 4
           test "$(find dist -name '*.tar.gz' | wc -l)" -eq "$targets"
           test "$(find dist -name 'hya-*.hyabundle' | wc -l)" -eq $((5 * targets + 7))
           (cd dist && for file in *.tar.gz hya-*.hyabundle; do shasum -a 256 "$file"; done > SHA256SUMS)
           (cd dist && shasum -a 256 -c SHA256SUMS)
+          # The curl-pipe installer `hya update` also runs (docs/install.md).
+          install -m 0755 scripts/hya-install.sh dist/hya-install.sh
 
       - name: Attest combined checksums
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
-          subject-path: dist/SHA256SUMS
+          subject-path: |
+            dist/SHA256SUMS
+            dist/hya-install.sh
 
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           body_path: CHANGELOG.md
+          # `releases/latest`, which the installer follows, skips prereleases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: dist/*
           fail_on_unmatched_files: true

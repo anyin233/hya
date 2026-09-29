@@ -14,7 +14,7 @@ standalone `hya-updater` binary are gone.
 | Sessions | `sessions`, `tail-session` |
 | Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
-| Self-update TCB | `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
+| Update | bare `update` (reinstall from the latest release, [`docs/install.md`](install.md)); self-update TCB `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
@@ -1181,10 +1181,15 @@ Empty `--db` is remapped to the durable XDG path (not in-memory).
 This command intentionally exits cleanly on broken pipe (exit 0), so shell
 filters such as `head` and `grep -q` can close stdout without causing a panic.
 
-## `hya update` (self-update TCB)
+## `hya update`
 
-`hya update` verifies signed release metadata, stages immutable generations,
-optionally smokes them, and activates only with explicit owner authorization.
+Bare `hya update [--version VERSION] [--force] [--prefix DIR]` reinstalls
+the running hya's prefix from the latest (or the given) GitHub release with
+the same installer as `curl … | sh`; see [Install and update](install.md).
+
+The subcommands below are the self-update TCB. They verify signed release
+metadata, stage immutable generations,
+optionally smoke them, and activate only with explicit owner authorization.
 It replaces the former standalone `hya-updater` binary. The commands are
 implemented in the independent `hya-updater` library crate, and `hya`
 dispatches them before composing any runtime: no config bootstrap, bundles,
