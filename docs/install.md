@@ -14,8 +14,13 @@ Building from a source checkout (`./install.sh`) is still supported; see the
 ## Install
 
 ```sh
-curl -fsSL https://github.com/anyin233/hya/releases/latest/download/hya-install.sh | sh
+curl -fsSL https://hya.ed-aisys.com/install.sh | sh
 ```
+
+`https://hya.ed-aisys.com/install.sh` answers with a 302 redirect to
+`https://github.com/anyin233/hya/releases/latest/download/hya-install.sh`, the
+installer published with the newest release. `curl -L` (included in `-fsSL`)
+follows it. Every other path on that host redirects to this page.
 
 The script:
 
@@ -43,7 +48,7 @@ running, it keeps the old version until you run `hya serve restart`.
 Pass flags through `sh -s --`:
 
 ```sh
-curl -fsSL https://github.com/anyin233/hya/releases/latest/download/hya-install.sh \
+curl -fsSL https://hya.ed-aisys.com/install.sh \
   | sh -s -- --version 0.43.23 --prefix /opt/hya
 ```
 
@@ -72,6 +77,18 @@ The script is self-contained POSIX `sh`. Copy `scripts/hya-install.sh` (or the
 <HYA_RELEASES_URL>/download/v<version>/SHA256SUMS
 <HYA_RELEASES_URL>/download/v<version>/hya-<version>-<target>.tar.gz
 ```
+
+`hya.ed-aisys.com` is not a Worker. It is a proxied DNS record
+(`AAAA 100::`, no origin) in the `ed-aisys.com` zone plus two Single Redirect
+rules in the zone's `http_request_dynamic_redirect` ruleset:
+
+| Expression | Target (302) |
+| --- | --- |
+| `http.host eq "hya.ed-aisys.com" and http.request.uri.path eq "/install.sh"` | `https://github.com/anyin233/hya/releases/latest/download/hya-install.sh` |
+| `http.host eq "hya.ed-aisys.com" and http.request.uri.path ne "/install.sh"` | `https://github.com/anyin233/hya/blob/main/docs/install.md` |
+
+Because it redirects to the latest release, the URL serves the installer of
+the newest release. It returns 404 until a release publishes `hya-install.sh`.
 
 ## Update
 

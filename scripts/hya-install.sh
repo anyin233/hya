@@ -2,8 +2,8 @@
 # hya release installer: download a published hya release for this machine,
 # verify it against the release's SHA256SUMS, and install it into a prefix.
 #
-#   curl -fsSL https://github.com/anyin233/hya/releases/latest/download/hya-install.sh | sh
-#   curl -fsSL <url>/hya-install.sh | sh -s -- --version 0.43.23 --prefix /opt/hya
+#   curl -fsSL https://hya.ed-aisys.com/install.sh | sh
+#   curl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- --version 0.43.23 --prefix /opt/hya
 #
 # `hya update` runs this same script for the prefix of the running hya.
 # Host it anywhere; it only reads release assets from HYA_RELEASES_URL.

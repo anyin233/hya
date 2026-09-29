@@ -36,7 +36,7 @@ may still change between versions.
 Linux (x86_64, arm64, glibc) and macOS (Apple silicon, Intel):
 
 ```sh
-curl -fsSL https://github.com/anyin233/hya/releases/latest/download/hya-install.sh | sh
+curl -fsSL https://hya.ed-aisys.com/install.sh | sh
 hya update   # later: move to the newest release
 ```
 
