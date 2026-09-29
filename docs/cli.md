@@ -12,7 +12,7 @@ standalone `hya-updater` binary are gone.
 | Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
 | Server and wire protocols | `serve` (and `serve start`/`status`/`stop`/`restart` for the backend daemon), `rpc` |
 | Sessions | `sessions`, `tail-session` |
-| Providers and auth | `provider` (`add`, `list`, `remove`), `login`, `oauth`, `auth` (alias `providers`), `models` |
+| Providers and auth | `provider` (alias `providers`: `add`, `list`, `remove`, `logout`), `login`, `oauth`, `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
 | Update | bare `update` (reinstall from the latest release, [`docs/install.md`](install.md)); self-update TCB `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
@@ -120,7 +120,7 @@ URIs are never locked.
 | `sessions` (list), `tail-session` | Durable default or `--db` | Read directly, never write, no lock | Read directly, no lock |
 | `-p` goal mode, `loop`, `rpc` | A private temporary database per run | Not affected (`--db` is ignored) | Not affected |
 | `serve` | `--db`, else in-memory | Exits 75 | Takes the lock (it is the server) |
-| `agent`, `bundle`, `models`, `auth`, `update` | No session store | Not affected | Not affected |
+| `agent`, `bundle`, `models`, `provider`, `update` | No session store | Not affected | Not affected |
 
 The 75 line for a command the server cannot run names the server and the way
 out:
@@ -1053,10 +1053,11 @@ deletes a provider. They write the same files as the TUI Provider View
 hya provider add [--name <id>] [--base-url <url>] [--protocol <protocol>] [--api-key <key>] [-y]
 hya provider list [--refresh]
 hya provider remove <id> [-y]
+hya provider logout <id>
 ```
 
-`hya provider` (singular) is not `hya providers`. The plural is an alias of
-`hya auth`, which manages only saved keys.
+`hya providers` is an alias of `hya provider`. It replaces the removed
+`hya auth list|logout`: `list` shows saved keys and `logout` deletes one.
 
 ### `hya provider add`
 
@@ -1144,12 +1145,31 @@ URL, and where the key comes from (`saved key`, `oauth`, `config api_key`, or
 from the model cache merged with `models:` entries, the same catalog
 `hya models` prints. `--refresh` fetches every provider's list first.
 
+A `models:` entry that names a fetched model overrides it field by field, and
+unset fields keep the fetched values
+([ADR-0029](adr/0029-config-model-entries-override-the-model-cache.md)). Such
+rows end in `(config override)`. Rows the endpoint does not list, but an entry
+declares, end in `(config only)`. Keys saved for ids that `config.yaml` does
+not declare come last.
+
 ```text
 12th  anthropic-messages  https://api.12th.day/v1  saved key
   12th/MiniMaxAI/MiniMax-M2.5
-  12th/glm-5.3
+  12th/claude-sonnet-5  (config only)
+  12th/glm-5.3  (config override)
   …
+
+Saved keys without a provider in config.yaml (`hya provider logout <id>` deletes one):
+  old-proxy
 ```
+
+### `hya provider logout`
+
+`hya provider logout <id>` deletes the saved key `auth/<id>.yaml` and keeps
+the provider's declaration, which is then used with its inline `api_key` if it
+has one. The provider can also be missing from `config.yaml`, which cleans up
+a leftover key. If no key is saved, it exits 1. A running backend rebuilds the
+provider without the key (`DELETE /v1/auth/{id}`).
 
 ### `hya provider remove`
 
@@ -1169,10 +1189,6 @@ configured exits 1.
 hya login <provider> <token>
 hya oauth login --provider <name> --type <openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
 hya oauth status [provider]
-hya auth list
-hya auth logout <provider>
-hya providers list
-hya providers logout <provider>
 hya models [provider] [--verbose] [--refresh]
 hya agent list [--all]
 ```
@@ -1212,8 +1228,9 @@ approval in that window, the command fails and must be rerun. Flags map to
 `no_browser`, `model`, `base_url` (the `auth_dir` / `config_path` fields are
 test-only overrides).
 
-Saved credentials take precedence over inline `api_key` values. `providers` is
-an alias for `auth`.
+Saved credentials take precedence over inline `api_key` values. `hya provider
+list` shows every saved key and `hya provider logout <id>` deletes one (see
+[`hya provider`](#hya-provider)).
 
 **`oauth status [provider]`.** Prints non-secret per-provider status only —
 credential kind (`api` vs oauth), OAuth type when present, `expires` /

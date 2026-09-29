@@ -82,6 +82,7 @@ If you want to understand the codebase:
 13. [Development](development.md)
 14. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
 15. [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md)
+16. [Config model entries override the model cache](adr/0029-config-model-entries-override-the-model-cache.md)
 
 ## Docs Map
 
@@ -106,6 +107,7 @@ If you want to understand the codebase:
 | [Install and update](install.md) | Release packages per platform, the `curl … \| sh` installer (`hya-install.sh`), bare `hya update`, mirrors, archive layout. |
 | [Secure self-update](self-update.md) | `hya update` over the independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Supervisor-owned listener handoff](adr/0028-inherited-listener-handoff.md) | Foreground Unix listener FD handoff primitive and successor-process follow-up plan. |
+| [Config model entries override the model cache](adr/0029-config-model-entries-override-the-model-cache.md) | A `models:` entry for a fetched model wins field by field; unset fields fall back to the cached metadata. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |

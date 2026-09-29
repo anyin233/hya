@@ -496,7 +496,7 @@ Provider View's refresh and add-provider actions). A refresh replaces the
 provider's rows; a 401/403 clears them; a transport, status, or decode failure
 keeps the old rows.
 
-**Merge rule (per model id, field by field).**
+**Merge rule (per model id, field by field; [ADR-0029](adr/0029-config-model-entries-override-the-model-cache.md)).**
 
 | Model is in | Source shown | Metadata |
 | --- | --- | --- |
@@ -1057,9 +1057,9 @@ Saved tokens take precedence over inline `api_key` values:
 ```sh
 hya login anthropic "$ANTHROPIC_API_KEY"
 hya oauth login --provider codex --type openai-codex
-hya auth list
+hya provider list
 hya oauth status
-hya auth logout anthropic
+hya provider logout anthropic
 ```
 
 ### On-disk auth file schema
