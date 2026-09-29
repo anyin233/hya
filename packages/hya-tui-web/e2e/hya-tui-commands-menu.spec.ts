@@ -21,13 +21,14 @@ async function connected(term: Tui): Promise<void> {
 /** Rows of the bordered box titled `title` (the topmost box whose border shows that title), trimmed. */
 async function box(term: Tui, title: string): Promise<{ top: number; rows: string[] } | undefined> {
   const lines = await term.lines()
-  const top = lines.findIndex((line) => line.startsWith("┌") && line.includes(title))
+  const top = lines.findIndex((line) => line.includes("┌") && line.includes(title))
   if (top < 0) return undefined
+  const left = lines[top]!.lastIndexOf("┌", lines[top]!.indexOf(title))
   let bottom = top + 1
-  while (bottom < lines.length && !lines[bottom]!.startsWith("└")) bottom++
+  while (bottom < lines.length && lines[bottom]![left] !== "└") bottom++
   const rows = lines.slice(top + 1, bottom).map((line) => {
-    const end = line.indexOf("│", 1)
-    return line.slice(1, end < 0 ? undefined : end).trim()
+    const end = line.indexOf("│", left + 1)
+    return line.slice(left + 1, end < 0 ? undefined : end).trim()
   })
   return { top, rows }
 }

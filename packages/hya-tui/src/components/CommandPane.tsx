@@ -1,4 +1,5 @@
 import type { InputRenderable, KeyEvent } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp, type CommandPaneHandle } from "../app/context"
 import { historyEntry } from "../bridge"
@@ -18,13 +19,17 @@ interface CommandMenu {
 /** A single command input that owns slash completion and command history. */
 export function CommandPane() {
   const { store, controller, ui } = useApp()
+  const size = useTerminalDimensions()
+  const width = () => Math.max(20, Math.min(96, size().width - 4))
+  const left = () => Math.max(0, Math.floor((size().width - width()) / 2))
   let editor: InputRenderable | undefined
   const [active, setActive] = createSignal(ui.commandInput?.active ?? false)
   const [menu, setMenu] = createSignal<CommandMenu | undefined>()
   const visibleMenu = createMemo(() => {
     const shown = menu()
     if (!shown) return undefined
-    const { start, end } = pickerWindow(shown.items.length, shown.index, commandSuggestionLimit)
+    const rows = Math.max(1, Math.min(commandSuggestionLimit, size().height - 6))
+    const { start, end } = pickerWindow(shown.items.length, shown.index, rows)
     return { items: shown.items.slice(start, end), index: shown.index - start }
   })
   const history = ui.commandHistory ??= new InputHistory()
@@ -163,7 +168,7 @@ export function CommandPane() {
   })
 
   return (
-    <box width="100%" flexShrink={0} border borderColor={colors.accent} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
+    <box position="absolute" top={2} left={left()} width={width()} zIndex={90} flexShrink={0} border borderColor={colors.accent} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
       <Show when={visibleMenu()}>
         {(shown) => (
           <For each={shown().items}>

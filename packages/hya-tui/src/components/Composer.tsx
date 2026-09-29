@@ -373,7 +373,8 @@ export function Composer(props: { width: number }) {
       return
     }
     const inputEmpty = !(editor?.plainText ?? value())
-    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || inputEmpty, chord })
+    const commandPaneFocus = paneLeaves(store.state.paneLayout.root).find((pane) => pane.id === store.state.paneLayout.active)
+    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || commandPaneFocus?.kind !== "conversation" || inputEmpty, chord })
     if (commandShortcut === "openCommands") {
       consume()
       if (chord && store.state.status === chordHint) store.setStatus(beforeChord)

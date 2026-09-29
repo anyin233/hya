@@ -1,4 +1,3 @@
-import { CommandPane } from "./CommandPane"
 import { Composer } from "./Composer"
 import { Footer } from "./Footer"
 import { Header } from "./Header"
@@ -23,7 +22,6 @@ export function ConversationPane(props: { width: number }) {
       <PromptDock />
       <ModeConfirm />
       <StatusLine />
-      <CommandPane />
       <Composer width={props.width} />
       <Footer />
     </box>

@@ -2,6 +2,7 @@ import type { MouseEvent, Selection } from "@opentui/core"
 import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { createEffect } from "solid-js"
 import { AgentsView } from "../components/AgentsView"
+import { CommandPane } from "../components/CommandPane"
 import { DiffView } from "../components/DiffView"
 import { McpView } from "../components/McpView"
 import { Picker } from "../components/Picker"
@@ -21,8 +22,11 @@ export { layoutBreakpoints } from "../state/layout"
  * Todos, and Context. The full-screen
  * Provider (`/key`), Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`),
  * and Agents (`/agent`) views are drawn over both when one of
- * them is open (at most one at a time), and the modal picker
- * (components/Picker.tsx) over everything.
+ * them is open (at most one at a time). The global Commands overlay is
+ * independent of this tree, with the modal picker (components/Picker.tsx)
+ * drawn above it. Commands mounts before Composer subscribes to its active
+ * signal; the workspace container isolates split-tree replacement from the
+ * persistent overlays.
  *
  * Mouse selection: a left press paints the theme's selection color on the
  * text renderables (components/selection.ts); releasing a drag copies the
@@ -44,7 +48,10 @@ export function App() {
   createEffect(() => store.setColumns(size().width))
   return (
     <box width="100%" height="100%" flexDirection="row" backgroundColor={colors.bg} onMouseDown={paint}>
-      <PaneWorkspace />
+      <CommandPane />
+      <box width="100%" height="100%" flexGrow={1}>
+        <PaneWorkspace />
+      </box>
       <ProviderView />
       <DiffView />
       <McpView />

@@ -1,5 +1,5 @@
-# 0.43.30
+# 0.43.31
 
 ## Features
 
-- Backspace closes the command pane when it deletes the last character, returning focus to the message composer or Projects sidebar while preserving the message draft. Reopening the emptied pane starts with `/`.
+- Slash commands now open a global overlay centered near the top of the whole terminal, like help. Its input and history survive pane reassignment and responsive layout changes. Slash opens it from any non-conversation workspace pane even when a message draft exists; Ctrl+X then slash opens it while drafting in the conversation.
