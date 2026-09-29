@@ -214,7 +214,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
     complete: ({ words, current, head }) => {
       if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
-      if ((words[0] === "split" && words.length === 3) || (words[0] === "assign" && words.length === 2)) return matchValues(head, current, [...paneKinds])
+      if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation"))
+      if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
       if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down"])
       return []
     },

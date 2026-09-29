@@ -7,7 +7,7 @@ import { isDefaultPaneTree } from "../state/panes"
 export function Footer() {
   const { store, ui } = useApp()
   const text = () => ui.command?.active()
-    ? "Command pane · type a name or use Up/Down · Tab completes · Enter runs · Esc returns"
+    ? "Command pane · type or use Up/Down · Tab chooses · Enter chooses/runs · Esc returns"
     : store.state.view === "chat" && (store.state.paneLayout.active !== "pane-1" || !isDefaultPaneTree(store.state.paneLayout))
       ? "Alt+arrows select pane · /layout split|assign|resize|close|reset · / commands"
     : footerInstruction(store.state.view, Boolean(store.state.selected?.parent))

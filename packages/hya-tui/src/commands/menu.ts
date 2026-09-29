@@ -19,6 +19,14 @@ export interface CommandEntry {
   source: CommandSource
 }
 
+/** A selectable row in the command pane, regardless of argument depth. */
+export interface CommandSuggestion {
+  label: string
+  replacement: string
+  kind: "command" | "argument"
+  runOnEnter: boolean
+}
+
 /** Rows shown at once; the rest are still reachable by typing a longer query. */
 export const commandSuggestionLimit = 8
 
@@ -85,4 +93,23 @@ export function filterCommands(entries: CommandEntry[], query: string): CommandE
   return scored
     .sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
     .map((row) => row.entry)
+}
+
+/** Build the same selectable rows for a command name or any nested argument. */
+export function suggestCommandInput(input: string, entries: () => CommandEntry[], complete: (input: string) => string[]): CommandSuggestion[] {
+  if (!input.startsWith("/")) return []
+  if (/\s/.test(input)) {
+    return complete(input)
+      .filter((replacement) => replacement !== input)
+      .slice(0, commandSuggestionLimit)
+      .map((replacement) => ({ label: replacement, replacement, kind: "argument", runOnEnter: false }))
+  }
+  return filterCommands(entries(), input.slice(1))
+    .slice(0, commandSuggestionLimit)
+    .map((entry) => ({
+      label: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}]`,
+      replacement: entry.name,
+      kind: "command",
+      runOnEnter: !requiresArgument(entry.argumentHint),
+    }))
 }
