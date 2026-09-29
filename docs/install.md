@@ -25,8 +25,8 @@ follows it. Every other path on that host redirects to this page.
 The script:
 
 1. Detects the target triple from `uname`. An x86_64 shell under Rosetta on
-   Apple silicon gets the arm64 build. musl Linux, Windows, and other CPUs are
-   refused.
+   Apple silicon gets the arm64 build. Intel Macs, musl Linux, Windows, and
+   other CPUs are refused.
 2. Downloads `SHA256SUMS` of the release, either the latest release or
    `--version`. It then picks `hya-<version>-<target>.tar.gz` from that file.
 3. Exits early if `<prefix>/bin/hya --version` already reports that version,
@@ -125,7 +125,9 @@ prerelease, which `releases/latest` skips.
 | `x86_64-unknown-linux-gnu` | `ubuntu-22.04` |
 | `aarch64-unknown-linux-gnu` | `ubuntu-22.04-arm` |
 | `aarch64-apple-darwin` | `macos-15` |
-| `x86_64-apple-darwin` | `macos-15-intel` |
+
+Intel Macs (`x86_64-apple-darwin`) are no longer built; 0.43.25 is the last
+release with that package.
 
 Release assets:
 
@@ -157,3 +159,18 @@ Every build job smoke-tests its package before upload. It installs the archive
 with `scripts/hya-install.sh` from a `file://` release tree, then checks that
 the installed hya's bare `hya update` reports the release as current.
 `cargo run -p xtask -- release-rehearsal` runs the same checks locally.
+
+### Build cache
+
+A tag run can restore GitHub Actions caches saved on `main`, but not caches
+saved by another tag. The same workflow therefore also runs on `main` to keep
+one Rust dependency cache per target (`Swatinem/rust-cache`, key = target):
+
+| Trigger | What runs |
+| --- | --- |
+| Tag push `v*.*.*` | Full build, package, smoke, publish. Restores main's cache; never saves one. |
+| Push to `main` touching `Cargo.lock`, any `Cargo.toml`, or `release.yml` | Cache refresh: the release `cargo build` commands plus `cargo build -p xtask`, then save. |
+| Daily schedule (03:17 UTC) and `workflow_dispatch` | Cache refresh, catching a new stable toolchain. Skips the build when the exact key is already cached. |
+
+A cache refresh runs only the checkout, toolchain, cache, and build steps. It
+does not package, attest, upload, or publish anything.

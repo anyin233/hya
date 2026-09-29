@@ -1,6 +1,9 @@
-# 0.43.26
+# 0.43.27
 
-## Fixes
+## Breaking
 
-- **DeepSeek and other thinking-mode chat models can finish a tool round over `openai-compatible`.** An `openai-compatible` (Chat Completions) route used to discard the streamed `reasoning_content`. The next request after a tool call then failed with `http status 400: The reasoning_content in the thinking mode must be passed back to the API`. hya now stores that reasoning as a reasoning part and sends it back as the assistant message's `reasoning_content` on every later request. Once a session holds such reasoning, every assistant message carries the field, as an empty string when a message had none. Reasoning from other protocols, such as Anthropic thinking before a model switch, is never sent. The context estimate counts the resent reasoning.
-- **A preamble streamed before a tool call stays in front of it on `openai-compatible` routes.** Text such as "I'll start by finding your slides draft." was stored after the tool call. The next request then sent it as a separate assistant message after the tool result. The chat decoder now ends an open reasoning or text part before the next part starts.
+- **Intel Macs are no longer supported.** The release builds `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`; `x86_64-apple-darwin` is gone. 0.43.25 is the last release with an Intel Mac package. The installer, and so bare `hya update`, now stops on an Intel Mac with "no hya release for Intel Macs". An x86_64 shell under Rosetta on Apple silicon still gets the arm64 build. `cargo run -p xtask -- release-rehearsal` accepts only the three remaining targets.
+
+## Build
+
+- **Release builds restore a warm Rust dependency cache.** A tag run cannot read caches saved by another tag, so every release compiled all dependencies from scratch and also saved about 2 GB of caches that no later release could use. The release workflow now also runs on `main` when `Cargo.lock`, a `Cargo.toml`, or `release.yml` changes, daily, and on `workflow_dispatch`. Those runs only build and save one dependency cache per target (including xtask's), skipping the build when the exact key is already cached. Tag runs restore that cache and no longer save one. Dropping the Intel Mac job, which took 28 minutes, and the warm cache shorten a release from about 32 minutes. See `docs/install.md` "Build cache".
