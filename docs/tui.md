@@ -1524,13 +1524,41 @@ it upward. Esc or Ctrl+C closes the pane and keeps its command draft for
 reopening. Shift+Up/Down walks its own last 200 submitted commands. The
 message composer keeps a separate history and draft.
 
+After the command name, the same menu shows argument choices at every depth
+that the command can complete. This makes subcommands and their next values
+visible while typing. For example, `/layout ` lists actions including `split`
+and `assign`; `/layout split ` lists `horizontal` and `vertical`; and
+`/layout split vertical ` lists pane jobs such as `jobs` and `todos`.
+`conversation` is offered for `/layout assign`, but not for a split because a
+split cannot create a second conversation pane. `/api ` similarly lists HTTP
+methods, then `/api GET /v1/hea` suggests `/api GET /v1/health`. At most eight
+rows are shown; type more of the current argument to narrow the list. Commands
+without an argument completer show their syntax hint in the command-name row
+but do not invent argument values after the name.
+
 Tab always completes the highlighted name and a trailing space, so you keep
 typing its arguments. Enter's behavior depends on the highlighted command's
 argument hint: with no hint, or one written `[in brackets]` (an optional
 argument, for example `/new [agent] [model]` or `/sidebar [on|off]`), Enter
-runs the command as is. Any other hint (`/open <id|number>`, `/key
-set|remove <provider>`) names a required first argument, so Enter behaves
+runs the command as is. Any other hint (`/open <id|number>`, `/workflow
+select <name>`) names a required first argument, so Enter behaves
 like Tab: it completes the name and waits for you to type the argument.
+For an argument row, Tab or Enter inserts the highlighted full command line
+and a trailing space, then shows the next available choices. An argument
+selection does not run the command; press Enter again after the final value
+when no choice is highlighted. Up/Down and Shift+Tab navigate argument rows
+the same way as command-name rows. If the typed argument already exactly
+matches its only completion, the menu closes so Enter runs the command.
+
+The command pane builds all selectable rows through
+`suggestCommandInput(input, entries, complete)`. Each row is a
+`CommandSuggestion` with `label: string`, `replacement: string`,
+`kind: "command" | "argument"`, and `runOnEnter: boolean`. A local command's
+`CommandSpec.complete(position, context)` supplies zero or more full-line
+replacement strings for any argument depth; `position` contains `words`,
+`current`, and `head` (the text before `current`). Name rows use the merged
+local/backend catalog; argument rows use these existing local completers.
+No new server operation or payload is involved.
 
 Local and backend (command or skill) names are merged and deduplicated by
 name; a local name always wins a clash with a backend name (the registry

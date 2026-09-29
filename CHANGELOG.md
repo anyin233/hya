@@ -1,6 +1,6 @@
-# 0.43.9
+# 0.43.10
 
-## Lazy pane focus rendering
+## Nested command hints
 
-- Keep mounted pane content and scroll positions when switching focus with Alt+arrows or `/layout focus`.
-- Recalculate the visible split tree only when the layout, terminal width, or sidebar visibility changes; focus updates only the affected pane chrome and status.
+- Show selectable command argument suggestions at any depth in the command pane, using one menu and consistent Tab, Enter, and arrow-key behavior.
+- Offer only valid pane jobs when completing `/layout split`.

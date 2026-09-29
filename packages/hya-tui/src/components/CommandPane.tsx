@@ -2,15 +2,16 @@ import type { InputRenderable, KeyEvent } from "@opentui/core"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp, type CommandPaneHandle } from "../app/context"
 import { historyEntry } from "../bridge"
-import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
+import { suggestCommandInput, type CommandSuggestion } from "../commands"
 import { InputHistory } from "../composer/history"
 import { projectsSidebarVisible } from "../state/layout"
 import { isShiftTab } from "../state/modes"
 import { colors } from "../theme"
 
 interface CommandMenu {
-  items: CommandEntry[]
+  items: CommandSuggestion[]
   index: number
+  scope: string
 }
 
 /** A single command input that owns slash completion and command history. */
@@ -22,9 +23,6 @@ export function CommandPane() {
   const history = ui.commandHistory ??= new InputHistory()
   let originSidebar = ui.commandInput?.originSidebar ?? false
   let replaced: string | undefined
-  let choices: string[] = []
-  let index = -1
-  let completed = ""
 
   function replace(text: string): void {
     if (!editor) return
@@ -38,9 +36,10 @@ export function CommandPane() {
   function updateMenu(): void {
     if (!active() || !editor) return setMenu(undefined)
     const text = editor.plainText
-    if (!text.startsWith("/") || /\s/.test(text)) return setMenu(undefined)
-    const items = filterCommands(controller.commandEntries(), text.slice(1)).slice(0, commandSuggestionLimit)
-    setMenu(items.length ? { items, index: Math.min(menu()?.index ?? 0, items.length - 1) } : undefined)
+    const items = suggestCommandInput(text, controller.commandEntries, controller.complete)
+    const previous = menu()
+    const scope = text.slice(0, text.lastIndexOf(" ") + 1)
+    setMenu(items.length ? { items, index: previous?.scope === scope ? Math.min(previous.index, items.length - 1) : 0, scope } : undefined)
   }
 
   function sync(): void {
@@ -83,28 +82,15 @@ export function CommandPane() {
   }
 
   function acceptEntry(run: boolean): void {
-    const entry = menu()?.items[menu()?.index ?? 0]
+    const shown = menu()
+    const entry = shown?.items[shown.index]
     if (!entry) return
-    if (run && !requiresArgument(entry.argumentHint)) {
-      replace(entry.name)
+    if (run && entry.runOnEnter) {
+      replace(entry.replacement)
       submit()
       return
     }
-    replace(`${entry.name} `)
-  }
-
-  function complete(): void {
-    if (!editor) return
-    const text = editor.plainText
-    if (completed !== text) {
-      choices = controller.complete(text)
-      index = -1
-    }
-    if (!choices.length) return
-    index = (index + 1) % choices.length
-    replace(choices[index] ?? text)
-    completed = editor.plainText
-    store.setStatus(`${index + 1}/${choices.length} completion · Tab cycles`)
+    replace(`${entry.replacement} `)
   }
 
   function key(event: KeyEvent): boolean {
@@ -142,7 +128,6 @@ export function CommandPane() {
     }
     if (!event.ctrl && !event.meta && event.name === "tab") {
       if (shown) acceptEntry(false)
-      else complete()
       return true
     }
     if (!event.ctrl && !event.meta && !event.shift && (event.name === "return" || event.name === "kpenter")) {
@@ -172,7 +157,7 @@ export function CommandPane() {
           <For each={shown().items}>
             {(entry, row) => (
               <text height={1} wrapMode="none" fg={row() === shown().index ? colors.accent : colors.fg}>
-                {`${row() === shown().index ? "▸" : " "} ${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}]`}
+                {`${row() === shown().index ? "▸" : " "} ${entry.label}`}
               </text>
             )}
           </For>
@@ -194,7 +179,7 @@ export function CommandPane() {
         onSubmit={submit}
         onContentChange={sync}
       />
-      <text height={1} wrapMode="none" fg={colors.muted}>Up/Down select · Shift+Up/Down history · Tab completes · Enter runs · Esc returns</text>
+      <text height={1} wrapMode="none" fg={colors.muted}>Up/Down select · Shift+Up/Down history · Tab chooses · Enter chooses/runs · Esc returns</text>
     </box>
   )
 }
