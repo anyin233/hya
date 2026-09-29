@@ -126,7 +126,7 @@ prerelease, which `releases/latest` skips.
 | `aarch64-unknown-linux-gnu` | `ubuntu-22.04-arm` |
 | `aarch64-apple-darwin` | `macos-15` |
 
-Intel Macs (`x86_64-apple-darwin`) are no longer built; 0.43.25 is the last
+Intel Macs (`x86_64-apple-darwin`) are no longer built; 0.43.26 is the last
 release with that package.
 
 Release assets:
