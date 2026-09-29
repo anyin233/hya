@@ -102,3 +102,15 @@ test("a valid tiled layout survives preferences round-trip; an invalid tree is i
   writeFileSync(path, JSON.stringify({ theme: "light", paneLayout: { ...paneLayout, active: "missing" } }))
   expect(loadPreferences(path).preferences).toEqual({ theme: "light" })
 })
+
+test("a saved version-1 center split loads with editable outer side panes", () => {
+  const path = join(temp(), "tui.json")
+  const legacy = { version: 1, active: "pane-2", root: { type: "split", axis: "vertical", weight: 0.5,
+    first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
+  writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
+  const loaded = loadPreferences(path).preferences.paneLayout!
+  expect(loaded.version).toBe(2)
+  expect(loaded.active).toBe("pane-2")
+  expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
+  expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')
+})

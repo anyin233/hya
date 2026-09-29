@@ -29,7 +29,7 @@ export interface TuiPreferences {
   notifications?: boolean
   /** Default permission mode for sessions this TUI creates; unset defaults to manual. */
   permissionMode?: string
-  /** Versioned central workspace split tree; exactly one conversation pane. */
+  /** Versioned whole-workspace split tree; exactly one conversation pane. */
   paneLayout?: PaneLayout
 }
 
@@ -87,7 +87,10 @@ export function loadPreferences(path: string): LoadedPreferences {
   if (raw === null) return { preferences: {}, warning: `Ignored unreadable TUI preferences ${path}` }
   const preferences: Record<string, unknown> = {}
   for (const [key, valid] of Object.entries(validators) as [string, (value: unknown) => boolean][]) {
-    if (key in raw && valid(raw[key])) preferences[key] = raw[key]
+    if (key === "paneLayout") {
+      const layout = parsePaneLayout(raw[key])
+      if (layout) preferences[key] = layout
+    } else if (key in raw && valid(raw[key])) preferences[key] = raw[key]
   }
   return { preferences: preferences as TuiPreferences }
 }

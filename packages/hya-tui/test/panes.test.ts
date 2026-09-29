@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test"
 import {
-  closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves,
-  resizePane, setPaneKind, splitPane,
+  closePane, movePaneFocus, parsePaneLayout, paneLeaves,
+  resizePane, setPaneKind, splitPane, type PaneLayout,
 } from "../src/state/panes"
 
+const singlePaneLayout = (): PaneLayout => ({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } })
+
 test("nested splits keep one conversation and focus the nearest pane in each direction", () => {
-  const leftRight = splitPane(defaultPaneLayout(), "vertical", "jobs")
+  const leftRight = splitPane(singlePaneLayout(), "vertical", "jobs")
   expect(paneLeaves(leftRight.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs"])
   const nested = splitPane(leftRight, "horizontal", "todos")
   expect(paneLeaves(nested.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs", "todos"])
@@ -15,7 +17,7 @@ test("nested splits keep one conversation and focus the nearest pane in each dir
 })
 
 test("assignment and close preserve the conversation; invalid saved layouts are refused", () => {
-  const split = splitPane(defaultPaneLayout(), "vertical", "jobs")
+  const split = splitPane(singlePaneLayout(), "vertical", "jobs")
   const models = setPaneKind(split, "models")
   expect(paneLeaves(models.root).map((pane) => pane.kind)).toEqual(["conversation", "models"])
   const moved = setPaneKind(models, "conversation")
@@ -28,7 +30,7 @@ test("assignment and close preserve the conversation; invalid saved layouts are 
 })
 
 test("resize changes only the focused split and closes a nested auxiliary pane", () => {
-  const nested = splitPane(splitPane(defaultPaneLayout(), "vertical", "jobs"), "horizontal", "todos")
+  const nested = splitPane(splitPane(singlePaneLayout(), "vertical", "jobs"), "horizontal", "todos")
   const resized = resizePane(nested, 0.1)
   expect(resized.root.type).toBe("split")
   if (resized.root.type !== "split" || resized.root.second.type !== "split") return

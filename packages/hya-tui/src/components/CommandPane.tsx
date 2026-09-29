@@ -4,6 +4,7 @@ import { useApp, type CommandPaneHandle } from "../app/context"
 import { historyEntry } from "../bridge"
 import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
 import { InputHistory } from "../composer/history"
+import { projectsSidebarVisible } from "../state/layout"
 import { isShiftTab } from "../state/modes"
 import { colors } from "../theme"
 
@@ -16,10 +17,10 @@ interface CommandMenu {
 export function CommandPane() {
   const { store, controller, ui } = useApp()
   let editor: InputRenderable | undefined
-  const [active, setActive] = createSignal(false)
+  const [active, setActive] = createSignal(ui.commandInput?.active ?? false)
   const [menu, setMenu] = createSignal<CommandMenu | undefined>()
-  const history = new InputHistory()
-  let originSidebar = false
+  const history = ui.commandHistory ??= new InputHistory()
+  let originSidebar = ui.commandInput?.originSidebar ?? false
   let replaced: string | undefined
   let choices: string[] = []
   let index = -1
@@ -30,6 +31,7 @@ export function CommandPane() {
     replaced = text
     editor.setText(text)
     editor.cursorOffset = text.length
+    ui.commandInput = { text: editor.plainText, active: active(), originSidebar }
     updateMenu()
   }
 
@@ -45,6 +47,7 @@ export function CommandPane() {
     if (!editor) return
     if (editor.plainText !== replaced) history.reset()
     replaced = undefined
+    ui.commandInput = { text: editor.plainText, active: active(), originSidebar }
     updateMenu()
   }
 
@@ -54,13 +57,15 @@ export function CommandPane() {
       if (safe !== editor.plainText) replace(safe)
     }
     setActive(false)
+    ui.commandInput = { text: editor?.plainText ?? "", active: false, originSidebar }
     setMenu(undefined)
-    if (originSidebar) store.setProjectsSidebarFocus(true)
+    if (originSidebar && projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebarFocus(true)
   }
 
   function open(): void {
     if (active()) return
     originSidebar = store.state.projectsSidebarFocus
+    ui.commandInput = { text: editor?.plainText ?? "", active: true, originSidebar }
     store.setProjectsSidebarFocus(false)
     setActive(true)
     if (!editor?.plainText.startsWith("/")) replace("/")
@@ -155,7 +160,10 @@ export function CommandPane() {
     paste: (text) => editor?.insertText(text.replace(/\r?\n/g, " ")),
   }
   ui.command = handle
-  onCleanup(() => { if (ui.command === handle) ui.command = undefined })
+  onCleanup(() => {
+    if (editor) ui.commandInput = { text: editor.plainText, active: active(), originSidebar }
+    if (ui.command === handle) ui.command = undefined
+  })
 
   return (
     <box width="100%" flexShrink={0} border borderColor={colors.accent} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
@@ -171,7 +179,12 @@ export function CommandPane() {
         )}
       </Show>
       <input
-        ref={(element: InputRenderable) => (editor = element)}
+        ref={(element: InputRenderable) => {
+          editor = element
+          if (ui.commandInput?.text) element.setText(ui.commandInput.text)
+          element.cursorOffset = element.plainText.length
+          updateMenu()
+        }}
         width="100%"
         placeholder="/command [arguments]"
         textColor={colors.fg}

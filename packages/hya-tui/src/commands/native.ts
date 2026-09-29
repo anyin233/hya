@@ -5,7 +5,7 @@ import { agentRows, modelRows, relativeTime, sessionRows } from "../state/catalo
 import { copyNotice } from "../composer/clipboard"
 import { modelReference, sessionTree, strategyText, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
-import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
+import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -209,7 +209,7 @@ export async function backendCommand(context: CommandContext, invocation: Comman
 export const nativeCommandSpecs: CommandSpec[] = [
   {
     name: "/layout",
-    description: "Edit central panes: split, assign, focus, resize, close, reset, or show",
+    description: "Edit workspace panes: split, assign, focus, resize, close, reset, or show",
     argumentHint: "[split|assign|focus|resize|close|reset|show]",
     complete: ({ words, current, head }) => {
       if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
@@ -240,8 +240,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
         case "focus": {
           const target = args[1]
           if (!target) throw new Error("Usage: /layout focus <left|right|up|down|pane-id>")
-          if (["left", "right", "up", "down"].includes(target)) next = movePaneFocus(current, target as PaneDirection)
-          else if (paneLeaves(current.root).some((pane) => pane.id === target)) next = { ...current, active: target }
+          if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection).active }
+          else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target)) next = { ...current, active: target }
           else throw new Error(`Unknown pane ${target}`)
           break
         }
@@ -256,7 +256,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
         default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reset|show]")
       }
       store.setView("chat")
-      store.setProjectsSidebarFocus(false)
+      const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
+      store.setProjectsSidebarFocus(command === "focus" && active?.kind === "projects")
       if (next !== current) {
         store.setPaneLayout(next)
         try { actions.savePreferences({ paneLayout: next }) }
@@ -265,7 +266,6 @@ export const nativeCommandSpecs: CommandSpec[] = [
           return
         }
       }
-      const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
       store.setStatus(`Layout · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reset`)
     },
   },

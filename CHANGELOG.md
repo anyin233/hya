@@ -1,7 +1,8 @@
-# 0.43.7
+# 0.43.8
 
-## Editable tiled workspace
+## Complete tiled TUI layout
 
-- Split the central TUI workspace horizontally or vertically with `/layout`, then assign read-only jobs, sessions, todos, context, models, Workflows, interactions, status, or API panes beside the conversation.
-- Move pane focus with Alt+arrow keys or `/layout focus`; resize or close auxiliary panes and move the conversation by assigning it to another pane.
-- Save the versioned pane tree in TUI preferences and restore it on restart. The default single-pane screen retains its existing sidebars and message composer.
+- Place Projects, Conversation, Sessions, Todos, and Context in one editable split tree. The conversation's input and status controls move with its pane.
+- Resize, focus, reassign, split, or close side panes with `/layout`; keep the familiar left/middle/right arrangement as the default.
+- Preserve narrow-terminal sidebar toggles and migrate saved center-only version-1 layouts into the complete version-2 tree.
+- Keep message and command drafts and their histories when terminal resizing reshapes the pane tree.

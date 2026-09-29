@@ -1,42 +1,24 @@
 import type { MouseEvent, Selection } from "@opentui/core"
 import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
-import { createEffect, Show } from "solid-js"
+import { createEffect } from "solid-js"
 import { AgentModelsView } from "../components/AgentModelsView"
-import { Composer } from "../components/Composer"
-import { CommandPane } from "../components/CommandPane"
 import { DiffView } from "../components/DiffView"
-import { Footer } from "../components/Footer"
-import { Header } from "../components/Header"
-import { MainPanel } from "../components/MainPanel"
 import { McpView } from "../components/McpView"
-import { ModeConfirm } from "../components/ModeConfirm"
-import { PendingBlock } from "../components/PendingBlock"
 import { Picker } from "../components/Picker"
+import { PaneWorkspace } from "../components/PaneWorkspace"
 import { ProviderView } from "../components/ProviderView"
 import { RulesView } from "../components/RulesView"
 import { paintSelection } from "../components/selection"
 import { copyNotice } from "../composer/clipboard"
 import { ProjectView } from "../components/ProjectView"
-import { ProjectsSidebar } from "../components/ProjectsSidebar"
-import { PromptDock } from "../components/PromptDock"
-import { Sidebar } from "../components/Sidebar"
-import { StatusBar } from "../components/StatusBar"
-import { StatusLine } from "../components/StatusLine"
-import { WorkingIndicator } from "../components/WorkingIndicator"
-import { projectsSidebarVisible, projectsSidebarWidth, sidebarVisible, sidebarWidth } from "../state/layout"
-import { paneLeaves } from "../state/panes"
 import { colors } from "../theme"
 import { useApp } from "./context"
 
 export { layoutBreakpoints } from "../state/layout"
 
 /**
- * Root layout: one main column (header, status bar, transcript or view
- * panel, the working indicator for a running turn, pending block for other
- * sessions' asks, the permission/question prompt, the one-line yolo
- * confirmation, status line, the temporary command pane, bordered message
- * composer, footer instruction) and,
- * when shown, the sidebar on the right (state/layout.ts). The full-screen
+ * Root layout: one editable split tree owns Projects, Conversation, Sessions,
+ * Todos, and Context. The full-screen
  * Provider (`/key`), Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`),
  * and Agent Models (`/agent-models`) views are drawn over both when one of
  * them is open (at most one at a time), and the modal picker
@@ -60,32 +42,9 @@ export function App() {
     if (event.button === 0) paintSelection(renderer.root, colors.selection)
   }
   createEffect(() => store.setColumns(size().width))
-  const tiled = () => store.state.view === "chat" && paneLeaves(store.state.paneLayout.root).length > 1
-  const shown = () => !tiled() && sidebarVisible(store.state.sidebar, size().width)
-  const side = () => sidebarWidth(size().width)
-  const leftShown = () => !tiled() && projectsSidebarVisible(store.state.projectsSidebar, size().width)
-  const leftSide = () => projectsSidebarWidth(size().width)
   return (
     <box width="100%" height="100%" flexDirection="row" backgroundColor={colors.bg} onMouseDown={paint}>
-      <Show when={leftShown()}>
-        <ProjectsSidebar width={leftSide()} />
-      </Show>
-      <box height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
-        <Header />
-        <StatusBar />
-        <MainPanel />
-        <WorkingIndicator />
-        <PendingBlock width={size().width - (shown() ? side() : 0) - (leftShown() ? leftSide() : 0)} />
-        <PromptDock />
-        <ModeConfirm />
-        <StatusLine />
-        <CommandPane />
-        <Composer />
-        <Footer />
-      </box>
-      <Show when={shown()}>
-        <Sidebar width={side()} />
-      </Show>
+      <PaneWorkspace />
       <ProviderView />
       <DiffView />
       <McpView />

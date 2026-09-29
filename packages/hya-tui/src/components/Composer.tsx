@@ -1,5 +1,5 @@
 import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, usePaste } from "@opentui/solid"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
@@ -75,16 +75,15 @@ interface FileMenu {
  * screen) and is otherwise ignored. Ctrl+C closes the open view and keeps
  * its quit meaning.
  */
-export function Composer() {
+export function Composer(props: { width: number }) {
   const { store, controller, ui } = useApp()
-  const size = useTerminalDimensions()
   let editor: TextareaRenderable | undefined
   const [value, setValue] = createSignal("")
   const [rows, setRows] = createSignal(1)
   const [menu, setMenu] = createSignal<FileMenu | undefined>()
   /** Pending `@path` image attachments of the current text (composer/attachments.ts), shown above the input; an `error` entry blocks submit. */
   const [attachments, setAttachments] = createSignal<AttachmentPreview[]>([])
-  const history = new InputHistory()
+  const history = ui.composerHistory ??= new InputHistory()
   const quitGuard = createQuitGuard()
   /**
    * Text the composer itself last put in the editor (history, completion,
@@ -126,6 +125,7 @@ export function Composer() {
   }))
 
   onCleanup(() => {
+    if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
     if (lookupTimer) clearTimeout(lookupTimer)
     if (attachmentTimer) clearTimeout(attachmentTimer)
     if (hintTimer) clearTimeout(hintTimer)
@@ -151,15 +151,15 @@ export function Composer() {
   /** Rows the text needs at the editor's width (wrapped lines counted), capped at `composerMaxRows`. */
   function measure(): void {
     if (!editor) return
-    const width = Math.max(1, editor.width)
+    const width = Math.max(1, Math.floor(props.width) - 4)
     const lines = editor.plainText.split("\n")
       .reduce((total, line) => total + Math.max(1, Math.ceil((Bun.stringWidth(line) + 1) / width)), 0)
     setRows(Math.max(1, Math.min(composerMaxRows, lines)))
   }
 
-  // Wrapping changes with the width.
+  // The pane width remains available while OpenTUI recreates the textarea.
   createEffect(() => {
-    size()
+    props.width
     queueMicrotask(measure)
   })
 
@@ -226,6 +226,7 @@ export function Composer() {
     const text = editor.plainText
     setValue(text)
     store.setDraft(text.length > 0)
+    ui.composerInput = { text, cursor: editor.cursorOffset }
     measure()
     if (text !== replaced) {
       replaced = undefined
@@ -389,7 +390,8 @@ export function Composer() {
       return
     }
     // The left Projects sidebar has focus (Ctrl+P): Up/Down/Enter/Esc go to it.
-    if (store.state.projectsSidebarFocus && !store.state.picker && !overlayViewOpen()) {
+    if (store.state.projectsSidebarFocus && !store.state.picker && !overlayViewOpen()
+      && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar") {
       chord = undefined
       if (key.ctrl && !key.meta && key.name === "c") { store.setProjectsSidebarFocus(false); return }
       consume()
@@ -550,8 +552,14 @@ export function Composer() {
           store.setProjectsSidebarFocus(false)
           store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
         } else {
+          const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
+          if (!projects) {
+            store.setStatus("No Projects pane · /layout split vertical projects to add one")
+            return
+          }
           if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
           if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
+          store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
           store.setProjectsSidebarFocus(true)
           store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
         }
@@ -687,7 +695,17 @@ export function Composer() {
         visible={!store.state.secretEntry}
       >
         <textarea
-          ref={(element: TextareaRenderable) => (editor = element)}
+          ref={(element: TextareaRenderable) => {
+            editor = element
+            const saved = ui.composerInput
+            if (saved?.text) {
+              replaced = saved.text
+              element.setText(saved.text)
+              element.cursorOffset = Math.min(saved.cursor, saved.text.length)
+              setValue(saved.text)
+              measure()
+            }
+          }}
           width="100%"
           height={rows()}
           placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
@@ -700,7 +718,10 @@ export function Composer() {
           focused={!overlayViewOpen() && !store.state.picker && !store.state.secretEntry && !ui.command?.active()}
           onSubmit={submit}
           onContentChange={sync}
-          onCursorChange={() => updateMention()}
+          onCursorChange={() => {
+            if (editor) ui.composerInput = { text: editor.plainText, cursor: editor.cursorOffset }
+            updateMention()
+          }}
         />
       </box>
     </box>

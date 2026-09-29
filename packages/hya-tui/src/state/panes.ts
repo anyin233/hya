@@ -1,5 +1,7 @@
-/** Local, versioned split tree for the central workspace. Backend projections are shared by its panes. */
-export const paneKinds = ["conversation", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api"] as const
+/** Local split tree for the whole workspace. Backend projections are shared by its panes. */
+import { projectsSidebarVisible, sidebarVisible, type SidebarMode } from "./layout"
+
+export const paneKinds = ["conversation", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api"] as const
 export type PaneKind = typeof paneKinds[number]
 export type PaneAxis = "horizontal" | "vertical"
 export type PaneDirection = "left" | "right" | "up" | "down"
@@ -21,15 +23,50 @@ export interface PaneSplit {
 
 export type PaneNode = PaneLeaf | PaneSplit
 export interface PaneLayout {
-  version: 1
+  version: 2
   root: PaneNode
   active: string
 }
 
-export const maxPanes = 8
+export const maxPanes = 16
 
 export function defaultPaneLayout(): PaneLayout {
-  return { version: 1, root: { type: "pane", id: "pane-1", kind: "conversation" }, active: "pane-1" }
+  const leaf = (id: number, kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${id}`, kind })
+  return { version: 2, active: "pane-1", root: {
+    type: "split", axis: "vertical", weight: 0.18, first: leaf(2, "projects"), second: {
+      type: "split", axis: "vertical", weight: 0.74, first: leaf(1, "conversation"), second: {
+        type: "split", axis: "horizontal", weight: 0.62, first: leaf(3, "sessions"), second: {
+          type: "split", axis: "horizontal", weight: 0.36, first: leaf(4, "todos"), second: leaf(5, "context"),
+        },
+      },
+    },
+  } }
+}
+
+/** The familiar startup arrangement, independent of which pane is selected. */
+export function isDefaultPaneTree(layout: PaneLayout): boolean {
+  return JSON.stringify(layout.root) === JSON.stringify(defaultPaneLayout().root)
+}
+
+/** Keep the same tree for every width, pruning sidebar jobs when their existing modes hide them. */
+export function visiblePaneLayout(layout: PaneLayout, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneLayout {
+  const right = sidebarVisible(sidebar, columns)
+  const left = projectsSidebarVisible(projectsSidebar, columns)
+  const keep = (node: PaneNode): PaneNode | undefined => {
+    if (node.type === "pane") {
+      if (node.kind === "projects" && !left) return undefined
+      if (["sessions", "todos", "context"].includes(node.kind) && !right) return undefined
+      return node
+    }
+    const first = keep(node.first)
+    const second = keep(node.second)
+    if (!first) return second
+    if (!second) return first
+    return { ...node, first, second }
+  }
+  const root = keep(layout.root) ?? { type: "pane", id: "pane-1", kind: "conversation" }
+  const leaves = paneLeaves(root)
+  return { ...layout, root, active: leaves.some((pane) => pane.id === layout.active) ? layout.active : leaves.find((pane) => pane.kind === "conversation")?.id ?? leaves[0]!.id }
 }
 
 export function paneLeaves(node: PaneNode): PaneLeaf[] {
@@ -133,7 +170,7 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
     const firstHas = paneLeaves(node.first).some((pane) => pane.id === layout.active)
     const secondHas = paneLeaves(node.second).some((pane) => pane.id === layout.active)
     if ((firstHas && node.first.type === "pane") || (secondHas && node.second.type === "pane")) {
-      return [{ ...node, weight: Math.max(0.2, Math.min(0.8, node.weight + (firstHas ? delta : -delta))) }, true]
+      return [{ ...node, weight: Math.max(0.1, Math.min(0.9, node.weight + (firstHas ? delta : -delta))) }, true]
     }
     if (firstHas) { const [first, done] = resize(node.first); return [{ ...node, first }, done] }
     if (secondHas) { const [second, done] = resize(node.second); return [{ ...node, second }, done] }
@@ -146,11 +183,11 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
 export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  if (record.version !== 1 || typeof record.active !== "string") return undefined
+  if ((record.version !== 1 && record.version !== 2) || typeof record.active !== "string") return undefined
   const ids = new Set<string>()
   let conversations = 0
   const valid = (node: unknown, depth: number): node is PaneNode => {
-    if (depth > 7 || typeof node !== "object" || node === null || Array.isArray(node)) return false
+    if (depth > 15 || typeof node !== "object" || node === null || Array.isArray(node)) return false
     const row = node as Record<string, unknown>
     if (row.type === "pane") {
       if (typeof row.id !== "string" || !/^pane-[1-9]\d*$/.test(row.id) || ids.has(row.id) || !paneKinds.includes(row.kind as PaneKind)) return false
@@ -158,10 +195,19 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
       if (row.kind === "conversation") conversations += 1
       return ids.size <= maxPanes
     }
-    if (row.type !== "split" || (row.axis !== "horizontal" && row.axis !== "vertical") || typeof row.weight !== "number" || !Number.isFinite(row.weight) || row.weight < 0.2 || row.weight > 0.8) return false
+    if (row.type !== "split" || (row.axis !== "horizontal" && row.axis !== "vertical") || typeof row.weight !== "number" || !Number.isFinite(row.weight) || row.weight < 0.1 || row.weight > 0.9) return false
     return valid(row.first, depth + 1) && valid(row.second, depth + 1)
   }
-  return valid(record.root, 0) && conversations === 1 && ids.has(record.active)
-    ? { version: 1, root: record.root, active: record.active }
-    : undefined
+  if (!valid(record.root, 0) || conversations !== 1 || !ids.has(record.active)) return undefined
+  if (record.version === 2) return { version: 2, root: record.root, active: record.active }
+  if (ids.size > maxPanes - 4) return undefined
+  // Version 1 saved only the center. Preserve that subtree and add the old sidebars as editable leaves.
+  let next = Math.max(...[...ids].map((id) => Number(id.slice(5))))
+  const leaf = (kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${++next}`, kind })
+  const right: PaneNode = { type: "split", axis: "horizontal", weight: 0.62, first: leaf("sessions"), second: {
+    type: "split", axis: "horizontal", weight: 0.36, first: leaf("todos"), second: leaf("context"),
+  } }
+  return { version: 2, active: record.active, root: { type: "split", axis: "vertical", weight: 0.18, first: leaf("projects"), second: {
+    type: "split", axis: "vertical", weight: 0.74, first: record.root, second: right,
+  } } }
 }

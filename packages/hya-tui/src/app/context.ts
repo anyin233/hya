@@ -2,6 +2,7 @@
 import { createContext, useContext } from "solid-js"
 import type { KeyEvent } from "@opentui/core"
 import type { AppStore } from "../state/store"
+import type { InputHistory } from "../composer/history"
 import type { Controller } from "./controller"
 
 /** Imperative handles registered by mounted components (the transcript's and Diff view's scroll actions). */
@@ -11,6 +12,10 @@ export interface UiHandles {
   panes?: Map<string, TranscriptScroller>
   diff?: DiffScroller
   command?: CommandPaneHandle
+  composerHistory?: InputHistory
+  commandHistory?: InputHistory
+  composerInput?: { text: string; cursor: number }
+  commandInput?: { text: string; active: boolean; originSidebar: boolean }
 }
 
 /** One command input, independent of the message composer. */
