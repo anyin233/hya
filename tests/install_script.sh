@@ -20,7 +20,7 @@ not_contains() {
   [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
 }
 
-first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents)
+first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
 
 help=$(bash ./install.sh --help)
 [[ -x ./install.sh ]] || fail "install.sh must be executable"
@@ -121,7 +121,7 @@ fake_bin="$fixture/fake-bin"
 target="$fixture/target"
 mkdir -p "$fake_bin"
 
-# Fake cargo: builds a scripted backend and stages twelve placeholder bundles.
+# Fake cargo: builds a scripted backend and stages eleven placeholder bundles.
 cat >"$fake_bin/cargo" <<'FAKE_CARGO'
 #!/usr/bin/env bash
 set -euo pipefail

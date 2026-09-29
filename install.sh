@@ -23,7 +23,7 @@ Options:
 
 Installs the release layout:
   bin/hya                   unified CLI: exec, serve, login, bundles, models, update, ...
-  bundles/hya-*.hyabundle   the twelve trusted first-party bundles it loads at startup
+  bundles/hya-*.hyabundle   the eleven trusted first-party bundles it loads at startup
   lib/hya/bun-adapter       Bun adapter for JavaScript bundle extensions
   lib/hya/tui               terminal UI that bare `hya` starts
   lib/hya/tui-web           WebUI host that serves the TUI to the browser
@@ -307,7 +307,7 @@ for index in "${!lib_names[@]}"; do
 done
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
-first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents)
+first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
 if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya" --version >/dev/null
   "$bin_dir/hya" --help >/dev/null
