@@ -258,3 +258,78 @@ fn add_writes_nothing_when_the_endpoint_rejects_the_key() -> TestResult {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn list_marks_config_overrides_and_logout_drops_only_the_key() -> TestResult {
+    let root = unique_root()?;
+    let server = FakeModels::start("sk-test")?;
+    let base = server.base.as_str();
+    let add = provider(
+        &root,
+        &[
+            "add",
+            "--name",
+            "fake",
+            "--base-url",
+            base,
+            "--protocol",
+            "openai-chat",
+            "--api-key",
+            "sk-test",
+        ],
+        "",
+    )?;
+    assert!(add.status.success(), "{}", text(&add));
+
+    // A `models:` entry for a fetched model overrides it; one the endpoint
+    // does not list is config-only.
+    let path = root.join("config/hya/config.yaml");
+    let yaml = fs::read_to_string(&path)?.replace(
+        "    models: []",
+        "    models:\n      - id: alpha\n        name: Alpha Custom\n      - gamma",
+    );
+    fs::write(&path, yaml)?;
+    // A key saved for a provider that config.yaml does not declare.
+    let login = hya(&root).args(["login", "orphan", "sk-orphan"]).output()?;
+    assert!(login.status.success(), "{}", text(&login));
+
+    let listed = text(&provider(&root, &["list"], "")?);
+    let line = |needle: &str| {
+        listed
+            .lines()
+            .find(|line| line.trim_start().starts_with(needle))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(line("fake/alpha").contains("config override"), "{listed}");
+    assert!(line("fake/gamma").contains("config only"), "{listed}");
+    let beta = line("fake/beta");
+    assert!(!beta.is_empty() && !beta.contains("config"), "{listed}");
+    assert!(
+        listed.contains("orphan"),
+        "saved keys without a provider are listed:\n{listed}"
+    );
+
+    // `providers` is the same command.
+    let alias = hya(&root).args(["providers", "list"]).output()?;
+    assert_eq!(text(&alias), listed);
+
+    let logout = provider(&root, &["logout", "fake"], "")?;
+    assert!(logout.status.success(), "{}", text(&logout));
+    assert!(!root.join("config/hya/auth/fake.yaml").exists());
+    assert!(
+        config(&root).contains("fake:"),
+        "logout keeps the provider:\n{}",
+        config(&root)
+    );
+    let after = text(&provider(&root, &["list"], "")?);
+    assert!(
+        after
+            .lines()
+            .any(|line| line.starts_with("fake ") && line.ends_with("no key")),
+        "{after}"
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

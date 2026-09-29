@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use anyhow::Context as _;
 use clap::{Args, Subcommand, ValueEnum};
 use hya_app::{auth, config, model_cache};
+use hya_provider::ModelCatalogSource;
 
 use crate::prompt;
 
@@ -34,6 +35,11 @@ pub(crate) enum ProviderCommand {
         /// Do not ask for confirmation.
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+    /// Delete a provider's saved API key (`auth/<id>.yaml`); its declaration stays.
+    Logout {
+        /// Provider id whose saved key to delete.
+        id: String,
     },
 }
 
@@ -117,6 +123,7 @@ pub(crate) async fn run(command: ProviderCommand, db: String) -> anyhow::Result<
         ProviderCommand::Add(args) => add(args, &db).await,
         ProviderCommand::List { refresh } => list(refresh).await,
         ProviderCommand::Remove { id, yes } => remove(&id, yes, &db).await,
+        ProviderCommand::Logout { id } => logout(&id, &db).await,
     }
 }
 
@@ -393,31 +400,48 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The note after a model row: where its metadata comes from when config
+/// is involved (a `models:` entry overrides a fetched model field by field).
+fn source_note(source: ModelCatalogSource) -> &'static str {
+    match source {
+        ModelCatalogSource::Overridden => "  (config override)",
+        ModelCatalogSource::Configured => "  (config only)",
+        ModelCatalogSource::Discovered | ModelCatalogSource::Offline => "",
+    }
+}
+
 async fn list(refresh: bool) -> anyhow::Result<()> {
     let declared = config::provider_declarations()?;
-    if declared.is_empty() {
+    let orphans: Vec<String> = auth::list_tokens()
+        .context("list saved keys")?
+        .into_iter()
+        .filter(|id| !declared.iter().any(|provider| &provider.id == id))
+        .collect();
+    if declared.is_empty() && orphans.is_empty() {
         println!("No providers configured. Add one with `hya provider add`.");
         return Ok(());
     }
-    let resolved = config::load().await?.context("config.yaml is missing")?;
-    let catalog = if refresh {
-        config::rebuild_providers(
-            None,
-            config::DiscoverMode::Always,
-            resolved.catalog.as_ref(),
-            &resolved.router,
-        )
-        .await?
-        .catalog
-    } else {
-        resolved.catalog
-    };
-    let mut models: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for model in catalog.models() {
-        models
-            .entry(model.provider_id.as_str())
-            .or_default()
-            .push(model.model_id.as_str());
+    let mut models: BTreeMap<String, Vec<(String, ModelCatalogSource)>> = BTreeMap::new();
+    if !declared.is_empty() {
+        let resolved = config::load().await?.context("config.yaml is missing")?;
+        let catalog = if refresh {
+            config::rebuild_providers(
+                None,
+                config::DiscoverMode::Always,
+                resolved.catalog.as_ref(),
+                &resolved.router,
+            )
+            .await?
+            .catalog
+        } else {
+            resolved.catalog
+        };
+        for model in catalog.models() {
+            models
+                .entry(model.provider_id.clone())
+                .or_default()
+                .push((model.model_id.clone(), model.source));
+        }
     }
     for (index, provider) in declared.iter().enumerate() {
         if index > 0 {
@@ -435,15 +459,41 @@ async fn list(refresh: bool) -> anyhow::Result<()> {
             Protocol::label_for_kind(&provider.kind),
             provider.base_url
         );
-        match models.get_mut(provider.id.as_str()) {
-            Some(ids) => {
-                ids.sort_unstable();
-                for id in ids.iter() {
-                    println!("  {}/{id}", provider.id);
+        match models.get_mut(&provider.id) {
+            Some(rows) => {
+                rows.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+                for (id, source) in rows.iter() {
+                    println!("  {}/{id}{}", provider.id, source_note(*source));
                 }
             }
             None => println!("  (no models known; `hya provider list --refresh` fetches them)"),
         }
+    }
+    if !orphans.is_empty() {
+        if !declared.is_empty() {
+            println!();
+        }
+        println!(
+            "Saved keys without a provider in config.yaml (`hya provider logout <id>` deletes one):"
+        );
+        for id in orphans {
+            println!("  {id}");
+        }
+    }
+    Ok(())
+}
+
+/// Delete a provider's saved key and keep its declaration.
+async fn logout(id: &str, db: &str) -> anyhow::Result<()> {
+    if !auth::remove_token(id).with_context(|| format!("remove the key of `{id}`"))? {
+        anyhow::bail!("no saved key for `{id}`");
+    }
+    println!("Removed the saved key of `{id}`");
+    if config::provider_declarations()?
+        .iter()
+        .any(|provider| provider.id == id)
+    {
+        sync_running_backend(db, id, SyncAction::DropKey).await;
     }
     Ok(())
 }
@@ -481,6 +531,8 @@ enum SyncAction {
     Rebuild,
     /// Drop the removed provider's route and models.
     Drop,
+    /// Rebuild the provider without its (deleted) saved key.
+    DropKey,
 }
 
 /// Bring the database's running backend (if any) up to date without a
@@ -496,9 +548,9 @@ async fn sync_running_backend(db: &str, id: &str, action: SyncAction) {
         SyncAction::Rebuild => client
             .post(format!("{url}/v1/providers/{id}/refresh"))
             .json(&serde_json::json!({})),
-        // Removing the (already deleted) key rebuilds the provider, and a
-        // provider no longer in config.yaml loses its route and models.
-        SyncAction::Drop => client.delete(format!("{url}/v1/auth/{id}")),
+        // Deleting the (already deleted) key rebuilds the provider without
+        // it; a provider no longer in config.yaml loses its route and models.
+        SyncAction::Drop | SyncAction::DropKey => client.delete(format!("{url}/v1/auth/{id}")),
     };
     match request
         .timeout(std::time::Duration::from_secs(30))

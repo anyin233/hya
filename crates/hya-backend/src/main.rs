@@ -1109,7 +1109,6 @@ async fn run(
         }
         Some(Command::Login { provider, token }) => auth_cmd::login(provider, token).await,
         Some(Command::Oauth { command }) => auth_cmd::run_oauth(command).await,
-        Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Provider { command }) => {
             provider_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
         }
