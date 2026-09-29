@@ -4,7 +4,8 @@ The `packages/hya-tui` frontend is the terminal client of hya. Running
 `hya` in a terminal starts it together with the WebUI, both connected to the
 database's backend daemon, which `hya` starts when none runs (see
 [Start it](#start-it)); from a source checkout it can also be run directly, or
-connect to a server you name with `--server`. It uses OpenTUI for
+connect to a server you name with `--server` or directly to its gRPC listener
+with `--grpc`. It uses OpenTUI for
 display and input while the backend remains the owner of sessions, event
 history, tool execution, and permissions. The default screen places Projects
 on the left, the conversation and its input in the middle, and separate
@@ -82,7 +83,7 @@ cargo build -p hya-backend --bin hya        # once; or put a released hya on PAT
 HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
 ```
 
-Without `--server` the TUI uses the backend daemon of its database
+Without `--server` or `--grpc` the TUI uses the backend daemon of its database
 ([ADR-0022](adr/0022-one-writer-per-database.md),
 [ADR-0023](adr/0023-persistent-backend-daemon.md)):
 
@@ -141,12 +142,36 @@ connects after the daemon was restarted on another port. `/status` shows
 `Backend     daemon · pid <pid> · via --backend/--server` for a `--server`
 without `--db`.
 
+To use the same `hya.v1` server over gRPC, pass the listener's `HOST:PORT`.
+The server accepts gRPC on its main HTTP port (h2c); `HYA_GRPC_BIND` can add
+another listener. This is useful when a client needs the gRPC transport while
+keeping the same sessions, events, and permissions. For example, in two
+terminals from the repository root:
+
+```sh
+HYA_GRPC_BIND=127.0.0.1:22104 hya serve --bind 127.0.0.1:22103 --db "$HOME/hya-sessions.db"
+bun packages/hya-tui/src/main.ts --grpc 127.0.0.1:22104 --dir "$PWD"
+```
+
+`--grpc` takes only a host and port (an optional `grpc://` prefix is accepted).
+It cannot be combined with `--server` or `--db`; the TUI connects to that
+fixed listener and never starts a local daemon. `--dir`, `--session`,
+`--continue`, and `--resume` work as with `--server`. Requests use the
+`hya.v1` RPC matching each operation in the [v1 API catalog](protocol/api-reference.md);
+responses are the corresponding protobuf messages. The two live event calls
+are `Events.StreamSessionEvents` with `{session, since_seq,
+include_descendants}` and `Events.StreamGlobalEvents` with
+`{interactions_only: true}`. See the [protocol guide](protocol/README.md)
+for the message and event payload definitions. `/connect-remote` can still
+switch this TUI to an HTTP relay bridge during the session.
+
 | Flag | Meaning |
 | --- | --- |
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI uses the database's daemon. |
+| `--grpc <host:port>` | Direct hya.v1 gRPC listener (h2c). Mutually exclusive with `--server` and `--db`; no local daemon is started. |
 | `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `directory` scope of every scoped request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
 | `--hya <path>` | `hya` binary that starts the daemon and that `/connect-remote` runs `hya bridge` with (first in the lookup order above). |
-| `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
+| `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server` or `--grpc`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). Unlike a plain launch, it never reopens an archived session. |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
 | `--server-label <text>` | Show this text instead of the server URL in the header, the sidebar `Context` box, and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
@@ -292,7 +317,7 @@ last frame of each stream says why (`serverStopping {reason}`, see
 [Server shutdown](protocol/README.md#server-shutdown)). When a stream ends or
 fails, the TUI probes the server twice, 500 ms apart; a server that still
 answers was a blip, and the stream just reconnects (with the usual backoff).
-A TUI that knows its database (started without `--server`, or with `--db`)
+A TUI that knows its database (started without `--server` or `--grpc`, or with `--db`)
 then acts on the reason:
 
 | Reason | What the TUI does | Status line |

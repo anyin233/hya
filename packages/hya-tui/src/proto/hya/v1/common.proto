@@ -1,0 +1,42 @@
+// hya API v1 — shared types.
+//
+// The v1 contract is protocol-first: every service defined under `hya.v1`
+// is exposed identically over HTTP/JSON+SSE (axum) and gRPC (tonic). Each
+// rpc carries a `// hya.http: METHOD /path` comment that declares its HTTP
+// binding; the codegen validates that every rpc has exactly one mapping.
+//
+// Errors use one stable code table (see `hya_api::error`). Pagination uses
+// opaque cursors: pass `PageRequest.cursor` from a previous
+// `PageInfo.next_cursor`; never interpret cursor bytes.
+syntax = "proto3";
+
+package hya.v1;
+
+// Stable, machine-readable error returned by every failed v1 call.
+//
+// HTTP bindings render `{"error": {"code": ..., "message": ...}}` with the
+// status mapped from the code; gRPC bindings carry the same code in the
+// trailer/status details.
+message Error {
+  // Stable error code, e.g. `session_not_found`, `session_busy`.
+  string code = 1;
+  // Human-readable explanation safe to show to an end user.
+  string message = 2;
+}
+
+// Standard list controls shared by every paginated rpc.
+message PageRequest {
+  // Opaque cursor from a previous `PageInfo.next_cursor`; empty starts at
+  // the beginning.
+  string cursor = 1;
+  // Maximum entries to return; servers clamp to their own maximum.
+  uint32 limit = 2;
+}
+
+// Pagination outcome attached to every paginated response.
+message PageInfo {
+  // Cursor to pass into the next `PageRequest`; empty when exhausted.
+  string next_cursor = 1;
+  // Whether more entries exist beyond this page.
+  bool has_more = 2;
+}

@@ -1,0 +1,191 @@
+// hya API v1 — durable per-agent base-model preferences.
+//
+// An agent without its own explicit model/category policy resolves its base
+// model through tiers: session override > agent configuration > the durable
+// preference set here (when it exactly matches the current catalog) > the
+// process default. The `source` field on every row tells the client which
+// tier is effective.
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/common.proto";
+
+// Durable per-agent model preference surface, backed by the app-owned
+// control handle.
+service AgentModels {
+  // Effective model state for every catalog agent under one binding.
+  //
+  // hya.http: GET /v1/agent-models
+  rpc ListAgentModels(ListAgentModelsRequest) returns (ListAgentModelsResponse);
+
+  // Set or clear one agent's remembered preference; returns the
+  // post-commit state.
+  //
+  // hya.http: PUT /v1/agent-models/{agent_id}
+  rpc SetAgentModel(SetAgentModelRequest) returns (AgentModelState);
+
+  // Set or clear the model in the owning user configuration file. Keeps a
+  // distinct session override and applies the saved value live.
+  //
+  // hya.http: PUT /v1/agent-models/{agent_id}/configuration
+  rpc SaveAgentModelConfiguration(SaveAgentModelConfigurationRequest) returns (AgentModelState);
+  // hya.http: GET /v1/model-effort-preferences
+  rpc ListModelEffortPreferences(ListModelEffortPreferencesRequest) returns (ListModelEffortPreferencesResponse);
+
+  // Empty effort clears the preference. Emits a live `catalogUpdated` frame
+  // (sessions on the model may now resolve another `effective_effort`).
+  // hya.http: PUT /v1/model-effort-preferences/{provider_id}/{model_id}
+  rpc SetModelEffortPreference(SetModelEffortPreferenceRequest) returns (ModelEffortPreference);
+
+  // Set or clear (empty `effort`) one agent's default thinking effort,
+  // independent of its model. Applies to the agent's next request; a `task`
+  // spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
+  //
+  // hya.http: PUT /v1/agent-efforts/{agent_id}
+  rpc SetAgentEffort(SetAgentEffortRequest) returns (AgentEffort);
+ }
+
+// Which layer chose an agent's default thinking effort.
+enum AgentEffortSource {
+  // Unset sentinel.
+  AGENT_EFFORT_SOURCE_UNSPECIFIED = 0;
+  // Set by the user at runtime (`SetAgentEffort`).
+  AGENT_EFFORT_SOURCE_PREFERENCE = 1;
+  // `agents.<id>.reasoning` in the user's configuration file.
+  AGENT_EFFORT_SOURCE_CONFIGURED = 2;
+  // The bundle agent's authored `model_policy.reasoning`.
+  AGENT_EFFORT_SOURCE_AUTHORED = 3;
+  // No agent-level effort: the model's default applies.
+  AGENT_EFFORT_SOURCE_NONE = 4;
+}
+
+message SetAgentEffortRequest {
+  // Stable catalog agent id.
+  string agent_id = 1;
+  // Effort label (`low`, `high`, `none`, …); empty clears the choice.
+  string effort = 2;
+  // Directory scope whose catalog must know `agent_id` (its Project's
+  // bundle agents included); empty: the global catalog.
+  string directory = 3;
+}
+
+// One agent's saved runtime effort choice (empty when cleared).
+message AgentEffort {
+  string agent_id = 1;
+  string effort = 2;
+}
+
+message ModelEffortPreference {
+  string provider_id = 1;
+  string model_id = 2;
+  string effort = 3;
+  int64 updated_at = 4;
+}
+
+message ListModelEffortPreferencesRequest {}
+
+message ListModelEffortPreferencesResponse {
+  repeated ModelEffortPreference preferences = 1;
+}
+
+message SetModelEffortPreferenceRequest {
+  string provider_id = 1;
+  string model_id = 2;
+  string effort = 3;
+}
+
+// A concrete provider/model selection.
+message AgentModelSelection {
+  // Provider identifier.
+  string provider_id = 1;
+  // Provider-local model identifier.
+  string model_id = 2;
+}
+
+// Which tier resolved an agent's effective base model.
+enum AgentModelSource {
+  // Unset sentinel; never emitted by the server.
+  AGENT_MODEL_SOURCE_UNSPECIFIED = 0;
+  // An explicit override captured for the current root session tree.
+  AGENT_MODEL_SOURCE_SESSION = 1;
+  // The agent has an explicit direct model or category policy.
+  AGENT_MODEL_SOURCE_CONFIGURED = 2;
+  // A durable preference retained and matching the current catalog.
+  AGENT_MODEL_SOURCE_REMEMBERED = 3;
+  // No configured or retained model; the process base is used.
+  AGENT_MODEL_SOURCE_DEFAULT = 4;
+}
+
+// Effective model state for one catalog agent.
+message AgentModelState {
+  // Stable catalog agent id.
+  string agent_id = 1;
+  // Human-readable agent description.
+  string description = 2;
+  // Selector role (`primary` or `subagent`).
+  string mode = 3;
+  // Whether the agent is hidden from ordinary selection.
+  bool hidden = 4;
+  // Whether direct model/category configuration is present (such agents
+  // cannot take a remembered preference).
+  bool configured = 5;
+  // Whether an automatic remembered preference can be set.
+  bool settable = 6;
+  // Retained preference, including stale or configured rows.
+  AgentModelSelection preference = 7;
+  // Whether the retained preference exactly matches the current catalog.
+  bool preference_available = 8;
+  // Current effective model identity.
+  AgentModelSelection effective = 9;
+  // Which tier resolved the effective model.
+  AgentModelSource source = 10;
+  // Model explicitly stored in the owning user configuration file.
+  AgentModelSelection configuration = 11;
+  // Active root-session override captured for this agent.
+  AgentModelSelection session_override = 12;
+  // The agent's default thinking effort (empty: its model's default).
+  string effort = 13;
+  // Which layer chose `effort`.
+  AgentEffortSource effort_source = 14;
+  // Owning configuration file path, empty when no configuration exists.
+  string configuration_path = 15;
+}
+
+message ListAgentModelsRequest {
+  // Directory scope for the agent binding (absolute). Optional: when both
+  // it and `session` are empty the global (project-less) binding is used.
+  string directory = 1;
+  // Bind against this session's runtime when non-empty (its workdir and
+  // session overrides); otherwise the directory root binding is used.
+  string session = 2;
+}
+
+message ListAgentModelsResponse {
+  // Effective state for every agent in the binding, stable id order.
+  repeated AgentModelState agents = 1;
+}
+
+message SetAgentModelRequest {
+  // Directory scope for the agent binding (absolute). Optional: when both
+  // it and `session` are empty the global (project-less) binding is used.
+  string directory = 1;
+  // Bind against this session's runtime when non-empty.
+  string session = 2;
+  // Stable catalog agent id whose preference is being set.
+  string agent_id = 3;
+  // New remembered preference; absent/null clears it.
+  optional AgentModelSelection preference = 4;
+}
+
+message SaveAgentModelConfigurationRequest {
+  // Directory scope for the agent binding (absolute). Optional: when both
+  // it and `session` are empty the global (project-less) binding is used.
+  string directory = 1;
+  // Bind against this session's runtime when non-empty.
+  string session = 2;
+  // Stable catalog agent id whose configured model is being written.
+  string agent_id = 3;
+  // New configured model; absent/null removes the agent's `model` leaf.
+  optional AgentModelSelection model = 4;
+}
