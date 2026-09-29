@@ -160,10 +160,22 @@ The interactive TUI follows the same precedence. A new session created without a
 explicit `/agent` or model sends empty selection fields so the backend applies
 `default_agent` and `agents.<id>.model`; changing `/agent <id>` affects only the
 current Session. Therefore a later hya startup returns to the configured default
-agent. `/model provider/model` saves that model for the active Agent, and
-`/model provider/model#high` saves both the model and the Agent's `reasoning:`
-effort. The save is performed through `/v1/agent-models` before the TUI refreshes
-its catalog, so the choice is available after restart and to other clients.
+agent. `/model provider/model` remembers that model for the active Agent, and
+`/model provider/model#high` also saves the Agent's runtime effort. The save is
+performed through `PUT /v1/agent-models/{agent}` and `PUT /v1/agent-efforts/{agent}`
+before the TUI refreshes its catalog, so the choice is available after restart
+and to other clients. An Agent whose model is pinned in `config.yaml` answers
+that save with `409 Conflict`; `/model` then changes only the current Session,
+and new sessions keep starting on the pinned model and effort. To make a model
+and effort the default for every new session, pin them on the default Agent:
+
+```yaml
+agents:
+  build:
+    model: anthropic/claude-sonnet-4-6
+    reasoning: high
+```
+
 The default durable database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
 explicit `--db <PATH>` has an independent preference set. In-memory execution

@@ -1,13 +1,5 @@
-# 0.43.20
+# 0.43.21
 
 ## Fixes
 
-- **Bash results show failures to the model.** When output is too long for the inline preview, the preview now keeps a short head and a long tail with an omission marker that names the full-output artifact, so the final failure summary (for example `cargo test`'s) stays visible. A non-zero exit adds `Command exited with code N.` and a signal kill adds `Command terminated by signal.` to the model-visible output. Previously only the head was shown and the exit code lived in metadata the model never saw, so a failing `cargo test` could be reported as passing.
-- **Bash `timeout` is documented as seconds.** The tool schema now states the unit, the 300 s default, the 1–3600 s clamp, and that `0` disables the deadline.
-- **Context eviction is sticky.** Evicted tool outputs keep a byte-identical placeholder in every later round and turn of the session, and those placeholders are applied before the request is measured. A request they already keep under the threshold no longer re-walks the reduction ladder, re-evicts, emits another `context_evicted`, or escalates to a summary. This keeps the provider prompt-cache prefix stable. A mail notice (`--- [NEW MAIL …`) appended to an evicted output is kept verbatim in the placeholder.
-- **No spurious `TEAM QUIESCED` turn.** Team mail that the lead consumed during its own running turn is marked delivered, so ending that turn no longer triggers a synthesis turn that repeats the answer. Mail arriving after the lead read its inbox still wakes it.
-- **Reasoning summaries keep paragraph breaks.** OpenAI Responses reasoning summary parts are separated by a blank line instead of running together (`**A****B**`).
-- **grep `glob` accepts a directory.** A glob without wildcards that names an existing directory matches the files under it (`src` works like `src/**`) instead of silently returning no matches.
-- **Provider retries are visible and slower.** An error that exhausted several retry attempts names the attempts and elapsed time (`http status 503: after 3 attempts over 3.1s: …`). The default `provider_retry.backoff_base_ms` is now 1000 (was 100), so the default budget rides out short outages.
-- **Bash-detected file changes are marked `observed`.** `files_changed` entries inferred from `git status` around a bash command carry `observed: true`, and revert/unrevert report the same flag, because such entries can include edits made outside hya while the command ran. Older events read as `observed: false`.
-- **Release:** the five `bundles/extra/*` bundles now carry the workspace version again (0.43.19 shipped them at 0.43.18, which failed `cargo test`). `AGENTS.md` now names them in the version rule.
+- **`/model` on a config-pinned Agent no longer errors.** When `config.yaml` pins an Agent's model (`agents.<id>.model`), the backend rejects a remembered preference for it with `409 Conflict`. `/model` treated that as a failure after the session had already switched. It now keeps the choice as a session override and leaves the configured default in place, so new sessions still start on the configured model and effort.

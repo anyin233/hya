@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { HyaClient } from "../src/client"
+import { HttpError, type HyaClient } from "../src/client"
 import type { TuiPreferences } from "../src/prefs"
 import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandContext } from "../src/commands"
@@ -81,6 +81,32 @@ test("/model persists an agent model and explicit effort", async () => {
     "agent-model build=openai/gpt session=hysec_1",
     "agent-effort build=high",
   ])
+})
+
+test("/model on a config-pinned agent switches only the session", async () => {
+  const writes: string[] = []
+  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
+  const h = harness({
+    updateSessionModel: async (id, model) => {
+      writes.push(`session ${id}=${model}`)
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      return { ...session, model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+    },
+    setAgentModel: async () => {
+      throw new HttpError(409, "PUT", "/v1/agent-models/build", "conflict: Agent `build` has a configured model")
+    },
+    setAgentEffort: async (agent, effort) => {
+      writes.push(`agent-effort ${agent}=${effort}`)
+      return { agentId: agent, effort }
+    },
+  })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], workflows: [], providers: [], commands: [] })
+  h.store.openSession(session)
+  await h.run("/model openai/gpt#high")
+  // The configured default stays in config.yaml; the session keeps the `#high` suffix itself.
+  expect(writes).toEqual(["session hysec_1=openai/gpt#high"])
+  expect(h.store.state.status).toBe("Model → openai/gpt#high")
 })
 
 test("registers every native slash command with a description", () => {
