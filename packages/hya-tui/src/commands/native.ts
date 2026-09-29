@@ -1,7 +1,7 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
-import { agentRows, effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
+import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
@@ -182,6 +182,22 @@ export function openModelPicker({ store, client, actions }: CommandContext, opti
       await actions.refresh()
     },
   })
+}
+
+/**
+ * Run the session on `agent` (`UpdateSession`); with no session open, remember
+ * it for the next `CreateSession`. Shared by `/agent <name>` and the Agents view.
+ */
+export async function selectAgent({ store, client, actions }: CommandContext, agent: string): Promise<void> {
+  const selected = store.state.selected
+  if (!selected) {
+    store.setPendingAgent(agent)
+    store.setStatus(`Agent → ${agent} · applies when the session is created`)
+    return
+  }
+  store.setSelected(await client.updateSession(selected.id, { agent }))
+  store.setStatus(`Agent → ${agent}`)
+  await actions.refresh()
 }
 
 /**
@@ -394,36 +410,15 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/agent",
-    description: "Pick a visible session agent, or set one directly; with no session the choice is remembered for the next one",
+    description: "Open the Agents view (primary, subagent, and system agents: select, model, effort), or switch to one directly; with no session the choice is remembered for the next one",
     argumentHint: "[name]",
     complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.agents) : [],
-    run: async ({ store, client, actions }, { args }) => {
-      const selected = store.state.selected
+    run: async (context, { args }) => {
       if (args[0]) {
-        if (!selected) {
-          store.setPendingAgent(args[0])
-          store.setStatus(`Agent → ${args[0]} · applies when the session is created`)
-          return
-        }
-        store.setSelected(await client.updateSession(selected.id, { agent: args[0] }))
-        store.setStatus(`Agent → ${args[0]}`)
-        await actions.refresh()
+        await selectAgent(context, args[0])
         return
       }
-      actions.openPicker({
-        title: "Agent",
-        rows: agentRows(store.state.agents, selected ? selected.agent : (store.state.pendingAgent ?? "")),
-        onSelect: async (row) => {
-          if (!selected) {
-            store.setPendingAgent(row.id)
-            store.setStatus(`Agent → ${row.id} · applies when the session is created`)
-            return
-          }
-          store.setSelected(await client.updateSession(selected.id, { agent: row.id }))
-          store.setStatus(`Agent → ${row.id}`)
-          await actions.refresh()
-        },
-      })
+      context.actions.openAgents()
     },
   },
   {
@@ -547,11 +542,6 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/rules",
     description: "Open the Saved Rules view: saved permission decisions, delete",
     run: ({ actions }) => { actions.openRules() },
-  },
-  {
-    name: "/agent-models",
-    description: "Open the Agent Models view: per-agent default model, pick or clear",
-    run: ({ actions }) => { actions.openAgentModels() },
   },
   {
     name: "/project",

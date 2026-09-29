@@ -24,7 +24,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openDiff: () => { calls.push("diff") },
     openMcp: () => { calls.push("mcp") },
     openRules: () => { calls.push("rules") },
-    openAgentModels: () => { calls.push("agentModels") },
+    openAgents: () => { calls.push("agents") },
     openProjectView: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
@@ -183,13 +183,13 @@ test("/open resolves list numbers and /key opens the Provider View", async () =>
   expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
 })
 
-test("/diff, /mcp, /rules, /agent-models open their full-screen views", async () => {
+test("/diff, /mcp, /rules, /agent open their full-screen views", async () => {
   const { calls, run } = harness()
   await run("/diff")
   await run("/mcp")
   await run("/rules")
-  await run("/agent-models")
-  expect(calls).toEqual(["diff", "mcp", "rules", "agentModels"])
+  await run("/agent")
+  expect(calls).toEqual(["diff", "mcp", "rules", "agents"])
 })
 
 test("usage errors are thrown for incomplete commands", async () => {
@@ -223,7 +223,7 @@ test("a backend command turn's user message shows the /name args the user typed"
   expect(store.state.commandDisplay.get("msg_u1")).toBe("/review  src/main.ts")
 })
 
-test("/model and /agent with no argument open a picker of the catalog, the session's current value marked", async () => {
+test("/model with no argument opens a picker of the catalog, the session's current value marked", async () => {
   const { store, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
@@ -233,12 +233,9 @@ test("/model and /agent with no argument open a picker of the catalog, the sessi
   await run("/model")
   expect(pickers.at(-1)?.title).toBe("Model")
   expect(pickers.at(-1)?.rows).toEqual([{ id: "openai/gpt", label: "gpt", tag: "openai", detail: "", current: true }])
-  await run("/agent")
-  expect(pickers.at(-1)?.title).toBe("Agent")
-  expect(pickers.at(-1)?.rows).toEqual([{ id: "build", label: "build", tag: "", detail: "Default agent", current: true }])
 })
 
-test("/model and /agent with no session and no argument remember the picker choice for the next session", async () => {
+test("/model and /agent <name> with no session remember the choice for the next session", async () => {
   const { store, calls, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
@@ -248,9 +245,9 @@ test("/model and /agent with no session and no argument remember the picker choi
   await pickers.at(-1)?.onSelect({ id: "openai/gpt", label: "gpt" })
   expect(store.state.pendingModel).toBe("openai/gpt")
   expect(store.state.status).toContain("applies when the session is created")
-  await run("/agent")
-  await pickers.at(-1)?.onSelect({ id: "review", label: "review" })
+  await run("/agent review")
   expect(store.state.pendingAgent).toBe("review")
+  expect(store.state.status).toBe("Agent → review · applies when the session is created")
   expect(calls).toEqual([])
 })
 

@@ -1,7 +1,7 @@
 import type { MouseEvent, Selection } from "@opentui/core"
 import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, Show } from "solid-js"
-import { AgentModelsView } from "../components/AgentModelsView"
+import { AgentsView } from "../components/AgentsView"
 import { Composer } from "../components/Composer"
 import { DiffView } from "../components/DiffView"
 import { Footer } from "../components/Footer"
@@ -35,7 +35,7 @@ export { layoutBreakpoints } from "../state/layout"
  * confirmation, status line, bordered composer, footer instruction) and,
  * when shown, the sidebar on the right (state/layout.ts). The full-screen
  * Provider (`/key`), Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`),
- * and Agent Models (`/agent-models`) views are drawn over both when one of
+ * and Agents (`/agent`) views are drawn over both when one of
  * them is open (at most one at a time), and the modal picker
  * (components/Picker.tsx) over everything.
  *
@@ -85,7 +85,7 @@ export function App() {
       <DiffView />
       <McpView />
       <RulesView />
-      <AgentModelsView />
+      <AgentsView />
       <ProjectView />
       <Picker />
     </box>

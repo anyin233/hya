@@ -5,7 +5,7 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -23,8 +23,13 @@ use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
-#[derive(Clone)]
-struct FakeAgentModelControl;
+/// One `save_configuration` call the fake received: agent id and model (`None` clears).
+type SavedConfiguration = (String, Option<AgentModelIdentity>);
+
+#[derive(Clone, Default)]
+struct FakeAgentModelControl {
+    saved: Arc<Mutex<Vec<SavedConfiguration>>>,
+}
 
 impl AgentModelControl for FakeAgentModelControl {
     fn available(&self) -> bool {
@@ -83,11 +88,18 @@ impl AgentModelControl for FakeAgentModelControl {
     fn save_configuration(
         &self,
         _binding: TurnBinding,
-        _agent_id: String,
-        _model: Option<AgentModelIdentity>,
+        agent_id: String,
+        model: Option<AgentModelIdentity>,
         _base_model: hya_proto::ModelRef,
     ) -> AgentModelControlFuture<'_, AgentModelState> {
-        async move { Err(AgentModelControlError::unavailable()) }.boxed()
+        async move {
+            self.saved.lock().unwrap().push((agent_id, model.clone()));
+            let mut state = row(model);
+            state.configuration_path = Some("/tmp/config.yaml".to_string());
+            state.configuration = state.preference.clone();
+            Ok(state)
+        }
+        .boxed()
     }
 
     fn list_model_effort_preferences(
@@ -190,7 +202,7 @@ async fn request(
 
 #[tokio::test]
 async fn v1_lists_updates_and_clears_agent_model_preferences() {
-    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl);
+    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl::default());
     let (status, list) = request(
         app(Some(control.clone())).await,
         Method::GET,
@@ -230,7 +242,7 @@ async fn v1_lists_updates_and_clears_agent_model_preferences() {
 
 #[tokio::test]
 async fn v1_agent_model_errors_map_to_the_stable_table() {
-    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl);
+    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl::default());
     let app = app(Some(control)).await;
 
     let (status, body) = request(
@@ -301,7 +313,7 @@ async fn v1_agent_models_unavailable_without_installed_control() {
 /// the JSON body (protojson mapping), never from the query string.
 #[tokio::test]
 async fn v1_set_agent_model_reads_its_scope_from_the_body() {
-    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl);
+    let control: Arc<dyn AgentModelControl> = Arc::new(FakeAgentModelControl::default());
     let app = app(Some(control)).await;
     let preference = json!({"providerId": "fake", "modelId": "model"});
 
@@ -349,4 +361,44 @@ async fn v1_set_agent_model_reads_its_scope_from_the_body() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn v1_saves_agent_model_configuration_and_clears_it() {
+    let fake = FakeAgentModelControl::default();
+    let saved = Arc::clone(&fake.saved);
+    let control: Arc<dyn AgentModelControl> = Arc::new(fake);
+    let app = app(Some(control)).await;
+
+    let (status, body) = request(
+        app.clone(),
+        Method::PUT,
+        "/v1/agent-models/general/configuration",
+        json!({"model": {"providerId": "fake", "modelId": "saved"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["configurationPath"], "/tmp/config.yaml");
+    assert_eq!(body["configuration"]["providerId"], "fake");
+    assert_eq!(
+        saved.lock().unwrap().as_slice(),
+        &[(
+            "general".to_string(),
+            Some(AgentModelIdentity::new("fake", "saved"))
+        )]
+    );
+
+    let (status, body) = request(
+        app,
+        Method::PUT,
+        "/v1/agent-models/general/configuration",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("configuration").is_none());
+    assert_eq!(
+        saved.lock().unwrap().last().cloned(),
+        Some(("general".to_string(), None))
+    );
 }

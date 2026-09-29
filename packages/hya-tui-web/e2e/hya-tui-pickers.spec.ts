@@ -1,9 +1,9 @@
-// `/model` (C11) and `/agent` (C12) pickers (docs/tui.md "Pickers"): rows
-// grouped/tagged by provider or the agent's default model, the current
-// value marked, filtering, a choice with a session open switches it at
-// once (a notice, and the next assistant reply's header shows the new
-// model), and a choice made before any session exists is remembered and
-// applied to the next `CreateSession`.
+// The `/model` picker (C11; docs/tui.md "Pickers"): rows tagged by
+// provider, the current value marked, filtering, a choice with a session
+// open switches it at once (a notice, and the next assistant reply's header
+// shows the new model), and a choice made before any session exists is
+// remembered and applied to the next `CreateSession`. `/agent` opens the
+// Agents view (hya-tui-agents.spec.ts).
 
 import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep } from "./hya"
@@ -85,39 +85,5 @@ test.describe("/model with the agent's model pinned in config.yaml", () => {
     await prompt(term, "again")
     await term.waitForText("Second reply.", 20_000)
     await term.waitForText(/● build · fake\/slow/)
-  })
-})
-
-test.describe("/agent picker", () => {
-  test.use({ model: { steps: [textStep("Reply one."), textStep("Reply two.")] } })
-
-  test("lists visible agents with their default model, the current one marked; switching updates the session", async ({ tui, backend }, testInfo) => {
-    const term = await tui(hyaTui(backend))
-    await newSession(term)
-    await prompt(term, "/agent")
-    await term.waitForText("Agent")
-    await term.waitForText(/▸ ● build\s/)
-    await term.waitForText(/ {3}explore\s/)
-    await term.attach(testInfo, "agent-picker")
-
-    await term.type("explore")
-    await term.press("Enter")
-    await term.waitForText("Agent → explore")
-    await prompt(term, "hi")
-    await term.waitForText(/● explore · fake\/model/, 20_000)
-  })
-
-  test("before a session exists the choice is remembered and applied to the next session", async ({ tui, backend }) => {
-    // --continue with no earlier session: none is open (a plain start creates one).
-    const term = await tui([...hyaTui(backend), "--continue"])
-    await term.waitForText("Connected to hya")
-    await prompt(term, "/agent")
-    await term.waitForText("Agent")
-    await term.type("explore")
-    await term.press("Enter")
-    await term.waitForText("Agent → explore · applies when the session is created")
-    await prompt(term, "hello")
-    await term.waitForText("Reply one.", 20_000)
-    await term.waitForText(/● explore · fake\/model/)
   })
 })

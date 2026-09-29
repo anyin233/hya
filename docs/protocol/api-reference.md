@@ -45,6 +45,7 @@ control handle.
 |---|---|---|---|---|
 | `ListAgentModels` | `GET /v1/agent-models` | `hya.v1.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
 | `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
+| `SaveAgentModelConfiguration` | `PUT /v1/agent-models/{agent_id}/configuration` | `hya.v1.AgentModels.SaveAgentModelConfiguration` | `SaveAgentModelConfigurationRequest` | `AgentModelState` |
 | `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `hya.v1.AgentModels.ListModelEffortPreferences` | `ListModelEffortPreferencesRequest` | `ListModelEffortPreferencesResponse` |
 | `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `hya.v1.AgentModels.SetModelEffortPreference` | `SetModelEffortPreferenceRequest` | `ModelEffortPreference` |
 | `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `hya.v1.AgentModels.SetAgentEffort` | `SetAgentEffortRequest` | `AgentEffort` |
@@ -58,6 +59,12 @@ Effective model state for every catalog agent under one binding.
 
 Set or clear one agent's remembered preference; returns the
 post-commit state.
+
+
+### `AgentModels.SaveAgentModelConfiguration`
+
+Set or clear the model in the owning user configuration file. Keeps a
+distinct session override and applies the saved value live.
 
 
 ### `AgentModels.SetModelEffortPreference`
@@ -975,6 +982,7 @@ Effective model state for one catalog agent.
 | `session_override` (12) | `AgentModelSelection` | Active root-session override captured for this agent. |
 | `effort` (13) | `string` | The agent's default thinking effort (empty: its model's default). |
 | `effort_source` (14) | `AgentEffortSource` | Which layer chose `effort`. |
+| `configuration_path` (15) | `string` | Owning configuration file path, empty when no configuration exists. |
 
 ### `ListAgentModelsRequest`
 
@@ -1000,6 +1008,16 @@ Effective model state for one catalog agent.
 | `session` (2) | `string` | Bind against this session's runtime when non-empty. |
 | `agent_id` (3) | `string` | Stable catalog agent id whose preference is being set. |
 | `preference` (4) | `optional AgentModelSelection` | New remembered preference; absent/null clears it. |
+
+### `SaveAgentModelConfigurationRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope for the agent binding (absolute). Optional: when both it and `session` are empty the global (project-less) binding is used. |
+| `session` (2) | `string` | Bind against this session's runtime when non-empty. |
+| `agent_id` (3) | `string` | Stable catalog agent id whose configured model is being written. |
+| `model` (4) | `optional AgentModelSelection` | New configured model; absent/null removes the agent's `model` leaf. |
 
 ### `ListProviderAuthResponse`
 

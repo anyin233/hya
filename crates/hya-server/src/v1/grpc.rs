@@ -1737,6 +1737,24 @@ impl pb::agent_models_server::AgentModels for V1Grpc {
             .await?,
         )
     }
+
+    async fn save_agent_model_configuration(
+        &self,
+        request: GrpcRequest<pb::SaveAgentModelConfigurationRequest>,
+    ) -> Result<GrpcResponse<pb::AgentModelState>, Status> {
+        let (ctx, inner) = split(request);
+        let agent_id = field(&inner, "agentId");
+        into_response(
+            self.dispatch(
+                &ctx,
+                "PUT",
+                &format!("/v1/agent-models/{agent_id}/configuration"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
     async fn list_model_effort_preferences(
         &self,
         request: GrpcRequest<pb::ListModelEffortPreferencesRequest>,

@@ -138,6 +138,9 @@ pub struct AgentModelState {
     /// Which layer chose `effort`.
     #[prost(enumeration = "AgentEffortSource", tag = "14")]
     pub effort_source: i32,
+    /// Owning configuration file path, empty when no configuration exists.
+    #[prost(string, tag = "15")]
+    pub configuration_path: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListAgentModelsRequest {
@@ -171,6 +174,22 @@ pub struct SetAgentModelRequest {
     /// New remembered preference; absent/null clears it.
     #[prost(message, optional, tag = "4")]
     pub preference: ::core::option::Option<AgentModelSelection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SaveAgentModelConfigurationRequest {
+    /// Directory scope for the agent binding (absolute). Optional: when both
+    /// it and `session` are empty the global (project-less) binding is used.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Bind against this session's runtime when non-empty.
+    #[prost(string, tag = "2")]
+    pub session: ::prost::alloc::string::String,
+    /// Stable catalog agent id whose configured model is being written.
+    #[prost(string, tag = "3")]
+    pub agent_id: ::prost::alloc::string::String,
+    /// New configured model; absent/null removes the agent's `model` leaf.
+    #[prost(message, optional, tag = "4")]
+    pub model: ::core::option::Option<AgentModelSelection>,
 }
 /// Which layer chose an agent's default thinking effort.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -402,6 +421,36 @@ pub mod agent_models_client {
                 .insert(GrpcMethod::new("hya.v1.AgentModels", "SetAgentModel"));
             self.inner.unary(req, path, codec).await
         }
+        /// Set or clear the model in the owning user configuration file. Keeps a
+        /// distinct session override and applies the saved value live.
+        ///
+        /// hya.http: PUT /v1/agent-models/{agent_id}/configuration
+        pub async fn save_agent_model_configuration(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SaveAgentModelConfigurationRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AgentModelState>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.AgentModels/SaveAgentModelConfiguration",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("hya.v1.AgentModels", "SaveAgentModelConfiguration"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /// hya.http: GET /v1/model-effort-preferences
         pub async fn list_model_effort_preferences(
             &mut self,
@@ -516,6 +565,14 @@ pub mod agent_models_server {
         async fn set_agent_model(
             &self,
             request: tonic::Request<super::SetAgentModelRequest>,
+        ) -> std::result::Result<tonic::Response<super::AgentModelState>, tonic::Status>;
+        /// Set or clear the model in the owning user configuration file. Keeps a
+        /// distinct session override and applies the saved value live.
+        ///
+        /// hya.http: PUT /v1/agent-models/{agent_id}/configuration
+        async fn save_agent_model_configuration(
+            &self,
+            request: tonic::Request<super::SaveAgentModelConfigurationRequest>,
         ) -> std::result::Result<tonic::Response<super::AgentModelState>, tonic::Status>;
         /// hya.http: GET /v1/model-effort-preferences
         async fn list_model_effort_preferences(
@@ -698,6 +755,58 @@ pub mod agent_models_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SetAgentModelSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.AgentModels/SaveAgentModelConfiguration" => {
+                    #[allow(non_camel_case_types)]
+                    struct SaveAgentModelConfigurationSvc<T: AgentModels>(pub Arc<T>);
+                    impl<
+                        T: AgentModels,
+                    > tonic::server::UnaryService<
+                        super::SaveAgentModelConfigurationRequest,
+                    > for SaveAgentModelConfigurationSvc<T> {
+                        type Response = super::AgentModelState;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::SaveAgentModelConfigurationRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AgentModels>::save_agent_model_configuration(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SaveAgentModelConfigurationSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
