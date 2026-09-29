@@ -149,9 +149,10 @@ In `auto` mode, a reported provider measurement is anchored to the **latest
 round** (`input + cache_read + cache_write`), then locally estimated content
 appended after that round is added; cumulative usage from earlier rounds is not
 summed. `ContextStatus.source` is `provider` when this measurement is accepted.
-Estimates follow the route encoder: Chat OpenAI and Google omit reasoning,
-Responses resends only a reasoning part's provider data, and Anthropic replays
-only signed current-turn thinking. Encoder and estimator share one predicate
+Estimates follow the route encoder: Google omits reasoning, Chat OpenAI
+resends chat-native `reasoning_content` from every turn, Responses resends
+only a reasoning part's provider data, and Anthropic replays only signed
+current-turn thinking. Encoder and estimator share one predicate
 (`hya_provider::ReasoningReplayPolicy::replays`), so they cannot drift.
 Tool outputs appended to the running assistant message after its latest round
 are not yet in that round's measurement; the next round's report includes them.

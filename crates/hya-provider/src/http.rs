@@ -1106,9 +1106,8 @@ impl Provider for HttpProvider {
                 crate::ReasoningReplayPolicy::ProviderData
             }
             ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
-            ProviderKind::OpenAiCompatible | ProviderKind::Google => {
-                crate::ReasoningReplayPolicy::None
-            }
+            ProviderKind::OpenAiCompatible => crate::ReasoningReplayPolicy::ReasoningContent,
+            ProviderKind::Google => crate::ReasoningReplayPolicy::None,
         }
     }
 

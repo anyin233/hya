@@ -423,8 +423,14 @@ Chat Completions compatible APIs (`ProviderKind::OpenAiCompatible`):
 - tools become `type: function` tool definitions
 - tool results are emitted as `role: tool`
 - streamed text deltas become `TextStart` / `TextDelta` / `TextEnd`
+- streamed `delta.reasoning_content` becomes `ReasoningStart` /
+  `ReasoningDelta` / `ReasoningEnd` with
+  `provider_data: {"type": "reasoning_content"}`
 - streamed tool arguments are accumulated and emitted as `ToolCallRequested`
 - decoder closes on SSE data `[DONE]` or on plain stream end (`finish()`)
+- an open reasoning part ends before text starts, and open reasoning or text
+  ends before a tool call starts. The engine persists these parts at their end
+  event, so a part left open would be stored after a later tool call.
 
 **Finish-reason mapping** (`openai/decoder.rs`):
 
@@ -439,9 +445,30 @@ Chat Completions compatible APIs (`ProviderKind::OpenAiCompatible`):
 the string `"{}"` in `function.arguments`, because the wire format requires a
 JSON object string.
 
-Stored assistant messages may contain interleaved text and tool parts. The
-encoder clusters `text + tool calls + results` into wire messages that satisfy
-the provider's tool-call pairing rules.
+Stored assistant messages may contain interleaved reasoning, text, and tool
+parts. The encoder clusters `reasoning + text + tool calls + results` into
+wire messages that satisfy the provider's tool-call pairing rules.
+
+**`reasoning_content` round-trip.** Thinking-mode chat APIs (DeepSeek V4,
+Kimi) return HTTP 400 `The reasoning_content in the thinking mode must be
+passed back to the API` when a later request omits the reasoning of an
+earlier assistant message. The route's replay policy is
+`ReasoningReplayPolicy::ReasoningContent`: reasoning parts marked
+`{"type": "reasoning_content"}` are resent on every turn as the wire
+message's `reasoning_content`. Once a transcript holds any such part, every
+assistant wire message carries `reasoning_content`; it is `""` when that
+message had none. Reasoning from other protocols (for example Anthropic
+thinking before a model switch) is never sent, and a transcript without
+chat-native reasoning is encoded without the field. Example second request of
+a tool round:
+
+```json
+{"role": "assistant", "content": "I'll start by finding your slides draft.",
+ "reasoning_content": "User wants the slides draft; glob for it.",
+ "tool_calls": [{"id": "…", "type": "function",
+                 "function": {"name": "glob", "arguments": "{\"pattern\":\"**/*slide*\"}"}}]},
+{"role": "tool", "tool_call_id": "…", "content": "slides_draft.md"}
+```
 
 **Media.** User/system media parts fail encode with
 `ProviderError::Incompatible("OpenAI chat does not support media type <mime>")`

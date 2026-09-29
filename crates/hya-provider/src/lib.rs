@@ -461,6 +461,9 @@ pub enum ReasoningReplayPolicy {
     ProviderData,
     /// The encoder sends signed current-turn reasoning text and metadata.
     SignedCurrentTurn,
+    /// The chat encoder sends the text of reasoning streamed as
+    /// `reasoning_content`, on every turn, as the message's `reasoning_content`.
+    ReasoningContent,
 }
 
 /// Index of the latest user message that carries text: assistant messages
@@ -491,6 +494,13 @@ impl ReasoningReplayPolicy {
                     && provider_data
                         .as_ref()
                         .is_some_and(is_signed_anthropic_reasoning)
+            }
+            Self::ReasoningContent => {
+                provider_data
+                    .as_ref()
+                    .and_then(|data| data.get("type"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(openai::REASONING_CONTENT_TYPE)
             }
         }
     }

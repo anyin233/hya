@@ -3,9 +3,13 @@ use std::collections::BTreeMap;
 use hya_proto::{
     Event, FinishReason, MessageId, PartId, Role, SessionId, TokenUsage, ToolCallId, ToolName,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{Decoder, ProviderError};
+
+/// `provider_data` marking a reasoning part streamed as chat
+/// `delta.reasoning_content`; the chat encoder replays exactly these parts.
+pub(crate) const REASONING_CONTENT_TYPE: &str = "reasoning_content";
 
 struct ToolAsm {
     part: PartId,
@@ -28,9 +32,14 @@ impl ToolAsm {
 }
 
 /// Stateful decoder for OpenAI Chat Completions SSE chunks.
+///
+/// The engine persists a text or reasoning part at its end event, so an open
+/// part is closed before the next kind starts; otherwise the stored message
+/// would list a later tool call before an earlier preamble.
 pub struct OpenAiChatDecoder {
     session: SessionId,
     message: MessageId,
+    reasoning_part: Option<PartId>,
     text_part: Option<PartId>,
     tools: BTreeMap<usize, ToolAsm>,
     finish_reason: Option<String>,
@@ -45,11 +54,33 @@ impl OpenAiChatDecoder {
         Self {
             session,
             message,
+            reasoning_part: None,
             text_part: None,
             tools: BTreeMap::new(),
             finish_reason: None,
             usage: TokenUsage::default(),
             finished: false,
+        }
+    }
+
+    fn end_reasoning(&mut self, out: &mut Vec<Event>) {
+        if let Some(part) = self.reasoning_part.take() {
+            out.push(Event::ReasoningEnd {
+                session: self.session,
+                message: self.message,
+                part,
+                provider_data: Some(json!({ "type": REASONING_CONTENT_TYPE })),
+            });
+        }
+    }
+
+    fn end_text(&mut self, out: &mut Vec<Event>) {
+        if let Some(part) = self.text_part.take() {
+            out.push(Event::TextEnd {
+                session: self.session,
+                message: self.message,
+                part,
+            });
         }
     }
 
@@ -60,13 +91,8 @@ impl OpenAiChatDecoder {
         self.finished = true;
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
-        if let Some(part) = self.text_part.take() {
-            out.push(Event::TextEnd {
-                session,
-                message,
-                part,
-            });
-        }
+        self.end_reasoning(&mut out);
+        self.end_text(&mut out);
         for (_, entry) in std::mem::take(&mut self.tools) {
             let input = serde_json::from_str(&entry.args).unwrap_or(Value::Null);
             out.push(Event::ToolCallRequested {
@@ -124,9 +150,38 @@ impl Decoder for OpenAiChatDecoder {
             return Ok(out);
         };
 
+        if let Some(reasoning) = choice
+            .pointer("/delta/reasoning_content")
+            .and_then(Value::as_str)
+            && !reasoning.is_empty()
+        {
+            self.end_text(&mut out);
+            let part = match self.reasoning_part {
+                Some(p) => p,
+                None => {
+                    let p = PartId::new();
+                    self.reasoning_part = Some(p);
+                    out.push(Event::ReasoningStart {
+                        session,
+                        message,
+                        part: p,
+                        reason: None,
+                    });
+                    p
+                }
+            };
+            out.push(Event::ReasoningDelta {
+                session,
+                message,
+                part,
+                delta: reasoning.to_string(),
+            });
+        }
+
         if let Some(content) = choice.pointer("/delta/content").and_then(Value::as_str)
             && !content.is_empty()
         {
+            self.end_reasoning(&mut out);
             let part = match self.text_part {
                 Some(p) => p,
                 None => {
@@ -161,14 +216,18 @@ impl Decoder for OpenAiChatDecoder {
                 {
                     entry.started = true;
                     entry.name = name.to_string();
+                    let (part, call) = (entry.part, entry.call);
+                    self.end_reasoning(&mut out);
+                    self.end_text(&mut out);
                     out.push(Event::ToolInputStart {
                         session,
                         message,
-                        part: entry.part,
-                        call: entry.call,
+                        part,
+                        call,
                         name: ToolName::new(name),
                     });
                 }
+                let entry = self.tools.entry(index).or_insert_with(ToolAsm::new);
                 if let Some(args) = tc.pointer("/function/arguments").and_then(Value::as_str)
                     && !args.is_empty()
                 {
