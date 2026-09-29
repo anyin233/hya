@@ -45,6 +45,7 @@ pub(super) fn projection_to_messages(
                 parts: map_parts(&m.parts),
                 finish: m.finish,
                 tokens: m.tokens,
+                last_round: m.usage.as_ref().map(|usage| usage.last_round),
             },
             Role::System => Message::System {
                 id: m.id,
@@ -54,14 +55,15 @@ pub(super) fn projection_to_messages(
         .collect()
 }
 
+/// `reasoning` is the already-resolved effort ([`crate::SessionEngine::effective_effort`]).
 pub(super) fn request_from_messages(
     agent: &AgentSpec,
     messages: Vec<Message>,
     resources: &CompiledResourceView,
     model: &ModelRef,
     depth: u32,
+    reasoning: Option<ReasoningEffort>,
 ) -> CompletionRequest {
-    let reasoning = reasoning_for_model(model, agent.reasoning);
     let tools = filtered_tool_schemas(resources, model, depth);
     // The team quick reference teaches exactly the coordination tools this
     // request advertises (harness-allocated per agent and depth).
@@ -86,16 +88,19 @@ pub(super) fn request_from_messages(
     }
 }
 
-/// Resolve an explicit model-ref variant before the Agent's configured default.
+/// Effort for a cross-model fallback attempt: the candidate's own `#variant`
+/// wins; otherwise the effort resolved for the preferred model carries over.
+///
+/// A `#suffix` is an explicit choice: a valid variant wins, and an invalid one
+/// sends no effort rather than silently inheriting the default.
 pub(super) fn reasoning_for_model(
     model: &ModelRef,
     fallback: Option<ReasoningEffort>,
 ) -> Option<ReasoningEffort> {
-    model
-        .as_str()
-        .rsplit_once('#')
-        .and_then(|(_, variant)| ReasoningEffort::parse(variant))
-        .or(fallback)
+    match model.as_str().rsplit_once('#') {
+        Some((_, variant)) => ReasoningEffort::parse(variant),
+        None => fallback,
+    }
 }
 
 fn filtered_tool_schemas(
@@ -253,22 +258,23 @@ mod tests {
 
     use hya_tool::ToolRegistry;
 
-    /// Pin explicit overrides and unchanged request effort for missing or invalid variants.
+    /// Pin explicit overrides, the unsuffixed default, and no silent
+    /// inheritance for an invalid variant.
     #[test]
-    fn model_variant_overrides_or_preserves_request_reasoning() {
-        let original = Some(ReasoningEffort::Low);
+    fn model_variant_overrides_preserves_default_and_rejects_invalid_variants() {
+        let default = Some(ReasoningEffort::Low);
 
         assert_eq!(
-            reasoning_for_model(&ModelRef::new("fallback#high"), original),
+            reasoning_for_model(&ModelRef::new("fallback#high"), default),
             Some(ReasoningEffort::High),
         );
         assert_eq!(
-            reasoning_for_model(&ModelRef::new("fallback"), original),
-            original,
+            reasoning_for_model(&ModelRef::new("fallback"), default),
+            default,
         );
         assert_eq!(
-            reasoning_for_model(&ModelRef::new("fallback#unknown"), original),
-            original,
+            reasoning_for_model(&ModelRef::new("fallback#unknown"), default),
+            None,
         );
     }
 
@@ -308,16 +314,145 @@ mod tests {
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(builtins.len(), 28);
+        assert_eq!(builtins.len(), 29);
 
         let advertised = builtins
             .iter()
             .filter(|name| advertise_tool(name))
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(advertised.len(), 27);
+        assert_eq!(advertised.len(), 28);
         assert!(advertised.contains("write"));
         assert!(advertised.contains("edit"));
         assert!(!advertised.contains("apply_patch"));
+    }
+    #[test]
+    fn request_keeps_in_flight_message_after_compaction_marker() {
+        use hya_proto::{AgentName, CompactionStrategy, Envelope, Event, EventSeq, SessionKind};
+        let session = hya_proto::SessionId::new();
+        let user = hya_proto::MessageId::new();
+        let assistant = hya_proto::MessageId::new();
+        let marker = hya_proto::MessageId::new();
+        let marker_part = hya_proto::PartId::new();
+        let assistant_part = hya_proto::PartId::new();
+        let env = |seq, event| Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        };
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: AgentName::new("build"),
+                    model: ModelRef::new("fake"),
+                    workdir: "/tmp".to_string(),
+                    project: None,
+                    kind: SessionKind::Project,
+                },
+            ),
+            env(
+                2,
+                Event::MessageStarted {
+                    session,
+                    message: user,
+                    role: Role::User,
+                    agent: None,
+                    model: None,
+                },
+            ),
+            env(
+                3,
+                Event::MessageStarted {
+                    session,
+                    message: assistant,
+                    role: Role::Assistant,
+                    agent: Some(AgentName::new("build")),
+                    model: Some(ModelRef::new("fake")),
+                },
+            ),
+            env(
+                4,
+                Event::MessageStarted {
+                    session,
+                    message: marker,
+                    role: Role::System,
+                    agent: None,
+                    model: None,
+                },
+            ),
+            env(
+                5,
+                Event::TextStart {
+                    session,
+                    message: marker,
+                    part: marker_part,
+                },
+            ),
+            env(
+                6,
+                Event::TextDelta {
+                    session,
+                    message: marker,
+                    part: marker_part,
+                    delta: "HYA_COMPACTED_CONTEXT\nsummary".to_string(),
+                },
+            ),
+            env(
+                7,
+                Event::ContextCompacted {
+                    session,
+                    message: marker,
+                    strategy: CompactionStrategy::LocalSummarizer,
+                    from_message: user,
+                    to_message: user,
+                    folded_count: 1,
+                    input_tokens_est: 100,
+                    threshold: 75,
+                },
+            ),
+            env(
+                8,
+                Event::TextStart {
+                    session,
+                    message: assistant,
+                    part: assistant_part,
+                },
+            ),
+            env(
+                9,
+                Event::TextDelta {
+                    session,
+                    message: assistant,
+                    part: assistant_part,
+                    delta: "retained in-flight work".to_string(),
+                },
+            ),
+        ]);
+        let agent = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            reasoning: None,
+            system_prompt: String::new(),
+            workdir: "/tmp".into(),
+        };
+
+        let messages = projection_to_messages(
+            &agent,
+            &projection,
+            &ModelRef::new("fake"),
+            &AttachmentData::new(),
+        );
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(
+            &messages[1],
+            Message::Assistant { parts, .. }
+                if parts.iter().any(|part| matches!(
+                    part,
+                    Part::Text { text, .. } if text == "retained in-flight work"
+                ))
+        ));
     }
 }

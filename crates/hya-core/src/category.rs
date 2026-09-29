@@ -21,6 +21,7 @@ pub fn apply_spawn_model_policy(
     categories: &CategoryRegistry,
     is_servable: &dyn Fn(&ModelRef) -> bool,
 ) -> AgentSpec {
+    let original_model = agent.model.clone();
     let resolve_category = |name: &str| {
         categories
             .resolve_servable(name, is_servable)
@@ -73,6 +74,11 @@ pub fn apply_spawn_model_policy(
         .filter(|model| !model.is_empty())
     {
         agent.model = ModelRef::new(model);
+    }
+    // An inherited effort belongs to the original model. A changed model
+    // must resolve its own preference/default; authored child reasoning stays.
+    if agent.model != original_model && definition.model_policy.reasoning.is_none() {
+        agent.reasoning = None;
     }
     agent
 }

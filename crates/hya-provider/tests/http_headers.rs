@@ -255,6 +255,57 @@ async fn retry_config_limits_total_attempts_to_one() {
 }
 
 #[tokio::test]
+async fn exhausted_retryable_status_reports_attempt_count() {
+    let busy =
+        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy"
+            .to_string();
+    let (base_url, connections, _requests) =
+        start_scripted_server(vec![busy.clone(), busy.clone(), busy]).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_retry(hya_provider::RetryConfig {
+        backoff_base: Duration::from_millis(1),
+        ..hya_provider::RetryConfig::default()
+    });
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let error = match provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("three 503 responses must exhaust the retry budget"),
+    };
+    assert!(matches!(
+        &error,
+        ProviderError::HttpStatus { status: 503, .. }
+    ));
+    assert_eq!(connections.load(Ordering::SeqCst), 3);
+    assert!(error.to_string().contains("after 3 attempts"), "{error}");
+    assert!(error.to_string().contains("busy"), "{error}");
+    assert!(error.is_retryable_before_stream());
+    assert_eq!(
+        hya_provider::RetryConfig::default().backoff_base,
+        Duration::from_secs(1)
+    );
+}
+
+#[tokio::test]
 async fn post_event_body_failure_is_never_replayed() {
     // One valid frame is delivered before the body truncates: the consumer has
     // now seen an event, so the no-replay boundary holds and the decode error
@@ -565,6 +616,43 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
         assert_eq!(body["store"], false);
         assert!(body.get("include").is_none());
     }
+}
+
+#[tokio::test]
+async fn http_provider_omits_reasoning_when_no_effort_is_selected() {
+    let (base_url, request_rx) = start_sse_server(
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n".to_string(),
+    )
+    .await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiResponse,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-6-astra".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("openai/gpt-6-astra"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let events: Vec<_> = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let request = captured_request(request_rx).await;
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+
+    assert!(events.iter().all(Result::is_ok));
+    assert!(body.get("reasoning").is_none());
 }
 
 #[tokio::test]
@@ -963,6 +1051,35 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
 }
 
 #[tokio::test]
+async fn responses_summary_parts_have_paragraph_separator() {
+    for part_added in [
+        "",
+        "data: {\"type\":\"response.reasoning_summary_part.added\",\"output_index\":0,\"summary_index\":1,\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}\n\n",
+    ] {
+        let delta_index = if part_added.is_empty() {
+            "\"summary_index\":1,"
+        } else {
+            ""
+        };
+        let sse = format!(
+            "data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"A\"}}\n\n{part_added}data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,{delta_index}\"delta\":\"B\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\"}}}}\n\n"
+        );
+        let events = response_events(ProviderKind::OpenAiResponse, &sse)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let text = events.iter().fold(String::new(), |mut text, event| {
+            if let Event::ReasoningDelta { delta, .. } = event {
+                text.push_str(delta);
+            }
+            text
+        });
+        assert_eq!(text, "A\n\nB", "part_added={part_added:?}");
+    }
+}
+
+#[tokio::test]
 async fn http_provider_reports_nested_responses_failure() {
     let (base_url, _request_rx) = start_sse_server(
         "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n"
@@ -1057,6 +1174,7 @@ async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
                 ],
                 finish: Some(FinishReason::ToolCalls),
                 tokens: None,
+                last_round: None,
             },
         ],
         tools: Vec::new(),
@@ -1169,10 +1287,19 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
     assert!(headers.contains("anthropic-version: 2023-06-01"));
     assert!(request.raw.starts_with("POST /messages HTTP/1.1\r\n"));
     assert_eq!(body["model"], "claude-sonnet-4-20250514");
+    // Anthropic routes cache by default: the last system block, the last tool,
+    // and the last block of the final message carry ephemeral breakpoints.
     assert_eq!(
         body["messages"],
         json!([
-            {"role": "user", "content": "explain the file"}
+            {
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "explain the file",
+                    "cache_control": {"type": "ephemeral"}
+                }]
+            }
         ])
     );
     assert_eq!(
@@ -1185,13 +1312,97 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
                     "required": ["path"]
-                }
+                },
+                "cache_control": {"type": "ephemeral"}
             }
         ])
     );
     assert_eq!(body["max_tokens"], 128);
-    assert_eq!(body["system"], "be helpful");
+    assert_eq!(
+        body["system"],
+        json!([{
+            "type": "text",
+            "text": "be helpful",
+            "cache_control": {"type": "ephemeral"}
+        }])
+    );
     assert!(text_deltas.iter().any(|delta| delta == mock_text));
+}
+
+#[tokio::test]
+async fn http_provider_posts_signed_anthropic_thinking_before_tool_use() {
+    let (base_url, request_rx) =
+        start_sse_server("data: {\"type\":\"message_stop\"}\n\n".to_string()).await;
+    let provider = HttpProvider::new(
+        "anthropic",
+        ProviderKind::Anthropic,
+        &base_url,
+        Some("token".to_string()),
+        ["claude".to_string()],
+    )
+    .unwrap();
+    let call_id = ToolCallId::new();
+    let req = CompletionRequest {
+        model: ModelRef::new("anthropic/claude"),
+        system: None,
+        messages: vec![
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "read".into(),
+                }],
+            },
+            Message::Assistant {
+                id: MessageId::new(),
+                agent: AgentName::new("build"),
+                model: ModelRef::new("anthropic/claude"),
+                parts: vec![
+                    Part::Reasoning {
+                        id: PartId::new(),
+                        text: "think".into(),
+                        provider_data: Some(json!({"type":"thinking","signature":"sig"})),
+                    },
+                    Part::Text {
+                        id: PartId::new(),
+                        text: "done".into(),
+                    },
+                    Part::Tool {
+                        id: PartId::new(),
+                        call_id,
+                        name: ToolName::new("read"),
+                        state: ToolPartState::Completed {
+                            input: json!({}),
+                            output: json!("ok"),
+                            time_ms: 1,
+                        },
+                    },
+                ],
+                finish: None,
+                tokens: None,
+                last_round: None,
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: Some(128),
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let _ = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    let body: Value = serde_json::from_str(&captured_request(request_rx).await.body).unwrap();
+    let content = &body["messages"][1]["content"];
+    assert_eq!(
+        content[0],
+        json!({"type":"thinking","thinking":"think","signature":"sig"})
+    );
+    assert_eq!(content[1]["type"], "text");
+    assert_eq!(content[2]["type"], "tool_use");
 }
 
 #[tokio::test]

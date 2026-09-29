@@ -107,7 +107,7 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
     findFiles: async (pattern: string) => { calls.push(["findFiles", pattern]); return [] },
     listSessions: async (filter?: { projectId?: string }) => sessions.filter((row) => !filter?.projectId || row.projectId === filter.projectId),
     listInteractions: async () => [],
-    listModels: async () => [{ id: "hya/echo", providerId: "hya", modelId: "echo" }],
+    listModels: async () => [{ id: "hya/echo", providerId: "hya", modelId: "echo", reasoning: true, reasoningVariants: ["low", "medium"] }],
     listAgents: async () => [{ name: "build" }],
     listWorkflows: async () => [],
     listProviders: async () => [],
@@ -128,7 +128,9 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
       const temporary = "temporary" in placement && placement.temporary
       const projectId = temporary ? undefined : ("projectId" in placement && placement.projectId) || "prj_work"
       const workdir = temporary ? "/cache/scratch" : ("workdir" in placement && placement.workdir) || projects.find((row) => row.id === projectId)?.roots[0] || "/work"
-      const session: SessionInfo = { id: `new_${++created}`, agent, workdir, model: { providerId: "hya", modelId: "echo" }, ...(projectId ? { projectId } : {}), kind: temporary ? "SESSION_KIND_TEMPORARY" : "SESSION_KIND_PROJECT" }
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      const session: SessionInfo = { id: `new_${++created}`, agent, workdir, model: { providerId, modelId, ...(variant ? { variant } : {}) }, ...(projectId ? { projectId } : {}), kind: temporary ? "SESSION_KIND_TEMPORARY" : "SESSION_KIND_PROJECT" }
       sessions.unshift(session)
       return session
     },
@@ -290,6 +292,7 @@ test("a new-session attempt without an active Project opens the Project view ins
   expect(h.store.state.projectView).toBeDefined()
   h.controller.dispose()
 })
+
 
 test("the Project view creates, renames, edits roots of, and deletes a Project", async () => {
   const h = harness()

@@ -1,8 +1,14 @@
 # 0.43.8
 
-## Complete tiled TUI layout
+## `project_activity`: see who else is working in this Project
 
-- Place Projects, Conversation, Sessions, Todos, and Context in one editable split tree. The conversation's input and status controls move with its pane.
-- Resize, focus, reassign, split, or close side panes with `/layout`; keep the familiar left/middle/right arrangement as the default.
-- Preserve narrow-terminal sidebar toggles and migrate saved center-only version-1 layouts into the complete version-2 tree.
-- Keep message and command drafts and their histories when terminal resizing reshapes the pane tree.
+- New read-only agent tool `project_activity` (extended-tools family, permission `read_only`, allowed without prompting). It lists the other sessions and agents in the caller's Project — independent sessions, subagents, team members — with their relation to the caller (`parent`, `child`, `sibling`, `unrelated`), lineage root, busy/idle state, and last activity, plus the newest change per file (`created` or `changed`) with the session that made it.
+- Agents can now check concurrent work in a shared worktree directly instead of inferring it from process lists, file timestamps, and `git diff`.
+- Parameters: `since_ms` (default: last 2 hours), `limit` (default 50, max 200), `include_self` (default `false`). Results never include prompts, tool arguments, or file contents. `busy`/`idle` is the serving daemon's live turn state.
+- One bounded store query serves the file list; the canonical tool registry now has 29 names.
+
+Example tool call:
+
+```json
+{"name": "project_activity", "input": {"since_ms": 1790600000000, "limit": 20}}
+```

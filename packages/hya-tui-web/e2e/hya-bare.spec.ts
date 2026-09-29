@@ -89,8 +89,10 @@ test.describe("bare hya", () => {
     // A plain tab reopens the terminal's conversation, so it may show
     // `Resumed …` rather than a generic connection message.
     await web.waitForText("hello from the terminal", 30_000)
-    // The header names the server the tab's TUI is connected to.
-    await web.waitForText(`${backend}/`)
+    // The header now keeps the current effort visible and may clip the server
+    // URL; `/status` is the unambiguous server contract.
+    await prompt(web, "/status")
+    await web.waitForText(backend.replace(/\/$/, ""))
     await prompt(web, "/sessions")
     await web.waitForText("New session")
     await web.waitForText("hello from the terminal")

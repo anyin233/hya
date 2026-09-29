@@ -174,6 +174,7 @@ impl RuntimeCatalogRefresh for CountingRefresh {
 /// One installed bundle agent with an explicit prompt, over the built-ins.
 fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
     let bundle = PreparedAgentBundle {
+        check: None,
         format_version: 2,
         identity: BundleIdentity {
             id: format!("hya/round-rebind-{stable_id}"),

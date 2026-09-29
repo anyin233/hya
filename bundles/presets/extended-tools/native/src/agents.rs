@@ -15,7 +15,7 @@ impl Tool for ListAgentsTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("list_agents"),
-            description: "List the agent definitions available to spawn via the `task` tool. Returns each agent's name (the `subagent_type` to pass to `task`), description, logical model category, and mode. Call this to discover which subagent types exist before spawning one.".to_string(),
+            description: "List the agent definitions available to spawn via the `task` tool. Returns each agent's name (the `subagent_type` to pass to `task`), description, logical model category, mode, and default thinking effort (`effort`; none means the model's default). Pass `effort` to `task` to override it for one spawn. Call this to discover which subagent types exist before spawning one.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -36,6 +36,8 @@ impl Tool for ListAgentsTool {
                     "description": agent.description,
                     "category": agent.category,
                     "mode": agent.mode,
+                    "effort": agent.effort,
+                    "effort_source": agent.effort_source,
                 })
             })
             .collect();
@@ -51,9 +53,14 @@ impl Tool for ListAgentsTool {
                         .as_deref()
                         .map(|category| format!(" [category: {category}]"))
                         .unwrap_or_default();
+                    let effort = agent
+                        .effort
+                        .as_deref()
+                        .map(|effort| format!(" [effort: {effort}]"))
+                        .unwrap_or_default();
                     format!(
-                        "- {} ({}){}: {}",
-                        agent.name, agent.mode, category, description
+                        "- {} ({}){}{}: {}",
+                        agent.name, agent.mode, category, effort, description
                     )
                 })
                 .collect::<Vec<_>>()

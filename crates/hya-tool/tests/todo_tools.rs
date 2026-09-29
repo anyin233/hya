@@ -46,6 +46,7 @@ fn ctx_with(rules: Vec<Rule>, session: SessionId, todo: TodoPlane) -> ToolCtx {
         workdir: PathBuf::from("."),
         roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 
@@ -272,7 +273,7 @@ fn todo_group_registered_under_namespace_without_legacy_names() {
     assert!(!canonical.contains(&"todowrite".to_string()));
     assert!(registry.get("todowrite").is_none());
     assert!(registry.get("todo").is_none());
-    assert_eq!(canonical.len(), 28);
+    assert_eq!(canonical.len(), 29);
 }
 
 #[tokio::test]

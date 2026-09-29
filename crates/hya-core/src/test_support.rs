@@ -17,6 +17,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
     let bundles = ["resident", "reviewer"]
         .into_iter()
         .map(|stable_id| PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: format!("hya/core-unit-tests-{stable_id}"),

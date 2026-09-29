@@ -37,6 +37,7 @@ fn ctx(lifecycle: LifecyclePlane) -> hya_tool::ToolCtx {
         workdir: std::path::PathBuf::from("."),
         roots: vec![std::path::PathBuf::from(".")],
         cancel: tokio_util::sync::CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

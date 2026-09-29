@@ -16,10 +16,11 @@ use hya_proto::{
     PartProjection, Projection, Role, SessionId, SessionProjection,
 };
 use hya_provider::{
-    Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
+    Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
+    ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -90,6 +91,57 @@ impl Provider for DelayedDeltaProvider {
                 Some((Ok(event), (events, index + 1)))
             },
         )))
+    }
+}
+
+struct PartialFailureProvider;
+
+#[async_trait]
+impl Provider for PartialFailureProvider {
+    fn id(&self) -> &str {
+        "partial-failure"
+    }
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
+            streaming_tool_calls: true,
+            ..Capabilities::default()
+        })
+    }
+
+    async fn stream(
+        &self,
+        _req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let reasoning = PartId::new();
+        let part = PartId::new();
+        Ok(Box::pin(stream::iter([
+            Ok(Event::ReasoningStart {
+                session,
+                message,
+                part: reasoning,
+                reason: None,
+            }),
+            Ok(Event::ReasoningDelta {
+                session,
+                message,
+                part: reasoning,
+                delta: "partial thought".to_string(),
+            }),
+            Ok(Event::TextStart {
+                session,
+                message,
+                part,
+            }),
+            Ok(Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: "partial".to_string(),
+            }),
+            Err(ProviderError::Transport("mid-stream failure".to_string())),
+        ])))
     }
 }
 
@@ -317,4 +369,206 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
         _ => None,
     });
     assert_eq!(sent, Some(&provider_data));
+}
+
+#[tokio::test]
+async fn partial_text_is_persisted_when_stream_fails() {
+    let workdir = tempdir();
+    let router = ProviderRouter::new().with(Arc::new(PartialFailureProvider));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.expect("store"),
+        Arc::new(router),
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    ));
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("partial-failure"),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .expect("create session");
+    engine
+        .admit_user_prompt(session, "fail after text".to_string())
+        .await
+        .expect("admit prompt");
+    let mut run_agent = agent(&workdir);
+    run_agent.model = ModelRef::new("partial-failure");
+    let result = engine
+        .run_turn(session, &run_agent, CancellationToken::new())
+        .await;
+    assert!(
+        result.is_err(),
+        "the provider failure must end the turn in error"
+    );
+
+    let replay = engine.store().replay(session).await.expect("replay");
+    let projection = Projection::from_events(&replay);
+    let assistant = projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Assistant)
+        .expect("assistant message");
+    assert!(assistant.parts.iter().any(|part| matches!(
+        part,
+        PartProjection::Text { text, .. } if text == "partial"
+    )));
+    assert!(assistant.parts.iter().any(|part| matches!(
+        part,
+        PartProjection::Reasoning { text, .. } if text == "partial thought"
+    )));
+    let reasoning_snapshot_events = replay
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                envelope.event,
+                Event::ReasoningReplace { .. } | Event::ReasoningEnd { .. }
+            )
+        })
+        .count();
+    assert_eq!(reasoning_snapshot_events, 2);
+    assert_eq!(assistant.finish, Some(FinishReason::Error));
+}
+
+#[tokio::test]
+async fn completed_text_parts_replay_in_stream_order_around_tools() {
+    let workdir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::Text("before".to_string()),
+            FakeStep::ToolCall {
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "true"}),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("done".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Bash,
+        "**",
+        Mode::Allow,
+    )]));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.expect("store"),
+        Arc::new(ProviderRouter::new().with(Arc::new(provider))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .expect("create session");
+    engine
+        .admit_user_prompt(session, "go".to_string())
+        .await
+        .expect("prompt");
+    engine
+        .run_turn(session, &agent(&workdir), CancellationToken::new())
+        .await
+        .expect("turn");
+    let projection = engine.read_projection(session).await.expect("projection");
+    let assistant = projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Assistant)
+        .expect("assistant");
+    let kinds = assistant
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            PartProjection::Text { text, .. } => Some(text.as_str()),
+            PartProjection::Tool { .. } => Some("<tool>"),
+            PartProjection::Reasoning { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, ["before", "<tool>", "done"]);
+}
+
+#[tokio::test]
+async fn reasoning_deltas_are_snapshotted_once_and_replayed() {
+    let workdir = tempdir();
+    let router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![
+        FakeStep::Reasoning("think one and two".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ])));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.expect("store"),
+        Arc::new(router),
+        support::test_runtime(tools),
+        permission,
+        EventBus::default(),
+    ));
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .expect("create session");
+    engine
+        .admit_user_prompt(session, "reasoning".to_string())
+        .await
+        .expect("admit prompt");
+    engine
+        .run_turn(session, &agent(&workdir), CancellationToken::new())
+        .await
+        .expect("turn");
+    let replay = engine.store().replay(session).await.expect("replay");
+    let reasoning_events = replay
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                envelope.event,
+                Event::ReasoningStart { .. }
+                    | Event::ReasoningReplace { .. }
+                    | Event::ReasoningEnd { .. }
+            )
+        })
+        .count();
+    assert_eq!(reasoning_events, 3);
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|envelope| matches!(envelope.event, Event::ReasoningDelta { .. }))
+            .count(),
+        0
+    );
+    let projection = Projection::from_events(&replay);
+    let text = projection
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .find_map(|part| match part {
+            PartProjection::Reasoning { text, .. } => Some(text.as_str()),
+            _ => None,
+        });
+    assert_eq!(text, Some("think one and two"));
 }

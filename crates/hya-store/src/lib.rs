@@ -8,13 +8,17 @@
 //! cannot run inside the transaction sqlx wraps migrations in.
 
 mod admission;
+mod agent_effort_preference;
 mod agent_model_preference;
 mod bundle_registry;
 /// Typed store errors shared by session and bundle registry APIs.
 pub mod error;
 mod file_blob;
+mod handoff;
+mod interaction;
 mod mailbox;
 mod materialize;
+mod model_effort_preference;
 mod paths;
 mod permission;
 mod project;
@@ -47,6 +51,7 @@ pub use admission::{
     AdmissionCounts, AdmissionFinalizeOutcome, AdmissionIntent, AdmissionLaunch, AdmissionRecord,
     AdmissionReleaseOutcome, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
 };
+pub use agent_effort_preference::AgentEffortPreference;
 pub use agent_model_preference::AgentModelPreference;
 pub use bundle_registry::{
     BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleInstallPlan,
@@ -54,8 +59,11 @@ pub use bundle_registry::{
     NamespaceInstallPolicy, is_downgrade,
 };
 pub use error::StoreError;
+pub use handoff::{HANDOFF_REASON, HandoffCheckpoint, HandoffResumeStart, PendingResume};
 pub use hya_proto::{ActorClaim, OwnerRunId};
+pub use interaction::{PendingInteraction, PendingInteractionReply};
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
+pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
 pub use project::{Project, ProjectSummary, normalize_project_path};
@@ -121,6 +129,20 @@ impl RuntimeOwnerState {
         match claim.as_ref() {
             Some(claim) if claim.owner == owner => Ok(()),
             _ => Err(StoreError::RuntimeOwnerClaimRequired),
+        }
+    }
+    fn release(&self, owner: OwnerRunId) -> Result<(), StoreError> {
+        let mut claim = self
+            .claim
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match claim.as_ref() {
+            Some(existing) if existing.owner == owner => {
+                *claim = None;
+                Ok(())
+            }
+            Some(_) => Err(StoreError::RuntimeOwnerBusy),
+            None => Ok(()),
         }
     }
 }
@@ -204,6 +226,18 @@ pub struct SessionInfo {
     /// Number of rows in `event_log` for this session.
     pub events: u64,
 }
+/// One durable file activity row extracted from a `FilesChanged` event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectActivityFile {
+    /// Changed path.
+    pub path: String,
+    /// Session that changed it.
+    pub session: SessionId,
+    /// Event timestamp.
+    pub changed_millis: i64,
+    /// Whether the path was absent before the change.
+    pub created: bool,
+}
 
 /// One token-usage row written by the engine after a completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -250,6 +284,31 @@ impl SessionStore {
         })
     }
 
+    /// Write a transactionally consistent copy of the database at `source`
+    /// to `dest` (`VACUUM INTO`), opening `source` read-only: no migration,
+    /// no runtime-owner claim, and no write to the live database. `dest`
+    /// must not exist.
+    ///
+    /// # Errors
+    ///
+    /// The source cannot be opened or the copy fails.
+    pub async fn snapshot_database(source: &Path, dest: &Path) -> Result<(), StoreError> {
+        let opts = SqliteConnectOptions::new()
+            .filename(source)
+            .read_only(true)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        sqlx::query("VACUUM INTO ?")
+            .bind(dest.to_string_lossy().into_owned())
+            .execute(&pool)
+            .await?;
+        pool.close().await;
+        Ok(())
+    }
+
     /// Open an in-memory store (single connection) and run migrations.
     pub async fn connect_memory() -> Result<Self, StoreError> {
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
@@ -288,6 +347,11 @@ impl SessionStore {
     pub fn claim_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
         self.runtime_owner.claim(owner)
     }
+    /// Release this store's runtime-owner claim before a successor opens it.
+    /// The caller must have quiesced all writes first.
+    pub fn release_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
+        self.runtime_owner.release(owner)
+    }
 
     /// Require a matching runtime-owner claim before a startup-only mutation.
     pub(crate) fn require_runtime_owner(&self, owner: OwnerRunId) -> Result<(), StoreError> {
@@ -295,7 +359,11 @@ impl SessionStore {
     }
 
     async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
-        sqlx::migrate!("./migrations").run(pool).await?;
+        // Unknown migrations belong to newer generations; rollback remains safe while
+        // migrations are additive and known checksums still match.
+        let mut migrator = sqlx::migrate!("./migrations");
+        migrator.ignore_missing = true;
+        migrator.run(pool).await?;
         Ok(())
     }
 
@@ -436,6 +504,7 @@ impl SessionStore {
                 "event_log",
                 "token_ledger",
                 "open_assistant_message",
+                "pending_resume",
                 "projection_snapshot",
                 "file_blob",
             ] {
@@ -572,6 +641,93 @@ impl SessionStore {
         .fetch_all(&self.pool)
         .await?;
         session_infos(rows)
+    }
+
+    /// Sessions of one Project whose latest event is at or after
+    /// `since_millis`, newest first, at most `limit` (clamped to 1..=200),
+    /// optionally leaving out `exclude`.
+    pub async fn list_sessions_in_since(
+        &self,
+        project: ProjectId,
+        since_millis: i64,
+        limit: usize,
+        exclude: Option<SessionId>,
+    ) -> Result<Vec<SessionInfo>, StoreError> {
+        let limit = i64::try_from(limit.clamp(1, 200)).unwrap_or(200);
+        let rows = sqlx::query(
+            "SELECT e.session_id, MIN(e.ts) AS started, MAX(e.ts) AS updated, COUNT(*) AS n \
+             FROM event_log e JOIN session s ON s.id = e.session_id \
+             WHERE s.project_id = ? AND (? IS NULL OR e.session_id != ?) \
+             GROUP BY e.session_id HAVING MAX(e.ts) >= ? \
+             ORDER BY updated DESC, e.session_id DESC LIMIT ?",
+        )
+        .bind(project.to_string())
+        .bind(exclude.map(|s| s.storage_key()))
+        .bind(exclude.map(|s| s.storage_key()))
+        .bind(since_millis)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        session_infos(rows)
+    }
+
+    /// Most recent file changes made by sessions of one Project since
+    /// `since_millis`, newest first, one row per path (the last writer among
+    /// the considered sessions wins), at most `limit` rows (clamped to
+    /// 1..=200). `exclude` leaves one session's changes out before picking the
+    /// last writer.
+    ///
+    /// One bounded query over `files_changed` rows: no projection replay. The
+    /// change time is the event's append timestamp; `created` is true when the
+    /// path did not exist before that change.
+    pub async fn project_activity_files(
+        &self,
+        project: ProjectId,
+        since_millis: i64,
+        limit: usize,
+        exclude: Option<SessionId>,
+    ) -> Result<Vec<ProjectActivityFile>, StoreError> {
+        let limit = i64::try_from(limit.clamp(1, 200)).unwrap_or(200);
+        let rows = sqlx::query(
+            "SELECT session_id, ts, path, before_kind FROM ( \
+               SELECT e.session_id AS session_id, e.ts AS ts, \
+                      json_extract(f.value, '$.path') AS path, \
+                      json_extract(f.value, '$.before.kind') AS before_kind, \
+                      ROW_NUMBER() OVER ( \
+                        PARTITION BY json_extract(f.value, '$.path') \
+                        ORDER BY e.ts DESC, e.seq DESC \
+                      ) AS rn \
+               FROM event_log e \
+               JOIN session s ON s.id = e.session_id, \
+                    json_each(e.payload, '$.files') f \
+               WHERE s.project_id = ? AND e.ts >= ? \
+                 AND (? IS NULL OR e.session_id != ?) \
+                 AND json_extract(e.payload, '$.type') = 'files_changed' \
+             ) WHERE rn = 1 AND path IS NOT NULL \
+             ORDER BY ts DESC, path ASC LIMIT ?",
+        )
+        .bind(project.to_string())
+        .bind(since_millis)
+        .bind(exclude.map(|s| s.storage_key()))
+        .bind(exclude.map(|s| s.storage_key()))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let key: Vec<u8> = row.try_get("session_id")?;
+            let Some(session) = decode_session_key(&key) else {
+                continue;
+            };
+            let before_kind: Option<String> = row.try_get("before_kind")?;
+            out.push(ProjectActivityFile {
+                path: row.try_get("path")?,
+                session,
+                changed_millis: row.try_get("ts")?,
+                created: before_kind.as_deref() == Some("absent"),
+            });
+        }
+        Ok(out)
     }
 
     /// One session's [`SessionInfo`] (log bounds and event count), without

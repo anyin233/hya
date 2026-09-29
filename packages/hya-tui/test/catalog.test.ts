@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import { agentRows, modelRows, relativeTime, sessionRows } from "../src/state/catalog"
-import type { AgentSummary, ModelSummary, SessionInfo } from "../src/client"
+import { effortRows, modelRows, relativeTime, sessionRows } from "../src/state/catalog"
+import type { ModelSummary, SessionInfo } from "../src/client"
 
 const models: ModelSummary[] = [
   { id: "acme/fast", providerId: "acme", modelId: "fast", displayName: "Fast", contextLimit: "128000" },
@@ -18,17 +18,29 @@ test("modelRows tags each row with its provider and marks the current model", ()
   expect(rows[0]?.detail).toContain("128k")
 })
 
-const agents: AgentSummary[] = [
-  { name: "build", description: "General-purpose coding agent", model: { providerId: "acme", modelId: "fast" } },
-  { name: "review", description: "Read-only review agent", hidden: false },
-  { name: "internal", description: "Not for pickers", hidden: true },
-]
+const effortModel: ModelSummary = { id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoning: true, reasoningVariants: ["minimal", "low", "medium", "high"] }
 
-test("agentRows drops hidden agents and marks the current one", () => {
-  const rows = agentRows(agents, "review")
-  expect(rows.map((row) => row.id)).toEqual(["build", "review"])
-  expect(rows.find((row) => row.id === "build")?.tag).toBe("acme/fast")
-  expect(rows.find((row) => row.id === "review")?.current).toBe(true)
+
+test("the effort picker lists default first, then none, then the advertised variants", () => {
+  const rows = effortRows(effortModel, undefined, "default")
+  expect(rows.map((row) => ({ id: row.id, tag: row.tag }))).toEqual([
+    { id: "default", tag: "default" },
+    { id: "none", tag: "off" },
+    { id: "minimal", tag: "thinking" },
+    { id: "low", tag: "thinking" },
+    { id: "medium", tag: "thinking" },
+    { id: "high", tag: "thinking" },
+  ])
+  // No explicit choice: `default` is current and says what it resolves to.
+  expect(rows.find((row) => row.current)?.id).toBe("default")
+  expect(rows[0]?.detail).toBe("no explicit effort")
+  expect(effortRows({ ...effortModel, reasoningDefault: "low" }, undefined, "low")[0]?.detail).toBe("effective low")
+  // With an explicit choice that row is current instead.
+  const explicit = effortRows({ ...effortModel, reasoningDefault: "low" }, "none", "none")
+  expect(explicit.find((row) => row.current)?.id).toBe("none")
+  expect(explicit[0]?.detail).toBe("no explicit effort")
+  // A model without reasoning support still offers the explicit off switch.
+  expect(effortRows({ id: "m/plain", providerId: "m", modelId: "plain", reasoning: false }, undefined, "default").map((row) => row.id)).toEqual(["default", "none"])
 })
 
 test("relativeTime formats seconds/minutes/hours/days, and is empty for unset or bad input", () => {

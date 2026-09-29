@@ -53,7 +53,10 @@ async function secondTab(page: Page, workspace: Workspace): Promise<{ term: Tui;
 function servePids(workspace: Workspace): number[] {
   let out = ""
   try {
-    out = execFileSync("pgrep", ["-f", `serve --bind 127.0.0.1:0 --db ${workspaceDb(workspace)}`]).toString()
+    // A successor inherits the listener and may omit the original --bind argv;
+    // match the database-bearing serve command rather than one exact argv.
+    const db = workspaceDb(workspace).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    out = execFileSync("pgrep", ["-f", `serve .*--db ${db}`]).toString()
   } catch {
     // pgrep exits 1 when nothing matches.
   }
@@ -115,23 +118,34 @@ test.describe("backend daemon", () => {
     await prompt(term, "first prompt")
     await term.waitForText("Before the stop.", 20_000)
     await term.waitForText(/^Ready/m)
-    const before = await statusPid(term)
+    const session = /hya · (\S+) · build/.exec(await term.text())![1]!
+    const initial = await daemonStatus(workspace)
+    expect(initial?.pid).toBeDefined()
+    const before = initial!.pid
     // About 80 columns: the notice still reads.
     await term.resize(690, 640)
 
     const restarted = await daemon(workspace, ["restart", "--json"])
     expect(restarted.code).toBe(0)
-    const next = JSON.parse(restarted.stdout.trim()) as { pid: number; started: boolean }
-    expect(next.started).toBe(true)
-    await term.waitForText(`Server moved · now pid ${next.pid}`, 30_000)
-    await term.attach(testInfo, "narrow-moved")
+    const next = JSON.parse(restarted.stdout.trim()) as { pid: number; queued: boolean }
+    expect(next.queued).toBe(true)
+    expect(next.pid).toBe(before)
+    // Restart reports the queued request against the old owner. Poll until
+    // handoff publishes the actual successor generation.
+    let successorPid = before
+    await expect.poll(async () => {
+      successorPid = (await daemonStatus(workspace))?.pid ?? before
+      return successorPid !== before
+    }, { timeout: 30_000 }).toBe(true)
     expect(await term.text()).not.toContain("Started a new server")
-    expect(next.pid).not.toBe(before)
-    expect(servePids(workspace)).toEqual([next.pid])
+    expect(await term.text()).toContain(`hya · ${session}`)
+    expect(successorPid).not.toBe(before)
+    await expect.poll(() => servePids(workspace)).toEqual([successorPid])
     await prompt(term, "after the restart")
     await term.waitForText("After the new server.", 20_000)
-    await term.waitForText(/^Ready/m)
-    expect(servePids(workspace)).toEqual([next.pid])
+    expect(await term.text()).toContain(`hya · ${session}`)
+    await expect.poll(() => statusPid(term), { timeout: 30_000 }).toBe(successorPid)
+    await expect.poll(() => servePids(workspace)).toEqual([successorPid])
   })
 
   test("a daemon killed with SIGKILL (no reason sent): the TUI starts the next one by itself", async ({ tui, workspace }, testInfo) => {

@@ -69,6 +69,28 @@ hya bundle search skill-pack
 hya bundle remove acme/skill-pack
 ```
 
+### Source self-check
+
+All bundle kinds may declare a source-root self-check. It is an argv (never a
+shell string) and runs before `verify` or `install` publishes the bundle:
+
+```yaml
+check:
+  command: [bun, test]
+  timeout_secs: 120 # default 120; maximum 600
+```
+
+The command runs in a private copy of the package's source files (its working
+directory, also `HYA_BUNDLE_ROOT`) with the inherited environment plus
+`HYA_BUNDLE_ID` and `HYA_BUNDLE_VERSION`, stdin closed. A non-zero exit, a
+timeout (the process is killed), or a spawn error refuses `verify` and
+`install` with the last 40 output lines, and nothing is written. Without a
+declaration both print `self-check: none declared`. An empty command, an empty
+argv entry, or a timeout outside 1–600 seconds is rejected during preparation.
+The check is part of the prepared bundle only as a declaration; it never runs
+inside the backend. Use it for the tests that prove the bundle, for example a
+Bun extension's `bun test` or `[sh, -c, 'cargo test --manifest-path native/Cargo.toml']`.
+
 The closed manifest accepts only these top-level fields:
 
 | Field | Type | Contract |
@@ -79,6 +101,7 @@ The closed manifest accepts only these top-level fields:
 | `resources` | object | Optional `tools`, `skills`, `mcp`, and `hooks` resource arrays, using the shared resource schema below. |
 | `extensions` | object | Optional `js`, `files`, `rust`, `libraries`, and `process` fields, with the same support limits described below. |
 | `schemas` | array | Optional `{ scheme: string, tool: string, writable: boolean = false }` declarations. |
+| `check` | optional object | The bundle's self-check `{ command: [argv…], timeout_secs: 1–600 = 120 }`; see [Source self-check](#source-self-check). |
 
 Unknown fields, including `agent`, `agents`, `workflow`, and `channels`, are
 rejected even when empty. Use `bundle.yaml`; `bundle.hya.md` is only supported

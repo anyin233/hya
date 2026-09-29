@@ -291,15 +291,32 @@ async fn a_relay_daemon_rejoins_with_the_same_link_after_restart() {
         relay_state(&root, &db)["state"] == "RELAY_STATE_CONNECTED"
     });
 
+    // The restart returns at the queued handoff; the successor takes the
+    // same URL and rejoins the same relay with the same link (the link is
+    // recoverable through the relay's identity once the successor serves).
     let restarted = run(&root, &db, &["restart", "--json"]);
-    let second = json(&restarted);
-    assert_ne!(second["pid"].as_i64().unwrap(), first_pid);
-    let again =
-        marked_link(&String::from_utf8_lossy(&restarted.stderr)).expect("restart prints the link");
-    assert_eq!(again, link, "same identity, same relay");
-    wait_until("the new daemon joined the relay", || {
-        relay_state(&root, &db)["state"] == "RELAY_STATE_CONNECTED"
+    assert!(
+        restarted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    let queued = json(&restarted);
+    assert_eq!(queued["queued"], serde_json::json!(true), "{queued}");
+    assert_eq!(
+        queued["pid"].as_i64().unwrap(),
+        first_pid,
+        "the old generation acknowledged the handoff: {queued}"
+    );
+    wait_until("the successor generation", || {
+        let output = run(&root, &db, &["status", "--json"]);
+        output.status.success() && json(&output)["pid"].as_i64().unwrap() != first_pid
     });
+    wait_until("the new daemon joined the relay", || {
+        let output = run(&root, &db, &["relay", "status", "--json"]);
+        output.status.success() && json(&output)["state"] == "RELAY_STATE_CONNECTED"
+    });
+    let again = stdout(&run(&root, &db, &["relay", "link"]));
+    assert_eq!(again, link, "same identity, same relay");
     let status = json(&run(&root, &db, &["status", "--json"]));
     assert_eq!(status["relay"]["proxyUrl"], serde_json::json!(relay));
     assert!(health_through(&link).await.unwrap().contains("\"ok\":true"));

@@ -3,13 +3,52 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::path::{Path, PathBuf};
 
+fn prepare(root: &std::path::Path, sequence: u64, previous: u64) {
+    let owner = UpdaterOwner::acquire(root).unwrap();
+    let generation = read_selector(root).unwrap().generation;
+    let authorization = owner.authorize(root, sequence, generation).unwrap();
+    owner
+        .prepare_activation(root, &authorization, previous)
+        .unwrap();
+}
+
+fn activate(
+    root: &std::path::Path,
+    sequence: u64,
+    previous: u64,
+) -> hya_updater::ActivationSelector {
+    let owner = UpdaterOwner::acquire(root).unwrap();
+    let generation = read_selector(root).unwrap().generation;
+    let authorization = owner.authorize(root, sequence, generation).unwrap();
+    owner
+        .prepare_activation(root, &authorization, previous)
+        .unwrap();
+    owner.commit_activation(root, &authorization).unwrap()
+}
+
+fn commit_existing(
+    root: &std::path::Path,
+    sequence: u64,
+) -> Result<hya_updater::ActivationSelector, UpdaterError> {
+    let owner = UpdaterOwner::acquire(root)?;
+    let generation = read_selector(root)?.generation;
+    let authorization = owner.authorize(root, sequence, generation)?;
+    owner.commit_activation(root, &authorization)
+}
+
+fn authorization(root: &std::path::Path, sequence: u64) -> hya_updater::ActivationAuthorization {
+    let owner = UpdaterOwner::acquire(root).unwrap();
+    let generation = read_selector(root).unwrap().generation;
+    owner.authorize(root, sequence, generation).unwrap()
+}
+
 use ed25519_dalek::{Signer, SigningKey};
 use hya_updater::{
     AcceptedFloor, ApplyOptions, ArtifactDigest, ReleaseMetadata, SUPPORTED_PROTOCOL_VERSION,
-    TrustRoot, UpdaterError, apply_update, assert_no_session_or_secret_reads,
-    assert_tcb_outside_candidate, commit_activation, discard_staged_release, journal_prepare,
-    layout, load_trust_roots, read_selector, recover_activation, smoke_staged_release,
-    stage_verified_release, verify_artifact_bytes, verify_release_metadata, write_trust_roots,
+    TrustRoot, UpdaterError, UpdaterOwner, apply_update, assert_no_session_or_secret_reads,
+    assert_tcb_outside_candidate, discard_staged_release, layout, load_trust_roots, read_selector,
+    recover_activation, smoke_staged_release, stage_verified_release, verify_artifact_bytes,
+    verify_release_metadata, write_trust_roots,
 };
 use sha2::{Digest, Sha256};
 
@@ -105,14 +144,13 @@ fn stage_then_commit_advances_floor_and_selector() {
         stage_verified_release(&root, &verified, &[("hya".to_string(), bytes.to_vec())],).is_err()
     );
 
-    journal_prepare(&root, 1, 0).unwrap();
-    let selector = commit_activation(&root, 1).unwrap();
+    let selector = activate(&root, 1, 0);
     assert_eq!(selector.current_sequence, 1);
     assert_eq!(selector.accepted_floor, 1);
     assert_eq!(read_selector(&root).unwrap().current_sequence, 1);
 
     // Anti-rollback: cannot commit lower/equal sequence after floor advanced.
-    assert!(commit_activation(&root, 1).is_err());
+    assert!(commit_existing(&root, 1).is_err());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -121,17 +159,16 @@ fn stage_then_commit_advances_floor_and_selector() {
 fn recover_prepare_without_selector_keeps_previous_generation() {
     let root = tempdir("recover-keep");
     verify_and_stage(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
 
     verify_and_stage(&root, 2, 1, b"v2", "hya");
-    journal_prepare(&root, 2, 1).unwrap();
+    prepare(&root, 2, 1);
     // Crash before selector rename: recover must keep generation 1 and floor 1.
     let recovered = recover_activation(&root).unwrap();
     assert_eq!(recovered.current_sequence, 1);
     assert_eq!(recovered.accepted_floor, 1);
     // Floor never decrements on aborted prepare.
-    assert!(commit_activation(&root, 1).is_err());
+    assert!(commit_existing(&root, 1).is_err());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -140,11 +177,10 @@ fn recover_prepare_without_selector_keeps_previous_generation() {
 fn recover_prepare_after_selector_switch_finishes_commit() {
     let root = tempdir("recover-finish");
     verify_and_stage(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
 
     verify_and_stage(&root, 2, 1, b"v2", "hya");
-    journal_prepare(&root, 2, 1).unwrap();
+    prepare(&root, 2, 1);
     // Simulate selector rename without floor/journal commit.
     std::fs::write(root.join("current"), "2\n").unwrap();
     // Floor still at 1.
@@ -162,8 +198,7 @@ fn recover_prepare_after_selector_switch_finishes_commit() {
 fn recover_ignores_stale_selector_temp_file() {
     let root = tempdir("recover-tmp");
     verify_and_stage(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
     // Crash left a temp selector behind; recovery must not use it as authority.
     std::fs::write(root.join("current.tmp"), "99\n").unwrap();
     let recovered = recover_activation(&root).unwrap();
@@ -240,17 +275,15 @@ fn artifact_digest_mismatch_is_rejected() {
 fn higher_sequence_recovery_release_may_advance_after_floor() {
     let root = tempdir("recovery-seq");
     verify_and_stage(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
 
     // Authorized recovery is just a higher sequence (floor never decreases).
     verify_and_stage(&root, 3, 1, b"recovery-bits", "hya");
-    journal_prepare(&root, 3, 1).unwrap();
-    let selector = commit_activation(&root, 3).unwrap();
+    let selector = activate(&root, 3, 1);
     assert_eq!(selector.current_sequence, 3);
     assert_eq!(selector.accepted_floor, 3);
     // Cannot go back to sequence 2 after floor is 3.
-    assert!(commit_activation(&root, 2).is_err());
+    assert!(commit_existing(&root, 2).is_err());
 
     std::fs::remove_dir_all(&root).ok();
 }
@@ -271,8 +304,7 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
 
     // Seed floor 1 so sequence 2 is a real advance.
     verify_and_stage(&root, 1, 0, b"v1", "hya");
-    journal_prepare(&root, 1, 0).unwrap();
-    commit_activation(&root, 1).unwrap();
+    activate(&root, 1, 0);
 
     let staged_only = apply_update(ApplyOptions {
         updater_root: &root,
@@ -283,7 +315,7 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
         now_unix: 100,
         smoke_command: None,
         smoke_args: &[],
-        owner_authorized: false,
+        activation: None,
     })
     .unwrap();
     assert!(staged_only.activated.is_none());
@@ -301,13 +333,14 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
             now_unix: 100,
             smoke_command: None,
             smoke_args: &[],
-            owner_authorized: true,
+            activation: None,
         })
         .is_err()
     );
 
-    // Discard uncommitted candidate and re-apply with activation.
+    // Discard uncommitted candidate and re-apply with explicit owner authorization.
     discard_staged_release(&root, 2).unwrap();
+    let authorization = authorization(&root, 2);
     let activated = apply_update(ApplyOptions {
         updater_root: &root,
         metadata: &metadata,
@@ -317,7 +350,7 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
         now_unix: 100,
         smoke_command: None,
         smoke_args: &[],
-        owner_authorized: true,
+        activation: Some(&authorization),
     })
     .unwrap();
     assert_eq!(activated.activated.unwrap().current_sequence, 2);
@@ -335,4 +368,73 @@ fn remote_package_scheme_is_rejected() {
     let err = hya_updater::resolve_package_source("https://example.com/pkg")
         .expect_err("network schemes stay outside TCB");
     assert!(matches!(err, UpdaterError::InvalidMetadata(_)));
+}
+
+/// `hya update authorize` is the owner's CLI for `UpdaterOwner::authorize`:
+/// it binds the candidate sequence to the active generation, writes the
+/// capability file `apply --authorization` consumes, and refuses to run
+/// unattended without `--yes`.
+#[test]
+fn cli_authorize_writes_a_capability_that_activates_the_candidate() {
+    use std::io::IsTerminal as _;
+    let root = tempdir("cli-authorize");
+    let package = tempdir("cli-authorize-package");
+    let signing = SigningKey::from_bytes(&[5u8; 32]);
+    let bytes = b"payload-v2";
+    std::fs::write(package.join("hya"), bytes).unwrap();
+    let (metadata, trust) = signed_release(&signing, 2, "hya", bytes);
+    write_trust_roots(&layout(&root).trust_roots, &[trust]).unwrap();
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
+    activate(&root, 1, 0);
+    let generation = read_selector(&root).unwrap().generation;
+    let capability = package.join("activation.authorization.json");
+
+    if !std::io::stdin().is_terminal() {
+        let refused = hya_updater::cli::run(
+            hya_updater::cli::UpdateCommand::Authorize {
+                root: root.clone(),
+                sequence: 2,
+                out: capability.clone(),
+                yes: false,
+            },
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(refused.contains("--yes"), "{refused}");
+        assert!(!capability.exists());
+    }
+
+    let mut out = Vec::new();
+    hya_updater::cli::run(
+        hya_updater::cli::UpdateCommand::Authorize {
+            root: root.clone(),
+            sequence: 2,
+            out: capability.clone(),
+            yes: true,
+        },
+        &mut out,
+    )
+    .unwrap();
+    let printed = String::from_utf8(out).unwrap();
+    assert!(
+        printed.contains(&format!("authorized sequence=2 generation={generation}")),
+        "{printed}"
+    );
+    let authorization: hya_updater::ActivationAuthorization =
+        serde_json::from_str(&std::fs::read_to_string(&capability).unwrap()).unwrap();
+    let activated = apply_update(ApplyOptions {
+        updater_root: &root,
+        metadata: &metadata,
+        package_source: package.to_str().unwrap(),
+        trust_roots: None,
+        host_platform: "x86_64-unknown-linux-gnu",
+        now_unix: 100,
+        smoke_command: None,
+        smoke_args: &[],
+        activation: Some(&authorization),
+    })
+    .unwrap();
+    assert_eq!(activated.activated.unwrap().current_sequence, 2);
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&package).ok();
 }

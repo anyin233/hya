@@ -253,6 +253,10 @@ pub(crate) async fn compose(
     let mut watched = Vec::new();
     for bundle in bundles.bundles() {
         let id = &bundle.identity().id;
+        let attribute = |error: CoreError| CoreError::BundleRuntime {
+            bundle_id: id.clone(),
+            source: Box::new(error),
+        };
         let process = prepared_catalog_refs
             .iter()
             .find_map(|catalog| catalog.bundle_process(id));
@@ -269,7 +273,9 @@ pub(crate) async fn compose(
         let apis = owner.map_or(&[][..], |catalog| catalog.bundle_apis(id));
         let permission_modes = owner.map_or(&[][..], |catalog| catalog.bundle_permission_modes(id));
         let location = resolver.location(id).map_err(|error| {
-            CoreError::Invalid(format!("resolve bundle `{id}` configuration: {error}"))
+            attribute(CoreError::Invalid(format!(
+                "resolve the bundle configuration: {error}"
+            )))
         })?;
         let config = crate::bundle_runtime::BundleRuntimeConfig::capture(bundle, process, location);
         if config.watched() {
@@ -282,7 +288,8 @@ pub(crate) async fn compose(
             apis,
             permission_modes,
             &config,
-        )?;
+        )
+        .map_err(attribute)?;
         let key = (id.clone(), fingerprint);
         let source = match cache.get(&key) {
             Some(source) => source,
@@ -298,7 +305,8 @@ pub(crate) async fn compose(
                     },
                     &config,
                 )
-                .await?;
+                .await
+                .map_err(attribute)?;
                 debug_assert_eq!(prepared.fingerprint, fingerprint);
                 prepared.source
             }

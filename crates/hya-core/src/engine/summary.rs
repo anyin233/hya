@@ -117,6 +117,7 @@ pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, 
                 parts: text_parts(&message.parts),
                 finish: message.finish,
                 tokens: None,
+                last_round: None,
             },
             Role::System => Message::System {
                 id: message.id,

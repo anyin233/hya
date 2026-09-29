@@ -6,6 +6,13 @@
 //! curated `StreamFrame`s into a transcript view. gRPC clients can use
 //! `hya-api`'s generated clients directly against the same contract.
 //!
+//! Streams are deliberately single-attempt: `stream_session` returns one SSE
+//! connection and does not retry or select a successor server. Consumers MUST
+//! reconnect after transport closure or `serverStopping`; after reconnect (or
+//! `resync`) they MUST re-read the projection or replay durable events from
+//! their last applied sequence. Live `seq == 0` deltas can be lost during a
+//! process restart and are not replayed; durable round parts are the authority.
+//!
 //! Scoped calls name the client's directory in the request's `directory`
 //! field (a query parameter on GET/DELETE, a body field otherwise); the
 //! server refuses the removed `x-hya-directory` header.
@@ -554,10 +561,14 @@ impl V1Sdk {
         Ok(applied.applied)
     }
 
-    /// `GET /v1/sessions/{session}/events/stream` — the live SSE stream.
+    /// `GET /v1/sessions/{session}/events/stream` — one live SSE attempt.
     ///
     /// The returned stream yields typed frames; a `resync` frame tells the
-    /// consumer to re-replay from its `lastSeq`.
+    /// consumer to replay from its last durable sequence. This method does not
+    /// retry, reconnect, or bootstrap a successor process: callers own that
+    /// policy. On `serverStopping` or an unexpected close, reconnect and
+    /// re-read/replay durable state. In-flight `seq == 0` provider deltas may
+    /// be absent after a process restart; durable parts/transcript reads win.
     ///
     /// # Errors
     /// Returns [`SdkError`] on transport failure.

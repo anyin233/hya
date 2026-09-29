@@ -65,9 +65,12 @@ pub enum UpdaterError {
     /// Candidate layout would place or replace TCB control files incorrectly.
     #[error("updater ownership layout violation: {0}")]
     OwnershipViolation(String),
-    /// Activation was requested without `owner_authorized` / CLI owner gate.
-    #[error("activation requires owner authorization")]
-    ActivationNotAuthorized,
+    /// Updater-root ownership could not be acquired.
+    #[error("updater root lease unavailable: {0}")]
+    LeaseUnavailable(String),
+    /// Owner token or generation no longer matches durable activation state.
+    #[error("stale activation owner generation")]
+    StaleOwnerGeneration,
     /// Malformed metadata, bad paths, I/O, or other non-crypto validation failure.
     #[error("invalid release metadata: {0}")]
     InvalidMetadata(String),

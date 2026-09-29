@@ -1,69 +1,74 @@
-//! Opt-in apply pipeline: recover → verify → fetch → stage → smoke → (optional) activate.
-//!
-//! Activation never runs unless `owner_authorized` is true. That flag is the
-//! product-side stand-in for the plan's owner production-activation gate; it is
-//! not granted by a valid signature alone.
-
-use std::fs;
-use std::path::Path;
-
+//! Independent verify, stage, smoke, and owner-authorized activation pipeline.
 use crate::error::UpdaterError;
 use crate::fetch::{fetch_artifacts_from_dir, resolve_package_source};
 use crate::journal::{
-    ActivationSelector, commit_activation, journal_prepare, read_selector, recover_activation,
+    ActivationSelector, commit_activation_owned, journal_prepare_owned, read_selector,
+    recover_activation_locked,
 };
 use crate::layout::{assert_no_session_or_secret_reads, assert_tcb_outside_candidate, layout};
+use crate::lease::ActivationAuthorization;
 use crate::metadata::{AcceptedFloor, ReleaseMetadata, TrustRoot, VerifiedRelease};
 use crate::smoke::smoke_staged_release;
 use crate::stage::{StagedRelease, stage_verified_release};
 use crate::trust::load_trust_roots;
 use crate::verify::verify_release_metadata;
+use std::fs;
+use std::path::Path;
 
-/// Result of a staged (and optionally activated) apply.
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Result of verification, staging, and optional activation.
 pub struct ApplyResult {
-    /// Release intent that passed signature and policy checks.
+    /// Verified signed release metadata.
     pub verified: VerifiedRelease,
-    /// Immutable staged generation under `releases/<sequence>/`.
+    /// Filesystem staging result.
     pub staged: StagedRelease,
-    /// New selector after owner-authorized activation; `None` if only staged.
+    /// Activated selector, or `None` for stage-only.
     pub activated: Option<ActivationSelector>,
-    /// Selector state after crash recovery, before this apply mutated anything.
+    /// Selector recovered before applying this release.
     pub recovered_before: ActivationSelector,
 }
 
-/// Apply options for the independent updater pipeline.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
+/// Inputs to the updater verification and staging pipeline.
 pub struct ApplyOptions<'a> {
-    /// Updater TCB root that owns trust roots, floor, journal, and releases.
+    /// Updater trust-boundary root.
     pub updater_root: &'a Path,
-    /// Signed release metadata to verify and apply.
+    /// Signed release metadata.
     pub metadata: &'a ReleaseMetadata,
-    /// Local package directory or `file://` path holding artifacts.
+    /// Local package directory or `file://` source.
     pub package_source: &'a str,
-    /// Explicit trust roots; when `None`, load `updater_root/trust_roots.json`.
+    /// Optional external trust roots.
     pub trust_roots: Option<&'a [TrustRoot]>,
-    /// Host platform string compared to metadata `platform`.
+    /// Platform string required by the metadata.
     pub host_platform: &'a str,
-    /// Unix seconds used for not_before / not_after checks.
+    /// Verification time in Unix seconds.
     pub now_unix: i64,
-    /// Relative smoke command under the staged release, if any.
+    /// Relative smoke command, when configured.
     pub smoke_command: Option<&'a str>,
-    /// Arguments passed to the smoke command after the program path.
+    /// Arguments passed to the smoke command.
     pub smoke_args: &'a [&'a str],
-    /// Must be true to journal prepare + commit selector/floor.
-    pub owner_authorized: bool,
+    /// Capability issued by the trusted owner. `None` always means stage-only.
+    pub activation: Option<&'a ActivationAuthorization>,
 }
 
-/// Recover interrupted state, verify, fetch, stage, smoke, and optionally activate.
+/// Verify, stage, smoke-test, and optionally activate one signed release.
 pub fn apply_update(options: ApplyOptions<'_>) -> Result<ApplyResult, UpdaterError> {
     let root = options.updater_root;
     assert_no_session_or_secret_reads(root)?;
-    let recovered_before = recover_activation(root)?;
+    let _lease = crate::lease::acquire(root)?;
+    let recovered_before = recover_activation_locked(root)?;
+    if let Some(auth) = options.activation {
+        let issued = crate::lease::read_issuance(root)?;
+        if issued.as_ref() != Some(auth)
+            || auth.candidate_sequence() != options.metadata.sequence
+            || auth.expected_generation() != recovered_before.generation
+        {
+            return Err(UpdaterError::StaleOwnerGeneration);
+        }
+    }
     let floor = AcceptedFloor {
         sequence: recovered_before.accepted_floor,
     };
-
     let roots_owned;
     let roots: &[TrustRoot] = if let Some(roots) = options.trust_roots {
         roots
@@ -71,7 +76,6 @@ pub fn apply_update(options: ApplyOptions<'_>) -> Result<ApplyResult, UpdaterErr
         roots_owned = load_trust_roots(&layout(root).trust_roots)?;
         &roots_owned
     };
-
     let verified = verify_release_metadata(
         options.metadata,
         roots,
@@ -80,28 +84,36 @@ pub fn apply_update(options: ApplyOptions<'_>) -> Result<ApplyResult, UpdaterErr
         options.host_platform,
     )?;
     assert_tcb_outside_candidate(root, verified.sequence)?;
-
     let package_dir = resolve_package_source(options.package_source)?;
-    let fetched = fetch_artifacts_from_dir(&package_dir, &verified)?;
-    let artifacts = fetched
+    let artifacts = fetch_artifacts_from_dir(&package_dir, &verified)?
         .into_iter()
         .map(|item| (item.name, item.bytes))
         .collect::<Vec<_>>();
     let staged = stage_verified_release(root, &verified, &artifacts)?;
-
     if let Some(command) = options.smoke_command {
         smoke_staged_release(&staged, command, options.smoke_args)?;
     }
-
-    let activated = if options.owner_authorized {
-        let previous = read_selector(root)?.current_sequence;
-        journal_prepare(root, verified.sequence, previous)?;
-        Some(commit_activation(root, verified.sequence)?)
+    let activated = if let Some(auth) = options.activation {
+        let previous = read_selector(root)?;
+        if previous.generation != auth.expected_generation() {
+            return Err(UpdaterError::StaleOwnerGeneration);
+        }
+        journal_prepare_owned(
+            root,
+            verified.sequence,
+            previous.current_sequence,
+            auth.owner_token(),
+            auth.expected_generation(),
+        )?;
+        Some(commit_activation_owned(
+            root,
+            verified.sequence,
+            auth.owner_token(),
+            auth.expected_generation(),
+        )?)
     } else {
-        // Staged-only path: candidate is immutable and floor does not advance.
         None
     };
-
     Ok(ApplyResult {
         verified,
         staged,
@@ -110,15 +122,13 @@ pub fn apply_update(options: ApplyOptions<'_>) -> Result<ApplyResult, UpdaterErr
     })
 }
 
-/// Discard a staged candidate that was never committed (failed smoke / opt-out).
-///
-/// Refuses to remove the currently selected generation or any sequence at or
-/// below the accepted floor.
+/// Remove an unaccepted candidate under the same root mutation lease as activation.
 pub fn discard_staged_release(root: &Path, sequence: u64) -> Result<(), UpdaterError> {
+    let _lease = crate::lease::acquire(root)?;
     let selector = read_selector(root)?;
     if sequence == 0 {
         return Err(UpdaterError::InvalidMetadata(
-            "cannot discard sequence 0".to_string(),
+            "cannot discard sequence 0".into(),
         ));
     }
     if sequence == selector.current_sequence {
@@ -140,6 +150,5 @@ pub fn discard_staged_release(root: &Path, sequence: u64) -> Result<(), UpdaterE
     }
     fs::remove_dir_all(&dir).map_err(|error| {
         UpdaterError::InvalidMetadata(format!("discard staged release {}: {error}", dir.display()))
-    })?;
-    Ok(())
+    })
 }

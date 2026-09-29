@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
@@ -21,7 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 mod output_limit_tests;
 mod stream;
 
-use crate::anthropic::AnthropicMessagesProtocol;
+use crate::anthropic::{AnthropicMessagesProtocol, add_prompt_cache_breakpoints};
 use crate::google::GoogleProtocol;
 use crate::openai::{
     GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items,
@@ -33,7 +33,7 @@ use crate::{
 };
 
 const MAX_REQUEST_ATTEMPTS: usize = 3;
-const BASE_RETRY_DELAY: Duration = Duration::from_millis(100);
+const BASE_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -199,6 +199,8 @@ enum AuthStyle {
 /// Owns SSE framing; the protocol decoder only sees data payloads. Redirects are
 /// disabled so auth headers are never followed cross-origin.
 pub struct HttpProvider {
+    /// Whether Anthropic prompt-cache breakpoints are enabled on this route.
+    prompt_caching: bool,
     id: String,
     protocol: Arc<dyn Protocol>,
     core: RouteCore,
@@ -335,17 +337,27 @@ impl HttpProvider {
             model_sources: BTreeMap::new(),
             kind,
             catalog_source: ModelCatalogSource::Configured,
+            prompt_caching: kind == ProviderKind::Anthropic,
             caps: Capabilities {
                 streaming_tool_calls: true,
                 parallel_tool_calls: true,
                 usage_reporting: true,
                 reasoning_request: true,
+                prompt_caching: kind == ProviderKind::Anthropic,
                 max_context: 200_000,
                 max_output: 0,
                 ..Capabilities::default()
             },
             stream_idle_timeout: STREAM_IDLE_TIMEOUT,
         })
+    }
+
+    /// Enable or disable Anthropic prompt-cache breakpoints for this route.
+    #[must_use]
+    pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
+        self.prompt_caching = enabled && self.kind == ProviderKind::Anthropic;
+        self.caps.prompt_caching = self.prompt_caching;
+        self
     }
 
     /// Switch a ChatGPT Codex provider to OAuth session auth (account id header).
@@ -677,6 +689,7 @@ impl RouteCore {
         max_attempts: usize,
     ) -> Result<(reqwest::Response, usize), ProviderError> {
         let max_attempts = max_attempts.max(1);
+        let started = Instant::now();
         // Auth-recovery level: the forced-refresh retry fires at most once per
         // request and always occupies one of the attempt slots below — it never
         // extends the budget, so broken credentials cannot degrade into a
@@ -738,6 +751,28 @@ impl RouteCore {
                 )),
             };
             if attempt + 1 == max_attempts || !error.is_retryable_before_stream() {
+                let attempts = attempt + 1;
+                if attempts > 1 && error.is_retryable_before_stream() {
+                    let detail = format!(
+                        "after {attempts} attempts over {:.1}s",
+                        started.elapsed().as_secs_f64()
+                    );
+                    return Err(match error {
+                        ProviderError::HttpStatus {
+                            status,
+                            message,
+                            retry_after,
+                        } => ProviderError::HttpStatus {
+                            status,
+                            message: format!("{detail}: {message}"),
+                            retry_after,
+                        },
+                        ProviderError::Transport(message) => {
+                            ProviderError::Transport(format!("{detail}: {message}"))
+                        }
+                        other => other,
+                    });
+                }
                 return Err(error);
             }
             sleep(retry_delay(&error, attempt, &self.retry)).await;
@@ -831,7 +866,10 @@ impl HttpProvider {
         if let Some(limit) = output_limit {
             req.max_output_tokens = Some(req.max_output_tokens.map_or(limit, |max| max.min(limit)));
         }
-        let body = self.protocol.encode_with_output_limit(&req, output_limit)?;
+        let mut body = self.protocol.encode_with_output_limit(&req, output_limit)?;
+        if self.prompt_caching {
+            add_prompt_cache_breakpoints(&mut body);
+        }
         Ok((req, body))
     }
 
@@ -1061,6 +1099,17 @@ impl Provider for HttpProvider {
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         let served = self.served_model_name(model)?;
         Some(self.caps_for_model(served))
+    }
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        match self.kind {
+            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
+                crate::ReasoningReplayPolicy::ProviderData
+            }
+            ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
+            ProviderKind::OpenAiCompatible | ProviderKind::Google => {
+                crate::ReasoningReplayPolicy::None
+            }
+        }
     }
 
     fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {

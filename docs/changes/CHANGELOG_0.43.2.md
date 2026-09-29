@@ -1,11 +1,7 @@
 # 0.43.2
 
-## Continue DeepSeek tool turns
+## Compaction preserves in-flight turns
 
-- OpenAI Chat streaming preserves reasoning content and sends it back with
-  assistant history after tool calls, as required by DeepSeek thinking mode.
-- DeepSeek assistant history includes an empty reasoning field when a model
-  produced no reasoning chunks. Durable replay keeps assistant text before
-  its tool calls so the follow-up request retains the original order.
-- The TUI and WebUI package versions now match the 0.43.2 backend, so a fresh
-  frontend no longer reports a version mismatch at connection.
+- Compaction markers now sit before the retained tail in the event-sourced projection, so a mid-turn compaction keeps the active assistant's prior tool calls and results in later model requests instead of restarting the task.
+- The compaction ladder excludes the marker and active assistant tail from the foldable range, preventing repeated compaction of the same boundary.
+- Added regression coverage for marker placement and post-compaction request reconstruction; the compaction reference documents the boundary contract.

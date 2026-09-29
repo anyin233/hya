@@ -96,7 +96,16 @@ async fn nested_spawn() -> NestedSpawn {
                 .members
                 .iter()
                 .any(|member| member.child == Some(grandchild));
-            if root_has_child && child_has_grandchild {
+            // Both residents must also have parked: the roster assertions
+            // compare separate projection reads, so a turn still running
+            // would flip `busy` → `idle` between them.
+            let settled = root_projection.team.roster.len() >= 2
+                && root_projection
+                    .team
+                    .roster
+                    .values()
+                    .all(|entry| entry.status == hya_proto::RosterStatus::Idle);
+            if root_has_child && child_has_grandchild && settled {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

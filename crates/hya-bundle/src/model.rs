@@ -272,6 +272,17 @@ impl PreparedResource {
     }
 }
 
+/// A validated bundle self-check declaration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCheck {
+    /// Argv to execute without a shell.
+    pub command: Vec<String>,
+    /// Maximum runtime in seconds.
+    pub timeout_secs: u64,
+}
+
+/// Fully prepared singular AgentBundle: exactly one Agent plus its resources.
 /// Fully prepared singular AgentBundle: exactly one Agent plus its resources.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -280,6 +291,9 @@ pub struct PreparedAgentBundle {
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional source self-check.
+    pub check: Option<PreparedCheck>,
     /// Provider-facing namespace (declared or identity-derived). Skipped when
     /// absent so prepared documents written before namespaces stay decodable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -310,6 +324,9 @@ pub struct PreparedAgentSetBundle {
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional source self-check.
+    pub check: Option<PreparedCheck>,
     /// Provider-facing namespace (declared or identity-derived).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
@@ -340,6 +357,9 @@ pub struct PreparedPluginBundle {
     pub format_version: u32,
     /// Bundle identity.
     pub identity: BundleIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional source self-check.
+    pub check: Option<PreparedCheck>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Provider namespace.
     pub namespace: Option<String>,
@@ -381,6 +401,9 @@ pub struct PreparedWorkflowBundle {
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional source self-check.
+    pub check: Option<PreparedCheck>,
     /// Provider-facing namespace (declared or identity-derived). Skipped when
     /// absent so prepared documents written before namespaces stay decodable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -430,6 +453,16 @@ impl PreparedInstallableBundle {
             Self::Plugin(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
         };
         declared.unwrap_or_else(|| id.rsplit('/').next().unwrap_or_default())
+    }
+    /// Self-check declaration, if present.
+    #[must_use]
+    pub fn check(&self) -> Option<&PreparedCheck> {
+        match self {
+            Self::Agent(bundle) => bundle.check.as_ref(),
+            Self::AgentSet(bundle) => bundle.check.as_ref(),
+            Self::Workflow(bundle) => bundle.check.as_ref(),
+            Self::Plugin(bundle) => bundle.check.as_ref(),
+        }
     }
 }
 

@@ -45,6 +45,10 @@ control handle.
 |---|---|---|---|---|
 | `ListAgentModels` | `GET /v1/agent-models` | `hya.v1.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
 | `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
+| `SaveAgentModelConfiguration` | `PUT /v1/agent-models/{agent_id}/configuration` | `hya.v1.AgentModels.SaveAgentModelConfiguration` | `SaveAgentModelConfigurationRequest` | `AgentModelState` |
+| `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `hya.v1.AgentModels.ListModelEffortPreferences` | `ListModelEffortPreferencesRequest` | `ListModelEffortPreferencesResponse` |
+| `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `hya.v1.AgentModels.SetModelEffortPreference` | `SetModelEffortPreferenceRequest` | `ModelEffortPreference` |
+| `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `hya.v1.AgentModels.SetAgentEffort` | `SetAgentEffortRequest` | `AgentEffort` |
 
 ### `AgentModels.ListAgentModels`
 
@@ -55,6 +59,24 @@ Effective model state for every catalog agent under one binding.
 
 Set or clear one agent's remembered preference; returns the
 post-commit state.
+
+
+### `AgentModels.SaveAgentModelConfiguration`
+
+Set or clear the model in the owning user configuration file. Keeps a
+distinct session override and applies the saved value live.
+
+
+### `AgentModels.SetModelEffortPreference`
+
+Empty effort clears the preference. Emits a live `catalogUpdated` frame
+(sessions on the model may now resolve another `effective_effort`).
+
+### `AgentModels.SetAgentEffort`
+
+Set or clear (empty `effort`) one agent's default thinking effort,
+independent of its model. Applies to the agent's next request; a `task`
+spawn's own `effort` still wins. Emits a live `catalogUpdated` frame.
 
 
 ## Service `Auth`
@@ -156,6 +178,7 @@ rebuilds that provider's route and the catalog, and emits
 | `GetProvider` | `GET /v1/providers/{provider_id}` | `hya.v1.Catalog.GetProvider` | `GetProviderRequest` | `ProviderInfo` |
 | `UpsertProvider` | `PUT /v1/providers/{provider_id}` | `hya.v1.Catalog.UpsertProvider` | `UpsertProviderRequest` | `ProviderUpdate` |
 | `RefreshProvider` | `POST /v1/providers/{provider_id}/refresh` | `hya.v1.Catalog.RefreshProvider` | `RefreshProviderRequest` | `ProviderUpdate` |
+| `RefreshBundles` | `POST /v1/bundles:refresh` | `hya.v1.Catalog.RefreshBundles` | `RefreshBundlesRequest` | `RefreshBundlesResponse` |
 | `SetProviderModel` | `PUT /v1/providers/{provider_id}/models` | `hya.v1.Catalog.SetProviderModel` | `SetProviderModelRequest` | `ProviderUpdate` |
 | `RemoveProviderModel` | `DELETE /v1/providers/{provider_id}/models` | `hya.v1.Catalog.RemoveProviderModel` | `RemoveProviderModelRequest` | `ProviderUpdate` |
 | `TestProviderModel` | `POST /v1/providers/{provider_id}/test` | `hya.v1.Catalog.TestProviderModel` | `TestProviderModelRequest` | `TestProviderModelResponse` |
@@ -196,6 +219,14 @@ reports it.
 
 Re-read the provider's config entry and key, fetch its remote model
 list into the model cache, and apply it live.
+
+
+### `Catalog.RefreshBundles`
+
+Refresh the installed-bundle catalog and the directory's Project
+overlay now instead of at the next bind, and report what is published.
+A generation that fails to prepare (for example a bundle process that
+does not start) keeps the previous one and is reported in `errors`.
 
 
 ### `Catalog.SetProviderModel`
@@ -752,10 +783,7 @@ permission mode, and the archived flag of a root session.
 
 ### `Session.DeleteSession`
 
-Delete a session and its event log. If the session has spawned subagents, this
-also deletes every descendant session in the session tree, including each
-descendant's event log and session-scoped persisted state. Unrelated sessions
-are unchanged.
+Delete a session and its event log.
 
 
 ### `Session.ForkSession`
@@ -881,6 +909,50 @@ Reset a worktree to a clean state at its branch head.
 
 ## Messages
 
+### `SetAgentEffortRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` (1) | `string` | Stable catalog agent id. |
+| `effort` (2) | `string` | Effort label (`low`, `high`, `none`, …); empty clears the choice. |
+| `directory` (3) | `string` | Directory scope whose catalog must know `agent_id` (its Project's bundle agents included); empty: the global catalog. |
+
+### `AgentEffort`
+
+One agent's saved runtime effort choice (empty when cleared).
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` (1) | `string` |  |
+| `effort` (2) | `string` |  |
+
+### `ModelEffortPreference`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` |  |
+| `model_id` (2) | `string` |  |
+| `effort` (3) | `string` |  |
+| `updated_at` (4) | `int64` |  |
+
+### `ListModelEffortPreferencesResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `preferences` (1) | `repeated ModelEffortPreference` |  |
+
+### `SetModelEffortPreferenceRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` |  |
+| `model_id` (2) | `string` |  |
+| `effort` (3) | `string` |  |
+
 ### `AgentModelSelection`
 
 A concrete provider/model selection.
@@ -908,6 +980,9 @@ Effective model state for one catalog agent.
 | `source` (10) | `AgentModelSource` | Which tier resolved the effective model. |
 | `configuration` (11) | `AgentModelSelection` | Model explicitly stored in the owning user configuration file. |
 | `session_override` (12) | `AgentModelSelection` | Active root-session override captured for this agent. |
+| `effort` (13) | `string` | The agent's default thinking effort (empty: its model's default). |
+| `effort_source` (14) | `AgentEffortSource` | Which layer chose `effort`. |
+| `configuration_path` (15) | `string` | Owning configuration file path, empty when no configuration exists. |
 
 ### `ListAgentModelsRequest`
 
@@ -933,6 +1008,16 @@ Effective model state for one catalog agent.
 | `session` (2) | `string` | Bind against this session's runtime when non-empty. |
 | `agent_id` (3) | `string` | Stable catalog agent id whose preference is being set. |
 | `preference` (4) | `optional AgentModelSelection` | New remembered preference; absent/null clears it. |
+
+### `SaveAgentModelConfigurationRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope for the agent binding (absolute). Optional: when both it and `session` are empty the global (project-less) binding is used. |
+| `session` (2) | `string` | Bind against this session's runtime when non-empty. |
+| `agent_id` (3) | `string` | Stable catalog agent id whose configured model is being written. |
+| `model` (4) | `optional AgentModelSelection` | New configured model; absent/null removes the agent's `model` leaf. |
 
 ### `ListProviderAuthResponse`
 
@@ -1146,6 +1231,8 @@ One selectable model.
 | `output_limit` (8) | `uint64` | Maximum output tokens from the model's metadata (config `limit.output`, else the remote model list); 0 (omitted) when unknown. |
 | `source` (9) | `string` | Where the row comes from: `remote` (the provider's remote model list, via the model cache), `config` (only a `models:` entry in `config.yaml`), `override` (both; config fields win field by field), or `offline` (the built-in `hya/offline` row). |
 | `image_input` (10) | `optional bool` | Whether the model accepts image input (config `modalities.input` contains `image`); unset when unknown. Prompt turns with attachments are refused only when this is `false`. |
+| `reasoning_variants` (11) | `repeated string` | Effort labels accepted by this model, in provider order. Empty when unknown or unsupported. |
+| `reasoning_default` (12) | `optional string` | Explicit configured effort default. Empty when no default is selected. |
 
 ### `ListModelsResponse`
 
@@ -1224,6 +1311,41 @@ Provider detail with its model rows.
 |---|---|---|
 | `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
 | `provider_id` (2) | `string` | Configured provider id. |
+
+### `RefreshBundlesRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope: its Project's bundles are refreshed too; empty: global. |
+
+### `RefreshBundlesResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `generation` (1) | `uint64` | Runtime configuration generation now bound for the scope. |
+| `bundles` (2) | `repeated RefreshedBundle` | Every bundle published for the scope after the refresh. |
+| `errors` (3) | `repeated BundleRefreshError` | Refresh failures; each kept the previous generation published. |
+| `scope` (4) | `string` | `global`, `directory` (not inside a registered Project: no project bundles load), or `project`. |
+
+### `RefreshedBundle`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` |  |
+| `version` (2) | `string` |  |
+| `prepared_digest` (3) | `string` | Prepared bundle digest (`hya bundle info` shows the same value). |
+| `scope` (4) | `string` | `user` (installed registry, first-party included) or `project`. |
+
+### `BundleRefreshError`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle_id` (1) | `string` | Bundle the failure names; empty when the refresh cannot attribute it. |
+| `message` (2) | `string` |  |
 
 ### `SetProviderModelRequest`
 
@@ -1620,8 +1742,8 @@ A part was appended to a message.
 
 ### `PartAppended`
 
-Streaming delta appended to a part. Assistant text deltas are live-only
-(`seq = 0`); reasoning and legacy text deltas are durable.
+Streaming delta appended to a part. Assistant text and reasoning deltas are
+live-only (`seq = 0`); legacy durable deltas remain replay-compatible.
 
 | Field | Type | Description |
 |---|---|---|
@@ -2727,6 +2849,8 @@ Projection summary of one session.
 | `ephemeral` (19) | `bool` | Whether this root session was created `ephemeral` and is still unused (no message, title, archive, or fork from it yet): the server deletes it once no client has a `StreamSessionEvents` stream open on it. |
 | `project_id` (20) | `string` | Project the session belongs to (a subagent session carries its root's); empty for a temporary session or one created before Projects existed. The id may name a Project that was deleted since. |
 | `kind` (21) | `SessionKind` | Kind of the session: `SESSION_KIND_PROJECT` or `SESSION_KIND_TEMPORARY`. |
+| `effective_effort` (22) | `string` | Effective reasoning effort selected for the current model. Empty means no effort. |
+| `effort_source` (23) | `EffortSource` | Precedence layer that selected effective_effort. |
 
 ### `ForkSource`
 
@@ -3205,6 +3329,18 @@ One git worktree.
 
 ## Enums
 
+### `AgentEffortSource`
+
+Which layer chose an agent's default thinking effort.
+
+| Value | Number | Description |
+|---|---|---|
+| `AGENT_EFFORT_SOURCE_UNSPECIFIED` | 0 | Unset sentinel. |
+| `AGENT_EFFORT_SOURCE_PREFERENCE` | 1 | Set by the user at runtime (`SetAgentEffort`). |
+| `AGENT_EFFORT_SOURCE_CONFIGURED` | 2 | `agents.<id>.reasoning` in the user's configuration file. |
+| `AGENT_EFFORT_SOURCE_AUTHORED` | 3 | The bundle agent's authored `model_policy.reasoning`. |
+| `AGENT_EFFORT_SOURCE_NONE` | 4 | No agent-level effort: the model's default applies. |
+
 ### `AgentModelSource`
 
 Which tier resolved an agent's effective base model.
@@ -3326,6 +3462,7 @@ top of FinishReason; unset when the model ended the message itself.
 | `FINISH_CAUSE_PROVIDER_ERROR` | 5 | The model provider failed the turn. |
 | `FINISH_CAUSE_OTHER` | 6 | A cause this server build does not name. |
 | `FINISH_CAUSE_ARCHIVED` | 7 | The member's parent archived it (`archive` tool) while it was mid-turn. |
+| `FINISH_CAUSE_HANDOFF` | 8 | The open turn was durably checkpointed for successor restart. |
 
 ### `Role`
 
@@ -3401,6 +3538,20 @@ The host connector's state.
 | `RELAY_STATE_CONNECTING` | 2 | Opening the control stream or registering the room. |
 | `RELAY_STATE_CONNECTED` | 3 | The room is registered: clients holding the link can connect. |
 | `RELAY_STATE_BACKOFF` | 4 | The last attempt failed; waiting before the next (`last_error`). |
+
+### `EffortSource`
+
+Source of a session's effective reasoning effort.
+
+| Value | Number | Description |
+|---|---|---|
+| `EFFORT_SOURCE_UNSPECIFIED` | 0 |  |
+| `EFFORT_SOURCE_SUFFIX` | 1 |  |
+| `EFFORT_SOURCE_AGENT` | 2 |  |
+| `EFFORT_SOURCE_PREFERENCE` | 3 |  |
+| `EFFORT_SOURCE_MODEL_DEFAULT` | 4 |  |
+| `EFFORT_SOURCE_GLOBAL_DEFAULT` | 5 |  |
+| `EFFORT_SOURCE_NONE` | 6 |  |
 
 ### `SessionKind`
 

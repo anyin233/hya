@@ -127,8 +127,8 @@ Saving a **configured default** for an Agent creates or updates the owning
 file; it does not erase a distinct Session override. Failed saves keep the
 prior effective state and report an error. Old backends without the
 `agentModelConfiguration` capability retain their original selection behavior.
-(The interactive save flow shipped with the removed legacy TUI; a v1 rpc for
-reading/writing per-Agent preferences has not been re-added yet — see below.)
+Reading and writing per-Agent preferences over v1 uses the `AgentModels`
+service (`/v1/agent-models`).
 
 Built-in Agents use the active Hya `config.yaml` (XDG path with the existing HOME
 fallback). Bundle Agents use their bundle's `config.yml`; see
@@ -145,15 +145,41 @@ agents:
 Use the bundle Agent's stable id instead of `hya-main` in a bundle file. Saves
 lock and reread the file, then atomically replace only the model leaf, preserving
 unrelated settings (including the bundle's own keys), credentials, reasoning
-fields and file permissions. Prepared bundle content is never rewritten.
+fields and file permissions. Prepared bundle content is never rewritten. The
+same `agents.<id>` entry may carry `reasoning:`, the Agent's default thinking
+effort; see [Agent default effort](#agent-default-effort).
 
 `GET /v1/bootstrap` advertises the effective catalog (agents, models,
 providers) to frontends, and `PATCH /v1/sessions/{session}` switches a
-session's `agent`/`model` fields. The dedicated per-Agent model-preference
-HTTP control (`GET/PUT /tui/agent-models`) was part of the deleted Compat
-surface; the durable preference files above are still read by runtime
-composition (`PersistentAgentModelControl`), and a v1 rpc for reading/writing
-per-Agent preferences has not been re-added yet.
+session's `agent`/`model` fields. Durable per-Agent model preferences are read
+and written through the v1 `AgentModels` service (`/v1/agent-models`), backed
+by the preference files above and `PersistentAgentModelControl`.
+
+
+The interactive TUI follows the same precedence. A new session created without an
+explicit `/agent` or model sends empty selection fields so the backend applies
+`default_agent` and `agents.<id>.model`; changing `/agent <id>` affects only the
+current Session. Therefore a later hya startup returns to the configured default
+agent. `/model provider/model` remembers that model for the active Agent, and
+`/model provider/model#high` also saves the Agent's runtime effort. The save is
+performed through `PUT /v1/agent-models/{agent}` and `PUT /v1/agent-efforts/{agent}`
+before the TUI refreshes its catalog, so the choice is available after restart
+and to other clients. An Agent whose model is pinned in `config.yaml` answers
+that save with `409 Conflict`; `/model` then changes only the current Session,
+and new sessions keep starting on the pinned model and effort. To make a model
+and effort the default for every new session, pin them on the default Agent:
+
+```yaml
+agents:
+  build:
+    model: anthropic/claude-sonnet-4-6
+    reasoning: high
+```
+
+The TUI's `/agent` view changes a pinned model without editing the file by hand:
+`m` on a pinned Agent calls `PUT /v1/agent-models/{agent}/configuration`, which
+rewrites only that Agent's `model` leaf (keeping `reasoning` and every other key)
+and applies at once (see [TUI — Agents view](tui.md#agents-view)).
 
 The default durable database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
@@ -260,6 +286,11 @@ is optional.
 # Row-backed process default. A stale value is ignored and the deterministic
 # first resolved row is selected instead.
 default_model: anthropic/claude-sonnet-4-6
+
+# Optional global reasoning fallback. Valid labels: minimal, low, medium, high,
+# xhigh, max, and none. Used only when no model suffix, Agent policy, saved
+# preference, or model `reasoning.default` chose an effort.
+reasoning: medium
 
 # Optional: agent profile selected when a workdir does not specify one.
 # Falls back to the built-in `build` agent when omitted.
@@ -412,6 +443,15 @@ Supported `kind` values:
 | `grok-build` | Grok Build Responses route (`/responses`). |
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
+
+Provider fields:
+
+| Field | Type | Default | Example |
+| --- | --- | --- | --- |
+| `prompt_cache` | optional boolean | `true` for `anthropic`, `false` for other kinds | `prompt_cache: false` |
+
+`prompt_cache` controls Anthropic ephemeral prompt-cache breakpoints for this
+route. It is ignored for non-Anthropic kinds; omit it to use the kind default.
 
 A provider's **effective model list** is its remote model list (from the
 [model cache](#model-cache-and-config-overrides)) merged per model id with
@@ -570,7 +610,7 @@ over both:
 ```yaml
 provider_retry:
   max_attempts: 5        # total request attempts per completion (default 3)
-  backoff_base_ms: 250   # exponential backoff seed (default 100)
+  backoff_base_ms: 250   # exponential backoff seed (default 1000)
   backoff_max_ms: 60000  # backoff / Retry-After ceiling (default 30000)
 
 providers:
@@ -586,7 +626,7 @@ providers:
 | Field | Env override | Default | Meaning |
 | --- | --- | --- | --- |
 | `max_attempts` | `HYA_PROVIDER_RETRY_MAX_ATTEMPTS` | `3` | Total request attempts per streamed completion, shared by pre-stream retries (transport, 429, 5xx) and the zero-event replay window (link-level failures and transient in-stream error frames). Clamped to at least 1. |
-| `backoff_base_ms` | `HYA_PROVIDER_RETRY_BACKOFF_BASE_MS` | `100` | Exponential backoff seed; grows `2^attempt` with jitter (75–125%). |
+| `backoff_base_ms` | `HYA_PROVIDER_RETRY_BACKOFF_BASE_MS` | `1000` | Exponential backoff seed; grows `2^attempt` with jitter (75–125%). |
 | `backoff_max_ms` | `HYA_PROVIDER_RETRY_BACKOFF_MAX_MS` | `30000` | Ceiling for the exponential backoff and `Retry-After` waits (the latter is additionally hard-capped at 30 s). |
 
 The budget covers both recovery layers: the pre-stream attempt loop, and the
@@ -598,6 +638,12 @@ the whole request is re-issued while budget remains. Non-transient error frames
 (invalid request, auth, unclassified) are never retried. Once a single event has
 been delivered the strict no-replay boundary applies and errors surface exactly
 once. See [In-stream error frames](architecture/providers.md#in-stream-error-frames).
+
+If the pre-stream loop exhausts multiple attempts on a retryable status or
+transport failure, the error includes the number of attempts and elapsed time
+alongside the original status and response detail (for example,
+`http status 503: after 3 attempts over 2.1s: busy`). A single failed attempt
+retains the original error text.
 
 Discovery uses the declared provider kind and base URL: OpenAI-compatible and
 Responses use `/models`; Anthropic uses `/models` with bounded cursor pages;
@@ -616,9 +662,9 @@ is `auth_required`; a credentialed 401/403 is `auth_rejected`. Either produces
 no remote row.
 
 `grok-build` uses the Responses request shape and adds encrypted reasoning
-content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
-defaulting to `high`. Grok streams must end with `response.completed` or
-`response.incomplete`; `[DONE]` alone is not completion.
+content. Its fallback reasoning menu is `low`, `medium`, and `high`; the menu
+does not select a default effort. Grok streams must end with
+`response.completed` or `response.incomplete`; `[DONE]` alone is not completion.
 
 ### Reasoning metadata
 
@@ -652,23 +698,84 @@ on a model, it **replaces** (does not extend) the provider-kind default menu.
 | `grok-build` | `low`, `medium`, `high` |
 | `google` | `high`, `max` |
 
-When `reasoning.default` is omitted, the effective default is the **highest**
-effort in the resulting list (ordering Off &lt; Minimal &lt; Low &lt; Medium &lt;
-High &lt; XHigh &lt; Max). Shipped default resolution uses
-[`resolve_default_reasoning`](../crates/hya-provider/src/lib.rs) from
-[`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs), which always
-passes `last_used: None`:
+An advertised effort menu describes capabilities, not a selection. hya never
+chooses its highest entry automatically, nor treats a remote model-list default
+as a user request. An explicit model `reasoning.default` remains a request
+default for that model; an explicit agent policy or `#variant` can override it.
 
-1. Explicit `reasoning.default` from config (must be advertised, else config error).
-2. Otherwise the highest supported level among the route's advertised variants.
+### Reasoning effort precedence
 
-If the model advertises no reasoning at all, the result is `None` and no default
-is shown. A route emits an empty variant list when `reasoning_request` is false.
+When a request is sent, Hya resolves one effective reasoning effort using this
+order (highest precedence first):
 
-The helper also accepts a `last_used` argument (kept when it is `none`/`off` or
-present in the advertised variants), but **no production caller supplies it** —
-only unit tests exercise that branch. hya does **not** remember a previously
-selected effort across runs or UI picks.
+| Layer | Source | Example |
+| --- | --- | --- |
+| Suffix | `#level` on the model reference (also `--effort`, a `task` spawn's `effort`, or `model: provider/model#level` on `task`) | `openai/gpt#high` |
+| Agent (runtime) | The user's saved per-Agent effort (SQLite, all clients; TUI `/agent` view `t`) | `PUT /v1/agent-efforts/scout {"effort":"low"}` |
+| Agent (configured) | `agents.<id>.reasoning` in the owning configuration file | `reasoning: medium` |
+| Agent (authored) | An authored bundle Agent `model_policy.reasoning` | `reasoning: high` |
+| Preference | The user's saved per-`provider/model` effort (SQLite, all clients) | `/effort high` in the TUI |
+| Model default | `providers.<id>.models[].reasoning.default` | `default: medium` |
+| Global default | Top-level `reasoning` | `reasoning: low` |
+| None | No layer selected an effort | The request omits effort |
+
+The effort is resolved for every request, so a preference saved mid-session
+applies to the next request without a restart. For example, with
+`reasoning: low`, a model default of `medium`, and a saved preference of
+`high`, requests send `high`; clearing the preference sends `medium`; a model
+without a default sends `low`. A model suffix always wins.
+Without any explicit choice or configured default, the provider request omits
+effort. The upstream provider then decides its default; omission does **not**
+guarantee that the model will not think.
+
+#### Agent default effort
+
+Each Agent — the main agent and every subagent — can carry its own default
+thinking effort, independent of which model it runs on. It sits between an
+explicit suffix and the per-model preference, so `scout` can think `low` and
+`reviewer` `high` on the same model. Three layers set it, highest first:
+
+1. the user's runtime choice, saved in the session database (table
+   `agent_effort_preference`) and applied to the Agent's next request;
+2. `agents.<id>.reasoning` in the same file that holds the Agent's model
+   leaf (`config.yaml` for built-in Agents, the bundle's `config.yml` for
+   bundle Agents), read at backend start;
+3. the authored bundle Agent's `model_policy.reasoning`.
+
+```yaml
+agents:
+  explore:
+    model: anthropic/claude-sonnet-4-5
+    reasoning: low
+```
+
+An unknown label in `agents.<id>.reasoning` fails startup with
+`configuration agents.<id>.reasoning in <path> is not a thinking effort`.
+The main agent sees each Agent's default through `list_agents` (`effort`,
+`effort_source`: `preference`, `configured`, or `authored`) and can override
+it for one spawn with `task`'s `effort` parameter.
+
+Saved preferences live in the session database (tables
+`model_effort_preference` and `agent_effort_preference`) and are shared by
+every client of that backend. Interface (`hya.v1.AgentModels`):
+
+| RPC | HTTP | Body / result |
+| --- | --- | --- |
+| `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `{preferences: [{providerId, modelId, effort, updatedAt}]}` |
+| `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `{effort}`; an empty `effort` clears the preference |
+| `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `{effort}` → `{agentId, effort}`; an empty `effort` clears the runtime choice. Unknown label → `INVALID_ARGUMENT`; unknown Agent → `NOT_FOUND` |
+| `SaveAgentModelConfiguration` | `PUT /v1/agent-models/{agent_id}/configuration` | `{model?: {providerId, modelId}, directory?, session?}`; absent `model` clears the owning config leaf and returns `configurationPath` |
+| `ListAgentModels` | `GET /v1/agent-models` | each `AgentModelState` also carries `effort` (empty: the model decides) and `effortSource` (`AGENT_EFFORT_SOURCE_PREFERENCE`, `_CONFIGURED`, `_AUTHORED`, `_NONE`) |
+
+`SessionInfo.effectiveEffort` (empty when none) and `SessionInfo.effortSource`
+(`EFFORT_SOURCE_SUFFIX`, `_AGENT`, `_PREFERENCE`, `_MODEL_DEFAULT`,
+`_GLOBAL_DEFAULT`, `_NONE`) show what the session's next request sends.
+
+The TUI's `/effort` picker shows the advertised choices and saves the choice
+on the layer that decides the session's effort (the Agent's runtime effort
+when the Agent has one, else the model's preference); `/effort default`
+clears it. The TUI shows the result as `<model>:<effort>`. See
+[Thinking effort](tui.md#thinking-effort) for selection examples.
 
 **Provider budget / label mapping:**
 

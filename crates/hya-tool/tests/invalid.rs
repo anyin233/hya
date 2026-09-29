@@ -20,6 +20,7 @@ async fn invalid_tool_reports_argument_error_in_open_code_shape() {
                 workflows: hya_tool::WorkflowPlane::disconnected(),
                 operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
                 mailbox: hya_tool::MailboxPlane::disconnected(),
+                project_activity: hya_tool::ProjectActivityPlane::disconnected(),
                 lifecycle: hya_tool::LifecyclePlane::disconnected(),
                 session: None,
                 parent_session: None,

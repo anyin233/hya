@@ -32,6 +32,7 @@ fn request(error_value: Value, message: &str) -> CompletionRequest {
             ],
             finish: None,
             tokens: None,
+            last_round: None,
         }],
         tools: Vec::new(),
         temperature: None,

@@ -47,6 +47,80 @@ fn body(route: &HttpProvider, req: CompletionRequest) -> Value {
 }
 
 #[test]
+fn anthropic_prompt_cache_marks_only_system_last_tool_and_final_message_block() {
+    use hya_proto::{Message, MessageId, Part, PartId, ToolName, ToolSchema};
+    use serde_json::json;
+
+    let mut req = request(LIMITED, None, None);
+    req.system = Some("shared prefix".into());
+    req.tools = ["read", "write"]
+        .into_iter()
+        .map(|name| ToolSchema {
+            name: ToolName::new(name),
+            description: name.into(),
+            input_schema: json!({"type":"object"}),
+            output_schema: None,
+        })
+        .collect();
+    req.messages = ["first", "last"]
+        .into_iter()
+        .map(|text| Message::User {
+            id: MessageId::new(),
+            parts: vec![Part::Text {
+                id: PartId::new(),
+                text: text.into(),
+            }],
+        })
+        .collect();
+    let enabled = body(&route(ProviderKind::Anthropic, 0), req.clone());
+    let marker = json!({"type":"ephemeral"});
+    assert_eq!(enabled["system"][0]["cache_control"], marker);
+    assert!(enabled["tools"][0].get("cache_control").is_none());
+    assert_eq!(enabled["tools"][1]["cache_control"], marker);
+    assert!(
+        enabled["messages"][0]["content"][0]
+            .get("cache_control")
+            .is_none()
+    );
+    assert_eq!(
+        enabled["messages"][0]["content"][1]["cache_control"],
+        marker
+    );
+    assert_eq!(enabled.to_string().matches("cache_control").count(), 3);
+
+    let disabled = body(
+        &route(ProviderKind::Anthropic, 0).with_prompt_cache(false),
+        req.clone(),
+    );
+    assert!(!disabled.to_string().contains("cache_control"));
+    assert_eq!(disabled["system"], "shared prefix");
+    let other = body(
+        &route(ProviderKind::OpenAiCompatible, 0).with_prompt_cache(true),
+        req,
+    );
+    assert!(!other.to_string().contains("cache_control"));
+}
+
+#[test]
+fn prompt_cache_changes_anthropic_route_identity_and_capabilities() {
+    let enabled = route(ProviderKind::Anthropic, 0);
+    let disabled = route(ProviderKind::Anthropic, 0).with_prompt_cache(false);
+    let model = ModelRef::new(LIMITED);
+    assert!(enabled.capabilities(&model).unwrap().prompt_caching);
+    assert!(!disabled.capabilities(&model).unwrap().prompt_caching);
+    assert_ne!(
+        enabled.configured_identity_v1(),
+        disabled.configured_identity_v1()
+    );
+    assert!(
+        !route(ProviderKind::Google, 0)
+            .capabilities(&model)
+            .unwrap()
+            .prompt_caching
+    );
+}
+
+#[test]
 fn anthropic_defaults_max_tokens_to_the_known_output_limit() {
     let route = route(ProviderKind::Anthropic, 131_072);
     let body = body(&route, request("12th/glm-5.3-flash", None, None));

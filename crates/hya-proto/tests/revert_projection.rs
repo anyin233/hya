@@ -66,6 +66,13 @@ fn stored(hash: &str) -> FileState {
 }
 
 #[test]
+fn old_file_change_json_defaults_observed_to_false() {
+    let json = r#"{"path":"/w/a.txt","before":{"kind":"absent"}}"#;
+    let change: FileChange = serde_json::from_str(json).expect("decode old file change");
+    assert!(!change.observed);
+}
+
+#[test]
 fn files_changed_folds_onto_the_message_that_changed_them() {
     let session = SessionId::new();
     let mut seq = 0;
@@ -80,6 +87,7 @@ fn files_changed_folds_onto_the_message_that_changed_them() {
             files: vec![FileChange {
                 path: "/w/a.txt".to_string(),
                 before: FileState::Absent,
+                observed: false,
             }],
         },
     ));
@@ -104,6 +112,7 @@ fn revert_hides_the_target_and_later_messages_and_unrevert_restores_them() {
         path: "/w/a.txt".to_string(),
         restored: FileState::Absent,
         saved: stored("h1"),
+        observed: false,
         error: None,
     }];
     seq += 1;
@@ -189,6 +198,7 @@ fn reverting_further_back_extends_the_hidden_range_and_keeps_the_first_saved_sta
                 path: "/w/a.txt".to_string(),
                 restored: stored("before-two"),
                 saved: stored("head"),
+                observed: false,
                 error: None,
             }],
         },
@@ -204,12 +214,14 @@ fn reverting_further_back_extends_the_hidden_range_and_keeps_the_first_saved_sta
                     path: "/w/a.txt".to_string(),
                     restored: FileState::Absent,
                     saved: stored("before-two"),
+                    observed: false,
                     error: None,
                 },
                 FileRestore {
                     path: "/w/b.txt".to_string(),
                     restored: FileState::Absent,
                     saved: stored("b"),
+                    observed: false,
                     error: None,
                 },
             ],
@@ -278,6 +290,7 @@ fn revert_events_round_trip_and_decode_as_unknown_elsewhere() {
                 reason: "too_large".to_string(),
             },
             saved: FileState::Absent,
+            observed: false,
             error: Some("denied".to_string()),
         }],
     };

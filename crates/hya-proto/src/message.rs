@@ -60,6 +60,12 @@ pub enum FinishCause {
     /// The member's parent archived it (`archive` tool) while it was
     /// mid-turn.
     Archived,
+    /// The runtime was replaced by a restart handoff: the old process closed
+    /// the turn at a durable boundary with `finish: cancelled, cause: handoff`
+    /// (open tool parts errored, never retried) and the successor process
+    /// resumes the session without a new user prompt. Not written by a normal
+    /// stop or a crash. Older builds fold this as [`FinishCause::Other`].
+    Handoff,
     /// A cause this build does not know.
     #[serde(other)]
     Other,
@@ -366,6 +372,9 @@ pub enum Message {
         model: ModelRef,
         /// Content parts (text, reasoning, tools).
         parts: Vec<Part>,
+        /// Latest provider round usage, distinct from cumulative `tokens`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_round: Option<TokenUsage>,
         /// Set when the assistant message is finished.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         finish: Option<FinishReason>,
@@ -416,6 +425,7 @@ mod message_id_tests {
             parts: Vec::new(),
             finish: None,
             tokens: None,
+            last_round: None,
         };
         let system = Message::System {
             id: system_id,

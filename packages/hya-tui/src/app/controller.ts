@@ -78,7 +78,7 @@
  */
 import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
-import { createCommandRegistry, mergeCommandEntries, openModelPicker, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
+import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
   attachmentName,
   exceedsTurnBudget,
@@ -100,12 +100,10 @@ import { savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
-import { defaultModelRef } from "../state/providers"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
-import type { AppStore } from "../state/store"
-import { createAgentModelsController } from "./agentModels"
+import { createAgentsViewController } from "./agentsView"
 import type { UiHandles } from "./context"
 import { createDiffController } from "./diff"
 import { createMcpController } from "./mcp"
@@ -115,6 +113,7 @@ import { answerPrompt } from "./prompts"
 import { createRevertController } from "./revert"
 import { createRulesController } from "./rules"
 import { createProjectViewController } from "./projectView"
+import type { AppStore } from "../state/store"
 import { errorLine } from "../state/projectView"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
@@ -373,9 +372,16 @@ export function createController({ client, store, directory, remote: startedRemo
     refreshLater.schedule()
   }
 
-  /** Re-read only the provider/model catalog (`GET /v1/models` / `GET /v1/providers`): lighter than `refresh()`, so a `catalogUpdated` frame does not also disturb the session list or interactions. */
+  /**
+   * Re-read the provider/model catalog (`GET /v1/models` / `GET /v1/providers`)
+   * and the open session's row: lighter than `refresh()`, so a
+   * `catalogUpdated` frame does not also disturb the session list or
+   * interactions. The session row carries the server-resolved effort, which a
+   * saved effort choice (`SetModelEffortPreference`, `SetAgentEffort`, from any
+   * client) changes, so its `model:effort` label updates live.
+   */
   async function refreshCatalogOnly(): Promise<void> {
-    const [models, providers] = await Promise.all([client.listModels(), client.listProviders()])
+    const [models, providers] = await Promise.all([client.listModels(), client.listProviders(), refreshSession()])
     store.setProviderCatalog(providers, models)
   }
 
@@ -802,12 +808,12 @@ export function createController({ client, store, directory, remote: startedRemo
       projectView.open()
       throw new NoProjectError()
     }
-    const { agents } = store.state
-    // A `/model`/`/agent` choice made before any session existed (state/picker.ts, C11/C12) applies to
-    // the next `CreateSession` the same way an explicit argument would.
-    const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
-    const model = modelArg ?? (defaultModelRef({ ...store.state, selected: undefined, pendingAgent: agent }) || undefined)
-    if (!model) throw new Error("No model is available; configure a provider on the backend")
+    // Leave agent/model empty unless the user explicitly chose one. The server then
+    // resolves config.default_agent and that agent's configured model. This keeps a
+    // hot `/agent` switch local to the current session and restores the configured
+    // default agent on the next startup.
+    const agent = agentArg ?? store.state.pendingAgent ?? ""
+    const model = modelArg || store.state.pendingModel || ""
     // Ephemeral: dropped by the daemon while unused once nobody watches it (app/sessionKeeper.ts).
     const session = await client.createSession(agent, model, placement, { ephemeral: true })
     keeper.created(session.id)
@@ -941,7 +947,7 @@ export function createController({ client, store, directory, remote: startedRemo
   const diffView = createDiffController({ store, client, ui })
   const mcp = createMcpController({ store, client, copyText: (text) => terminal?.copy(text) ?? false })
   const rules = createRulesController({ store, client })
-  const agentModels = createAgentModelsController({ store, client, openPicker })
+  const agentsView = createAgentsViewController({ store, client, openPicker, selectAgent: (agent) => selectAgent({ store, client, actions }, agent) })
   const projectView = createProjectViewController({
     store,
     client,
@@ -974,7 +980,7 @@ export function createController({ client, store, directory, remote: startedRemo
     openDiff: () => diffView.open(),
     openMcp: () => mcp.open(),
     openRules: () => rules.open(),
-    openAgentModels: () => agentModels.open(),
+    openAgents: () => agentsView.open(),
     openProjectView: () => projectView.open(),
     copyText: (text) => terminal?.copy(text) ?? false,
     undo: () => revert.undo(),
@@ -1279,6 +1285,15 @@ export function createController({ client, store, directory, remote: startedRemo
   async function switchServer(next: ServerSwitch): Promise<void> {
     client.setBaseUrl(next.url)
     store.setServerUrl(next.url)
+    const backend = store.state.backend
+    if (backend) {
+      store.setBackend({
+        ...backend,
+        pid: next.pid,
+        ...(next.version ? { version: next.version } : {}),
+        ...(next.startedAt !== undefined ? { startedAt: next.startedAt } : {}),
+      })
+    }
     try {
       store.applyBootstrap(await client.bootstrap())
     } catch {
@@ -1301,7 +1316,12 @@ export function createController({ client, store, directory, remote: startedRemo
 
   const reconnector = reconnect
     ? createReconnector({
-      url: () => client.baseUrl, probe, reconnect, switchTo: switchServer, status,
+      url: () => client.baseUrl,
+      generation: () => {
+        const backend = store.state.backend
+        return backend?.pid !== undefined && backend.startedAt !== undefined ? `${backend.pid}:${backend.startedAt}` : undefined
+      },
+      probe, reconnect, switchTo: switchServer, status,
       ...(find ? { find } : {}),
       onStopped: (stopped) => { store.setBackendStopped(stopped); if (stopped) store.setConnected(false) },
     })
@@ -1586,7 +1606,7 @@ export function createController({ client, store, directory, remote: startedRemo
     diffView.dispose()
     mcp.dispose()
     rules.dispose()
-    agentModels.dispose()
+    agentsView.dispose()
     unsubscribeFocus?.()
     secret.clear()
   }
@@ -1627,15 +1647,15 @@ export function createController({ client, store, directory, remote: startedRemo
     providerKey: (key: KeyLike) => providers.key(key),
     providerPaste: (text: string) => providers.paste(text),
     closeProviders: () => providers.close(),
-    /** One key while the Diff / MCP / Saved Rules / Agent Models view is open (components/Composer.tsx routes them). */
+    /** One key while the Diff / MCP / Saved Rules / Agents view is open (components/Composer.tsx routes them). */
     diffKey: (key: KeyLike) => diffView.key(key),
     closeDiff: () => diffView.close(),
     mcpKey: (key: KeyLike) => mcp.key(key),
     closeMcp: () => mcp.close(),
     rulesKey: (key: KeyLike) => rules.key(key),
     closeRules: () => rules.close(),
-    agentModelsKey: (key: KeyLike) => agentModels.key(key),
-    closeAgentModels: () => agentModels.close(),
+    agentsKey: (key: KeyLike) => agentsView.key(key),
+    closeAgents: () => agentsView.close(),
     /** One key / a paste while the concealed `/connect-remote` entry is open (components/Composer.tsx routes them). */
     secretKey,
     secretPaste,

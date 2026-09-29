@@ -17,6 +17,7 @@ use hya_proto::AgentName;
 /// One installed bundle holding one agent with the given spawn graph.
 fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedInstallableBundle {
     PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+        check: None,
         format_version: 2,
         identity: BundleIdentity {
             id: bundle_id.to_string(),

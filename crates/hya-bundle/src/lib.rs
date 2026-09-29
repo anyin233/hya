@@ -19,8 +19,9 @@ pub use api::{
 pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
 pub use first_party::{
-    FIRST_PARTY_BUNDLES, FirstPartySource, first_party_bundle, first_party_package_name,
-    first_party_source, first_party_source_directory, first_party_source_root, load_first_party,
+    FIRST_PARTY_BUNDLES, FIRST_PARTY_SOURCE_ROOT_ENV, FirstPartySource, first_party_bundle,
+    first_party_package_name, first_party_source, first_party_source_directory,
+    first_party_source_root, load_first_party,
 };
 pub use model::{
     AgentRole, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
@@ -28,7 +29,7 @@ pub use model::{
     PreparedAgentSetBundle, PreparedApi, PreparedBundleApis, PreparedBundleIndex,
     PreparedBundleKind, PreparedBundlePermissionModes, PreparedBundleProcess,
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedInstallableBundle, PreparedPermissionMode, PreparedPluginBundle,
+    PreparedCheck, PreparedInstallableBundle, PreparedPermissionMode, PreparedPluginBundle,
     PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema,
     PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
 };

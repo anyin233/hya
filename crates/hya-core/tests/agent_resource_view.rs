@@ -169,6 +169,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
         let bundle_id = format!("hya/resource-view-{bundle_slug}");
         let skill_id = format!("bundle:{bundle_id}/skill/bundle-skill");
         PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.clone(),
@@ -426,6 +427,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
         }))
         .unwrap();
     let bundle = PreparedAgentBundle {
+        check: None,
         format_version: 2,
         identity: BundleIdentity {
             id: "hya/alias-test".to_string(),
@@ -711,6 +713,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
     ] {
         let bundle_id = format!("hya/plane-refusal-{slug}");
         let bundle = PreparedAgentBundle {
+            check: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.clone(),

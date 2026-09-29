@@ -42,7 +42,7 @@ import type {
 import type { WebInfo } from "../cli"
 import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
-import type { AgentModelsViewState } from "./agentModels"
+import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
 import { defaultPaneLayout, type PaneLayout } from "./panes"
@@ -115,9 +115,9 @@ export interface AppState {
   readonly rulesView: RulesViewState | undefined
   /** `ListSavedRules`: saved permission rules, read when `/rules` opens. */
   readonly savedRules: SavedRule[]
-  /** The full-screen Agent Models view (`/agent-models`, state/agentModels.ts), while open. */
-  readonly agentModelsView: AgentModelsViewState | undefined
-  /** `ListAgentModels`: effective base model of every catalog agent, read when `/agent-models` opens. */
+  /** The full-screen Agents view (`/agent`, state/agentsView.ts), while open. */
+  readonly agentsView: AgentsViewState | undefined
+  /** `ListAgentModels`: effective base model of every catalog agent, read when `/agent` opens the Agents view. */
   readonly agentModelRows: AgentModelState[]
   /** Sidebar mode (state/layout.ts): `auto` follows the terminal width. */
   readonly sidebar: SidebarMode
@@ -294,6 +294,7 @@ export interface Catalog {
 export const startupStatus = "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit"
 
 function initialState(): { [K in keyof AppState]: AppState[K] } {
+
   return {
     ready: false,
     sessions: [],
@@ -322,7 +323,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     mcpServers: [],
     rulesView: undefined,
     savedRules: [],
-    agentModelsView: undefined,
+    agentsView: undefined,
     agentModelRows: [],
     sidebar: "auto",
     columns: 80,
@@ -919,8 +920,8 @@ export function createAppStore() {
     setRulesView(view: RulesViewState | undefined): void { set("rulesView", view) },
     setSavedRules(rules: SavedRule[]): void { set("savedRules", rules) },
 
-    /** Open, update, or (`undefined`) close the Agent Models view (`/agent-models`). */
-    setAgentModelsView(view: AgentModelsViewState | undefined): void { set("agentModelsView", view) },
+    /** Open, update, or (`undefined`) close the Agents view (`/agent`). */
+    setAgentsView(view: AgentsViewState | undefined): void { set("agentsView", view) },
     setAgentModelRows(rows: AgentModelState[]): void { set("agentModelRows", rows) },
 
     /** `ListProjects` rows (after a `projectsUpdated` frame or a Project write). */

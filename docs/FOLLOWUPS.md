@@ -144,8 +144,6 @@ workaround; the fields either need consumers or removal:
   carries only `command`, `arguments`, `text`.
 - Per-command `subtask` has no consumer anywhere in `crates/` or `packages/`.
 - `PreparedAgent::workdir` has no reader.
-- `resolve_default_reasoning`'s `last_used` branch is unreachable — its one
-  production caller passes `None`.
 - Skill `allowed-tools` and `model` feed only a semantic-identity digest; neither
   restricts tools nor routes models.
 

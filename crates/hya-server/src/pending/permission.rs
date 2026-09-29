@@ -131,6 +131,20 @@ impl PermissionRequests {
                     continue;
                 }
                 let asked = permission_asked_event(&request_id, &entry);
+                let payload = asked["properties"].to_string();
+                if store
+                    .save_pending_interaction(&hya_store::PendingInteraction::new(
+                        &request_id,
+                        entry.session,
+                        "permission",
+                        payload,
+                    ))
+                    .await
+                    .is_err()
+                {
+                    let _ = entry.reply.send(Decision::Reject { feedback: None });
+                    continue;
+                }
                 pending.insert(request_id, entry);
                 drop(pending);
                 let _published = events.send(asked);
@@ -244,6 +258,36 @@ impl PermissionRequests {
         reply: PermissionReply,
         message: Option<String>,
     ) -> Result<bool, StoreError> {
+        let missing = {
+            let pending = self.inner.lock().await;
+            !pending.contains_key(id)
+        };
+        if missing {
+            let valid = self
+                .store
+                .list_pending_interactions()
+                .await?
+                .into_iter()
+                .any(|row| {
+                    row.id == id && row.kind == "permission" && row.session == Some(session)
+                });
+            if !valid {
+                return Ok(false);
+            }
+            let payload = serde_json::json!({
+                "reply": reply_name(reply),
+                "message": message,
+                "session": session.to_string(),
+            });
+            let queued = hya_store::PendingInteractionReply {
+                id: id.to_string(),
+                kind: "permission".to_string(),
+                payload: payload.to_string(),
+                created_at: hya_proto::now_millis(),
+            };
+            self.store.queue_pending_interaction_reply(&queued).await?;
+            return Ok(true);
+        }
         let (entry, related) = {
             let mut pending = self.inner.lock().await;
             let Some(entry) = pending.get(id) else {
@@ -264,6 +308,9 @@ impl PermissionRequests {
         let save_action = entry.action;
         let save_remember = entry.remember.clone();
         let ok = entry.reply.send(decision(reply, message)).is_ok();
+        if ok {
+            let _ = self.store.resolve_pending_interaction(id).await;
+        }
         if ok && matches!(reply, PermissionReply::Always) {
             self.saved.remember(id, save_action, &save_remember).await?;
         }
@@ -304,6 +351,9 @@ impl PermissionRequests {
         let save_remember = entry.remember.clone();
         let replied_session = entry.session;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
+        if ok {
+            let _ = self.store.resolve_pending_interaction(id).await;
+        }
         if ok && matches!(reply, PermissionReply::Always) {
             self.saved.remember(id, save_action, &save_remember).await?;
         }

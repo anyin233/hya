@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use hya_proto::{Event, Message, MessageId, ModelRef, Part, PartId, SessionId, TokenUsage};
+use hya_proto::{
+    Event, Message, MessageId, ModelRef, Part, PartId, SessionId, TokenUsage, ToolPartState,
+};
 use hya_provider::{
     CompletionRequest, EventStream, ProviderError, ProviderRouter, ReasoningEffort,
 };
@@ -180,6 +182,23 @@ pub fn resolved_threshold(cfg: &CompactionConfig, max_context: Option<u32>) -> u
     scaled.min(reserved).max(MIN_RESOLVED_THRESHOLD)
 }
 
+/// Return the message range eligible for folding, excluding the latest
+/// persisted compaction marker and retaining the configured recent tail.
+pub(crate) fn foldable_range(messages: &[Message], keep_recent: usize) -> Option<(usize, usize)> {
+    let start = messages
+        .iter()
+        .rposition(|message| {
+            matches!(
+                message,
+                Message::System { content, .. }
+                    if content.starts_with(hya_provider::COMPACT_CONTEXT_MARKER)
+            )
+        })
+        .map_or(0, |index| index + 1);
+    let end = messages.len().checked_sub(keep_recent)?;
+    (start < end).then_some((start, end))
+}
+
 fn message_text_len(m: &Message) -> usize {
     match m {
         Message::User { parts, .. } | Message::Assistant { parts, .. } => {
@@ -293,10 +312,10 @@ pub fn needs_compaction(messages: &[Message], cfg: &CompactionConfig) -> bool {
     needs_compaction_at(messages, cfg, cfg.token_threshold)
 }
 
-/// Whether `messages` exceeds keep_recent and an explicit token `threshold`.
+/// Whether `messages` has a foldable prefix and exceeds an explicit token threshold.
 #[must_use]
 pub fn needs_compaction_at(messages: &[Message], cfg: &CompactionConfig, threshold: usize) -> bool {
-    messages.len() > cfg.keep_recent && tokens_in_use(messages) > threshold
+    foldable_range(messages, cfg.keep_recent).is_some() && tokens_in_use(messages) > threshold
 }
 
 /// One of the five built-in context-reduction mechanisms (oh-my-pi parity).
@@ -459,64 +478,170 @@ fn is_eviction_notice(output: &serde_json::Value) -> bool {
     })
 }
 
-/// Drop stale completed tool outputs from `messages`, keeping calls and inputs.
+/// Completed, not-yet-evicted tool outputs that are stale: outside the last
+/// `keep_recent` messages (older turns, as before) OR outside the last
+/// `keep_recent` tool steps. The step tail is what lets a long turn — one
+/// assistant message holding many tool steps — shed its own early outputs.
+fn stale_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<(usize, usize)> {
+    let mut candidates = Vec::new();
+    for (message_index, message) in messages.iter().enumerate() {
+        let parts = match message {
+            Message::Assistant { parts, .. } | Message::User { parts, .. } => parts,
+            Message::System { .. } => continue,
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            if let Part::Tool {
+                state: hya_proto::ToolPartState::Completed { output, .. },
+                ..
+            } = part
+                && !is_eviction_notice(output)
+            {
+                candidates.push((message_index, part_index));
+            }
+        }
+    }
+    let step_cut = candidates.len().saturating_sub(keep_recent);
+    let message_cut = messages.len().saturating_sub(keep_recent);
+    candidates
+        .into_iter()
+        .enumerate()
+        .filter(|(rank, (message_index, _))| *rank < step_cut || *message_index < message_cut)
+        .map(|(_, location)| location)
+        .collect()
+}
+
+/// Runtime record of evicted parts: projected message/part id to the exact
+/// model-facing placeholder that replaced its output.
+pub type StickyEvictions = std::collections::HashMap<(MessageId, PartId), String>;
+
+/// Evict stale tool outputs, reusing placeholders recorded in `sticky`.
 ///
-/// Returns how many parts were evicted. Messages in the most recent
-/// `keep_recent` are never touched, so the model keeps full fidelity on what it
-/// just did.
+/// The map is runtime state owned by the session engine; its keys identify a
+/// projected message/part and its values are the exact model-facing notice.
+pub fn evict_stale_tool_outputs_sticky(
+    messages: &mut [Message],
+    keep_recent: usize,
+    sink: Option<&dyn EvictionSink>,
+    sticky: &mut StickyEvictions,
+) -> u32 {
+    let mut evicted = 0;
+    for (message_index, part_index) in stale_tool_outputs(messages, keep_recent) {
+        let (Message::Assistant { id, parts, .. } | Message::User { id, parts, .. }) =
+            &mut messages[message_index]
+        else {
+            continue;
+        };
+        let message_id = *id;
+        let Part::Tool {
+            id: part_id,
+            name,
+            state,
+            ..
+        } = &mut parts[part_index]
+        else {
+            continue;
+        };
+        let key = (message_id, *part_id);
+        let ToolPartState::Completed {
+            input,
+            output,
+            time_ms,
+        } = state
+        else {
+            continue;
+        };
+        if let Some(notice) = sticky.get(&key) {
+            *state = ToolPartState::Completed {
+                input: input.clone(),
+                output: serde_json::Value::String(notice.clone()),
+                time_ms: *time_ms,
+            };
+            continue;
+        }
+        let body = value_text(output);
+        let mail = body
+            .find("--- [NEW MAIL")
+            .map(|index| body[index..].to_string());
+        let mut notice = sink
+            .and_then(|sink| sink.spill(name.as_str(), &body))
+            .map_or_else(
+                || EVICTED_OUTPUT_NOTICE.to_string(),
+                |handle| spilled_output_notice(&handle),
+            );
+        if let Some(mail) = mail {
+            notice.push('\n');
+            notice.push_str(&mail);
+        }
+        sticky.insert(key, notice.clone());
+        *state = ToolPartState::Completed {
+            input: input.clone(),
+            output: serde_json::Value::String(notice),
+            time_ms: *time_ms,
+        };
+        evicted += 1;
+    }
+    evicted
+}
+
+/// Re-apply the placeholders recorded in `sticky` without evicting anything
+/// new.
 ///
-/// **Request-local.** Callers pass a transcript built for one provider request;
-/// the event log is untouched, so the full output stays recoverable offline.
-///
-/// This is tried before summarizing because tool output dominates a tool-heavy
-/// transcript, and losing it costs the model far less than folding whole turns
-/// into prose: every call, its input, and all reasoning survive.
+/// Run on every rebuilt request before its size is measured, so earlier
+/// evictions keep byte-identical placeholders (a stable, cacheable prefix)
+/// and count toward the threshold decision. Returns how many parts were
+/// replaced.
+pub fn apply_sticky_evictions(messages: &mut [Message], sticky: &StickyEvictions) -> usize {
+    if sticky.is_empty() {
+        return 0;
+    }
+    let mut applied = 0;
+    for message in messages.iter_mut() {
+        let (Message::Assistant { id, parts, .. } | Message::User { id, parts, .. }) = message
+        else {
+            continue;
+        };
+        let message_id = *id;
+        for part in parts.iter_mut() {
+            let Part::Tool {
+                id: part_id, state, ..
+            } = part
+            else {
+                continue;
+            };
+            let Some(notice) = sticky.get(&(message_id, *part_id)) else {
+                continue;
+            };
+            let ToolPartState::Completed { input, time_ms, .. } = state else {
+                continue;
+            };
+            *state = ToolPartState::Completed {
+                input: input.clone(),
+                output: serde_json::Value::String(notice.clone()),
+                time_ms: *time_ms,
+            };
+            applied += 1;
+        }
+    }
+    applied
+}
+
+/// Drop stale outputs using request-local sticky state.
 pub fn evict_stale_tool_outputs(
     messages: &mut [Message],
     keep_recent: usize,
     sink: Option<&dyn EvictionSink>,
 ) -> u32 {
-    let cutoff = messages.len().saturating_sub(keep_recent);
-    let mut evicted = 0;
-    for message in messages.iter_mut().take(cutoff) {
-        let (Message::Assistant { parts, .. } | Message::User { parts, .. }) = message else {
-            continue;
-        };
-        for part in parts.iter_mut() {
-            let Part::Tool { name, state, .. } = part else {
-                continue;
-            };
-            let hya_proto::ToolPartState::Completed {
-                input,
-                output,
-                time_ms,
-            } = state
-            else {
-                continue;
-            };
-            // Already evicted: skip so a repeat pass is idempotent and the count
-            // reflects real work.
-            if is_eviction_notice(output) {
-                continue;
-            }
-            // Prefer moving the body to dropping it. The sink is handed the
-            // rendered output because an artifact is bytes and a tool result is
-            // only sometimes a string.
-            let notice = sink
-                .and_then(|sink| sink.spill(name.as_str(), &value_text(output)))
-                .map_or_else(
-                    || EVICTED_OUTPUT_NOTICE.to_string(),
-                    |handle| spilled_output_notice(&handle),
-                );
-            *state = hya_proto::ToolPartState::Completed {
-                input: input.clone(),
-                output: serde_json::Value::String(notice),
-                time_ms: *time_ms,
-            };
-            evicted += 1;
-        }
-    }
-    evicted
+    evict_stale_tool_outputs_sticky(
+        messages,
+        keep_recent,
+        sink,
+        &mut std::collections::HashMap::new(),
+    )
+}
+
+/// Whether at least one completed tool output is stale enough to spill.
+pub(crate) fn has_spillable_tool_output(messages: &[Message], keep_recent: usize) -> bool {
+    !stale_tool_outputs(messages, keep_recent).is_empty()
 }
 
 /// The anchored summary already present in `messages`, if any.
@@ -628,12 +753,10 @@ pub async fn fold_prefix(
     summarizer: &dyn Summarizer,
     options: SummarizeOptions,
 ) -> Result<Option<CompactionPlan>, CoreError> {
-    if messages.len() <= cfg.keep_recent {
+    let Some((start, end)) = foldable_range(messages, cfg.keep_recent) else {
         return Ok(None);
-    }
-    let split = messages.len() - cfg.keep_recent;
-    let older = &messages[..split];
-    // `needs_compaction` guarantees `split >= 1`; stay panic-free regardless.
+    };
+    let older = &messages[start..end];
     let (Some(first), Some(last)) = (older.first(), older.last()) else {
         return Ok(None);
     };
@@ -644,7 +767,7 @@ pub async fn fold_prefix(
         summary,
         from_message,
         to_message,
-        folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+        folded_count: u32::try_from(older.len()).unwrap_or(u32::MAX),
     }))
 }
 
@@ -958,12 +1081,10 @@ pub async fn plan_handoff(
     summarizer: &dyn Summarizer,
     options: SummarizeOptions,
 ) -> Result<Option<CompactionPlan>, CoreError> {
-    if messages.len() <= cfg.keep_recent {
+    let Some((start, end)) = foldable_range(messages, cfg.keep_recent) else {
         return Ok(None);
-    }
-    let split = messages.len() - cfg.keep_recent;
-    // `needs_compaction` guarantees `split >= 1`; stay panic-free regardless.
-    let (Some(first), Some(last)) = (messages.first(), messages.get(split - 1)) else {
+    };
+    let (Some(first), Some(last)) = (messages.get(start), messages.get(end - 1)) else {
         return Ok(None);
     };
     let summary = summarizer
@@ -979,7 +1100,7 @@ pub async fn plan_handoff(
         summary,
         from_message: first.id(),
         to_message: last.id(),
-        folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+        folded_count: u32::try_from(end - start).unwrap_or(u32::MAX),
     }))
 }
 
@@ -1000,17 +1121,20 @@ pub async fn compact_with(
     let Some(plan) = plan_compaction(&messages, cfg, summarizer, options).await? else {
         return Ok(messages);
     };
-    let split = messages.len() - cfg.keep_recent;
-    let recent = messages.split_off(split);
-    let older_count = plan.folded_count;
-    let summary = plan.summary;
-    let mut out = Vec::with_capacity(recent.len() + 1);
-    out.push(Message::System {
+    let Some((start, end)) = foldable_range(&messages, cfg.keep_recent) else {
+        return Ok(messages);
+    };
+    let recent = messages.split_off(end);
+    messages.truncate(start);
+    messages.push(Message::System {
         id: MessageId::new(),
-        content: format!("Summary of {older_count} earlier messages:\n{summary}"),
+        content: format!(
+            "Summary of {} earlier messages:\n{}",
+            plan.folded_count, plan.summary
+        ),
     });
-    out.extend(recent);
-    Ok(out)
+    messages.extend(recent);
+    Ok(messages)
 }
 
 /// Bytes of any single rendered payload the summarizer is shown.
@@ -1294,6 +1418,7 @@ mod tests {
             }],
             finish: None,
             tokens: None,
+            last_round: None,
         }];
         // Text-only estimator would be ~0; tool body alone is 100 tokens.
         assert!(estimate_tokens(&msgs) >= tool_body.len() / 4);
@@ -1344,6 +1469,7 @@ mod tests {
             }],
             finish: None,
             tokens: None,
+            last_round: None,
         }
     }
 
@@ -1402,6 +1528,53 @@ mod tests {
             panic!("expected completed state");
         };
         assert_eq!(input["pattern"], "*.rs", "tool input must be preserved");
+    }
+    #[test]
+    fn eviction_spills_old_tool_steps_inside_active_assistant() {
+        use hya_proto::{ToolCallId, ToolName, ToolPartState};
+        let parts = (0..4)
+            .map(|index| Part::Tool {
+                id: PartId::new(),
+                call_id: ToolCallId::new(),
+                name: ToolName::new("find"),
+                state: ToolPartState::Completed {
+                    input: serde_json::json!({"step": index}),
+                    output: serde_json::Value::String(format!(
+                        "output-{index}-{}",
+                        "x".repeat(100)
+                    )),
+                    time_ms: 1,
+                },
+            })
+            .collect();
+        let mut messages = vec![Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts,
+            finish: None,
+            tokens: None,
+            last_round: None,
+        }];
+
+        assert_eq!(evict_stale_tool_outputs(&mut messages, 2, None), 2);
+        let Message::Assistant { parts, .. } = &messages[0] else {
+            panic!("expected assistant");
+        };
+        let outputs: Vec<_> = parts
+            .iter()
+            .map(|part| match part {
+                Part::Tool {
+                    state: ToolPartState::Completed { output, .. },
+                    ..
+                } => output.as_str().unwrap_or_default().to_string(),
+                _ => String::new(),
+            })
+            .collect();
+        assert!(outputs[0].starts_with("[tool output evicted"));
+        assert!(outputs[1].starts_with("[tool output evicted"));
+        assert!(outputs[2].starts_with("output-2"));
+        assert!(outputs[3].starts_with("output-3"));
     }
 
     #[test]
@@ -1561,6 +1734,7 @@ mod tests {
             }],
             finish: None,
             tokens: None,
+            last_round: None,
         }];
         let archive = snapcompact_archive(&msgs);
         assert!(
@@ -1706,6 +1880,33 @@ mod tests {
         );
         assert_eq!(sink.calls().len(), 1, "the notice must not be re-spilled");
     }
+    #[test]
+    fn eviction_reuses_sticky_placeholder_and_preserves_mail_notice() {
+        let body = format!(
+            "{}\n--- [NEW MAIL from scout] child failed",
+            "OLD".repeat(200)
+        );
+        let mut first = vec![assistant_with_tool(&body), assistant_with_tool("recent")];
+        let mut second = first.clone();
+        let sink = RecordingSink::new();
+        let mut sticky = std::collections::HashMap::new();
+
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(&mut first, 1, Some(&sink), &mut sticky),
+            1
+        );
+        let first_notice = tool_output_of(&first[0]).expect("first placeholder");
+        assert!(first_notice.contains("--- [NEW MAIL from scout] child failed"));
+        assert_eq!(
+            evict_stale_tool_outputs_sticky(&mut second, 1, Some(&sink), &mut sticky),
+            0
+        );
+        assert_eq!(
+            tool_output_of(&second[0]).as_deref(),
+            Some(first_notice.as_str())
+        );
+        assert_eq!(sink.calls().len(), 1);
+    }
 
     /// A sink that declines degrades to the lossy notice rather than failing the
     /// reduction that is trying to keep the turn inside its window.
@@ -1820,6 +2021,7 @@ mod tests {
             parts: Vec::new(),
             finish: None,
             tokens: usage,
+            last_round: None,
         }
     }
 

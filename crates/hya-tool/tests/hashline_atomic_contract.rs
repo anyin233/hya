@@ -118,6 +118,7 @@ fn ctx_with_formatter_session(
         roots: vec![workdir.clone()],
         workdir,
         cancel,
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

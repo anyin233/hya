@@ -44,6 +44,8 @@ pub mod native_bundle;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
+/// Read-only activity query scoped to the caller's Project.
+pub mod project_activity;
 /// Project-root path boundary shared by the builtin file tools (ADR-0026).
 pub mod project_scope;
 mod skill;
@@ -96,6 +98,10 @@ pub use permission::{
     InvocationPolicy, InvocationRule, Mode, PermissionError, PermissionInterceptor,
     PermissionModel, PermissionPlane, PermissionRules, PermissionTarget, RememberScope, Resource,
     Rule, external_directory_grant_matches, glob_match,
+};
+pub use project_activity::{
+    ProjectActivityError, ProjectActivityFile, ProjectActivityPlane, ProjectActivityRequest,
+    ProjectActivityRequestMsg, ProjectActivityResult, ProjectActivitySession,
 };
 pub use project_scope::ProjectScope;
 pub use skill::{SkillError, SkillInfo, SkillPlane};

@@ -60,13 +60,18 @@ pub(crate) async fn session_agent_with_guidance(
         .clone()
         .unwrap_or_else(|| agent.name.clone());
     agent.name = active_name;
-    // Session model is applied by the engine from projection; AgentSpec.model
-    // remains the server default fallback for routes that read it before bind.
+    // Effort is resolved per request by the engine (`effective_effort`):
+    // suffix, Agent policy, stored preference, the active model's configured
+    // default, then the global default. A startup Agent effort belongs to the
+    // startup model, so a switched session drops it rather than carry it over.
     let active_model = projection
         .session
         .model
         .clone()
         .unwrap_or_else(|| agent.model.clone());
+    if active_model != agent.model {
+        agent.reasoning = None;
+    }
     agent.model = active_model;
     let guidance = guidance_at(st, &workdir).await;
     Ok(SessionTurnAgent { agent, guidance })

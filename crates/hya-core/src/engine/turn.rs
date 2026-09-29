@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, PartId, Role,
     SessionId, TokenUsage, ToolCallId, UsagePurpose,
@@ -8,6 +5,8 @@ use hya_proto::{
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
@@ -562,6 +561,82 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
             .await
     }
+
+    /// Drive a handoff continuation under the turn claim the resume driver
+    /// already reserved. Reserving the lease before the resume tail check is
+    /// what keeps a second discovery pass from queueing a duplicate
+    /// continuation behind the first; the reservation moves into the turn
+    /// here and is released when the continuation ends.
+    pub(crate) async fn run_handoff_continuation(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        lease: TurnLease,
+        guidance: Option<Arc<str>>,
+    ) -> Result<FinishReason, CoreError> {
+        let request = TurnRequestContext::new(CancellationToken::new(), &[], guidance, None, None)
+            .with_lease(lease);
+        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
+            .await
+    }
+    /// Append a durable handoff reply's tool error and continue exactly once.
+    /// The caller acknowledges its durable reply only after success.
+    pub async fn continue_after_handoff_tool_error(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        call: ToolCallId,
+        reason: impl Into<String>,
+        agent: &AgentSpec,
+    ) -> Result<FinishReason, CoreError> {
+        let lease = self.try_begin_turn(session)?;
+        let reason = reason.into();
+        self.emit(
+            session,
+            Event::ToolError {
+                session,
+                message,
+                part,
+                call,
+                value: Some(serde_json::json!({"error": reason})),
+                message_text: "tool execution was interrupted during daemon handoff".to_string(),
+            },
+        )
+        .await?;
+        self.run_handoff_continuation(session, agent, lease, None)
+            .await
+    }
+    /// Append a transferred tool result and continue exactly once. The result
+    /// must have been produced by the successor-side continuation driver; this
+    /// method never replays the old tool call.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn continue_after_handoff_tool_result(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        part: PartId,
+        call: ToolCallId,
+        output: serde_json::Value,
+        time_ms: u64,
+        agent: &AgentSpec,
+    ) -> Result<FinishReason, CoreError> {
+        let lease = self.try_begin_turn(session)?;
+        self.emit(
+            session,
+            Event::ToolResult {
+                session,
+                message,
+                part,
+                call,
+                output,
+                time_ms,
+            },
+        )
+        .await?;
+        self.run_handoff_continuation(session, agent, lease, None)
+            .await
+    }
     pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,
@@ -848,6 +923,8 @@ impl SessionEngine {
                 }
             };
             let (agent, agents, resources) = prepared?;
+            // `list_agents` shows the user's runtime/configured Agent efforts.
+            let agents = self.annotate_agent_efforts(agents).await?;
             let message = MessageId::new();
             let stable_id = projection
                 .session
@@ -911,14 +988,14 @@ impl SessionEngine {
                         biased;
                         _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
                         _ = loss_token.cancelled() => Err(CoreError::Cancelled),
-                        outcome = self.run_turn_rounds(session, message, &agent, execution) => outcome,
+                        outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
                     }
                 }
                 None => {
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
-                        outcome = self.run_turn_rounds(session, message, &agent, execution) => outcome,
+                        outcome = Box::pin(self.run_turn_rounds(session, message, &agent, execution)) => outcome,
                     }
                 }
             };
@@ -1227,6 +1304,41 @@ impl SessionEngine {
                 .await?;
                 return Ok(FinishReason::Cancelled);
             }
+            // Restart-handoff boundary check. This is the one safe point to
+            // hand a turn to a successor: the previous round's provider stream
+            // and tool calls are fully durable here and the next model call has
+            // not started, so nothing mid-flight is cancelled and no side
+            // effect is ever replayed. A quiesced gate reaches this check on
+            // every activation's next round:
+            //   * a Root turn checkpoints atomically (close the open assistant
+            //     message with `cause: handoff` and queue the pending-resume
+            //     row in one store transaction) and ends — the successor
+            //     continues the session without a new prompt. The store refuses
+            //     the checkpoint while a tool part is still open, so the turn
+            //     keeps running and the handoff aborts rather than erroring a
+            //     live call away;
+            //   * a Bound/Resolved member turn is NOT a boundary at all: it
+            //     keeps running to its natural end. Ending it here would drop
+            //     its episode mid-flight and claim the parent re-drives it — a
+            //     resident's parent never does, so the child work would be
+            //     lost. While it runs it holds its lease: a handoff whose
+            //     deadline passes with members still working is rejected, and
+            //     one that succeeds finds the member idle, whose durable claim
+            //     the successor's resident recovery revives;
+            //   * a Workflow-routed turn is equally not a boundary — it keeps
+            //     running and the restart aborts at the deadline instead.
+            // A failed checkpoint is equally not a boundary: the turn keeps
+            // running and the handoff aborts rather than silently dropping it.
+            if workflow_route.is_none() && apply_default_overlays && self.turn_gate.quiescing() {
+                match self.checkpoint_turn_for_handoff(session).await {
+                    Ok(()) => return Ok(FinishReason::Cancelled),
+                    Err(error) => tracing::warn!(
+                        session = %session,
+                        %error,
+                        "handoff checkpoint failed; this turn keeps running and the restart will abort"
+                    ),
+                }
+            }
 
             let mut projection = self.store.read_projection(session).await?;
             // Owned so the round rebind below can swap the active agent spec
@@ -1287,7 +1399,7 @@ impl SessionEngine {
                                 live_binding = fresh;
                                 live_agent = materialized;
                                 live_resources = compiled;
-                                live_agents = roster;
+                                live_agents = self.annotate_agent_efforts(roster).await?;
                                 binding = &live_binding;
                                 resources = &live_resources;
                                 agents = &live_agents;
@@ -1334,6 +1446,22 @@ impl SessionEngine {
             let attachments = self.attachment_data(session, &projection).await?;
             let mut messages =
                 projection_to_messages(&live_agent, &projection, &model, &attachments);
+            let mut fold_config = self.compaction;
+            if matches!(messages.last(), Some(Message::Assistant { .. })) {
+                fold_config.keep_recent = fold_config.keep_recent.saturating_add(1);
+            }
+            // Earlier evictions of this session stay in effect: re-apply their
+            // exact placeholders before measuring, so the prefix stays
+            // byte-stable (provider prompt cache) and a request they already
+            // keep under the threshold does not walk the ladder again.
+            let mut sticky_evictions = self
+                .sticky_evictions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&session)
+                .unwrap_or_default();
+            crate::compaction::apply_sticky_evictions(&mut messages, &sticky_evictions);
+
             // Active route for this turn. Its advertised context window scales
             // the compaction threshold, so resolve it before deciding.
             let capabilities = self.provider_router().capabilities(&model);
@@ -1341,21 +1469,20 @@ impl SessionEngine {
                 &self.compaction,
                 capabilities.as_ref().map(|c| c.max_context),
             );
-            // Routes advertise usage support they do not always honour, so the
-            // claim is an input to the accounting decision, not the decision.
-            let usage_reporting = capabilities.as_ref().is_some_and(|c| c.usage_reporting);
             // One running token count for the whole reduction sequence. It starts
-            // from the provider-measured value when that is believable, then tracks
-            // request-local edits by delta — re-measuring after an edit would
-            // return the stale pre-edit number and hide the saving.
-            let initial_count = self
-                .token_accounting
-                .tokens_in_use(&messages, usage_reporting);
+            // with the request occupancy and is adjusted after each rung so the
+            // next decision reflects the transcript that will actually be sent.
+            // Route-specific accounting must mirror what its encoder replays.
+            let usage_reporting = capabilities.as_ref().is_some_and(|c| c.usage_reporting);
+            let reasoning_policy = self.provider_router().reasoning_replay_policy(&model);
+            let initial_count = self.token_accounting.tokens_in_use_with_reasoning_policy(
+                &messages,
+                usage_reporting,
+                reasoning_policy,
+            );
             let mut tokens = initial_count.tokens;
             let token_source = initial_count.source;
-            let over_threshold = |tokens: usize, messages: &[_]| {
-                messages.len() > self.compaction.keep_recent && tokens > resolved_threshold
-            };
+            let over_threshold = |tokens: usize| tokens > resolved_threshold;
 
             // Reduction ladder: the five built-in mechanisms (oh-my-pi parity),
             // walked in the configured order — `compaction.method_order`. The
@@ -1377,7 +1504,7 @@ impl SessionEngine {
             // trigger is Overflow: the request cannot go out un-compacted, so
             // `resolve_compaction_decision` demotes any Skip to a warning and
             // a Replace only rewrites the summarizer instructions below.
-            let summarizer_instructions = if over_threshold(tokens, &messages) {
+            let summarizer_instructions = if over_threshold(tokens) {
                 match self.active_hook_dispatcher(session) {
                     Some(hooks) => {
                         let decision = hooks
@@ -1406,8 +1533,16 @@ impl SessionEngine {
             let mut committed_summary_tokens: Option<usize> = None;
 
             for rung in self.compaction.method_order {
-                if !over_threshold(tokens, &messages) {
+                if !over_threshold(tokens) {
                     break;
+                }
+                if matches!(rung, crate::compaction::CompactionRung::SpillToolOutputs)
+                    && !crate::compaction::has_spillable_tool_output(
+                        &messages,
+                        fold_config.keep_recent,
+                    )
+                {
+                    continue;
                 }
                 // Snapshot what tripped the threshold before this rung edits the
                 // transcript, so each record explains why that rung ran.
@@ -1416,17 +1551,22 @@ impl SessionEngine {
 
                 match rung {
                     crate::compaction::CompactionRung::SpillToolOutputs => {
-                        let estimate_before = self.token_accounting.estimate(&messages);
-                        let evicted = crate::compaction::evict_stale_tool_outputs(
+                        let estimate_before = self
+                            .token_accounting
+                            .estimate_with_reasoning_policy(&messages, reasoning_policy);
+                        let evicted = crate::compaction::evict_stale_tool_outputs_sticky(
                             &mut messages,
-                            self.compaction.keep_recent,
+                            fold_config.keep_recent,
                             Some(&spill),
+                            &mut sticky_evictions,
                         );
                         if evicted == 0 {
                             continue;
                         }
-                        let saved = estimate_before
-                            .saturating_sub(self.token_accounting.estimate(&messages));
+                        let saved = estimate_before.saturating_sub(
+                            self.token_accounting
+                                .estimate_with_reasoning_policy(&messages, reasoning_policy),
+                        );
                         tokens = tokens.saturating_sub(saved);
                         // Record the saving whether or not it sufficed. A partial
                         // reduction that still needed a summary is real work, and
@@ -1506,15 +1646,16 @@ impl SessionEngine {
                         // gate. Folds the same prefix a summary would into the
                         // dense archive, so the ladder's model-free rung works
                         // even where no summarizer is wired at all.
-                        if messages.len() <= self.compaction.keep_recent {
-                            continue;
-                        }
-                        let split = messages.len() - self.compaction.keep_recent;
-                        let (Some(from), Some(to)) = (messages.first(), messages.get(split - 1))
+                        let Some((start, end)) =
+                            crate::compaction::foldable_range(&messages, fold_config.keep_recent)
                         else {
                             continue;
                         };
-                        let archive = crate::compaction::snapcompact_archive(&messages[..split]);
+                        let (Some(from), Some(to)) = (messages.get(start), messages.get(end - 1))
+                        else {
+                            continue;
+                        };
+                        let archive = crate::compaction::snapcompact_archive(&messages[start..end]);
                         let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
                         committed_summary_tokens = Some(body.len() / 4);
                         let injected = match actor_claim {
@@ -1536,7 +1677,7 @@ impl SessionEngine {
                                 strategy: CompactionStrategy::SnapCompact,
                                 from_message: from.id(),
                                 to_message: to.id(),
-                                folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+                                folded_count: u32::try_from(end - start).unwrap_or(u32::MAX),
                                 input_tokens_est,
                                 threshold,
                             },
@@ -1569,7 +1710,7 @@ impl SessionEngine {
                         };
                         let planned = crate::compaction::plan_handoff(
                             &messages,
-                            &self.compaction,
+                            &fold_config,
                             summarizer.as_ref(),
                             options,
                         )
@@ -1640,7 +1781,7 @@ impl SessionEngine {
                         };
                         let planned = crate::compaction::fold_prefix(
                             &messages,
-                            &self.compaction,
+                            &fold_config,
                             summarizer.as_ref(),
                             options,
                         )
@@ -1694,6 +1835,26 @@ impl SessionEngine {
                     }
                 }
             }
+            while sticky_evictions.len() > 4096 {
+                if let Some(key) = sticky_evictions.keys().next().copied() {
+                    sticky_evictions.remove(&key);
+                }
+            }
+            self.sticky_evictions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(session, sticky_evictions);
+            {
+                let mut sticky = self
+                    .sticky_evictions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if sticky.len() > 64
+                    && let Some(other) = sticky.keys().find(|key| **key != session).copied()
+                {
+                    sticky.remove(&other);
+                }
+            }
             // Notify `compaction.after` best-effort: an enrichment point, so a
             // failure inside the host is logged there and never surfaced here.
             if let (Some(hooks), Some(summary_tokens)) = (
@@ -1722,7 +1883,15 @@ impl SessionEngine {
                 },
             )
             .await?;
-            let request = request_from_messages(&live_agent, messages, resources, &model, depth);
+            // Resolved every round, so a preference saved mid-session applies
+            // to the next request without a restart. `live_agent.reasoning` is
+            // the Agent's authored effort; the user's per-Agent choices outrank it.
+            let effort = self
+                .effective_effort(&model, Some(&stable_id), live_agent.reasoning)
+                .await?
+                .effort;
+            let request =
+                request_from_messages(&live_agent, messages, resources, &model, depth, effort);
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 let root_session = self
                     .request_root_session(session, &mut root_session_cache)
@@ -1751,71 +1920,110 @@ impl SessionEngine {
                 (Some(gov), false) => gov.acquire_reserved_stream().await,
                 (None, _) => None,
             };
-            self.validate_actor_claim(actor_claim).await?;
-            let (stream, served_model) = if let Some(route) = workflow_route {
+            let mut round_retries = 0;
+            let stream_round = loop {
+                self.validate_actor_claim(actor_claim).await?;
+                let (stream, served_model) = if let Some(route) = workflow_route {
+                    match self
+                        .stream_with_workflow_route(request.clone(), session, message, route)
+                        .await
+                    {
+                        Ok(opened) => opened,
+                        Err(error) => {
+                            if let Some(route) = workflow_route {
+                                route
+                                    .finalize(Some(workflow_provider_failure_class(&error)))
+                                    .await?;
+                            }
+                            return Err(error.into());
+                        }
+                    }
+                } else {
+                    self.stream_with_model_fallback(
+                        request.clone(),
+                        session,
+                        message,
+                        RequestLineage {
+                            agent: stable_id.as_str(),
+                            root_session_cache: &mut root_session_cache,
+                        },
+                    )
+                    .await?
+                };
+                let step = rounds + round_retries;
+                self.emit_for_actor(
+                    actor_claim,
+                    session,
+                    Event::StepStarted {
+                        session,
+                        message,
+                        step,
+                    },
+                )
+                .await?;
                 match self
-                    .stream_with_workflow_route(request, session, message, route)
+                    .collect_stream_round(
+                        session,
+                        message,
+                        stream,
+                        actor_claim,
+                        RoundAttribution {
+                            step,
+                            model: served_model,
+                        },
+                    )
                     .await
                 {
-                    Ok(opened) => opened,
-                    Err(error) => {
-                        route
-                            .finalize(Some(workflow_provider_failure_class(&error)))
-                            .await?;
-                        return Err(error.into());
+                    Ok(stream_round) => {
+                        if let Some(route) = workflow_route {
+                            route.finalize(None).await?;
+                        }
+                        break stream_round;
                     }
-                }
-            } else {
-                self.stream_with_model_fallback(
-                    request,
-                    session,
-                    message,
-                    RequestLineage {
-                        agent: stable_id.as_str(),
-                        root_session_cache: &mut root_session_cache,
-                    },
-                )
-                .await?
-            };
-            let step = rounds;
-            self.emit_for_actor(
-                actor_claim,
-                session,
-                Event::StepStarted {
-                    session,
-                    message,
-                    step,
-                },
-            )
-            .await?;
-            let stream_round = match self
-                .collect_stream_round(
-                    session,
-                    message,
-                    stream,
-                    actor_claim,
-                    RoundAttribution {
-                        step,
-                        model: served_model,
-                    },
-                )
-                .await
-            {
-                Ok(stream_round) => {
-                    if let Some(route) = workflow_route {
-                        route.finalize(None).await?;
+                    Err(failure) => {
+                        self.emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::StepFinished {
+                                session,
+                                message,
+                                step,
+                                finish: FinishReason::Error,
+                            },
+                        )
+                        .await?;
+                        let retryable = round_retries < MAX_ROUND_RETRIES
+                            && !failure.saw_tool_call
+                            && !failure.saw_text
+                            && is_retryable_round_error(&failure.error);
+                        if !retryable {
+                            if let Some(route) = workflow_route {
+                                route
+                                    .finalize(Some(workflow_failure_class(&failure.error, cancel)))
+                                    .await?;
+                            }
+                            return Err(failure.error);
+                        }
+                        round_retries += 1;
+                        tracing::warn!(
+                            %session,
+                            retry = round_retries,
+                            "provider round failed before text or tool output; retrying"
+                        );
+                        let delay = std::time::Duration::from_secs(1 << (round_retries - 1))
+                            + std::time::Duration::from_millis(50 * u64::from(round_retries));
+                        tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => return Err(CoreError::Cancelled),
+                            () = tokio::time::sleep(delay) => {}
+                        }
                     }
-                    stream_round
-                }
-                Err(error) => {
-                    if let Some(route) = workflow_route {
-                        route
-                            .finalize(Some(workflow_failure_class(&error, cancel)))
-                            .await?;
-                    }
-                    return Err(error);
                 }
             };
+            // Failed attempts consume step numbers so subsequent tool rounds do
+            // not reuse a step already recorded in the event log; `rounds` is
+            // now the step of the attempt that succeeded.
+            rounds += round_retries;
             if let Some(tokens) = stream_round.tokens {
                 total_tokens
                     .get_or_insert_with(TokenUsage::default)
@@ -1827,7 +2035,7 @@ impl SessionEngine {
                 Event::StepFinished {
                     session,
                     message,
-                    step,
+                    step: rounds,
                     finish: stream_round.finish,
                 },
             )
@@ -1936,11 +2144,14 @@ impl SessionEngine {
                                 )),
                             ));
                         }
-                        let result = match authorize_tool_call(
-                            &resolved, &tc.input, permission, message, tc.call,
-                        )
-                        .await
-                        {
+                        // The ask a restart handoff must not strand: mark the
+                        // decision in flight for the authorize await only.
+                        let authorized = {
+                            let _pending_ask = self.pending_ask_guard(session);
+                            authorize_tool_call(&resolved, &tc.input, permission, message, tc.call)
+                                .await
+                        };
+                        let result = match authorized {
                             Ok(permission) => {
                                 let channel_policy = crate::ChannelPolicy::from_binding(binding)?
                                     .snapshot_for(live_agent.name.as_str());
@@ -1970,6 +2181,7 @@ impl SessionEngine {
                                         .for_session(session)
                                         .with_channel_policy(channel_policy)
                                         .with_report_latch(report_latch.clone()),
+                                    project_activity: self.project_activity.for_session(session),
                                     session: Some(session),
                                     parent_session: projection.session.parent,
                                     todo: self.todo.clone(),
@@ -2175,6 +2387,29 @@ impl SessionEngine {
 
             rounds += 1;
         }
+    }
+}
+
+/// Maximum additional provider opens for one engine round.
+const MAX_ROUND_RETRIES: u32 = 2;
+
+/// Mid-stream retries are limited to link failures that are safe to replay before
+/// any assistant text or tool request was delivered. Decode is deliberately
+/// narrow: only the known truncated response-body diagnostics are included.
+fn is_retryable_round_error(error: &CoreError) -> bool {
+    let CoreError::Provider(error) = error else {
+        return false;
+    };
+    match error.as_ref() {
+        ProviderError::Transport(_) => true,
+        ProviderError::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
+        ProviderError::Decode(message) => {
+            let message = message.to_ascii_lowercase();
+            message == "error decoding response body"
+                || message.contains("unexpected eof")
+                || message.contains("unexpected end of file")
+        }
+        _ => false,
     }
 }
 

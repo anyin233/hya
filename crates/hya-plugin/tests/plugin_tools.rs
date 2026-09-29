@@ -102,6 +102,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         workdir: PathBuf::from("."),
         roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
+        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
     }
 }
 

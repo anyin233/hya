@@ -675,9 +675,12 @@ Stream events come in two kinds:
 
 **`catalogUpdated`.** When the provider/model catalog changes — a provider
 is added, edited, or refreshed, a key is set or removed, or startup model
-discovery finishes — every live stream (global and each session stream)
-receives one live-only `catalogUpdated` frame with an empty `projectId` and
-an empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
+discovery finishes — or a saved thinking effort changes
+(`SetModelEffortPreference`, `SetAgentEffort`), every live stream (global and
+each session stream) receives one live-only `catalogUpdated` frame with an
+empty `projectId` and an empty `session`. Re-read `GET /v1/models` /
+`GET /v1/providers`, and the open sessions (`GET /v1/sessions/{id}`) for their
+`effectiveEffort`.
 
 ```json
 { "event": { "timeRecorded": "2026-09-26T10:00:00Z", "catalogUpdated": {} } }
@@ -715,9 +718,10 @@ While a provider round streams, each assistant text part arrives live as
 `partCompleted`. When the round's stream ends, the durable log records the
 same part once, with the **same** message and part ids: `partStarted`,
 `partReplaced` (`text` = the final full text), `partCompleted`. Reasoning
-deltas and user-message text are durable `partStarted` / `partAppended` /
-`partCompleted` events; tool-call arguments are durable `partStarted` /
-`partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
+deltas are live-only (`seq = 0`) and durable replay emits the same
+`partStarted` / `partReplaced` / `partCompleted` sequence; legacy durable
+reasoning deltas remain accepted. Tool-call arguments are durable
+`partStarted` / `partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
 A prompt's image attachments arrive as one durable `partsAdded` (see
 [Prompt attachments](#prompt-attachments-images)).
 A `text_complete`
@@ -982,6 +986,8 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
 { "id": "gw/alpha", "providerId": "gw", "modelId": "alpha",
   "displayName": "Alpha",
   "reasoning": true,        // declared by metadata; absent when unknown
+  "reasoningVariants": ["none", "low", "medium", "high"],
+  "reasoningDefault": "medium", // explicit model config only; optional
   "auth": "AUTH_STATUS_CREDENTIALED",
   "contextLimit": "64000",  // uint64 → strings; absent when unknown
   "outputLimit": "4096",    // absent when unknown
@@ -1025,6 +1031,10 @@ model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
   `outputLimit`; without a reasoning claim it omits `reasoning` (the route
   still accepts its provider family's effort variants). `reasoning: false`
   is an explicit claim (`reasoning: false` in config).
+- `ModelSummary.reasoningVariants` reports the model's advertised effort menu.
+  `reasoningDefault` is present only for an explicit configured default; an
+  absent default means the runtime sends no reasoning effort unless the
+  request model reference includes `#variant`.
 - `SetProviderModel` patches one model entry in the provider's `models:`
   (adding a bare `- <modelId>` entry when there is none). An absent field
   keeps the entry's current value; `displayName: ""` removes `name`;
@@ -1202,6 +1212,12 @@ WebSocket speaking the same frames as the gRPC `StreamPty` rpc:
 The first server frame replays the current buffer. Resize currently relies
 on the shell's own TTY sizing; a runtime resize API is tracked in the
 consolidation plan.
+The PTY socket and child process are process-local. A WebSocket close or
+backend restart cannot reattach the old shell: clients MUST create a new PTY
+and connect a new ticket, then treat it as a new terminal. The first frame of
+that new connection replays only the new PTY's current buffer; it is not a
+continuity or command-replay guarantee. This differs from event streams,
+whose durable session transcript can be resynchronized with `sinceSeq`.
 
 ## Server shutdown
 

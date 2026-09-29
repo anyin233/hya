@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
-import type { HyaClient } from "../src/client"
-import { nativeCommands } from "../src/completion"
-import { createCommandRegistry, type AppActions } from "../src/commands"
-import { createAppStore } from "../src/state/store"
+import { HttpError, type HyaClient } from "../src/client"
+import type { TuiPreferences } from "../src/prefs"
+import { nativeCommands, type CompletionContext } from "../src/completion"
+import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandContext } from "../src/commands"
+import { createAppStore, type AppStore } from "../src/state/store"
+import { modelReference } from "../src/state/format"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 
@@ -22,7 +24,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openDiff: () => { calls.push("diff") },
     openMcp: () => { calls.push("mcp") },
     openRules: () => { calls.push("rules") },
-    openAgentModels: () => { calls.push("agentModels") },
+    openAgents: () => { calls.push("agents") },
     openProjectView: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
@@ -43,9 +45,70 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     deleteSession: async (id) => { calls.push(`delete ${id}`); await (client as HyaClient).deleteSession(id) },
   }
   const registry = createCommandRegistry()
-  const context = { store, client: { listSessions: async () => store.state.sessions, ...client } as HyaClient, actions }
+  const clientWithDefaults = {
+    listSessions: async () => store.state.sessions,
+    setAgentModel: async () => ({}),
+    setAgentEffort: async (agent: string, effort: string) => ({ agentId: agent, effort }),
+    ...client,
+  } as HyaClient
+  const context = { store, client: clientWithDefaults, actions }
   return { store, calls, pickers, registry, run: (text: string) => registry.dispatch(text, context) }
 }
+
+test("/model persists an agent model and explicit effort", async () => {
+  const writes: string[] = []
+  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
+  const h = harness({
+    updateSessionModel: async (id, model) => {
+      writes.push(`session ${id}=${model}`)
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      return { ...session, model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+    },
+    setAgentModel: async (agent, preference, id) => {
+      writes.push(`agent-model ${agent}=${preference?.providerId}/${preference?.modelId} session=${id}`)
+      return {} as Awaited<ReturnType<HyaClient["setAgentModel"]>>
+    },
+    setAgentEffort: async (agent, effort) => {
+      writes.push(`agent-effort ${agent}=${effort}`)
+      return { agentId: agent, effort }
+    },
+  })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], workflows: [], providers: [], commands: [] })
+  h.store.openSession(session)
+  await h.run("/model openai/gpt#high")
+  expect(writes).toEqual([
+    "session hysec_1=openai/gpt#high",
+    "agent-model build=openai/gpt session=hysec_1",
+    "agent-effort build=high",
+  ])
+})
+
+test("/model on a config-pinned agent switches only the session", async () => {
+  const writes: string[] = []
+  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "old" } }
+  const h = harness({
+    updateSessionModel: async (id, model) => {
+      writes.push(`session ${id}=${model}`)
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      return { ...session, model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+    },
+    setAgentModel: async () => {
+      throw new HttpError(409, "PUT", "/v1/agent-models/build", "conflict: Agent `build` has a configured model")
+    },
+    setAgentEffort: async (agent, effort) => {
+      writes.push(`agent-effort ${agent}=${effort}`)
+      return { agentId: agent, effort }
+    },
+  })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt", reasoningVariants: ["high"] }], workflows: [], providers: [], commands: [] })
+  h.store.openSession(session)
+  await h.run("/model openai/gpt#high")
+  // The configured default stays in config.yaml; the session keeps the `#high` suffix itself.
+  expect(writes).toEqual(["session hysec_1=openai/gpt#high"])
+  expect(h.store.state.status).toBe("Model → openai/gpt#high")
+})
 
 test("registers every native slash command with a description", () => {
   const { registry } = harness()
@@ -56,6 +119,43 @@ test("registers every native slash command with a description", () => {
   expect(registry.get("/key")?.complete).toBeUndefined()
   expect(registry.get("/keys")).toBeUndefined()
   expect(registry.get("/login")).toBeUndefined()
+})
+
+test("/effort saves the choice on the layer that decides the session's effort", async () => {
+  const writes: string[] = []
+  const session = { id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }
+  // The session's effort as the server resolves it after each write.
+  let resolved: { effectiveEffort?: string; effortSource?: string } = { effectiveEffort: "high", effortSource: "EFFORT_SOURCE_AGENT" }
+  const h = harness({
+    setModelEffortPreference: async (providerId, modelId, effort) => {
+      writes.push(`model ${providerId}/${modelId}=${effort}`)
+      return { providerId, modelId, effort }
+    },
+    setAgentEffort: async (agentId, effort) => {
+      writes.push(`agent ${agentId}=${effort}`)
+      resolved = effort ? { effectiveEffort: effort, effortSource: "EFFORT_SOURCE_AGENT" } : {}
+      return { agentId, effort }
+    },
+    updateSessionModel: async (id, model) => {
+      writes.push(`session ${id}=${model}`)
+      return { ...session, ...resolved }
+    },
+    request: (async () => ({ ...session, ...resolved })) as HyaClient["request"],
+  })
+  h.store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoningVariants: ["low", "high"] }], workflows: [], providers: [], commands: [] })
+  // A `#high` suffix outranks everything: it is dropped, then the Agent's effort (which decides next) takes the choice.
+  h.store.openSession({ ...session, model: { ...session.model, variant: "high" }, effectiveEffort: "high", effortSource: "EFFORT_SOURCE_SUFFIX" })
+  await h.run("/effort low")
+  expect(writes).toEqual(["session hysec_1=openai/gpt-6-astra", "agent build=low"])
+  expect(h.store.state.selected?.effectiveEffort).toBe("low")
+  // `default` clears both remembered layers.
+  writes.length = 0
+  await h.run("/effort default")
+  expect(writes).toEqual(["agent build=", "model openai/gpt-6-astra="])
+  // No Agent effort: the per-model preference takes the choice.
+  writes.length = 0
+  await h.run("/effort high")
+  expect(writes).toEqual(["model openai/gpt-6-astra=high"])
 })
 
 test("parses a command line into name, words, and the raw argument text", () => {
@@ -84,13 +184,13 @@ test("/open resolves list numbers and /key opens the Provider View", async () =>
   expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
 })
 
-test("/diff, /mcp, /rules, /agent-models open their full-screen views", async () => {
+test("/diff, /mcp, /rules, /agent open their full-screen views", async () => {
   const { calls, run } = harness()
   await run("/diff")
   await run("/mcp")
   await run("/rules")
-  await run("/agent-models")
-  expect(calls).toEqual(["diff", "mcp", "rules", "agentModels"])
+  await run("/agent")
+  expect(calls).toEqual(["diff", "mcp", "rules", "agents"])
 })
 
 test("usage errors are thrown for incomplete commands", async () => {
@@ -124,7 +224,7 @@ test("a backend command turn's user message shows the /name args the user typed"
   expect(store.state.commandDisplay.get("msg_u1")).toBe("/review  src/main.ts")
 })
 
-test("/model and /agent with no argument open a picker of the catalog, the session's current value marked", async () => {
+test("/model with no argument opens a picker of the catalog, the session's current value marked", async () => {
   const { store, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
@@ -134,12 +234,9 @@ test("/model and /agent with no argument open a picker of the catalog, the sessi
   await run("/model")
   expect(pickers.at(-1)?.title).toBe("Model")
   expect(pickers.at(-1)?.rows).toEqual([{ id: "openai/gpt", label: "gpt", tag: "openai", detail: "", current: true }])
-  await run("/agent")
-  expect(pickers.at(-1)?.title).toBe("Agent")
-  expect(pickers.at(-1)?.rows).toEqual([{ id: "build", label: "build", tag: "", detail: "Default agent", current: true }])
 })
 
-test("/model and /agent with no session and no argument remember the picker choice for the next session", async () => {
+test("/model and /agent <name> with no session remember the choice for the next session", async () => {
   const { store, calls, pickers, run } = harness()
   store.applyCatalog({
     sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
@@ -149,9 +246,9 @@ test("/model and /agent with no session and no argument remember the picker choi
   await pickers.at(-1)?.onSelect({ id: "openai/gpt", label: "gpt" })
   expect(store.state.pendingModel).toBe("openai/gpt")
   expect(store.state.status).toContain("applies when the session is created")
-  await run("/agent")
-  await pickers.at(-1)?.onSelect({ id: "review", label: "review" })
+  await run("/agent review")
   expect(store.state.pendingAgent).toBe("review")
+  expect(store.state.status).toBe("Agent → review · applies when the session is created")
   expect(calls).toEqual([])
 })
 
@@ -166,6 +263,52 @@ test("/model and /agent with an argument switch the session", async () => {
   await run("/agent review")
   expect(store.state.selected?.agent).toBe("review")
 })
+
+/** A harness whose `updateSessionModel` behaves like the server (echoing the parsed reference), with the references it received. */
+function modelSwitchingHarness() {
+  const updates: string[] = []
+  const h = harness({
+    updateSessionModel: async (session: string, model: string) => {
+      updates.push(`${session}:${model}`)
+      const [base, variant] = model.split("#", 2)
+      const [providerId, modelId] = base!.split("/", 2)
+      return { id: session, agent: "build", workdir: "/w", model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+    },
+  })
+  return { ...h, updates }
+}
+
+const astra = { id: "openai/gpt-6-astra", providerId: "openai", modelId: "gpt-6-astra", reasoning: true, reasoningVariants: ["minimal", "low", "medium", "high"] }
+
+function effortContext(events: string[], store: AppStore): CommandContext {
+  return {
+    store,
+    client: {
+      updateSessionModel: async (session: string, model: string) => {
+        events.push(`model ${model}`)
+        const [base, variant] = model.split("#", 2)
+        const [providerId, modelId] = base!.split("/", 2)
+        return { id: session, agent: "build", workdir: "/w", model: { providerId, modelId, ...(variant ? { variant } : {}) } }
+      },
+    } as unknown as HyaClient,
+    actions: {
+      refresh: async () => { events.push("refresh") },
+      savePreferences: (patch: Partial<TuiPreferences>) => { events.push(`prefs ${JSON.stringify(patch)}`) },
+    } as unknown as AppActions,
+  }
+}
+
+
+test("/think aliases /effort and wins any backend name clash", async () => {
+  const { registry } = harness()
+  expect(registry.get("/think")?.run).toBe(registry.get("/effort")?.run)
+  expect(registry.complete("/think lo", {} as CompletionContext)).toEqual(["/think low"])
+  // The backend removed its placeholder `think` row; if a catalog ever
+  // re-advertises that name, the local command still wins the merge.
+  const entries = mergeCommandEntries(registry.list(), [{ name: "think", description: "set reasoning effort" }])
+  expect(entries.filter((entry) => entry.name === "/think")).toEqual([{ name: "/think", description: "Set the thinking effort (alias of /effort)", argumentHint: "[default|none|minimal|low|medium|high|xhigh|max]", source: "local" }])
+})
+
 
 test("/rename updates the session title", async () => {
   const { store, run } = harness({
@@ -221,6 +364,7 @@ test("/status shows server, version, directory, session, agent, model, and mode"
   expect(text).toContain("Session     Fix bug")
   expect(text).toContain("Agent       build")
   expect(text).toContain("Model       openai/gpt")
+  expect(text).toContain("Thinking    default")
   expect(text).toContain("Mode        yolo")
   expect(text).not.toContain("WebUI")
 })
