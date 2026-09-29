@@ -21,6 +21,10 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/agent-models", get(list_agent_models))
         .route("/v1/agent-models/:agent_id", put(set_agent_model))
         .route(
+            "/v1/agent-models/:agent_id/configuration",
+            put(save_agent_model_configuration),
+        )
+        .route(
             "/v1/model-effort-preferences",
             get(list_model_effort_preferences),
         )
@@ -63,7 +67,69 @@ fn state_row(row: &crate::agent_model_control::AgentModelState) -> pb::AgentMode
         session_override: row.session_override.as_ref().map(selection),
         effort: String::new(),
         effort_source: pb::AgentEffortSource::None as i32,
+        configuration_path: row.configuration_path.clone().unwrap_or_default(),
     }
+}
+
+/// Parse a `SetAgentModel`/`SaveAgentModelConfiguration` PUT body and bind it.
+///
+/// `directory` and `session` are body fields of these PUTs (protojson
+/// mapping); the query string is not consulted. `field` names the optional
+/// `AgentModelSelection` (absent or `null` clears), and `label` words its
+/// decode error.
+async fn agent_model_body(
+    st: &ServerState,
+    body: Option<&serde_json::Value>,
+    field: &str,
+    label: &str,
+) -> Result<(hya_core::TurnBinding, Option<AgentModelIdentity>), V1Error> {
+    let body_text = |name: &str| -> Result<String, V1Error> {
+        match body.and_then(|value| value.get(name)) {
+            None | Some(serde_json::Value::Null) => Ok(String::new()),
+            Some(serde_json::Value::String(text)) => Ok(text.clone()),
+            Some(_) => Err(V1Error::invalid_argument(format!(
+                "invalid request body: `{name}` must be a string"
+            ))),
+        }
+    };
+    let directory = body_text("directory")?;
+    let session = body_text("session")?;
+    let selection = match body.and_then(|value| value.get(field)) {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => {
+            let selection: pb::AgentModelSelection = serde_json::from_value(value.clone())
+                .map_err(|error| V1Error::invalid_argument(format!("invalid {label}: {error}")))?;
+            validate_identity(&selection)?;
+            Some(AgentModelIdentity::new(
+                selection.provider_id,
+                selection.model_id,
+            ))
+        }
+    };
+    let session = parse_scope_session(&session).await?;
+    let binding = model_binding(st, &directory, session).await?;
+    Ok((binding, selection))
+}
+
+/// Write an agent's model into its owning configuration file (live), keeping
+/// any distinct session override.
+async fn save_agent_model_configuration(
+    State(st): State<ServerState>,
+    AxumPath(agent_id): AxumPath<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<Json<pb::AgentModelState>, V1Error> {
+    ensure_available(&st)?;
+    let body = body.map(|Json(value)| value);
+    let (binding, model) = agent_model_body(&st, body.as_ref(), "model", "agent model").await?;
+    let row = st
+        .agent_model_control
+        .save_configuration(binding.clone(), agent_id, model, st.agent.model.clone())
+        .await
+        .map_err(map_control_error)?;
+    super::providers::notify_catalog_updated(&st);
+    Ok(Json(
+        with_agent_effort(&st, &binding, state_row(&row)).await?,
+    ))
 }
 
 /// Fill the row's default effort with the same Agent layer the turn loop
@@ -188,40 +254,9 @@ async fn set_agent_model(
     body: Option<Json<serde_json::Value>>,
 ) -> Result<Json<pb::AgentModelState>, V1Error> {
     ensure_available(&st)?;
-    // `directory` and `session` are body fields of this PUT (protojson
-    // mapping); the query string is not consulted.
-    let body_text = |name: &str| -> Result<String, V1Error> {
-        match body.as_ref().and_then(|Json(value)| value.get(name)) {
-            None | Some(serde_json::Value::Null) => Ok(String::new()),
-            Some(serde_json::Value::String(text)) => Ok(text.clone()),
-            Some(_) => Err(V1Error::invalid_argument(format!(
-                "invalid request body: `{name}` must be a string"
-            ))),
-        }
-    };
-    let directory = body_text("directory")?;
-    let session = body_text("session")?;
-    let preference = match body.as_ref().and_then(|Json(value)| value.as_object()) {
-        Some(map) => match map.get("preference") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(value) => {
-                let selection: pb::AgentModelSelection = serde_json::from_value(value.clone())
-                    .map_err(|error| {
-                        V1Error::invalid_argument(format!(
-                            "invalid agent model preference: {error}"
-                        ))
-                    })?;
-                validate_identity(&selection)?;
-                Some(AgentModelIdentity::new(
-                    selection.provider_id,
-                    selection.model_id,
-                ))
-            }
-        },
-        _ => None,
-    };
-    let session = parse_scope_session(&session).await?;
-    let binding = model_binding(&st, &directory, session).await?;
+    let body = body.map(|Json(value)| value);
+    let (binding, preference) =
+        agent_model_body(&st, body.as_ref(), "preference", "agent model preference").await?;
     let row = st
         .agent_model_control
         .set(

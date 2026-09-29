@@ -1,12 +1,12 @@
 /**
- * Picker row builders for `/model`, `/agent`, and `/sessions` (S9, C11–C13):
- * models tagged by provider, visible (non-hidden) agents with their default
- * model, and sessions as a nested tree (S6's nesting rules, state/format.ts
- * `sessionTree`) with a relative update time and a busy marker. Pure; the
- * commands (`commands/native.ts`) build the current-value id, and
- * `state/picker.ts`/`components/Picker.tsx` render the rows.
+ * Picker row builders for `/model`, `/effort`, and `/sessions` (S9, C11,
+ * C13): models tagged by provider, effort levels, and sessions as a nested
+ * tree (S6's nesting rules, state/format.ts `sessionTree`) with a relative
+ * update time and a busy marker. Pure; the commands (`commands/native.ts`)
+ * build the current-value id, and `state/picker.ts`/`components/Picker.tsx`
+ * render the rows. `/agent` opens the Agents view (state/agentsView.ts).
  */
-import type { AgentSummary, ModelSummary, SessionInfo } from "../client"
+import type { ModelSummary, SessionInfo } from "../client"
 import { modelReference, sessionTree } from "./format"
 import { sessionsInScope } from "./projects"
 import type { PickerRow } from "./picker"
@@ -66,21 +66,6 @@ export function effortRows(model: ModelSummary | undefined, explicit: string | u
       current: explicit === effort,
     })),
   ]
-}
-
-/** `/agent` picker rows: visible agents only, tagged with the default `provider/model[#variant]`; `current` is the session's agent name. */
-export function agentRows(agents: readonly AgentSummary[], current: string): PickerRow[] {
-  return agents
-    .filter((agent) => !agent.hidden)
-    .map((agent) => ({
-      id: agent.name,
-      label: agent.name,
-      tag: agent.model?.providerId && agent.model.modelId
-        ? `${agent.model.providerId}/${agent.model.modelId}${agent.model.variant ? `#${agent.model.variant}` : ""}`
-        : "",
-      detail: agent.description ?? "",
-      current: agent.name === current,
-    }))
 }
 
 const minute = 60

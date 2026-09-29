@@ -18,6 +18,12 @@
     "streaming": false
   },
   {
+    "method": "PUT",
+    "path": "/v1/agent-models/{agent_id}/configuration",
+    "operationId": "AgentModels.SaveAgentModelConfiguration",
+    "streaming": false
+  },
+  {
     "method": "GET",
     "path": "/v1/agents",
     "operationId": "Catalog.ListAgents",

@@ -366,6 +366,8 @@ export interface AgentModelState {
   /** `AGENT_MODEL_SOURCE_SESSION`, `_CONFIGURED`, `_REMEMBERED`, `_DEFAULT`. */
   source?: string
   configuration?: AgentModelSelection
+  /** The owning config file (`config.yaml`, or a bundle's `config.yml`) that `SaveAgentModelConfiguration` writes; absent when none. */
+  configurationPath?: string
   sessionOverride?: AgentModelSelection
   /** The agent's own default thinking effort; absent: its model's default applies. */
   effort?: string
@@ -937,6 +939,14 @@ export class HyaClient {
       ...(this.directory ? { directory: this.directory } : {}),
       ...(session ? { session } : {}),
       ...(preference ? { preference } : {}),
+    }, signal)
+  }
+
+  /** `SaveAgentModelConfiguration` (`PUT /v1/agent-models/{agentId}/configuration`): write the agent's model into its owning config file; absent `model` clears it. */
+  async saveAgentModelConfiguration(agentId: string, model: AgentModelSelection | undefined, signal?: AbortSignal): Promise<AgentModelState> {
+    return this.request("PUT", `/v1/agent-models/${encodeURIComponent(agentId)}/configuration`, {
+      ...(this.directory ? { directory: this.directory } : {}),
+      ...(model ? { model } : {}),
     }, signal)
   }
 

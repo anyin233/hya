@@ -39,6 +39,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/agent-models/{agent_id}/configuration": {
+      "put": {
+        "operationId": "AgentModels.SaveAgentModelConfiguration",
+        "summary": "Set or clear the model in the owning user configuration file. Keeps a",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SaveAgentModelConfiguration",
+        "x-server-streaming": false
+      }
+    },
     "/v1/agents": {
       "get": {
         "operationId": "Catalog.ListAgents",
@@ -1322,6 +1333,9 @@
           },
           "effort_source": {
             "$ref": "#/components/schemas/AgentEffortSource"
+          },
+          "configuration_path": {
+            "type": "string"
           }
         }
       },
@@ -1363,6 +1377,24 @@
             "type": "string"
           },
           "preference": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
+      "SaveAgentModelConfigurationRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "model": {
             "$ref": "#/components/schemas/AgentModelSelection"
           }
         }

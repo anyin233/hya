@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import { agentRows, effortRows, modelRows, relativeTime, sessionRows } from "../src/state/catalog"
-import type { AgentSummary, ModelSummary, SessionInfo } from "../src/client"
+import { effortRows, modelRows, relativeTime, sessionRows } from "../src/state/catalog"
+import type { ModelSummary, SessionInfo } from "../src/client"
 
 const models: ModelSummary[] = [
   { id: "acme/fast", providerId: "acme", modelId: "fast", displayName: "Fast", contextLimit: "128000" },
@@ -41,19 +41,6 @@ test("the effort picker lists default first, then none, then the advertised vari
   expect(explicit[0]?.detail).toBe("no explicit effort")
   // A model without reasoning support still offers the explicit off switch.
   expect(effortRows({ id: "m/plain", providerId: "m", modelId: "plain", reasoning: false }, undefined, "default").map((row) => row.id)).toEqual(["default", "none"])
-})
-
-const agents: AgentSummary[] = [
-  { name: "build", description: "General-purpose coding agent", model: { providerId: "acme", modelId: "fast" } },
-  { name: "review", description: "Read-only review agent", hidden: false },
-  { name: "internal", description: "Not for pickers", hidden: true },
-]
-
-test("agentRows drops hidden agents and marks the current one", () => {
-  const rows = agentRows(agents, "review")
-  expect(rows.map((row) => row.id)).toEqual(["build", "review"])
-  expect(rows.find((row) => row.id === "build")?.tag).toBe("acme/fast")
-  expect(rows.find((row) => row.id === "review")?.current).toBe(true)
 })
 
 test("relativeTime formats seconds/minutes/hours/days, and is empty for unset or bad input", () => {

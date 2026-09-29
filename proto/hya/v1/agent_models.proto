@@ -24,6 +24,12 @@ service AgentModels {
   //
   // hya.http: PUT /v1/agent-models/{agent_id}
   rpc SetAgentModel(SetAgentModelRequest) returns (AgentModelState);
+
+  // Set or clear the model in the owning user configuration file. Keeps a
+  // distinct session override and applies the saved value live.
+  //
+  // hya.http: PUT /v1/agent-models/{agent_id}/configuration
+  rpc SaveAgentModelConfiguration(SaveAgentModelConfigurationRequest) returns (AgentModelState);
   // hya.http: GET /v1/model-effort-preferences
   rpc ListModelEffortPreferences(ListModelEffortPreferencesRequest) returns (ListModelEffortPreferencesResponse);
 
@@ -142,6 +148,8 @@ message AgentModelState {
   string effort = 13;
   // Which layer chose `effort`.
   AgentEffortSource effort_source = 14;
+  // Owning configuration file path, empty when no configuration exists.
+  string configuration_path = 15;
 }
 
 message ListAgentModelsRequest {
@@ -168,4 +176,16 @@ message SetAgentModelRequest {
   string agent_id = 3;
   // New remembered preference; absent/null clears it.
   optional AgentModelSelection preference = 4;
+}
+
+message SaveAgentModelConfigurationRequest {
+  // Directory scope for the agent binding (absolute). Optional: when both
+  // it and `session` are empty the global (project-less) binding is used.
+  string directory = 1;
+  // Bind against this session's runtime when non-empty.
+  string session = 2;
+  // Stable catalog agent id whose configured model is being written.
+  string agent_id = 3;
+  // New configured model; absent/null removes the agent's `model` leaf.
+  optional AgentModelSelection model = 4;
 }

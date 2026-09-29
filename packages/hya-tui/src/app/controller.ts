@@ -77,7 +77,7 @@
  */
 import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
-import { createCommandRegistry, mergeCommandEntries, openModelPicker, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
+import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import {
   attachmentName,
   exceedsTurnBudget,
@@ -102,7 +102,7 @@ import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/promp
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
 import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
-import { createAgentModelsController } from "./agentModels"
+import { createAgentsViewController } from "./agentsView"
 import type { UiHandles } from "./context"
 import { createDiffController } from "./diff"
 import { createMcpController } from "./mcp"
@@ -939,7 +939,7 @@ export function createController({ client, store, directory, remote: startedRemo
   const diffView = createDiffController({ store, client, ui })
   const mcp = createMcpController({ store, client, copyText: (text) => terminal?.copy(text) ?? false })
   const rules = createRulesController({ store, client })
-  const agentModels = createAgentModelsController({ store, client, openPicker })
+  const agentsView = createAgentsViewController({ store, client, openPicker, selectAgent: (agent) => selectAgent({ store, client, actions }, agent) })
   const projectView = createProjectViewController({
     store,
     client,
@@ -963,7 +963,7 @@ export function createController({ client, store, directory, remote: startedRemo
     openDiff: () => diffView.open(),
     openMcp: () => mcp.open(),
     openRules: () => rules.open(),
-    openAgentModels: () => agentModels.open(),
+    openAgents: () => agentsView.open(),
     openProjectView: () => projectView.open(),
     copyText: (text) => terminal?.copy(text) ?? false,
     undo: () => revert.undo(),
@@ -1577,7 +1577,7 @@ export function createController({ client, store, directory, remote: startedRemo
     diffView.dispose()
     mcp.dispose()
     rules.dispose()
-    agentModels.dispose()
+    agentsView.dispose()
     unsubscribeFocus?.()
     secret.clear()
   }
@@ -1617,15 +1617,15 @@ export function createController({ client, store, directory, remote: startedRemo
     providerKey: (key: KeyLike) => providers.key(key),
     providerPaste: (text: string) => providers.paste(text),
     closeProviders: () => providers.close(),
-    /** One key while the Diff / MCP / Saved Rules / Agent Models view is open (components/Composer.tsx routes them). */
+    /** One key while the Diff / MCP / Saved Rules / Agents view is open (components/Composer.tsx routes them). */
     diffKey: (key: KeyLike) => diffView.key(key),
     closeDiff: () => diffView.close(),
     mcpKey: (key: KeyLike) => mcp.key(key),
     closeMcp: () => mcp.close(),
     rulesKey: (key: KeyLike) => rules.key(key),
     closeRules: () => rules.close(),
-    agentModelsKey: (key: KeyLike) => agentModels.key(key),
-    closeAgentModels: () => agentModels.close(),
+    agentsKey: (key: KeyLike) => agentsView.key(key),
+    closeAgents: () => agentsView.close(),
     /** One key / a paste while the concealed `/connect-remote` entry is open (components/Composer.tsx routes them). */
     secretKey,
     secretPaste,

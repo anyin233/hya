@@ -72,8 +72,8 @@ interface CmdMenu {
  * (app/revert.ts); any other key drops the chord and is handled as usual.
  *
  * While the Provider View (`/key`, components/ProviderView.tsx) — or the
- * Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`), or Agent Models
- * (`/agent-models`) view, at most one at a time — is open, every key but
+ * Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`), or Agents
+ * (`/agent`) view, at most one at a time — is open, every key but
  * Ctrl+C goes to it (after the modal picker, which may open over any of
  * them); a paste goes to the Provider View's secret field (the controller's
  * `SecretEntry`, so a key never enters the editor, the store, or the
@@ -110,13 +110,13 @@ export function Composer() {
   let hintTimer: ReturnType<typeof setTimeout> | undefined
   /** The Provider View is open: keys and pastes go to it (the editor keeps its text). */
   const providersOpen = () => store.state.providerView !== undefined
-  /** The Diff / MCP / Saved Rules / Agent Models view is open (at most one at a time): keys go to it, the editor keeps its text. */
+  /** The Diff / MCP / Saved Rules / Agents view is open (at most one at a time): keys go to it, the editor keeps its text. */
   const diffOpen = () => store.state.diffView !== undefined
   const mcpOpen = () => store.state.mcpView !== undefined
   const rulesOpen = () => store.state.rulesView !== undefined
-  const agentModelsOpen = () => store.state.agentModelsView !== undefined
+  const agentsOpen = () => store.state.agentsView !== undefined
   const projectViewOpen = () => store.state.projectView !== undefined
-  const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentModelsOpen() || projectViewOpen()
+  const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentsOpen() || projectViewOpen()
   /** A subagent's session is open: prompts are disabled, slash commands still run. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
@@ -404,7 +404,7 @@ export function Composer() {
         return
       }
     }
-    // The Provider / Diff / MCP / Saved Rules / Agent Models view takes every
+    // The Provider / Diff / MCP / Saved Rules / Agents view takes every
     // key but Ctrl+C, which closes it and keeps its quit meaning.
     else if (overlayViewOpen()) {
       if (key.ctrl && !key.meta && key.name === "c") {
@@ -413,7 +413,7 @@ export function Composer() {
         else if (mcpOpen()) controller.closeMcp()
         else if (rulesOpen()) controller.closeRules()
         else if (projectViewOpen()) controller.closeProjectView()
-        else controller.closeAgentModels()
+        else controller.closeAgents()
       } else {
         consume()
         if (providersOpen()) controller.providerKey(key)
@@ -421,7 +421,7 @@ export function Composer() {
         else if (mcpOpen()) controller.mcpKey(key)
         else if (rulesOpen()) controller.rulesKey(key)
         else if (projectViewOpen()) controller.projectViewKey(key)
-        else controller.agentModelsKey(key)
+        else controller.agentsKey(key)
         return
       }
     }

@@ -33,8 +33,8 @@ export interface AppActions {
   openMcp(): void
   /** Open the full-screen Saved Rules view (`/rules`; state/rules.ts, app/rules.ts). */
   openRules(): void
-  /** Open the full-screen Agent Models view (`/agent-models`; state/agentModels.ts, app/agentModels.ts). */
-  openAgentModels(): void
+  /** Open the full-screen Agents view (`/agent`; state/agentsView.ts, app/agentsView.ts). */
+  openAgents(): void
   /** Open the full-screen Project view (`/project`, `/projects`; state/projectView.ts, app/projectView.ts). */
   openProjectView(): void
   scheduleRefresh(): void

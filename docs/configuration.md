@@ -176,6 +176,11 @@ agents:
     reasoning: high
 ```
 
+The TUI's `/agent` view changes a pinned model without editing the file by hand:
+`m` on a pinned Agent calls `PUT /v1/agent-models/{agent}/configuration`, which
+rewrites only that Agent's `model` leaf (keeping `reasoning` and every other key)
+and applies at once (see [TUI — Agents view](tui.md#agents-view)).
+
 The default durable database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
 explicit `--db <PATH>` has an independent preference set. In-memory execution
@@ -706,7 +711,7 @@ order (highest precedence first):
 | Layer | Source | Example |
 | --- | --- | --- |
 | Suffix | `#level` on the model reference (also `--effort`, a `task` spawn's `effort`, or `model: provider/model#level` on `task`) | `openai/gpt#high` |
-| Agent (runtime) | The user's saved per-Agent effort (SQLite, all clients; TUI `/agent-models` `e`) | `PUT /v1/agent-efforts/scout {"effort":"low"}` |
+| Agent (runtime) | The user's saved per-Agent effort (SQLite, all clients; TUI `/agent` view `t`) | `PUT /v1/agent-efforts/scout {"effort":"low"}` |
 | Agent (configured) | `agents.<id>.reasoning` in the owning configuration file | `reasoning: medium` |
 | Agent (authored) | An authored bundle Agent `model_policy.reasoning` | `reasoning: high` |
 | Preference | The user's saved per-`provider/model` effort (SQLite, all clients) | `/effort high` in the TUI |
@@ -759,6 +764,7 @@ every client of that backend. Interface (`hya.v1.AgentModels`):
 | `ListModelEffortPreferences` | `GET /v1/model-effort-preferences` | `{preferences: [{providerId, modelId, effort, updatedAt}]}` |
 | `SetModelEffortPreference` | `PUT /v1/model-effort-preferences/{provider_id}/{model_id}` | `{effort}`; an empty `effort` clears the preference |
 | `SetAgentEffort` | `PUT /v1/agent-efforts/{agent_id}` | `{effort}` → `{agentId, effort}`; an empty `effort` clears the runtime choice. Unknown label → `INVALID_ARGUMENT`; unknown Agent → `NOT_FOUND` |
+| `SaveAgentModelConfiguration` | `PUT /v1/agent-models/{agent_id}/configuration` | `{model?: {providerId, modelId}, directory?, session?}`; absent `model` clears the owning config leaf and returns `configurationPath` |
 | `ListAgentModels` | `GET /v1/agent-models` | each `AgentModelState` also carries `effort` (empty: the model decides) and `effortSource` (`AGENT_EFFORT_SOURCE_PREFERENCE`, `_CONFIGURED`, `_AUTHORED`, `_NONE`) |
 
 `SessionInfo.effectiveEffort` (empty when none) and `SessionInfo.effortSource`

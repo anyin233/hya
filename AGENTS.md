@@ -118,7 +118,7 @@ daemon (found or auto-started; it outlives its clients, ADR-0023).
 `hya-sdk-v1`, `hya-client`, and gRPC are the other supported ways to drive a
 backend.
 
-The server exposes exactly one contract — `hya.v1` (18 services / 103 rpcs in
+The server exposes exactly one contract — `hya.v1` (18 services / 104 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and over gRPC
 through `hya_server::V1Grpc`, which dispatches through the same router. Both
 are served on the same port from one server state (`hya_server::build`,
