@@ -6,7 +6,7 @@
  * name.
  */
 import type { CommandSummary } from "../client"
-import type { CommandSpec } from "./registry"
+import type { CommandSpec, Completion } from "./registry"
 
 /** Where a menu row came from. Local (TUI-registered) names win name clashes. */
 export type CommandSource = "local" | "command" | "skill"
@@ -96,13 +96,14 @@ export function filterCommands(entries: CommandEntry[], query: string): CommandE
 }
 
 /** Build the same selectable rows for a command name or any nested argument. */
-export function suggestCommandInput(input: string, entries: () => CommandEntry[], complete: (input: string) => string[]): CommandSuggestion[] {
+export function suggestCommandInput(input: string, entries: () => CommandEntry[], complete: (input: string) => Completion[]): CommandSuggestion[] {
   if (!input.startsWith("/")) return []
   if (/\s/.test(input)) {
     return complete(input)
-      .filter((replacement) => replacement !== input)
+      .map((item) => typeof item === "string" ? { label: item, replacement: item } : item)
+      .filter((item) => item.replacement !== input)
       .slice(0, commandSuggestionLimit)
-      .map((replacement) => ({ label: replacement, replacement, kind: "argument", runOnEnter: false }))
+      .map(({ label, replacement }) => ({ label, replacement, kind: "argument", runOnEnter: false }))
   }
   return filterCommands(entries(), input.slice(1))
     .slice(0, commandSuggestionLimit)

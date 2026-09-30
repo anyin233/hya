@@ -204,6 +204,21 @@ test.describe("command menu", () => {
     expect(await term.find("Help · keys and commands")).toBeNull()
   })
 
+  test("/new from the focused Projects sidebar leaves the composer taking typed text", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: { width: 1700, height: 800 } })
+    await connected(term)
+    await term.press("Control+p")
+    await term.waitForText("Projects sidebar shown, focused")
+    // Not `createSessionViaMenu`: at this width the Projects sidebar starts every row, so `^Created` never matches.
+    await term.type("/new")
+    await term.waitForText("▸ /new")
+    await term.press("Enter")
+    await term.waitForText(/Created hysec_/)
+    // Before the fix the refocused sidebar swallowed these keys and they showed nowhere.
+    await term.type("hello after new")
+    await term.waitForText("│ hello after new")
+  })
+
   test("Enter on a command with no arguments runs it; Enter on one with an argument hint completes and waits", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
@@ -281,6 +296,19 @@ test.describe("/rename", () => {
     await term.waitForText(/^mode [^·]+ · Bug fix session · /m)
     await term.press("Control+b")
     await term.waitForText("Bug fix session")
+  })
+
+  test("/open lists the titled session as title (id) and completes its id", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await connected(term)
+    await createSessionViaMenu(term)
+    await term.type("/rename Bug fix session")
+    await term.press("Enter")
+    await term.waitForText("Renamed to Bug fix session")
+    await term.type("/open bug")
+    await term.waitForText(/▸ \/open Bug fix session \(hysec_\w+\)/)
+    await term.press("Tab")
+    await expect.poll(() => commandText(term)).toMatch(/^\/open hysec_\w+$/)
   })
 })
 

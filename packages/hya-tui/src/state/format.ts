@@ -71,6 +71,8 @@ export interface SessionRow {
   session: SessionInfo
   /** 0 for a top-level session, 1 for its subagents, 2 for theirs. */
   depth: number
+  /** Hierarchical display number: roots are 1-based, descendants use x.y notation. */
+  number: string
 }
 
 /**
@@ -88,14 +90,29 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
   }
   const rows: SessionRow[] = []
   const seen = new Set<string>()
-  const visit = (session: SessionInfo, depth: number): void => {
+  let rootNumber = 0
+  const visit = (session: SessionInfo, depth: number, number: string): void => {
     if (seen.has(session.id)) return
     seen.add(session.id)
-    rows.push({ session, depth })
-    for (const child of children.get(session.id) ?? []) visit(child, depth + 1)
+    rows.push({ session, depth, number })
+    let childNumber = 0
+    for (const child of children.get(session.id) ?? []) {
+      childNumber += 1
+      visit(child, depth + 1, `${number}.${childNumber}`)
+    }
   }
-  for (const session of sessions) if (!(session.parent && ids.has(session.parent))) visit(session, 0)
-  for (const session of sessions) visit(session, 0)
+  for (const session of sessions) {
+    if (!(session.parent && ids.has(session.parent))) {
+      rootNumber += 1
+      visit(session, 0, String(rootNumber))
+    }
+  }
+  for (const session of sessions) {
+    if (!seen.has(session.id)) {
+      rootNumber += 1
+      visit(session, 0, String(rootNumber))
+    }
+  }
   return rows
 }
 
@@ -116,7 +133,7 @@ export function sessionListText(state: AppState, width?: number): string {
   if (!sessions.length) return "No sessions. Type a prompt or /new."
   const groups: string[][] = []
   let announcedTemporary = false
-  sessionTree(sessions).forEach(({ session, depth }, index) => {
+  sessionTree(sessions).forEach(({ session, depth, number }) => {
     const mark = session.id === state.selected?.id ? "▸" : " "
     // A pending ask outranks `running`: the session is blocked on the user.
     const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
@@ -126,11 +143,11 @@ export function sessionListText(state: AppState, width?: number): string {
         groups.push([truncate("— Temporary —", width)])
       }
       groups.push([
-        truncate(`${mark} ${index + 1}. ${session.title || session.id}`, width),
+        truncate(`${mark} ${number}. ${session.title || session.id}`, width),
         truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width),
       ])
     } else {
-      groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${index + 1}. ${session.title || session.agent}${running}`, width))
+      groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.agent}${running}`, width))
     }
   })
   return groups.map((lines) => lines.join("\n")).join("\n\n")
@@ -151,13 +168,12 @@ export function pendingLines(state: AppState, width?: number): string[] {
   })
 }
 
-/** The session list number `/open <n>` takes (sidebar order), or `undefined` when the list does not have it. */
-function sessionNumber(sessionId: string, sessions: readonly SessionInfo[]): number | undefined {
-  const index = sessionTree(sessions).findIndex((row) => row.session.id === sessionId)
-  return index < 0 ? undefined : index + 1
+/** The hierarchical session number used by `/open`, or `undefined` when absent. */
+function sessionNumber(sessionId: string, sessions: readonly SessionInfo[]): string | undefined {
+  return sessionTree(sessions).find((row) => row.session.id === sessionId)?.number
 }
 
-/** Which session an ask belongs to: `<n>. <title>` (its `/open` number), or its id when the session list does not have it. */
+/** Which session an ask belongs to: `<n>. <title>`, or its id when unlisted. */
 export function askSessionLabel(sessionId: string, sessions: readonly SessionInfo[]): string {
   const number = sessionNumber(sessionId, sessions)
   if (number === undefined) return sessionId

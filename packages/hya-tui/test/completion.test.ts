@@ -4,7 +4,7 @@ import { completeCommand, SecretEntry } from "../src/completion"
 const context = {
   backendCommands: ["compact", "review"],
   models: ["anthropic/claude", "openai/gpt"],
-  sessions: ["hysec_1"],
+  sessions: [{ id: "hysec_1" }],
   workflows: ["release"],
   interactions: ["req_1"],
   agents: ["hya-main"],
