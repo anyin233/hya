@@ -171,6 +171,8 @@ export interface ControllerOptions {
   reconnect?: () => Promise<ServerSwitch>
   /** Find the database's running server without starting one (src/launch.ts `findRunningServer`): how a stopped TUI notices a server another client started, and how it follows `hya serve restart`. */
   find?: () => Promise<ServerSwitch | undefined>
+  /** Called once the TUI followed `hya serve restart` to the successor (app/reconnect.ts `onRestarted`): app/run.tsx reloads the TUI's code then. */
+  onRestarted?: () => void
   /** Health probe of a server URL (default src/launch.ts `probeHealth`, with the client's bridge token for its own URL). */
   probe?: (url: string) => Promise<boolean>
   /**
@@ -218,7 +220,7 @@ type FileRead = { size: number; data?: string } | { error: string }
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   let remote = startedRemote
   let streamAbort: AbortController | undefined
@@ -1324,6 +1326,7 @@ export function createController({ client, store, directory, remote: startedRemo
       probe, reconnect, switchTo: switchServer, status,
       ...(find ? { find } : {}),
       onStopped: (stopped) => { store.setBackendStopped(stopped); if (stopped) store.setConnected(false) },
+      ...(onRestarted ? { onRestarted } : {}),
     })
     : undefined
 

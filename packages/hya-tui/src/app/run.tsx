@@ -33,6 +33,10 @@
  * watches it (a kill included). A backend that
  * cannot be reached or started is reported on stderr with the tail of its
  * output, and the TUI exits with status 1 before it takes over the terminal.
+ * After `hya serve restart` a supervised TUI (src/main.ts) reloads: it asks
+ * its supervisor to start it again on the open session with the unsent
+ * draft (src/reload.ts) and exits with status 75, leaving the session as a
+ * signal does. A supervisor that disappears ends the TUI (SIGHUP's status).
  */
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { render } from "@opentui/solid"
@@ -48,12 +52,26 @@ import { App } from "./App"
 import { AppContext } from "./context"
 import { createController, type Controller } from "./controller"
 import type { ExitMode } from "./sessionKeeper"
+import { reloadArguments, reloadExitCode, requestReload, type ReloadState, type Supervision } from "../reload"
 
 const exitSignals = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const
 
 const sameUrl = (a: string, b: string): boolean => a.replace(/\/+$/, "") === b.replace(/\/+$/, "")
 
-export async function run(options: Options): Promise<void> {
+/** How this app process was started (src/main.ts). */
+export interface Launch {
+  /** The command line after the entry script: the base of a reload's (src/reload.ts `reloadArguments`). */
+  argv: string[]
+  /** Run by the supervisor (src/supervisor.ts): only then can the app reload itself. */
+  supervision?: Supervision
+  /** Started by a reload: the draft to put back. */
+  reloaded?: ReloadState
+}
+
+/** The status notice of an app a reload started. */
+export const reloadedNotice = "TUI reloaded (hya serve restart)"
+
+export async function run(options: Options, launch: Launch = { argv: [] }): Promise<void> {
   // First, before anything can spawn a child. The token belongs to `--server` only.
   const envToken = takeServerToken()
   let serverToken = options.server ? envToken : undefined
@@ -77,6 +95,9 @@ export async function run(options: Options): Promise<void> {
   }
   // A signal is never a graceful exit: the session keeps running (no archive).
   for (const [signal, code] of Object.entries(exitSignals)) process.on(signal, () => void shutdown(code, "signal"))
+  // The supervisor went away (killed outright): its terminal belongs to nobody now; leave it.
+  const supervision = launch.supervision
+  if (supervision) setInterval(() => { if (process.ppid !== supervision.parent) void shutdown(exitSignals.SIGHUP, "signal") }, 1000).unref()
 
   // The database whose daemon this TUI uses: `--db`, or the default without an explicit transport.
   const db = options.grpc ? undefined : options.db ?? (options.server ? undefined : defaultDatabase(process.env))
@@ -131,6 +152,22 @@ export async function run(options: Options): Promise<void> {
   if (options.webTab) store.setWebTab(true)
   if (loaded.preferences.vim) store.setVim(true)
   if (loaded.preferences.paneLayout) store.setPaneLayout(loaded.preferences.paneLayout)
+  // `hya serve restart` replaced the backend: start this TUI again from its files (src/reload.ts), on the open session with the unsent draft.
+  const reload = supervision && db
+    ? () => {
+        const draft = controller?.ui.composerInput
+        try {
+          requestReload(supervision.file, {
+            argv: reloadArguments(launch.argv, { ...(store.state.selected ? { session: store.state.selected.id } : {}), server: client.baseUrl }),
+            ...(draft?.text ? { draft } : {}),
+          })
+        } catch (error) {
+          store.setStatus(`TUI reload failed: ${error instanceof Error ? error.message : String(error)} · restart hya for the new TUI`)
+          return
+        }
+        void shutdown(reloadExitCode, "signal")
+      }
+    : undefined
   controller = createController({
     client, store, directory: options.directory, remote: options.remote === true,
     quit: (mode) => void shutdown(0, mode),
@@ -185,6 +222,7 @@ export async function run(options: Options): Promise<void> {
           },
         }
       : {}),
+    ...(reload ? { onRestarted: reload } : {}),
     preferencesPath: prefsPath,
     preferredPermissionMode: loaded.preferences.permissionMode,
     // The renderer exists once the first frame is due; these run on user actions after that.
@@ -224,11 +262,13 @@ export async function run(options: Options): Promise<void> {
   // Only reached when nothing above started the shutdown (a signal OpenTUI caught first): never archive.
   renderer.once("destroy", () => void shutdown(0, "signal"))
   const active = controller
+  if (launch.reloaded?.draft) active.ui.composerInput = launch.reloaded.draft
   await render(() => (
     <AppContext.Provider value={{ store, controller: active, server, ui: active.ui }}>
       <App />
     </AppContext.Provider>
   ), renderer)
   await controller.start()
+  if (launch.reloaded) warnings.unshift(reloadedNotice)
   if (warnings.length) store.setStatus([store.state.status, ...warnings].filter(Boolean).join(" · "))
 }

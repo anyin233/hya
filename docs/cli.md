@@ -1014,8 +1014,10 @@ A stop is a stop: connected TUIs start nothing after `hya serve stop` (or a
 plain signal). They show `Backend stopped (hya serve stop) · /reconnect
 starts it again` and stay disconnected until `/reconnect` in one of them, or
 a new client (`hya`, a TUI, `hya serve start`) starts the daemon, which they
-then attach to. After `restart` they wait up to 60 s for the new daemon and
-attach to it. Only a daemon that goes away without saying why (a crash,
+then attach to. After `restart` they wait up to 60 s for the new daemon,
+attach to it, and reload their own code, so the TUI and WebUI tabs pick up
+new TUI features too ([tui.md](tui.md#hot-update-after-hya-serve-restart)).
+Only a daemon that goes away without saying why (a crash,
 `kill -9`) makes them find or start the next one by themselves
 ([tui.md](tui.md#when-the-server-goes-away)).
 
