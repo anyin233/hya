@@ -1212,18 +1212,6 @@ bottom. The transcript shows the newest 200 messages.
 
 ### Tool calls
 
-Tool calls render as transparent, single-line outlined cards. The title is the
-canonical tool name, followed by the complete JSON arguments on the first row.
-When expanded, a divider separates those arguments from the tool output; failed
-calls append their error below the output. Cards remain collapsed by default
-(and retain the existing `/tools` and click toggles), so long command output
-stays out of the composer until requested.
-
-Every assistant text block is separated from the next text block by one blank
-row, making streamed prose and adjacent model messages easier to scan.
-
-The projects sidebar and the auxiliary sessions/todos/context sidebar each use
-approximately half their previous width, leaving more room for the composer.
 
 
 Every tool call of an assistant message is a transparent, outlined card. The
