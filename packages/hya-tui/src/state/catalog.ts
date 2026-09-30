@@ -98,7 +98,7 @@ export function sessionRows(
 ): PickerRow[] {
   const newRow: PickerRow = { id: "__new__", label: "New session", tag: "new", detail: "Create a session with the current agent and model" }
   const scoped = sessionsInScope(sessions, scope.activeProjectId, scope.allProjects ?? false)
-  const rows = sessionTree(scoped).map(({ session, depth }): PickerRow => {
+  const rows = sessionTree(scoped).map(({ session, depth, number }): PickerRow => {
     const detail = [
       session.agent,
       modelReference(session) || "default",
@@ -107,7 +107,7 @@ export function sessionRows(
     ].filter(Boolean).join(" · ")
     return {
       id: session.id,
-      label: depth ? `${"  ".repeat(depth - 1)}↳ ${session.title || session.id}` : (session.title || session.id),
+      label: depth ? `${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.id}` : `${number}. ${session.title || session.id}`,
       tag: depth ? "subagent" : session.archived ? "archived" : "",
       detail,
       current: session.id === current,

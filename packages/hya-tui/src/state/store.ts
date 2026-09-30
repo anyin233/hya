@@ -953,7 +953,7 @@ export function createAppStore() {
       return {
         backendCommands: state.backendCommands.map((command) => command.name),
         models: state.models.map((model) => model.id),
-        sessions: state.sessions.map((session) => session.id),
+        sessions: state.sessions.map((session) => ({ id: session.id, title: session.title })),
         workflows: state.workflows.map((workflow) => workflow.name),
         interactions: state.interactions.map((interaction) => interaction.id),
         agents: state.agents.map((agent) => agent.name),

@@ -1,7 +1,7 @@
 /** Command completion and concealed key entry (the Provider View's key fields) for the OpenTUI frontend. */
 
 import { createCommandRegistry, nativeCommandSpecs } from "./commands/native"
-import { matchValues, type CommandRegistry } from "./commands/registry"
+import { matchValues, type CommandRegistry, type Completion } from "./commands/registry"
 
 /** Names of the built-in slash commands (from the command registry). */
 export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
@@ -9,7 +9,8 @@ export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
 export interface CompletionContext {
   backendCommands: string[]
   models: string[]
-  sessions: string[]
+  /** Listed sessions; `/open` and `/resume` show a titled one as `title (id)`. */
+  sessions: { id: string; title?: string }[]
   workflows: string[]
   interactions: string[]
   agents: string[]
@@ -27,7 +28,7 @@ const defaultRegistry = createCommandRegistry()
  * (native and backend) before the first space, else the command's own
  * argument completer from the registry.
  */
-export function completeCommand(input: string, context: CompletionContext, registry: CommandRegistry = defaultRegistry): string[] {
+export function completeCommand(input: string, context: CompletionContext, registry: CommandRegistry = defaultRegistry): Completion[] {
   if (!input.startsWith("/")) return []
   if (input.indexOf(" ") < 0) {
     return matchValues("", input, [

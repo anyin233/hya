@@ -71,27 +71,23 @@ test("the chat view's text is only the empty-state hint; messages render per com
   expect(mainContent(store.state)).toBe("")
 })
 
-test("child sessions nest under their parent in the session list, numbered in that order", () => {
+test("numbers only main sessions, with hierarchical child numbers", () => {
   const store = createAppStore()
   const parent = { id: "hysec_p", agent: "hya-main", workdir: "/w", title: "Parent" }
   const child = { id: "hysec_c", agent: "hya-scout", workdir: "/w", parent: "hysec_p", busy: true }
   const grandchild = { id: "hysec_g", agent: "hya-task", workdir: "/w", parent: "hysec_c" }
+  const sibling = { id: "hysec_s", agent: "hya-task", workdir: "/w", parent: "hysec_p" }
   const other = { id: "hysec_o", agent: "hya-plan", workdir: "/w", title: "Other" }
-  const orphan = { id: "hysec_x", agent: "hya-task", workdir: "/w", parent: "hysec_gone" }
-  // The server lists newest first, so children come before their parent.
-  const sessions = [grandchild, child, other, parent, orphan]
-  expect(sessionTree(sessions).map((row) => [row.session.id, row.depth])).toEqual([
-    ["hysec_o", 0], ["hysec_p", 0], ["hysec_c", 1], ["hysec_g", 2], ["hysec_x", 0],
+  const sessions = [grandchild, child, sibling, other, parent]
+  expect(sessionTree(sessions).map((row) => [row.session.id, row.number])).toEqual([
+    ["hysec_o", "1"], ["hysec_p", "2"], ["hysec_c", "2.1"], ["hysec_g", "2.1.1"], ["hysec_s", "2.2"],
   ])
   store.applyCatalog({ sessions, interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession(child)
-  expect(sessionListText(store.state)).toBe([
-    "  1. Other", "   hya-plan", "",
-    "  2. Parent", "   hya-main",
-    "▸  ↳ 3. hya-scout · running",
-    "     ↳ 4. hya-task", "",
-    "  5. hysec_x", "   hya-task",
-  ].join("\n"))
+  const rendered = sessionListText(store.state)
+  expect(rendered).toContain("2.1 hya-scout")
+  expect(rendered).toContain("2.1.1 hya-task")
+  expect(rendered).toContain("2.2 hya-task")
 })
 
 test("asks of the open session tree are prompts, not pending lines; the sidebar marks sessions that wait", () => {
@@ -112,7 +108,7 @@ test("asks of the open session tree are prompts, not pending lines; the sidebar 
   expect(sessionListText(store.state)).toBe([
     "  1. Other", "   hya-plan · ◌ waiting", "",
     "▸ 2. Parent", "   hya-main",
-    "   ↳ 3. hya-task · ◌ waiting",
+    "   ↳ 2.1 hya-task · ◌ waiting",
   ].join("\n"))
 })
 

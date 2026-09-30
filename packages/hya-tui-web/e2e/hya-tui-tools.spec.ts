@@ -213,7 +213,7 @@ test.describe("subagents", () => {
     expect((await term.cell(status.row, status.col))?.fg).toBe(colors.accent)
     expect((await term.cell(status.row, status.col + 2))?.fg).toBe(colors.accent)
     // The sidebar nests the child session under its parent.
-    await term.waitForText("↳ 2.")
+    await term.waitForText("↳ 1.1 ")
     await term.attach(testInfo, "task-running")
 
     // A click on the card opens the child read-only.

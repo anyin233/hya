@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { HttpError, type HyaClient } from "../src/client"
 import type { TuiPreferences } from "../src/prefs"
 import { nativeCommands, type CompletionContext } from "../src/completion"
-import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandContext } from "../src/commands"
+import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference } from "../src/state/format"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
@@ -185,6 +185,32 @@ test("/open resolves list numbers and /key opens the Provider View", async () =>
   expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
 })
 
+test("/open and /resume completions show a titled session as title (id) and insert its id", () => {
+  const { registry, store } = harness()
+  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w", title: "Fix login" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  const complete = (input: string) => registry.complete(input, store.completionContext())
+  expect(suggestCommandInput("/open ", () => [], complete)).toEqual([
+    { label: "/open Fix login (hysec_a)", replacement: "/open hysec_a", kind: "argument", runOnEnter: false },
+    { label: "/open hysec_b", replacement: "/open hysec_b", kind: "argument", runOnEnter: false },
+  ])
+  // The shown title is typeable too; the completed line still carries the id.
+  expect(suggestCommandInput("/open fix", () => [], complete).map((row) => row.replacement)).toEqual(["/open hysec_a"])
+  expect(suggestCommandInput("/resume hysec_a", () => [], complete)).toEqual([])
+  expect(suggestCommandInput("/resume hy", () => [], complete).map((row) => row.label)).toEqual(["/resume Fix login (hysec_a)", "/resume hysec_b"])
+})
+
+test("/new hands keyboard focus from the Projects sidebar to the composer", async () => {
+  const { store, calls, run } = harness()
+  // The command pane restores the sidebar's focus when it closes (it was opened from there).
+  store.setProjectsSidebarFocus(true)
+  await run("/new")
+  expect(store.state.projectsSidebarFocus).toBe(false)
+  store.setProjectsSidebarFocus(true)
+  await run("/new --temp")
+  expect(store.state.projectsSidebarFocus).toBe(false)
+  expect(calls).toEqual(["new", "new temp"])
+})
+
 test("/diff, /mcp, /rules, /agent open their full-screen views", async () => {
   const { calls, run } = harness()
   await run("/diff")
@@ -315,9 +341,12 @@ test("/rename updates the session title", async () => {
   const { store, run } = harness({
     updateSession: async (session, patch) => ({ id: session, agent: "hya-main", workdir: "/w", title: patch.title }),
   })
+  store.applyCatalog({ sessions: [{ id: "hysec_1", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/rename New title")
   expect(store.state.selected?.title).toBe("New title")
+  // The list row as well, so the sidebar and `/open` show it before any stream frame.
+  expect(store.completionContext().sessions).toEqual([{ id: "hysec_1", title: "New title" }])
   expect(store.state.status).toBe("Renamed to New title")
   await expect(run("/rename   ")).rejects.toThrow("Usage: /rename <title> in a session")
 })

@@ -10,7 +10,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, headlessTurn, hyaTui, showStatusLine, statusSessionId, test, textStep, toolStep } from "./hya"
+import { expect, hangStep, headlessTurn, hyaTui, showStatusLine, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
@@ -270,7 +270,8 @@ test.describe("subagent asks", () => {
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
-    const term = await tui(hyaTui(backend))
+    // Wide enough for the right sidebar (150 columns), whose session row says the subagent waits.
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
@@ -278,7 +279,8 @@ test.describe("subagent asks", () => {
     await term.waitForText(/asked by subagent hya-task/)
     await term.waitForText("│ $ echo from-child")
     await term.waitForText("◌ waiting for approval", 15_000)
-    await term.waitForText(/↳ 2\. hya-task · ◌ waiting/)
+    // The 29-column sidebar cuts the row: `↳ 1.1 hya-task · ◌ wa…`.
+    await term.waitForText(/↳ 1\.1 hya-task · ◌ wa/)
     await term.attach(testInfo, "subagent-ask")
     await term.press("1")
     await promptGone(term)

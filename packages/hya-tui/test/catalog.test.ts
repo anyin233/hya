@@ -58,12 +58,13 @@ const sessions: SessionInfo[] = [
   { id: "hysec_2", agent: "review", workdir: "/w", parent: "hysec_1", busy: true, timeUpdated: "2026-09-25T11:55:00Z" },
 ]
 
-test("sessionRows puts a New session row first, then the tree with subagents tagged and busy noted", () => {
+test("sessionRows puts a New session row first, then the numbered tree with subagents tagged and busy noted", () => {
   const now = Date.parse("2026-09-25T12:00:00Z")
   const rows = sessionRows(sessions, "hysec_1", now)
   expect(rows[0]).toMatchObject({ id: "__new__", label: "New session" })
-  expect(rows[1]).toMatchObject({ id: "hysec_1", label: "Refactor auth", current: true })
-  expect(rows[2]?.id).toBe("hysec_2")
+  expect(rows[1]).toMatchObject({ id: "hysec_1", label: "1. Refactor auth", current: true })
+  // A subagent carries its parent's number (`/open 1.1`).
+  expect(rows[2]).toMatchObject({ id: "hysec_2", label: "↳ 1.1 hysec_2" })
   expect(rows[2]?.tag).toBe("subagent")
   expect(rows[2]?.detail).toContain("running")
   expect(rows[1]?.detail).toContain("1h")

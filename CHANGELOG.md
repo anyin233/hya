@@ -1,3 +1,6 @@
-# 0.43.35
+# 0.43.36
 
-- `hya serve restart` now hot-updates the TUI as well: once a TUI (the terminal one and every WebUI tab) has attached to the new daemon, it starts itself again from the TUI files on disk, so new TUI features apply without quitting `hya`. The open session and the unsent composer text carry over; the reloaded TUI says `TUI reloaded (hya serve restart)`. Crash recovery, `/reconnect`, and remote backends do not reload. See docs/tui.md "Hot update after `hya serve restart`".
+- TUI session numbers are hierarchical: top-level sessions count `1`, `2`, …, and a subagent's session carries its parent's number (`2.1`, `2.1.3`) in the sidebar, `/sessions`, pending-ask labels, and `/open <number>`.
+- `/open` and `/resume` completions show a titled session as `title (id)`, match its title as well as its id, and insert the id.
+- `/rename` updates the session's row in the sidebar and in `/open` completion at once.
+- `/new` run from the focused Projects sidebar hands focus back to the composer, so typing goes to the new session's prompt.
