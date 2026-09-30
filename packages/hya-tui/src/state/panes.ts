@@ -33,8 +33,8 @@ export const maxPanes = 16
 export function defaultPaneLayout(): PaneLayout {
   const leaf = (id: number, kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${id}`, kind })
   return { version: 2, active: "pane-1", root: {
-    type: "split", axis: "vertical", weight: 0.18, first: leaf(2, "projects"), second: {
-      type: "split", axis: "vertical", weight: 0.74, first: leaf(1, "conversation"), second: {
+    type: "split", axis: "vertical", weight: 0.1, first: leaf(2, "projects"), second: {
+      type: "split", axis: "vertical", weight: 0.88, first: leaf(1, "conversation"), second: {
         type: "split", axis: "horizontal", weight: 0.62, first: leaf(3, "sessions"), second: {
           type: "split", axis: "horizontal", weight: 0.36, first: leaf(4, "todos"), second: leaf(5, "context"),
         },
@@ -213,7 +213,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   const right: PaneNode = { type: "split", axis: "horizontal", weight: 0.62, first: leaf("sessions"), second: {
     type: "split", axis: "horizontal", weight: 0.36, first: leaf("todos"), second: leaf("context"),
   } }
-  return { version: 2, active: record.active, root: { type: "split", axis: "vertical", weight: 0.18, first: leaf("projects"), second: {
-    type: "split", axis: "vertical", weight: 0.74, first: record.root, second: right,
+  return { version: 2, active: record.active, root: { type: "split", axis: "vertical", weight: 0.1, first: leaf("projects"), second: {
+    type: "split", axis: "vertical", weight: 0.88, first: record.root, second: right,
   } } }
 }

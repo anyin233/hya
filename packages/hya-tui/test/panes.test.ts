@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import {
-  closePane, movePaneFocus, parsePaneLayout, paneLeaves,
+  closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves,
   resizePane, setPaneKind, splitPane, type PaneLayout,
 } from "../src/state/panes"
 
@@ -39,4 +39,11 @@ test("resize changes only the focused split and closes a nested auxiliary pane",
   const closed = closePane(resized)
   expect(paneLeaves(closed.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs"])
   expect(parsePaneLayout(closed)).toEqual(closed)
+})
+
+test("default layout uses half-width project and context sidebars", () => {
+  const root = defaultPaneLayout().root
+  if (root.type !== "split" || root.second.type !== "split") throw new Error("expected nested vertical splits")
+  expect(root.weight).toBe(0.1)
+  expect(root.second.weight).toBe(0.88)
 })

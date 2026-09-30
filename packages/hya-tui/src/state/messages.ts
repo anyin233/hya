@@ -268,6 +268,12 @@ export function lastReplyText(views: readonly MessageView[]): string | undefined
   return undefined
 }
 
+/** Whether adjacent assistant blocks need a blank row in the composer. */
+export function messageBlockGap(previous: Block | undefined, block: Block): boolean {
+  if (!previous) return false
+  return previous.kind === "text" && block.kind === "text"
+}
+
 /**
  * The chat transcript: projection + overlay, dividers, the pending-revert
  * line (`SessionInfo.revert`, `/undo`), then prompts still waiting in the

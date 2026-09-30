@@ -610,11 +610,11 @@ A second, narrower sidebar on the left lists every Project live
 | `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
-| `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
+| `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). Keyboard focus goes to the composer afterwards, even when the command pane was opened from the focused Projects sidebar. |
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
-| `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
+| `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. The choice is also remembered as the active agent's default, unless `config.yaml` pins that agent's model (`agents.<id>.model`): then it changes only the current session (see [Configuration — Remembered Agent Models](configuration.md#remembered-agent-models)). |
 | `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -1212,6 +1212,20 @@ bottom. The transcript shows the newest 200 messages.
 
 ### Tool calls
 
+Tool calls render as transparent, single-line outlined cards. The title is the
+canonical tool name, followed by the complete JSON arguments on the first row.
+When expanded, a divider separates those arguments from the tool output; failed
+calls append their error below the output. Cards remain collapsed by default
+(and retain the existing `/tools` and click toggles), so long command output
+stays out of the composer until requested.
+
+Every assistant text block is separated from the next text block by one blank
+row, making streamed prose and adjacent model messages easier to scan.
+
+The projects sidebar and the auxiliary sessions/todos/context sidebar each use
+approximately half their previous width, leaving more room for the composer.
+
+
 Every tool call of an assistant message is a card. The header is one line:
 
 ```text
@@ -1608,9 +1622,14 @@ The command pane builds all selectable rows through
 `suggestCommandInput(input, entries, complete)`. Each row is a
 `CommandSuggestion` with `label: string`, `replacement: string`,
 `kind: "command" | "argument"`, and `runOnEnter: boolean`. A local command's
-`CommandSpec.complete(position, context)` supplies zero or more full-line
-replacement strings for any argument depth; `position` contains `words`,
-`current`, and `head` (the text before `current`). Name rows use the merged
+`CommandSpec.complete(position, context)` supplies zero or more completions
+for any argument depth; `position` contains `words`, `current`, and `head`
+(the text before `current`). A completion (`Completion`) is either a
+full-line replacement string, used as its own label, or
+`{ replacement: string, label: string }` when the row shows other text than
+it inserts: `/open` and `/resume` label a titled session `/open <title> (<id>)`
+and insert `/open <id>`. `CompletionContext.sessions` is
+`{ id: string, title?: string }[]`. Name rows use the merged
 local/backend catalog; argument rows use these existing local completers.
 No new server operation or payload is involved.
 
