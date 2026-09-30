@@ -209,6 +209,35 @@ fn manifest_identity(manifest: &SourceManifest) -> &BundleIdentity {
     }
 }
 
+fn resolve_version_reference(
+    manifest: &mut SourceManifest,
+    source_name: &str,
+) -> Result<(), BundleError> {
+    let (version_ref, identity) = match manifest {
+        SourceManifest::Agent(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
+        SourceManifest::AgentSet(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
+        SourceManifest::Workflow(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
+        SourceManifest::Plugin(manifest) => (&mut manifest.version_ref, &mut manifest.identity),
+    };
+    let Some(version_ref) = version_ref.take() else {
+        return Ok(());
+    };
+    if version_ref != "backend" {
+        return Err(BundleError::InvalidManifest {
+            source_name: source_name.to_string(),
+            detail: format!("unsupported version_ref `{version_ref}`; expected `backend`"),
+        });
+    }
+    if identity.version != "0.0.0" {
+        return Err(BundleError::InvalidManifest {
+            source_name: source_name.to_string(),
+            detail: "version_ref requires identity.version 0.0.0".to_string(),
+        });
+    }
+    identity.version = hya_version::BACKEND_VERSION.to_string();
+    Ok(())
+}
+
 fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
     let common = validate_identity(&bundle.identity().id, &bundle.identity().version).is_ok()
         && resources_are_canonical(bundle, "tool", bundle.tools())
@@ -1240,7 +1269,7 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
     let files = collect_files(&name, source_files)?;
     let yaml = files.get("bundle.yaml");
     let markdown = files.get("bundle.hya.md");
-    let (manifest, markdown_prompt) =
+    let (mut manifest, markdown_prompt) =
         match (yaml, markdown) {
             (Some(_), Some(_)) => {
                 return Err(BundleError::InvalidManifest {
@@ -1286,6 +1315,8 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
                 return Err(BundleError::UnsupportedSource { source_name: name });
             }
         };
+
+    resolve_version_reference(&mut manifest, &name)?;
 
     if let SourceManifest::Agent(manifest) = &manifest {
         for (present, key, guidance) in [

@@ -2402,7 +2402,7 @@ One file a session revert or unrevert wrote (or could not restore).
 | Field | Type | Description |
 |---|---|---|
 | `ok` (1) | `bool` | Always `true` when the endpoint answers successfully. |
-| `version` (2) | `string` | Backend version string (workspace release version). |
+| `version` (2) | `string` | Backend aggregate release version. |
 
 ### `GetLocationRequest`
 
@@ -2420,7 +2420,7 @@ Where this backend runs and which directory it serves.
 | `directory` (1) | `string` | The request's directory scope, empty when it named none: the backend has no working directory of its own. |
 | `hostname` (2) | `string` | Hostname of the machine running the backend. |
 | `pid` (3) | `uint32` | OS process id of the backend. |
-| `version` (4) | `string` | Backend version string (workspace release version). |
+| `version` (4) | `string` | Backend aggregate release version. |
 
 ### `GetConfigRequest`
 

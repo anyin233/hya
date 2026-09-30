@@ -191,8 +191,8 @@ fn first_party_identity_versions_follow_the_hya_version() {
         let catalog = first_party_bundle(identity).expect("load first-party bundle");
         assert_eq!(
             catalog.bundles()[0].identity().version,
-            env!("CARGO_PKG_VERSION"),
-            "{identity} must be released at the hya workspace version"
+            hya_version::BACKEND_VERSION,
+            "{identity} must be released at the backend version"
         );
     }
 }

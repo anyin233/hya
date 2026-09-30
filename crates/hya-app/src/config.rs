@@ -2361,7 +2361,7 @@ fn discovery_auth(kind: ProviderKind, credential: &ProviderCredential) -> Catalo
             }),
         ProviderKind::GrokBuild => CatalogAuth::grok(
             credential.token.clone(),
-            env!("CARGO_PKG_VERSION"),
+            hya_version::BACKEND_VERSION,
             "grok-cli",
         ),
         ProviderKind::OpenAiCompatible | ProviderKind::OpenAiResponse => credential
@@ -2605,7 +2605,7 @@ fn route_for_models(
         route = route.with_codex_session_auth(credential.account_id.clone());
     }
     if credential.use_grok_session {
-        route = route.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "grok-cli");
+        route = route.with_grok_session_auth(hya_version::BACKEND_VERSION, "grok-cli");
     }
     if credential.use_oauth_refresh && credential.token.is_some() {
         let resolver_id = provider.id.clone();

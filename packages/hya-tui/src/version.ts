@@ -1,4 +1,4 @@
-/** This TUI's own version, compared against the backend's bootstrap version (E24 "backend version mismatch" notice). */
-import pkg from "../package.json" with { type: "json" }
+/** This TUI's own version, compared against the backend's bootstrap version. */
+import { frontendVersion } from "../frontend-version"
 
-export const tuiVersion: string = pkg.version
+export const tuiVersion: string = frontendVersion

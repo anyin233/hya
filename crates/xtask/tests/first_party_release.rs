@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = hya_version::BACKEND_VERSION;
 const NATIVE_FAMILIES: [&str; 5] = [
     "base-tools",
     "extended-tools",

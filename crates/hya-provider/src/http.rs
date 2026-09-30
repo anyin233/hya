@@ -899,7 +899,7 @@ impl HttpProvider {
     fn configured_identity_bytes_v1(&self) -> Option<Vec<u8>> {
         let mut identity = Vec::new();
         append_identity_bytes(&mut identity, b"hya.provider.http.configured.v1")?;
-        append_identity_bytes(&mut identity, env!("CARGO_PKG_VERSION").as_bytes())?;
+        append_identity_bytes(&mut identity, hya_version::BACKEND_VERSION.as_bytes())?;
         append_identity_bytes(&mut identity, self.id.as_bytes())?;
         append_identity_bytes(&mut identity, provider_kind_identity(self.kind))?;
         append_identity_bytes(&mut identity, self.endpoint.as_bytes())?;
@@ -1679,8 +1679,8 @@ mod tests {
                         .windows("hya.provider.http.configured.v1".len())
                         .any(|bytes| bytes == b"hya.provider.http.configured.v1")
                         && identity
-                            .windows(env!("CARGO_PKG_VERSION").len())
-                            .any(|bytes| bytes == env!("CARGO_PKG_VERSION").as_bytes())
+                            .windows(hya_version::BACKEND_VERSION.len())
+                            .any(|bytes| bytes == hya_version::BACKEND_VERSION.as_bytes())
                 })
             })
         );

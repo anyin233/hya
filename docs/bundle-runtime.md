@@ -97,8 +97,10 @@ trusted bundle is a startup error, like a missing tool library.
 
 ### Release assets
 
-Every first-party bundle is released at the hya version: each `bundle.yaml`
-identity version equals `[workspace.package].version`, and a test enforces it.
+Every first-party bundle is released at the backend aggregate version. Source
+`bundle.yaml` files use identity version `0.0.0` with `version_ref: backend`;
+the preparation step resolves that reference before validation and packaging,
+and tests enforce that prepared identities match the backend release version.
 A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 

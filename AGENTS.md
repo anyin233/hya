@@ -94,13 +94,13 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 
 ## Release & Changelog Rule
 
-- Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
-- Every fix or feature change must include an explicit project version number update in `[workspace.package].version` in `Cargo.toml` (with every coupled version listed below); keep the release tag and changelog aligned when publishing.
+- Before publishing, `versions.toml` `[backend].version` and `[frontend].version`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` must describe the same release version; `[workspace.package].version` mirrors the backend aggregate.
+- Every fix or feature change that ships code must update the aggregate version contract when it changes release behavior. Only backend and frontend aggregate values are real versions; component manifests use `0.0.0` with explicit `version-reference` metadata.
 - Bump the version only for changes to shipped behavior: Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else that lands in the release archive or source install.
-- Do not bump the version for documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`) or CI-only changes (`.github/`, CI scripts and config). The same holds for test-only changes that leave shipped code untouched. Such changes also do not write a new root `CHANGELOG.md` entry.
-- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the version once for the whole atomic change.
-- The eleven first-party bundles are released with hya: every `bundles/presets/*/bundle.yaml` and `bundles/first-party/*/bundle.yaml` identity `version` must equal `[workspace.package].version`. Bump them together; `stage-first-party-bundles` and the `hya-bundle` first-party test reject a mismatch. The `bundles/extra/*/bundle.yaml` bundles follow the same rule; `crates/hya-bundle/tests/extra_bundles.rs` rejects a mismatch.
-- The same version also appears in `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json`, and the `README.md` status paragraph; `cargo test -p xtask` rejects a `package.json` mismatch, and the `release-rehearsal` metadata check rejects a stale `README.md` or `Cargo.lock`.
+- Do not bump the version for documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`) or CI-only changes (`.github/`, CI scripts and config). The same holds for test-only changes that leave shipped code untouched.
+- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the aggregate version once for the whole atomic change.
+- Bundle source manifests use identity version `0.0.0` plus `version_ref: backend`; preparation resolves the backend aggregate, and release tests reject unresolved or mismatched identities. Frontend package manifests use `0.0.0` plus `version-reference = "frontend"`; the packaged TUI carries `packages/hya-tui/frontend-version.ts`.
+- Version bumps: `cargo test -p xtask` checks aggregate/reference metadata and release layout; `cargo test -p hya-bundle` checks bundle preparation and resolved identities; `README.md` and `Cargo.lock` are checked by release rehearsal.
 - Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
 - When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
 - Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.

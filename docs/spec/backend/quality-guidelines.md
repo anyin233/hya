@@ -828,39 +828,47 @@ const lifecycle = resolveLifecyclePresentation(node)
 
 ### 2. Contracts
 
-Bumping the version means updating **all** of these together:
+Bumping the release means updating the aggregate contract together:
 
 | File | What to change |
 | --- | --- |
-| `Cargo.toml` | `[workspace.package].version` |
-| `Cargo.lock` | every `hya` / `hya-*` package version (a build refreshes it) |
-| `bundles/presets/*/bundle.yaml`, `bundles/first-party/*/bundle.yaml`, `bundles/extra/*/bundle.yaml` | identity `version` |
-| `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json` | `version` |
-| `README.md` | the `workspace version \`X.Y.Z\`` string |
+| `versions.toml` | `[backend].version` and `[frontend].version` |
+| `Cargo.toml` | `[workspace.package].version` mirrors the backend aggregate |
+| `Cargo.lock` | `hya-backend` carries the backend version; other `hya` packages remain `0.0.0` |
+| Rust `Cargo.toml` manifests | non-backend packages stay at `0.0.0` with `version-reference = "backend"` |
+| `bundles/**/bundle.yaml` | source identity stays `0.0.0` with `version_ref: backend`; preparation resolves the backend version |
+| frontend package manifests | stay at `0.0.0` with `version-reference = "frontend"` |
+| `packages/hya-tui/frontend-version.ts` | embedded frontend aggregate used by the packaged TUI |
+| `README.md` | backend/frontend aggregate versions in the status paragraph |
 | `CHANGELOG.md` | first heading is exactly `# X.Y.Z` |
 | `docs/changes/CHANGELOG_<prev>.md` | move the previous root changelog here first |
 
+The two aggregate values are the only real release versions. Component
+placeholders prevent a version bump from requiring a mass edit; explicit
+metadata references and the release checks make the intended aggregate
+relationship visible and fail closed.
+
 ### 3. Validation & Error Matrix
 
-- Stale `package.json` -> `cargo test -p xtask`
-  (`packaged_frontend_versions_match_workspace`) fails.
-- Stale first-party bundle -> `cargo test -p hya-bundle --test first_party` and
-  `stage-first-party-bundles` fail; stale extra bundle ->
-  `cargo test -p hya-bundle --test extra_bundles` fails.
-- Stale `README.md` or `Cargo.lock` -> the release metadata check in
-  `cargo run -p xtask -- release-rehearsal` fails.
-- Root `CHANGELOG.md` retaining old releases -> stale history is published verbatim
-  as the GitHub Release body.
+- Stale aggregate/reference metadata -> `cargo test -p xtask` fails.
+- Unresolved or mismatched bundle version reference ->
+  `cargo test -p hya-bundle` and `stage-first-party-bundles` fail.
+- Stale README, lockfile, package layout, or archive copy -> the release
+  metadata/rehearsal checks fail.
+- Root `CHANGELOG.md` retaining old releases -> stale history is published
+  verbatim as the GitHub Release body.
 
 ### 4. Good/Base/Bad Cases
 
-- Good: every file above updated in the same atomic change, verified with
-  `cargo test -p xtask` and `cargo test -p hya-bundle`.
-- Base: a docs-only or CI-only change keeps the current version and root
-  changelog untouched.
-- Bad: bumping `Cargo.toml` and running only the changed crate's tests — the
-  version checks live in `xtask` and `hya-bundle`, so that scoped run misses them.
-- Bad: bumping the version for a docs-only or CI-only change.
+- Good: update the two aggregate entries, README, changelog, and release
+  metadata in one atomic change; verify with `cargo test -p xtask` and
+  `cargo test -p hya-bundle`.
+- Base: a docs-only or CI-only change keeps the current aggregate versions and
+  root changelog untouched.
+- Bad: editing every component manifest or bundle source file for one release;
+  use the placeholder/reference contract instead.
+- Bad: bumping only one aggregate for a release that ships both backend and
+  frontend artifacts.
 
 ---
 

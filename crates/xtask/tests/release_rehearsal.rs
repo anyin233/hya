@@ -15,7 +15,7 @@ const WORKFLOW_CONTRACTS: &[&str] = &[
     "(cd \"$tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)",
     "cp -R packages/hya-tui-web/src/. \"$tui_web/src/\"",
     "cp -R packages/hya-tui-web/web/. \"$tui_web/web/\"",
-    "(cd \"$tui_web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)",
+    "cp packages/hya-tui/frontend-version.ts \"$tui/frontend-version.ts\"",
     "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist",
     "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")",
 ];
@@ -48,7 +48,7 @@ fn release_rehearsal_requires_a_host_target() {
         .arg(workspace_root().join(".github/workflows/release.yml"))
         .args([
             "--version",
-            env!("CARGO_PKG_VERSION"),
+            hya_version::BACKEND_VERSION,
             "--target",
             foreign,
             "--no-publish",

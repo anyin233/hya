@@ -78,7 +78,7 @@ pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
 pub fn host_info() -> HostInfo {
     HostInfo {
         name: "hya".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: hya_version::BACKEND_VERSION.to_string(),
     }
 }
 
