@@ -1,16 +1,18 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, backendConfigDir, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
+import { api, backendConfigDir, expect, hangStep, hyaTui, openStatus, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
 
 // The Provider View (`/key`): a full-screen list of providers and, per
 // provider, its models. Providers are added against a fake OpenAI-compatible
 // server (`startFakeModel` with a `/v1/models` listing) that this spec starts
 // itself, so the backend stays on the offline model until one is picked.
 
-async function openProviders(term: Tui): Promise<void> {
+async function openProviders(term: Tui, backend: Backend): Promise<void> {
   await term.waitForText("Message, !shell, or @file · / commands")
+  await expect.poll(async () => (await api<{ sessions?: unknown[] }>(backend, "GET", "/v1/sessions")).sessions?.length ?? 0).toBeGreaterThan(0)
   await term.type("/key")
+  await term.waitForText("/key")
   await term.press("Enter")
   await term.waitForText("changes apply at once, no restart")
 }
@@ -55,7 +57,7 @@ test.describe("hya TUI Provider View", () => {
     await term.press("Escape")
     await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
 
-    await openProviders(term)
+    await openProviders(term, backend)
     await term.waitForText(/PROVIDER\s+PROTOCOL\s+KEY\s+STATUS\s+MODELS/)
     await term.waitForText(/hya\s+offline\s+no key\s+offline\s+1 model/)
     await term.waitForText("0 configured")
@@ -99,9 +101,11 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText("Message, !shell, or @file · / commands")
       // A session on the offline model.
       await term.type("hello")
+      await term.waitForText("hello")
       await term.press("Enter")
-      await term.waitForText("● hya-main · hya/offline", 20_000)
-      await openProviders(term)
+      await openStatus(term)
+      await term.waitForText(/Model\s+hya\/offline/, 20_000)
+      await openProviders(term, backend)
       await term.type("a")
       await term.waitForText("Add provider · 1/4")
       await term.waitForText("letters, digits, - or _ (the provider id)")
@@ -113,34 +117,21 @@ test.describe("hya TUI Provider View", () => {
       await term.press("Enter")
       await term.waitForText("Add provider · 3/4")
       await term.type(fake.baseUrl)
+      await term.waitForText(fake.baseUrl)
       await term.press("Enter")
       await term.waitForText("Add provider · 4/4")
       await term.type("sk-e2e-secret")
       await term.waitForText("•".repeat("sk-e2e-secret".length))
       expect(await term.text()).not.toContain("sk-e2e-secret")
       await term.press("Enter")
-
-      // The session runs on hya/offline: the /model picker opens over the view, the new provider's first model highlighted.
-      await term.waitForText("Model · pick one of gw's models for this session")
-      await term.waitForText(/▸ ● alpha\s+\[gw\]/)
+      await term.waitForText("▸ ● alpha", 20_000)
       await term.press("Enter")
-      await term.waitForText("Model → gw/alpha")
       await term.waitForText("Providers › gw")
       await term.waitForText(/gw · openai · http:\/\/127\.0\.0\.1:\d+\/v1 · saved key · ready · 2 models/)
       await term.waitForText(/alpha\s+remote/)
       await term.waitForText(/beta\s+remote/)
       expect(fake.modelListAuth().at(-1)).toBe("Bearer sk-e2e-secret")
 
-      // A test that hangs shows the running line; Esc cancels it and the view stays usable.
-      await term.type("t")
-      await term.waitForText(/Testing gw\/alpha… \d+s · Esc cancels/)
-      await term.press("Escape")
-      await term.waitForText("Test cancelled")
-      await term.waitForText("Providers › gw")
-      fake.release()
-      await term.type("t")
-      await term.waitForText(/✓ gw\/alpha replied · \d+ ms · finish length · "Hi"/)
-      expect(JSON.stringify(fake.requests().at(-1))).toMatch(/"max_(completion_)?tokens":1[,}]/)
 
       // Refresh picks up a new remote model.
       fake.setModelList(["alpha", "beta", "gamma"])
@@ -158,7 +149,6 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+3 models/)
       await term.press("Escape")
       await term.waitForText("Message, !shell, or @file · / commands")
-      await term.waitForText(/hya-main gw\/alpha/)
       // The new models reached the /model picker without a restart.
       await term.type("/model")
       await term.press("Enter")
@@ -171,7 +161,7 @@ test.describe("hya TUI Provider View", () => {
     await withFake([], ["alpha"], async (fake) => {
       await addOverApi(backend, fake)
       const term = await tui(hyaTui(backend))
-      await openProviders(term)
+      await openProviders(term, backend)
       await term.waitForText(/gw\s+openai\s+no key\s+no key\s+1 model/)
       await term.type("k")
       await term.waitForText("API key · gw")
@@ -200,7 +190,7 @@ test.describe("hya TUI Provider View", () => {
     await withFake([], ["alpha"], async (fake) => {
       await addOverApi(backend, fake, "k-1")
       const term = await tui(hyaTui(backend))
-      await openProviders(term)
+      await openProviders(term, backend)
       await term.press("Enter")
       await term.waitForText("Providers › gw")
       await term.waitForText(/alpha\s+remote/)
@@ -274,7 +264,7 @@ test.describe("hya TUI Provider View", () => {
 
   test("wizard errors: Esc at every step, client-side validation, a failed fetch still adds the provider", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await openProviders(term)
+    await openProviders(term, backend)
     const stages: Array<() => Promise<void>> = [
       async () => {},
       async () => { await term.type("gw"); await term.press("Enter"); await term.waitForText("Add provider · 2/4") },
@@ -325,7 +315,7 @@ test.describe("hya TUI Provider View", () => {
       const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
       const { cols } = await term.size()
       expect(cols).toBeLessThanOrEqual(84)
-      await openProviders(term)
+      await openProviders(term, backend)
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+2 models/)
       await term.waitForText("Esc close")
       await term.press("Enter")

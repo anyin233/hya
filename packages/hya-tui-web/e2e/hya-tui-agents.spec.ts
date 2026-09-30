@@ -12,6 +12,7 @@ import { backendConfigDir, expect, hyaTui, test, textStep } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
+  await term.waitForText(text)
   await term.press("Enter")
 }
 
@@ -82,9 +83,14 @@ test.describe("hya TUI Agents view", () => {
     await openAgents(term)
     await filterTo(term, "hya-plan")
     await term.press("Enter")
+    await expect.poll(() => term.find("── Primary agents")).toBeNull()
     await prompt(term, "hello")
     await term.waitForText("Reply one.", 20_000)
-    await term.waitForText(/● hya-plan · fake\//)
+    await expect.poll(async () => {
+      const response = await fetch(`${backend.url}/v1/sessions`)
+      const body = await response.json() as { sessions?: { agent?: string }[] }
+      return body.sessions?.find((session) => session.agent === "hya-plan")?.agent
+    }, { timeout: 20_000 }).toBe("hya-plan")
   })
 
   test("m remembers a subagent's default model and c clears it", async ({ tui, backend }) => {
