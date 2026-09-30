@@ -25,8 +25,8 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.43.32`,
-`MIT OR Apache-2.0`). The latest public binary release is `v0.43.32`; install it
+hya is under active development (workspace version `0.43.33`,
+`MIT OR Apache-2.0`). The latest public binary release is `v0.43.33`; install it
 as described below, or build this checkout from source. It is not published to
 crates.io. APIs, config, and command surfaces may still change between versions.
 

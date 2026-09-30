@@ -24,12 +24,13 @@ fn unique_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(root)
 }
 
-/// A model-list endpoint that answers `GET …/models` with `alpha` and `beta`
-/// when the request carries `key` (Bearer or `x-api-key`), else 401. Every
-/// request's head is recorded.
+/// A model-list endpoint that answers `GET …/models` with its current model
+/// ids (`alpha` and `beta` at first) when the request carries `key` (Bearer
+/// or `x-api-key`), else 401. Every request's head is recorded.
 struct FakeModels {
     base: String,
     requests: Arc<Mutex<Vec<String>>>,
+    models: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl FakeModels {
@@ -37,7 +38,9 @@ impl FakeModels {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let base = format!("http://{}/v1", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let models = Arc::new(Mutex::new(vec!["alpha", "beta"]));
         let seen = Arc::clone(&requests);
+        let listed = Arc::clone(&models);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -59,13 +62,22 @@ impl FakeModels {
                 if let Ok(mut seen) = seen.lock() {
                     seen.push(head);
                 }
+                let data = listed
+                    .lock()
+                    .map(|ids| {
+                        ids.iter()
+                            .map(|id| format!(r#"{{"id":"{id}","type":"model"}}"#))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
                 let (status, body) = if authorized {
-                    (
-                        "200 OK",
-                        r#"{"data":[{"id":"alpha","type":"model"},{"id":"beta","type":"model"}],"has_more":false}"#,
-                    )
+                    ("200 OK", format!(r#"{{"data":[{data}],"has_more":false}}"#))
                 } else {
-                    ("401 Unauthorized", r#"{"error":{"message":"bad key"}}"#)
+                    (
+                        "401 Unauthorized",
+                        r#"{"error":{"message":"bad key"}}"#.to_string(),
+                    )
                 };
                 let _ = write!(
                     stream,
@@ -77,7 +89,11 @@ impl FakeModels {
                 let _ = reader.read_to_end(&mut rest);
             }
         });
-        Ok(Self { base, requests })
+        Ok(Self {
+            base,
+            requests,
+            models,
+        })
     }
 
     fn requests(&self) -> Vec<String> {
@@ -86,6 +102,34 @@ impl FakeModels {
             .map(|seen| seen.clone())
             .unwrap_or_default()
     }
+
+    /// How many model lists were fetched so far.
+    fn fetches(&self) -> usize {
+        self.requests()
+            .iter()
+            .filter(|head| head.starts_with("GET /v1/models"))
+            .count()
+    }
+
+    fn set_models(&self, ids: &[&'static str]) {
+        if let Ok(mut models) = self.models.lock() {
+            *models = ids.to_vec();
+        }
+    }
+}
+
+/// `GET /v1/models?providerId=fake` of the backend at `url` (the list the
+/// TUI and WebUI read); returns the response body.
+fn backend_models(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let host = url.trim_start_matches("http://").trim_end_matches('/');
+    let mut stream = std::net::TcpStream::connect(host)?;
+    write!(
+        stream,
+        "GET /v1/models?providerId=fake HTTP/1.1\r\nhost: {host}\r\nconnection: close\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
 }
 
 fn hya(root: &Path) -> Command {
@@ -330,6 +374,73 @@ fn list_marks_config_overrides_and_logout_drops_only_the_key() -> TestResult {
         "{after}"
     );
 
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// With a backend running for the database, `--refresh` fetches through it:
+/// the backend (and so the TUI and WebUI on it) lists the new models at once,
+/// and the endpoint is asked once per provider, not by both processes.
+#[test]
+fn refresh_updates_the_running_backend() -> TestResult {
+    let root = unique_root()?;
+    let server = FakeModels::start("sk-test")?;
+    let add = provider(
+        &root,
+        &[
+            "add",
+            "--name",
+            "fake",
+            "--base-url",
+            &server.base,
+            "--protocol",
+            "openai-chat",
+            "--api-key",
+            "sk-test",
+        ],
+        "",
+    )?;
+    assert!(add.status.success(), "{}", text(&add));
+    let db = root.join("s.db");
+    let db = db.to_str().ok_or("db path")?;
+    let started = hya(&root)
+        .args(["serve", "start", "--json", "--db", db])
+        .output()?;
+    assert!(started.status.success(), "{}", text(&started));
+    let ready: serde_json::Value = serde_json::from_slice(&started.stdout)?;
+    let url = ready["url"].as_str().ok_or("serve start url")?.to_string();
+    let result = (|| -> TestResult {
+        let before = backend_models(&url)?;
+        assert!(
+            before.contains("fake/beta") && !before.contains("fake/gamma"),
+            "{before}"
+        );
+
+        server.set_models(&["alpha", "beta", "gamma"]);
+        let fetched = server.fetches();
+        let listed = hya(&root)
+            .args(["provider", "list", "--refresh", "--db", db])
+            .output()?;
+        assert!(listed.status.success(), "{}", text(&listed));
+        assert!(text(&listed).contains("fake/gamma"), "{}", text(&listed));
+        assert_eq!(server.fetches(), fetched + 1, "one fetch per refresh");
+        let after = backend_models(&url)?;
+        assert!(after.contains("fake/gamma"), "{after}");
+
+        server.set_models(&["alpha", "beta", "gamma", "delta"]);
+        let fetched = server.fetches();
+        let models = hya(&root)
+            .args(["models", "fake", "--refresh", "--db", db])
+            .output()?;
+        assert!(models.status.success(), "{}", text(&models));
+        assert!(text(&models).contains("delta"), "{}", text(&models));
+        assert_eq!(server.fetches(), fetched + 1, "one fetch per refresh");
+        let after = backend_models(&url)?;
+        assert!(after.contains("fake/delta"), "{after}");
+        Ok(())
+    })();
+    let _ = hya(&root).args(["serve", "stop", "--db", db]).output();
+    result?;
     fs::remove_dir_all(root)?;
     Ok(())
 }

@@ -1125,8 +1125,26 @@ async fn run(
             refresh,
         }) => {
             first_run_config_bootstrap(false)?;
+            // With a running backend the refresh goes through it (one fetch,
+            // and its TUI/WebUI see the new models); `resolve_runtime` then
+            // reads the model cache it wrote, so those providers are not
+            // fetched again as pending.
+            let refreshed = if refresh {
+                provider_cmd::refresh_through_backend(
+                    &absolute_db(resolve_interactive_db(&db)),
+                    provider.as_deref(),
+                )
+                .await?
+            } else {
+                None
+            };
             let mut runtime = resolve_runtime(model).await;
-            if refresh {
+            if let Some(refreshed) = &refreshed {
+                runtime
+                    .pending_discovery
+                    .retain(|entry| !refreshed.contains(&entry.provider_id));
+            }
+            if refresh && refreshed.is_none() {
                 let ids = provider
                     .clone()
                     .map(|id| std::collections::BTreeSet::from([id]));

@@ -1158,7 +1158,8 @@ Prints one block per `providers.<id>` in `config.yaml`: the id, the protocol
 URL, and where the key comes from (`saved key`, `oauth`, `config api_key`, or
 `no key`). Below that it lists every model as `<id>/<model>`. Models come
 from the model cache merged with `models:` entries, the same catalog
-`hya models` prints. `--refresh` fetches every provider's list first.
+`hya models` prints. `--refresh` fetches every provider's list first, through
+the database's running backend when one runs (see `models --refresh` below).
 
 A `models:` entry that names a fetched model overrides it field by field, and
 unset fields keep the fetched values
@@ -1262,6 +1263,21 @@ no cached rows, and discovery-only providers, fetch their remote list first.
 `--refresh` fetches the remote list of every provider (or only `provider`'s)
 into the cache before printing; a failed fetch is reported on stderr as
 `hya: <provider>: model list <result>: <error>` and keeps the old rows.
+
+When a backend daemon of the database (`--db`) is running, `--refresh` asks it
+to fetch instead: one `POST /v1/providers/{id}/refresh` (`RefreshProvider`)
+per provider declared in `config.yaml` (only `provider` when given). The
+backend fetches each list once, writes the model cache, rebuilds its catalog,
+and emits a live `catalogUpdated` frame, so its TUI and WebUI clients re-read
+`GET /v1/models` and offer the refreshed models without a restart. The command
+then prints from the cache the backend wrote. Without a running backend it
+fetches the lists itself. A backend that answers with an error fails the
+command.
+
+```sh
+hya serve start
+hya models openai --refresh   # the open TUI's /model list now shows the new models
+```
 
 With `--verbose`, each id is followed by a JSON line with `id`, `provider`,
 `source` (`remote`, `config`, `override`, or `offline`), and — each only when
