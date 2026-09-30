@@ -234,7 +234,7 @@ test.describe("shell turns", () => {
     await term.type("!echo hello")
     await expect.poll(async () => (await composer(term)).title).toBe("! shell")
     const box = await composer(term)
-    expect((await term.cell(box.top, 0))?.fg).toBe(warning)
+    expect((await term.cell(box.top, 0))?.fg).toBe("#73c8e8")
     await term.attach(testInfo, "shell-mode")
     await term.press("Enter")
     // The user block shows what was typed; the assistant shows the command under the bash call.

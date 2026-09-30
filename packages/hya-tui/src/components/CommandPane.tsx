@@ -8,6 +8,7 @@ import { InputHistory } from "../composer/history"
 import { projectsSidebarVisible } from "../state/layout"
 import { pickerWindow } from "../state/picker"
 import { isShiftTab } from "../state/modes"
+import { keyboardOwner } from "../state/focus"
 import { colors } from "../theme"
 
 interface CommandMenu {
@@ -168,7 +169,7 @@ export function CommandPane() {
   })
 
   return (
-    <box position="absolute" top={2} left={left()} width={width()} zIndex={90} flexShrink={0} border borderColor={colors.accent} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
+    <box position="absolute" top={2} left={left()} width={width()} zIndex={90} flexShrink={0} border borderColor={keyboardOwner(store.state, active()) === "commands" ? colors.accent : colors.border} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
       <input
         ref={(element: InputRenderable) => {
           editor = element
@@ -181,7 +182,7 @@ export function CommandPane() {
         textColor={colors.fg}
         focusedTextColor={colors.fg}
         cursorColor={colors.accent}
-        focused={active() && !store.state.picker && !store.state.secretEntry}
+        focused={keyboardOwner(store.state, active()) === "commands"}
         onSubmit={submit}
         onContentChange={sync}
       />

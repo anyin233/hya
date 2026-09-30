@@ -18,12 +18,13 @@ import { For, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { defaultPickerHint, pickerMaxRows, pickerRows, pickerWindow, type ActivePicker } from "../state/picker"
 import { colors } from "../theme"
+import { keyboardOwner } from "../state/focus"
 
 /** Widest picker box, in columns. */
 const pickerMaxWidth = 96
 
 export function Picker() {
-  const { store, controller } = useApp()
+  const { store, controller, ui } = useApp()
   const size = useTerminalDimensions()
   const width = () => Math.max(20, Math.min(pickerMaxWidth, size().width - 4))
   const left = () => Math.max(0, Math.floor((size().width - width()) / 2))
@@ -54,7 +55,7 @@ export function Picker() {
             width={width()}
             zIndex={100}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "picker" ? colors.accent : colors.border}
             title={open().title}
             backgroundColor={colors.panel}
             flexDirection="column"

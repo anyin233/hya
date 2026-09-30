@@ -9,6 +9,7 @@ import { useApp } from "../app/context"
 import { agentHeaderLine, agentLine, agentsViewHint, agentsViewLines, sectionRule, type AgentsViewBusy, type AgentsViewLine, type AgentsViewNotice, type AgentsViewState } from "../state/agentsView"
 import { pickerWindow } from "../state/picker"
 import { colors } from "../theme"
+import { keyboardOwner } from "../state/focus"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: AgentsViewNotice): string {
@@ -31,7 +32,7 @@ function BusyLine(props: { busy: AgentsViewBusy }) {
 }
 
 export function AgentsView() {
-  const { store } = useApp()
+  const { store, ui } = useApp()
   const size = useTerminalDimensions()
   return (
     <Show when={store.state.agentsView}>
@@ -58,7 +59,7 @@ export function AgentsView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "agents" ? colors.accent : colors.border}
             title="Agents"
             backgroundColor={colors.bg}
             flexDirection="column"
