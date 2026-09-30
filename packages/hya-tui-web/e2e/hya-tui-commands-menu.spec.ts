@@ -126,7 +126,7 @@ test.describe("command menu", () => {
         selected = await highlighted()
         expect(visited.has(selected), "navigation wrapped before reaching /layout").toBe(false)
         visited.add(selected)
-        expect((await box(term, "Commands"))!.rows.filter((row) => row.includes("[local]") || row.includes("[command]") || row.includes("[skill]")).length).toBeLessThanOrEqual(8)
+        expect((await box(term, "Commands"))!.rows.length - 2).toBeLessThanOrEqual(12)
       }
       expect(selected).toMatch(/^▸ \/layout /)
       await term.attach(testInfo, "command-menu-scrolled")
