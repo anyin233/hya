@@ -28,7 +28,7 @@ export interface CommandSuggestion {
 }
 
 /** Rows shown at once; navigation still visits the complete suggestion list. */
-export const commandSuggestionLimit = 8
+export const commandSuggestionLimit = 12
 
 /**
  * Merge the local registry with the backend catalog into one list, sorted by

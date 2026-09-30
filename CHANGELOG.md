@@ -1,5 +1,5 @@
-# 0.43.34
+# 0.43.35
 
 ## Features
 
-- Workspace panes now own their keys and paste strictly; selecting an auxiliary pane preserves conversation drafts and prevents accidental submissions.
+- The Commands dropdown now shows up to twelve recommendations, while fitting short terminals and scrolling through every match.

@@ -1596,7 +1596,11 @@ substring match, then any name whose letters appear in order (a subsequence
 match); ties break alphabetically. Up/Down move the highlight through every
 matching command, scrolling the visible rows as needed; they wrap only at the
 first and last matching command. Shift+Tab moves it upward with the same
-behavior. For example, press `/` and keep pressing Down past the initial eight
+behavior. The dropdown displays up to 12 recommendations, 1.5 times the previous
+eight-row limit. It reserves six terminal rows for its input, hint, borders,
+and top offset: the visible choice count is `max(1, min(12, terminalRows - 6))`.
+This fixed frontend limit adds no saved preference or server interface. For
+example, press `/` and keep pressing Down past the initial twelve
 rows to reach `/layout`, then press Tab to see its actions. Esc or Ctrl+C closes
 the pane and keeps its command draft for reopening. Shift+Up/Down walks its own
 last 200 submitted commands. The
