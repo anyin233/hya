@@ -1,5 +1,5 @@
-# 0.43.32
+# 0.43.33
 
 ## Features
 
-- The message input no longer has a status line above it or a contextual footer below it. Command results and errors now appear directly beneath the conversation header; help and command overlays retain their keyboard instructions.
+- The global Commands overlay now puts its input bar first, with matching command and argument recommendations dropping down below it. The input stays at a fixed position as the suggestion list changes.

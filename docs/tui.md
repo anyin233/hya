@@ -1563,11 +1563,15 @@ it never resizes the conversation or side panes. Press `/` while the message
 composer is empty, or from any other workspace pane, to focus it. While a
 message draft is open in the conversation, press Ctrl+X then `/`; the draft
 stays in the composer. Like the help overlay, Commands is centered near the
-top of the whole terminal, and its own hint row shows its keys. For example, press `/`, type `models`, and press
+top of the whole terminal. Its first row is the command input bar; matching
+suggestions drop down beneath it, followed by the keyboard hint. This keeps
+the input in the same place while the recommendation list changes. For
+example, press `/`, type `models`, and press
 Enter to open the model catalog. To type `src/main.rs` in a message, keep
 typing in the composer; its slash is literal after the first character.
 
-The input starts with `/`. Each suggestion row shows the command name, its
+The input starts with `/`. Up/Down selects a recommendation below the input;
+Tab copies it into the input bar. Each suggestion row shows the command name, its
 argument hint, its description (truncated to width), and its source in
 brackets: `[local]` (this TUI's own
 registry), `[command]` (a custom or built-in server command, `/init` and
@@ -1623,7 +1627,9 @@ The command pane builds all selectable rows through
 `suggestCommandInput(input, entries, complete)`, which returns all matching
 rows without a display limit. The renderer uses `pickerWindow(count, index, rows)`
 to display at most eight rows, reduced on short terminals, while keeping the
-selected row visible. `App` owns one `CommandPane` for its full lifetime;
+selected row visible. The render order is input, suggestion rows, then hint;
+the input stays at absolute row 3 and recommendations begin at row 4 while
+the overlay is open. `App` owns one `CommandPane` for its full lifetime;
 assigning, resizing, or selecting a workspace leaf does not replace its input
 or history. Its absolute box starts at row 2, is centered across the terminal,
 and is at most 96 columns wide (four columns of outside margin on narrower

@@ -48,9 +48,9 @@ async function composerText(term: Tui): Promise<string> {
   return text === placeholder ? "" : text
 }
 
-/** The command input is the row immediately above the pane's key hint. */
+/** The command input is the first row, above the suggestion dropdown. */
 async function commandText(term: Tui): Promise<string | undefined> {
-  return (await box(term, "Commands"))?.rows.at(-2)
+  return (await box(term, "Commands"))?.rows[0]
 }
 
 async function writeSkill(dir: string, name: string, description: string, body: string): Promise<void> {
