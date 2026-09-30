@@ -9,6 +9,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
+import { keyboardOwner } from "../state/focus"
 import { pageStep } from "../state/scroll"
 import { currentDiffFile, diffFileWindow, diffViewHint, fileLine, type DiffBusy, type DiffNotice, type DiffViewState } from "../state/diff"
 import { colors, diffColors } from "../theme"
@@ -88,7 +89,7 @@ export function DiffView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "diff" ? colors.accent : colors.border}
             title={file() ? `Diff › ${file()!.path}` : "Diff"}
             backgroundColor={colors.bg}
             flexDirection="row"

@@ -533,6 +533,48 @@ fn openai_chat_deepseek_replays_empty_reasoning_content_for_tool_turn() {
     assert_eq!(body["messages"][2]["role"], "tool");
 }
 
+#[test]
+fn openai_chat_replays_reasoning_from_older_sessions() {
+    let mut request = assistant_tool_request(json!({"path": "a"}));
+    request.model = ModelRef::new("kimi-thinking");
+    let Message::Assistant { parts, .. } = &mut request.messages[1] else {
+        panic!("assistant fixture");
+    };
+    parts.insert(
+        0,
+        Part::Reasoning {
+            id: PartId::new(),
+            text: "old thought".into(),
+            provider_data: Some(json!({"openai_chat_reasoning_content": true})),
+        },
+    );
+
+    let body = OpenAiChatProtocol
+        .encode(&request)
+        .expect("encode historical reasoning");
+    assert_eq!(body["messages"][1]["reasoning_content"], "old thought");
+}
+
+#[test]
+fn openai_chat_keeps_an_assistant_with_only_reasoning() {
+    let mut request = assistant_tool_request(json!({"path": "a"}));
+    request.model = ModelRef::new("kimi-thinking");
+    let Message::Assistant { parts, .. } = &mut request.messages[1] else {
+        panic!("assistant fixture");
+    };
+    *parts = vec![Part::Reasoning {
+        id: PartId::new(),
+        text: "thinking".into(),
+        provider_data: Some(json!({"type": "reasoning_content"})),
+    }];
+
+    let body = OpenAiChatProtocol
+        .encode(&request)
+        .expect("encode reasoning-only reply");
+    assert_eq!(body["messages"][1]["reasoning_content"], "thinking");
+    assert_eq!(body["messages"][1]["content"], "");
+}
+
 #[tokio::test]
 async fn fake_and_openai_agree_on_canonical_shape() {
     let protocol = OpenAiChatProtocol;

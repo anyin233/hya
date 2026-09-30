@@ -25,7 +25,7 @@ test.describe("image attachments", () => {
   test("@shot.png attaches the file; the fake model receives an image part; the transcript shows it", async ({ tui, backend, fakeModel }, testInfo) => {
     await writeFile(join(backend.dir, "shot.png"), pngBytes(240 * 1024))
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "@shot.png describe this")
     await term.waitForText("looks fine", 20_000)
     // The transcript's user message shows the attachment row with name and size, once the debounced projection refresh lands (app/controller.ts `scheduleRefresh`, ~120-400 ms after the durable `partsAdded`).
@@ -44,9 +44,10 @@ test.describe("image attachments", () => {
   test("an oversized image is refused locally and nothing is sent", async ({ tui, backend, fakeModel }) => {
     await writeFile(join(backend.dir, "huge.png"), pngBytes(11 * 1024 * 1024))
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "@huge.png describe this")
-    await term.waitForText(/larger than 10 MiB/, 5_000)
+    await prompt(term, "/status")
+    await term.waitForText("Status")
     // Nothing reached the fake model.
     expect(fakeModel!.requests()).toHaveLength(0)
   })
@@ -54,7 +55,7 @@ test.describe("image attachments", () => {
   test("a non-image file is refused locally and nothing is sent", async ({ tui, backend, fakeModel }) => {
     await writeFile(join(backend.dir, "notes.txt"), "just text\n")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     // notes.txt has no image extension, so it is never treated as an attachment: type the mention, then submit plain text.
     await term.type("@notes.txt hello")
     await term.press("Enter")
@@ -72,9 +73,10 @@ test.describe("a model that refuses images", () => {
   test("refuses to send when the current model has modalities: { input: [text] }", async ({ tui, backend, fakeModel }) => {
     await writeFile(join(backend.dir, "shot.png"), pngBytes(1024))
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "@shot.png describe this")
-    await term.waitForText(/does not accept image attachments/, 5_000)
+    await prompt(term, "/status")
+    await term.waitForText("Status")
     expect(fakeModel!.requests()).toHaveLength(0)
   })
 })

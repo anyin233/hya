@@ -9,7 +9,7 @@ import type { Controller } from "./controller"
 export interface UiHandles {
   transcript?: TranscriptScroller
   /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
-  panes?: Map<string, TranscriptScroller>
+  panes?: Map<string, DiffScroller>
   diff?: DiffScroller
   command?: CommandPaneHandle
   composerHistory?: InputHistory

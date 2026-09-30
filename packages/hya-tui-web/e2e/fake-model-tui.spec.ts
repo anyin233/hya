@@ -12,7 +12,7 @@ test.describe("hya TUI against the fake model", () => {
 
   test("shows a scripted fake-model reply on screen", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("say something")
     await term.press("Enter")
     await term.waitForText("hya-fake-b7d2", 20_000)

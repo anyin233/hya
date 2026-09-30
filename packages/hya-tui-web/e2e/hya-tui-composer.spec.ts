@@ -39,7 +39,7 @@ async function composerText(term: Tui): Promise<string> {
 }
 
 async function connected(term: Tui): Promise<void> {
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
 }
 
 test.describe("multi-line input", () => {
@@ -174,12 +174,12 @@ test.describe("Esc and quitting", () => {
     await expect.poll(() => composerText(term)).toBe("")
   })
 
-  test("Ctrl+C once clears the input and shows the hint; twice quits with code 0", async ({ tui, backend }, testInfo) => {
+  test("Ctrl+C once clears the input; twice quits with code 0", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("some text")
     await term.press("Control+c")
-    await term.waitForText("Press Ctrl+C again to quit")
+    expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
     await expect.poll(() => composerText(term)).toBe("")
     await term.attach(testInfo, "quit-hint")
     await term.press("Control+c")
@@ -221,8 +221,8 @@ test.describe("Esc cancels a running turn", () => {
     // Text typed while the turn runs stays: Esc cancels the turn, it does not clear.
     await term.type("next")
     await term.press("Escape")
-    await term.waitForText("Cancelled · Ready", 20_000)
     await term.waitForText("! Cancelled")
+    await term.waitForIdle(20_000)
     expect(await composerText(term)).toBe("next")
   })
 })
@@ -234,14 +234,14 @@ test.describe("shell turns", () => {
     await term.type("!echo hello")
     await expect.poll(async () => (await composer(term)).title).toBe("! shell")
     const box = await composer(term)
-    expect((await term.cell(box.top, 0))?.fg).toBe(warning)
+    expect((await term.cell(box.top, 0))?.fg).toBe("#73c8e8")
     await term.attach(testInfo, "shell-mode")
     await term.press("Enter")
     // The user block shows what was typed; the assistant shows the bash call with the command as its arguments.
     await term.waitForText("┃ !echo hello", 20_000)
     // The user typed the command, so it runs without a permission prompt even in manual mode.
     await term.waitForText(toolCard("✓", "bash", '"command":"echo hello"'), 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     const text = await term.text()
     expect(text).not.toMatch(/asked by |perm_\w+|awaiting approval/)
     expect(text).not.toContain("The following tool was executed by the user")

@@ -27,8 +27,8 @@ export interface CommandSuggestion {
   runOnEnter: boolean
 }
 
-/** Rows shown at once; the rest are still reachable by typing a longer query. */
-export const commandSuggestionLimit = 8
+/** Rows shown at once; navigation still visits the complete suggestion list. */
+export const commandSuggestionLimit = 12
 
 /**
  * Merge the local registry with the backend catalog into one list, sorted by
@@ -102,11 +102,9 @@ export function suggestCommandInput(input: string, entries: () => CommandEntry[]
     return complete(input)
       .map((item) => typeof item === "string" ? { label: item, replacement: item } : item)
       .filter((item) => item.replacement !== input)
-      .slice(0, commandSuggestionLimit)
       .map(({ label, replacement }) => ({ label, replacement, kind: "argument", runOnEnter: false }))
   }
   return filterCommands(entries(), input.slice(1))
-    .slice(0, commandSuggestionLimit)
     .map((entry) => ({
       label: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}  ${entry.description}  [${entry.source}]`,
       replacement: entry.name,

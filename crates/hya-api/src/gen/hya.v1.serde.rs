@@ -17621,7 +17621,7 @@ impl<'de> serde::Deserialize<'de> for ModelEffortPreference {
                             if updated_at__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("updatedAt"));
                             }
-                            updated_at__ = 
+                            updated_at__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -21998,7 +21998,7 @@ impl<'de> serde::Deserialize<'de> for RefreshBundlesResponse {
                             if generation__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("generation"));
                             }
-                            generation__ = 
+                            generation__ =
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }

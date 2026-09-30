@@ -61,6 +61,34 @@ thinking-derived `max_tokens` within the limit. `decoder` returns a fresh
 stateful decoder.
 Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 
+### DeepSeek thinking with tools over OpenAI Chat
+
+DeepSeek's thinking mode requires each earlier assistant message's
+`reasoning_content` when a later request includes tools. Hya preserves that
+field so a tool result can be sent back without an upstream HTTP 400. The
+OpenAI Chat SSE decoder maps nonempty `choices[0].delta.reasoning_content`
+strings to `ReasoningStart`, `ReasoningDelta`, and `ReasoningEnd` events. The
+ending event carries `provider_data: {"type": "reasoning_content"}`. Stored
+sessions written by the older decoder with
+`{"openai_chat_reasoning_content": true}` still replay that reasoning.
+When tool input begins, the decoder closes any active text part first. The
+engine persists that completed text immediately, preserving transcript order
+while keeping tool input visible during the live turn.
+When replaying those assistant parts, the OpenAI Chat encoder includes their
+text in the assistant message's `reasoning_content` field, alongside `content`
+and any `tool_calls`. It does this for earlier assistant messages with or
+without tool calls. For `deepseek-*` model ids, it also sends an empty string
+when an earlier assistant message has no reasoning delta; DeepSeek still
+requires the field after a tool call. Reasoning parts from other protocols lack
+these markers and are not sent as OpenAI Chat reasoning content.
+
+To use this path, add a DeepSeek OpenAI-compatible provider in the TUI's `/key`
+view, save its API key, and select a DeepSeek model. For example, after setting
+up `deepseek-flash`, send `What files are in this directory?`; approve the
+pending read-only shell call when prompted. The assistant continues from the
+tool result. The upstream requirement is described in
+[DeepSeek's thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode/).
+
 ### Capabilities
 
 `Capabilities` has nine fields:
@@ -454,18 +482,15 @@ Kimi) return HTTP 400 `The reasoning_content in the thinking mode must be
 passed back to the API` when a later request omits the reasoning of an
 earlier assistant message. The route's replay policy is
 `ReasoningReplayPolicy::ReasoningContent`: reasoning parts marked
-`{"type": "reasoning_content"}` are resent on every turn as the wire
+`{"type": "reasoning_content"}` (or the older
+`{"openai_chat_reasoning_content": true}`) are resent on every turn as the wire
 message's `reasoning_content`. Once a transcript holds any such part, every
 assistant wire message carries `reasoning_content`; it is `""` when that
-message had none. For `deepseek-*` model ids (any `provider/` prefix) every
-assistant wire message carries it even when the transcript holds no
-chat-native reasoning, because DeepSeek requires the field after a tool call
-whose reply streamed no reasoning delta. Reasoning from other protocols (for
-example Anthropic thinking before a model switch) is never sent, and a
-non-DeepSeek transcript without chat-native reasoning is encoded without the
-field. The upstream requirement is described in
-[DeepSeek's thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode/).
-Example second request of a tool round:
+message had none. Reasoning from other protocols (for example Anthropic
+thinking before a model switch) is never sent. A transcript without
+chat-native reasoning is encoded without the field for other models; DeepSeek
+models include an empty field for their tool turns. Example second request of
+a tool round:
 
 ```json
 {"role": "assistant", "content": "I'll start by finding your slides draft.",

@@ -20,27 +20,29 @@ pub use responses::{
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
 };
 
+/// Marker written by older chat decoders; historical sessions still replay it.
+pub(crate) const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
+
 /// OpenAI Chat Completions request encoder + SSE decoder factory.
 pub struct OpenAiChatProtocol;
 
 impl Protocol for OpenAiChatProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         let mut messages = Vec::new();
-        // Thinking-mode routes (DeepSeek, Kimi) reject a later request whose
-        // assistant message lacks `reasoning_content`, so once the transcript
-        // holds chat-native reasoning every assistant message carries it.
-        // `deepseek-*` models require it even before any reasoning streamed
-        // (a tool turn whose reply had no reasoning delta).
         let deepseek = req
             .model
             .as_str()
             .rsplit('/')
             .next()
             .is_some_and(|model| model.starts_with("deepseek-"));
+        // Thinking-mode routes (DeepSeek, Kimi) reject a later request whose
+        // assistant message lacks `reasoning_content`, so once the transcript
+        // holds chat-native reasoning every assistant message carries it.
+        // DeepSeek also needs an empty field when it supplied no delta.
         let thinking = deepseek
             || req.messages.iter().any(|m| {
                 matches!(m, Message::Assistant { parts, .. }
-                    if parts.iter().any(replays_reasoning))
+                if parts.iter().any(replays_reasoning))
             });
         if let Some(system) = &req.system {
             messages.push(json!({"role": "system", "content": system}));
@@ -186,14 +188,14 @@ fn emit_assistant(
             }
         }
     }
-    if !cluster.tools.is_empty() || !cluster.text.is_empty() {
+    if !cluster.tools.is_empty() || !cluster.text.is_empty() || !cluster.reasoning.is_empty() {
         flush_cluster(out, &cluster, thinking);
     }
     Ok(())
 }
 
 fn flush_cluster(out: &mut Vec<Value>, cluster: &Cluster<'_>, thinking: bool) {
-    let content = if cluster.text.is_empty() {
+    let content = if cluster.text.is_empty() && !thinking {
         Value::Null
     } else {
         json!(cluster.text)

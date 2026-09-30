@@ -45,7 +45,7 @@ import type { View } from "../instructions"
 import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
-import { defaultPaneLayout, type PaneLayout } from "./panes"
+import { paneLeaves, defaultPaneLayout, type PaneLayout } from "./panes"
 import { foldMember, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -942,7 +942,14 @@ export function createAppStore() {
 
     setProjectsSidebar(mode: SidebarMode): void { set("projectsSidebar", mode) },
     toggleProjectsSidebar(): void { set("projectsSidebar", toggledProjectsSidebar(state.projectsSidebar, state.columns)) },
-    setProjectsSidebarFocus(focus: boolean): void { set("projectsSidebarFocus", focus) },
+    setProjectsSidebarFocus(focus: boolean): void {
+      set("projectsSidebarFocus", focus)
+      const leaves = paneLeaves(state.paneLayout.root)
+      const active = leaves.find((pane) => pane.id === state.paneLayout.active)
+      const target = focus ? leaves.find((pane) => pane.kind === "projects")
+        : active?.kind === "projects" ? leaves.find((pane) => pane.kind === "conversation") : undefined
+      if (target) set("paneLayout", { ...state.paneLayout, active: target.id })
+    },
     setProjectSidebarHighlight(id: string | undefined): void { set("projectSidebarHighlight", id) },
 
     /** Open, update, or (`undefined`) close the full-screen Project view (`/project`). */

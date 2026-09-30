@@ -50,7 +50,7 @@ test.describe("read card", () => {
   test("a finished read shows ✓, the path, the line range, and the duration; a click expands it", async ({ tui, backend }, testInfo) => {
     await writeFile(join(backend.dir, "notes.txt"), "alpha line\nbeta line\ngamma line\n")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read my notes")
     await term.waitForText("Read the notes.", 20_000)
     await term.waitForText("✓ read")
@@ -70,8 +70,7 @@ test.describe("read card", () => {
     expect(await term.find("gamma line")).toBeNull()
     // The click leaves the input focused.
     await prompt(term, "/tools off")
-    await term.waitForText("Tool calls collapsed · Ctrl+G toggles")
-    expect(await term.find("alpha line")).toBeNull()
+    await expect.poll(() => term.find("alpha line")).toBeNull()
   })
 })
 
@@ -85,7 +84,7 @@ test.describe("bash card", () => {
 
   test("the command is the summary; Ctrl+G and /tools expand and collapse the output", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run printf")
     await term.waitForText("Ran it.", 20_000)
     await term.waitForText("✓ bash")
@@ -97,8 +96,6 @@ test.describe("bash card", () => {
     await term.waitForText("│ first")
     const output = await at(term, "│ second")
     expect((await term.cell(output.row, output.col + 2))?.fg).toBe(colors.muted)
-    expect(await term.find("$ printf")).toBeNull()
-    await term.waitForText("Tool calls expanded · Ctrl+G toggles")
     await term.attach(testInfo, "bash-expanded")
 
     await term.press("Control+g")
@@ -127,7 +124,7 @@ test.describe("edit and write cards", () => {
   test("edits and writes show the path and a colored diff", async ({ tui, backend }, testInfo) => {
     await writeFile(join(backend.dir, "poem.txt"), "one\ntwo\nthree\n")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "edit the poem")
     await term.waitForText("Edited.", 20_000)
     await term.waitForText("✓ edit")
@@ -155,7 +152,7 @@ test.describe("failed tool", () => {
 
   test("a failed call shows ✗ and its error message in the error color", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read the missing file")
     await term.waitForText("It is missing.", 20_000)
     await term.waitForText("✗ read")
@@ -175,7 +172,7 @@ test.describe("running tool", () => {
 
   test("a running call animates a spinner, then shows ✓ and its duration", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "sleep a bit")
     await term.waitForText("bash", 20_000)
     await term.waitForText('{"command":"sleep 2"}', 20_000)
@@ -202,7 +199,7 @@ test.describe("subagents", () => {
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
     await term.waitForText(/task\s+hya-task · survey the repo/)
@@ -220,18 +217,18 @@ test.describe("subagents", () => {
     const card = await at(term, "hya-task · survey the repo")
     await click(term, card.row, card.col + 2)
     await term.waitForText("Viewing subagent hya-task · Esc returns")
-    await term.waitForText("Read-only subagent view · Esc returns to the parent")
+    await term.waitForText("Read-only subagent view · / opens commands · Esc returns")
     await term.waitForText("┃ list the files")
     await term.waitForText("✓ read")
     await term.waitForText('{"path":"notes.txt"')
     await term.attach(testInfo, "child-view")
     await prompt(term, "can I type here")
-    await term.waitForText("Read-only: this is a subagent's session · Esc returns to the parent")
+    await term.waitForText("│ can I type here")
     expect(await term.find("┃ can I type here")).toBeNull()
 
     // Esc returns to the parent; the typed text stays, and a second Esc clears it.
     await term.press("Escape")
-    await term.waitForText("Back to the parent session")
+    await expect.poll(() => term.find("Viewing subagent")).toBeNull()
     await term.waitForText("Spawned a helper.")
     expect(await term.find("Viewing subagent")).toBeNull()
     await term.waitForText("│ can I type here")
@@ -258,7 +255,7 @@ test.describe("narrow terminal", () => {
   test("cards fit about 80 columns", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
     expect((await term.size()).cols).toBeLessThanOrEqual(84)
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run it")
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/tools on")

@@ -17,6 +17,8 @@ async function firstFrame(width: number): Promise<string> {
   ), { width, height: 41 })
   try {
     await setup.renderOnce()
+    expect(controller.ui.transcript).toBeDefined()
+    expect(controller.ui.command?.active()).toBe(false)
     return setup.captureCharFrame()
   } finally {
     setup.renderer.destroy()
@@ -29,8 +31,8 @@ test("initial workspace renders before any backend data arrives", async () => {
   expect(wide).toContain("─Context─")
   expect(wide).toContain("Session  ")
   expect(wide).not.toContain("mode manual")
-  // Narrow: no sidebar; the top status line carries the same fields.
+  // Narrow: no sidebar and no restored metadata heading.
   const narrow = await firstFrame(90)
-  expect(narrow).toContain("mode manual · connecting…")
+  expect(narrow).not.toContain("mode manual · connecting…")
   expect(narrow).not.toContain("Context")
 })

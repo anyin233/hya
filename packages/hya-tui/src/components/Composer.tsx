@@ -15,6 +15,7 @@ import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
+import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
@@ -50,7 +51,7 @@ interface FileMenu {
  * (state/prompts.ts `promptKey`). Other keys always reach the editor.
  * Ctrl+C clears (or hints) and quits (archiving the session) on a second
  * press within 2 s; Ctrl+D on an empty input quits and leaves the session
- * running (in a WebUI tab it only shows a notice). `!command` input shows a shell-mode border; an
+ * running (in a WebUI tab it only shows a notice). `!command` input shows a shell-mode title; an
  * `@text` token opens a file suggestion list from `FindFiles`.
  *
  * Vim mode (`/vim`, composer/vim.ts): the state machine sees keys after the
@@ -77,6 +78,8 @@ interface FileMenu {
  */
 export function Composer(props: { width: number }) {
   const { store, controller, ui } = useApp()
+  const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
+    === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "conversation")?.id
   let editor: TextareaRenderable | undefined
   const [value, setValue] = createSignal("")
   const [rows, setRows] = createSignal(1)
@@ -314,6 +317,25 @@ export function Composer(props: { width: number }) {
     return false
   }
 
+  function toggleProjectsFocus(): void {
+    if (store.state.projectsSidebarFocus) {
+      store.setProjectsSidebarFocus(false)
+      store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
+    } else {
+      const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
+      if (!projects) {
+        store.setStatus("No Projects pane · /layout split vertical projects to add one")
+        return
+      }
+      if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
+      if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
+      store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
+      store.setProjectsSidebarFocus(true)
+      store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
+    }
+    return
+  }
+
   useKeyboard((key: KeyEvent) => {
     const consume = (): void => {
       key.preventDefault()
@@ -373,7 +395,8 @@ export function Composer(props: { width: number }) {
       return
     }
     const inputEmpty = !(editor?.plainText ?? value())
-    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || inputEmpty, chord })
+    const commandPaneFocus = focusedPane(store.state)
+    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || commandPaneFocus?.kind !== "conversation" || inputEmpty, chord })
     if (commandShortcut === "openCommands") {
       consume()
       if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
@@ -382,7 +405,7 @@ export function Composer(props: { width: number }) {
       ui.command?.open()
       return
     }
-    if (store.state.projectsSidebarFocus && commandShortcut === "chord") {
+    if (commandPaneFocus?.kind !== "conversation" && commandShortcut === "chord") {
       consume()
       chord = "ctrl+x"
       if (store.state.status !== chordHint) beforeChord = store.state.status
@@ -390,18 +413,44 @@ export function Composer(props: { width: number }) {
       return
     }
     // The left Projects sidebar has focus (Ctrl+P): Up/Down/Enter/Esc go to it.
-    if (store.state.projectsSidebarFocus && !store.state.picker && !overlayViewOpen()
-      && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar") {
+    if (commandPaneFocus?.kind !== "conversation"
+      && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar"
+      && commandShortcut !== "refresh" && commandShortcut !== "help" && commandShortcut !== "reviewPending"
+      && commandShortcut !== "quit" && commandShortcut !== "eof") {
       chord = undefined
-      if (key.ctrl && !key.meta && key.name === "c") { store.setProjectsSidebarFocus(false); return }
       consume()
-      controller.projectsSidebarKey(key)
+      if (commandPaneFocus?.kind === "projects") controller.projectsSidebarKey(key)
+      else {
+        const pane = commandPaneFocus && ui.panes?.get(commandPaneFocus.id)
+        if (key.name === "up" && !key.ctrl && !key.meta) pane?.line(-1)
+        else if (key.name === "down" && !key.ctrl && !key.meta) pane?.line(1)
+        else if (commandShortcut === "pageUp" || commandShortcut === "pageDown") pane?.page(commandShortcut === "pageUp" ? -1 : 1)
+        else if (commandShortcut === "scrollTop") pane?.top()
+        else if (commandShortcut === "scrollBottom") pane?.bottom()
+      }
+      return
+    }
+    // Global workspace actions skip conversation-local prompts, history and Vim.
+    if (commandPaneFocus?.kind !== "conversation") {
+      consume()
+      chord = undefined
+      if (commandShortcut === "help") { controller.openHelp(); return }
+      if (commandShortcut === "reviewPending") { controller.reviewPending(); return }
+      if (commandShortcut === "refresh") { controller.refreshAll(); return }
+      if (commandShortcut === "quit") {
+        if (quitGuard.press(true) === "quit") controller.quit("archive")
+        else showQuitHint()
+        return
+      }
+      if (commandShortcut === "eof") { controller.toBackground(); return }
+      if (commandShortcut === "toggleSidebar") store.toggleSidebar()
+      else if (commandShortcut === "toggleProjectsSidebar") toggleProjectsFocus()
       return
     }
     // The yolo confirmation line takes Enter, Esc, and Shift+Tab before the
     // lists and the prompt dock (so they never answer an ask); any other key
     // cancels it and is handled as usual.
-    if (store.state.modeConfirm && controller.modes.key(key)) {
+    if (commandPaneFocus?.kind === "conversation" && store.state.modeConfirm && controller.modes.key(key)) {
       consume()
       quitGuard.disarm()
       return
@@ -487,9 +536,9 @@ export function Composer(props: { width: number }) {
     const action = resolveBinding(key, { composerEmpty: !(editor?.plainText ?? value()) })
     if (action !== "quit") quitGuard.disarm()
     if (!action) return
-    const focusedPane = paneLeaves(store.state.paneLayout.root).find((pane) => pane.id === store.state.paneLayout.active)
+    const selectedPane = focusedPane(store.state)
     const transcript = store.state.view === "chat"
-      ? focusedPane?.kind === "conversation" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
+      ? selectedPane?.kind === "conversation" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
       : undefined
     switch (action) {
       case "interrupt": {
@@ -547,25 +596,10 @@ export function Composer(props: { width: number }) {
         if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
         else store.toggleSidebar()
         return
-      case "toggleProjectsSidebar": {
+      case "toggleProjectsSidebar":
         consume()
-        if (store.state.projectsSidebarFocus) {
-          store.setProjectsSidebarFocus(false)
-          store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
-        } else {
-          const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
-          if (!projects) {
-            store.setStatus("No Projects pane · /layout split vertical projects to add one")
-            return
-          }
-          if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
-          if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
-          store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
-          store.setProjectsSidebarFocus(true)
-          store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
-        }
+        toggleProjectsFocus()
         return
-      }
       case "toggleThinking":
         consume()
         store.setThinking(!store.state.thinking)
@@ -621,6 +655,7 @@ export function Composer(props: { width: number }) {
       controller.secretPaste(text)
       return
     }
+    if (store.state.picker) return
     if (overlayViewOpen() && !store.state.picker) {
       if (providersOpen()) controller.providerPaste(text)
       return
@@ -632,6 +667,7 @@ export function Composer(props: { width: number }) {
       ui.command.paste(cleaned)
       return
     }
+    if (focusedPane(store.state)?.kind !== "conversation") return
     // A terminal pastes a file dragged into the window as its path (quoted or
     // escaped when it has spaces): turn it into an `@path ` mention instead
     // of raw text when the path exists, so it resolves like a typed mention.
@@ -689,7 +725,7 @@ export function Composer(props: { width: number }) {
         height={rows() + 2}
         flexShrink={0}
         border
-        borderColor={shell() ? colors.warning : colors.border}
+        borderColor={composerFocused() ? colors.accent : colors.border}
         title={shell() ? "! shell" : undefined}
         backgroundColor={colors.panel}
         paddingX={1}
@@ -716,7 +752,7 @@ export function Composer(props: { width: number }) {
           cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
-          focused={!overlayViewOpen() && !store.state.picker && !store.state.secretEntry && !ui.command?.active()}
+          focused={composerFocused()}
           onSubmit={submit}
           onContentChange={sync}
           onCursorChange={() => {

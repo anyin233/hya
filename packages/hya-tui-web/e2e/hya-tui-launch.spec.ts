@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, tuiMain } from "./hya"
+import { daemonStatus, expect, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, tuiMain } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -39,6 +39,12 @@ async function backendPid(term: Tui): Promise<number> {
   expect(alive(pid)).toBe(true)
   expect(execFileSync("ps", ["-o", "command=", "-p", String(pid)]).toString()).toContain("serve --bind 127.0.0.1:0")
   return pid
+}
+
+async function sessionId(term: Tui): Promise<string> {
+  await prompt(term, "/status")
+  await term.waitForText(/Session\s+hysec_\w+/)
+  return /Session\s+(hysec_\w+)/.exec(await term.text())![1]!
 }
 
 /** Ids of the root sessions the daemon at `url` lists. */
@@ -68,12 +74,10 @@ test.describe("one-command launch", () => {
 
   test("starts the database's daemon, answers a prompt end to end; /exit leaves the daemon running and the next TUI uses it", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
-    await showStatusLine(term)
-    await term.waitForText(/127\.0\.0\.1:\d+/)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await prompt(term, "hello")
     await term.waitForText("Launched and replying.", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     const pid = await backendPid(term)
     await term.attach(testInfo, "status")
     await prompt(term, "/exit")
@@ -95,14 +99,11 @@ test.describe("one-command launch", () => {
   test("a plain start reopens the saved session; an explicit empty new one is dropped after exit; --continue reopens the saved chat", async ({ tui, workspace }) => {
     // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
-    await first.waitForText("Connected to hya", 30_000)
-    // Created on connect: the top status line names it before anything is typed.
-    await showStatusLine(first)
-    await first.waitForText(statusSessionPattern)
+    await first.waitForText("Message, !shell, or @file · / commands", 30_000)
     await first.waitForText("No messages yet")
     await prompt(first, "remember this")
     await first.waitForText("Launched and replying.", 20_000)
-    await first.waitForText(/^Ready/m)
+    await first.waitForIdle()
     await first.press("Control+d")
     await first.waitForExit()
 
@@ -111,8 +112,7 @@ test.describe("one-command launch", () => {
     await fresh.waitForText("remember this", 30_000)
     await prompt(fresh, "/new")
     await fresh.waitForText("No messages yet")
-    await showStatusLine(fresh)
-    const empty = await statusSessionId(fresh)
+    const empty = await sessionId(fresh)
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     await prompt(fresh, "/exit")
@@ -123,17 +123,16 @@ test.describe("one-command launch", () => {
     expect(await listed(url)).toHaveLength(1)
 
     const resumed = await tui(...selfLaunch(workspace, ["--continue"]))
-    await resumed.waitForText("Connected to hya", 30_000)
+    await resumed.waitForText("Message, !shell, or @file · / commands", 30_000)
     await resumed.waitForText("remember this")
     await resumed.waitForText("Launched and replying.")
   })
 
   test("a killed TUI's empty session is dropped by the daemon too", async ({ tui, workspace }) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await term.waitForText("No messages yet")
-    await showStatusLine(term)
-    const empty = await statusSessionId(term)
+    const empty = await sessionId(term)
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     // No exit handler runs: only its closed session stream tells the daemon.
@@ -147,7 +146,7 @@ test.describe("one-command launch", () => {
 
   test("closing the browser tab (SIGHUP) leaves the daemon running", async ({ tui, workspace, page }) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     const pid = await backendPid(term)
     await page.goto("about:blank")
     // The tab's TUI is gone (`bun <tui main> --dir …`; the host's own argv names it later on)…

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { CommandSummary } from "../src/client"
-import { filterCommands, mergeCommandEntries, requiresArgument, type CommandEntry } from "../src/commands/menu"
+import { filterCommands, mergeCommandEntries, requiresArgument, suggestCommandInput, type CommandEntry } from "../src/commands/menu"
 import { createCommandRegistry } from "../src/commands/native"
 
 test("merges the local registry with the backend catalog, sorted by name", () => {
@@ -32,6 +32,18 @@ const entries: CommandEntry[] = [
   { name: "/history", description: "c", source: "command" },
   { name: "/models", description: "d", source: "local" },
 ]
+
+test("suggestions retain every command and nested argument beyond the twelve visible rows", () => {
+  const names = Array.from({ length: 32 }, (_, index) => `/choice-${String(index).padStart(2, "0")}`)
+  const catalog = names.map((name): CommandEntry => ({ name, description: "", source: "local" }))
+  expect(suggestCommandInput("/", () => catalog, () => []).map((row) => row.replacement)).toEqual(names)
+  const replacements = names.map((name) => `/layout assign ${name.slice(1)}`)
+  expect(suggestCommandInput("/layout assign ", () => [], () => replacements).map((row) => row.replacement)).toEqual(replacements)
+  const titled = names.map((name) => ({ label: `${name} (session title)`, replacement: `/open ${name.slice(1)}` }))
+  const suggestions = suggestCommandInput("/open ", () => [], () => titled)
+  expect(suggestions.map((row) => row.label)).toEqual(titled.map((row) => row.label))
+  expect(suggestions.map((row) => row.replacement)).toEqual(titled.map((row) => row.replacement))
+})
 
 test("filterCommands ranks exact, then prefix, then substring, then subsequence matches", () => {
   expect(filterCommands(entries, "help").map((entry) => entry.name)).toEqual(["/help"])

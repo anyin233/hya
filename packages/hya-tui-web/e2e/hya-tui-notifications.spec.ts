@@ -57,7 +57,7 @@ test.describe("desktop notifications: turn end", () => {
 
   test("notifies over OSC 9 only while unfocused, and not when /notifications is off", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
 
     // Focused throughout: no notification.
     await captureOsc9(term)
@@ -78,7 +78,6 @@ test.describe("desktop notifications: turn end", () => {
     await focusTerminal(term)
     await term.type("/notifications off")
     await term.press("Enter")
-    await term.waitForText("Desktop notifications off")
     await captureOsc9(term)
     await promptThenBlur(term, "say it once more")
     await term.waitForText("Notify me please.", 20_000)
@@ -91,7 +90,7 @@ test.describe("desktop notifications: permission ask", () => {
 
   test("notifies over OSC 9 while unfocused", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await captureOsc9(term)
     await promptThenBlur(term, "run the command")
     await expect.poll(() => osc9Payloads(term), { timeout: 20_000 }).toEqual(["Permission needed: bash echo notified"])
@@ -106,7 +105,7 @@ test.describe("desktop notifications: another session's ask", () => {
 
   test("an ask of a session this TUI does not have open notifies once while unfocused, naming the session", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await captureOsc9(term)
     await blurTerminal(term)
     const other = await headlessTurn(backend, "run it over there")
@@ -140,7 +139,7 @@ test.describe("desktop notifications: browser Notification", () => {
       Object.defineProperty(window, "Notification", { value: FakeNotification, writable: true })
     })
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
 
     // Focused: no Notification.
     await focusTerminal(term)

@@ -10,6 +10,7 @@
 
 ## Fixes
 
+- **Source-checkout TUI startup is verified with the real OpenTUI renderer.** A render test catches a blank-screen failure before backend data arrives. Development setups that place `node_modules` on another disk document the resolved path OpenTUI needs.
 - **`hya serve start` no longer fails after a quick stop or restart.** A stopping server released the database lock before its runtime-owner lock, so a server started in that gap failed with `RUNTIME_OWNER_BUSY` and the start gave up. The server now releases the runtime owner first. A start that still meets a held owner exits 75 ("database in use"), so the starter waits and retries.
 - **A prompt sent from `/status`, `/models`, `/todos`, `/workflows`, or `/api` shows its reply.** Those pages replaced the transcript until you opened a session, so the reply stayed out of sight. Sending a prompt or `!command` now returns to the transcript.
 - **The WebUI address stays on the status bar at about 80 columns.** The `<model>:<effort>` segment pushed it off the line, and the sidebar that also shows it is hidden at that width. The WebUI segment now comes before the directory.

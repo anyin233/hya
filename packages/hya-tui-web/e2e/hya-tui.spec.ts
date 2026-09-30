@@ -1,14 +1,14 @@
-import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
+import { expect, hyaTui, test, wideViewport } from "./hya"
 
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
-    await term.waitForText(/Connected to hya \d+\.\d+\.\d+/)
-    // A wide viewport shows the sidebar boxes; the top status line is hidden.
-    // The old Chat and Pending panels are gone.
+    await term.waitForText("Message, !shell, or @file · / commands")
+    // One main column (transcript, status, composer, footer) and the sidebar boxes;
+    // the old Chat and Pending panels are gone.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
     await term.waitForText("No messages yet. Type a prompt below.")
-    await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const text = await term.text()
     expect(text).not.toContain("Chat")
     expect(text).not.toContain("Pending")
@@ -16,8 +16,8 @@ test.describe("hya TUI in the browser", () => {
   })
 
   test("admits a prompt and shows the offline model's reply", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("hello from the browser")
     await term.press("Enter")
     await term.waitForText("● hya-main · hya/offline", 20_000)
@@ -29,13 +29,12 @@ test.describe("hya TUI in the browser", () => {
     expect(text).not.toContain("user · stop")
     // The offline model echoes the prompt back, so it shows up in both messages.
     expect(text.match(/hello from the browser/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
-    await showStatusLine(term)
-    expect(await term.text()).toMatch(/mode [^·]+ · (hysec_\w+|hello from the browser) · hya-main · offline:default/)
+    expect(text).not.toContain("hya ·")
   })
 
   test("Tab completes slash commands", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/workf")
     await term.press("Tab")
     await term.waitForText("/workflow")

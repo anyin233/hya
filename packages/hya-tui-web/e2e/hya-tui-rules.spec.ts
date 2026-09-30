@@ -15,7 +15,7 @@ test.describe("hya TUI Saved Rules view", () => {
 
   test("a bash always-allow answer is a saved rule; /rules lists and deletes it", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run it")
     await term.waitForText("$ echo saved-rule", 20_000)
     await term.press("2") // Always allow
@@ -37,12 +37,12 @@ test.describe("hya TUI Saved Rules view", () => {
     await expect.poll(async () => /allow\s+bash/.test(await term.text())).toBe(false)
 
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("Esc during a pending delete cancels it; r refreshes the list", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run it")
     await term.waitForText("$ echo saved-rule", 20_000)
     await term.press("2")
