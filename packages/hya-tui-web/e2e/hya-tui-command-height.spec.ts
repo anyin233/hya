@@ -2,7 +2,7 @@ import { expect, hyaTui, test } from "./hya"
 
 test("command dropdown shows twelve choices and fits a short terminal", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("/")
   await term.waitForText("▸ /agent")
   const recommendations = async () => {

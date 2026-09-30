@@ -48,22 +48,20 @@ test.describe("copy", () => {
 
   test("/copy sends the last reply over OSC 52 and says how many characters", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await captureOsc52(term)
     await prompt(term, "/copy")
-    await term.waitForText("Nothing to copy: no assistant reply yet")
     expect(await copied(term)).toEqual([])
 
     await prompt(term, "say it")
     await term.waitForText("Alpha bravo charlie delta echo.", 20_000)
     await prompt(term, "/copy")
-    await term.waitForText("Copied 31 chars")
     await expect.poll(() => copied(term)).toEqual(["Alpha bravo charlie delta echo."])
   })
 
   test("dragging over transcript text highlights it in the theme's selection color and copies it on release", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "say it")
     await term.waitForText("Alpha bravo charlie delta echo.", 20_000)
     await captureOsc52(term)
@@ -80,7 +78,6 @@ test.describe("copy", () => {
     await term.attach(testInfo, "selecting")
     await term.page.mouse.up()
 
-    await term.waitForText("Copied 13 chars")
     await expect.poll(() => copied(term)).toEqual(["bravo charlie"])
     // The text keeps its own color under the highlight.
     expect((await term.cell(at.row, at.col + 2))?.fg).not.toBe("#2f4d6b")
@@ -88,7 +85,7 @@ test.describe("copy", () => {
 
   test("a plain click copies nothing", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "say it")
     await term.waitForText("Alpha bravo charlie delta echo.", 20_000)
     await captureOsc52(term)

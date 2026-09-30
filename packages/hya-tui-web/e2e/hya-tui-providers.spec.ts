@@ -36,7 +36,7 @@ const config = (backend: Backend) => readFile(join(backendConfigDir(backend), "c
 test.describe("hya TUI Provider View", () => {
   test("/key opens the view; /keys and /login are gone; help lists the view's keys", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.press("?")
     await term.waitForText("Help · keys and commands")
     await term.type("/key")
@@ -71,7 +71,7 @@ test.describe("hya TUI Provider View", () => {
   test("a provider added over the API while the TUI is running reaches the /model picker live, no restart or manual refresh (catalogUpdated)", async ({ tui, backend }) => {
     await withFake([], ["alpha"], async (fake) => {
       const term = await tui(hyaTui(backend))
-      await term.waitForText("Connected to hya")
+      await term.waitForText("Message, !shell, or @file · / commands")
       // Never opens the Provider View (whose own reload would also pick this
       // up): the global stream's live `catalogUpdated` frame is what must
       // carry it to the `/model` picker.
@@ -96,7 +96,7 @@ test.describe("hya TUI Provider View", () => {
   test("add a provider in the wizard: models are fetched, the session moves off hya/offline, a test replies", async ({ tui, backend }) => {
     await withFake([hangStep(), textStep("Hi", { finish: "length" })], ["alpha", "beta"], async (fake) => {
       const term = await tui(hyaTui(backend))
-      await term.waitForText("Connected to hya")
+      await term.waitForText("Message, !shell, or @file · / commands")
       // A session on the offline model.
       await term.type("hello")
       await term.press("Enter")

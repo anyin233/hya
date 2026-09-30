@@ -3,7 +3,7 @@ import { expect, hyaTui, test } from "./hya"
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText(/Connected to hya \d+\.\d+\.\d+/)
+    await term.waitForText("Message, !shell, or @file · / commands")
     // One main column (transcript, status, composer, footer) and the sidebar boxes;
     // the old Chat and Pending panels are gone.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
@@ -17,7 +17,7 @@ test.describe("hya TUI in the browser", () => {
 
   test("admits a prompt and shows the offline model's reply", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("hello from the browser")
     await term.press("Enter")
     await term.waitForText("● hya-main · hya/offline", 20_000)
@@ -29,13 +29,12 @@ test.describe("hya TUI in the browser", () => {
     expect(text).not.toContain("user · stop")
     // The offline model echoes the prompt back, so it shows up in both messages.
     expect(text.match(/hello from the browser/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
-    // The header names the session: its id, or the generated title once the backend's title task ran (the echo model echoes the prompt).
-    expect(text).toMatch(/hya · (hysec_\w+|hello from the browser) · hya-main hya\/offline/)
+    expect(text).not.toContain("hya ·")
   })
 
   test("Tab completes slash commands", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/workf")
     await term.press("Tab")
     await term.waitForText("/workflow")

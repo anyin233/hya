@@ -1,5 +1,5 @@
-# 0.43.36
+# 0.43.37
 
 ## Features
 
-- Exactly one focus border follows keyboard ownership across the composer, workspace panes, Commands, Help, full-screen views, and provider forms.
+- Removed the conversation session header, metadata bar, and routine status row entirely, leaving messages and input without relocated monitoring banners.

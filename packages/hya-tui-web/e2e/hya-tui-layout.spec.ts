@@ -22,22 +22,18 @@ test.describe("layout", () => {
 
   test("Projects and right-side jobs participate in the editable split tree", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.waitForText("Projects")
-    const initialConversation = (await term.find("hya ·"))!
+    const initialConversation = (await term.find("No messages yet"))!
     const initialSessions = (await term.find("Sessions"))!
     await term.press("Alt+ArrowLeft")
-    await term.waitForText("pane-2 projects")
+    await term.waitForText("Projects")
     await term.press("Control+p")
-    await term.waitForText("Projects sidebar unfocused")
     await term.type("/layout focus pane-1")
     await term.press("Enter")
-    await term.waitForText("pane-1 conversation")
     await prompt(term, "/layout focus pane-2")
-    await term.waitForText("pane-2 projects")
     await prompt(term, "/layout resize +5")
-    await term.waitForText("pane-2 projects")
-    await expect.poll(async () => (await term.find("hya ·"))!.col).toBeGreaterThan(initialConversation.col)
+    await expect.poll(async () => (await term.find("No messages yet"))!.col).toBeGreaterThan(initialConversation.col)
     await prompt(term, "/layout focus pane-3")
     await prompt(term, "/layout assign jobs")
     await term.waitForText("jobs · pane-3")
@@ -46,12 +42,12 @@ test.describe("layout", () => {
     await prompt(term, "/layout focus pane-2")
     await prompt(term, "/layout assign jobs")
     await term.press("Control+p")
-    await term.waitForText("No Projects pane")
+    await expect.poll(() => term.find("Projects")).toBeNull()
   })
 
   test("an open command survives a responsive pane reshape", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/layout split")
     await term.waitForText("/layout split")
     await term.resize(690, 640)
@@ -63,36 +59,36 @@ test.describe("layout", () => {
 
   test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
     let term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/layout split vertical jobs")
     await term.waitForText("▸ jobs · pane-6")
-    const conversation = (await term.find("hya ·"))!
+    const conversation = (await term.find("No messages yet"))!
     const jobs = (await term.find("jobs · pane-6"))!
     expect(jobs.col).toBeGreaterThan(conversation.col)
     await term.press("Alt+ArrowLeft")
-    await term.waitForText("pane-1 conversation")
     await prompt(term, "/layout split horizontal todos")
-    await term.waitForText("pane-7 todos")
+    await expect.poll(async () => (await term.lines()).filter((line) => line.includes("─Todos")).length).toBeGreaterThanOrEqual(2)
     expect((await term.find("Todos"))!.col).toBeLessThan(jobs.col)
-    await prompt(term, "/layout assign conversation")
-    await term.waitForText("pane-7 conversation")
-    expect((await term.find("hya ·"))!.row).toBeGreaterThan(conversation.row)
+    const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.row
+    await term.type("/")
+    await term.waitForText("Commands")
+    await term.type("layout assign conversation")
+    await term.press("Enter")
+    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.row).toBeGreaterThan(inputBeforeSwap)
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
     term = await tui(hyaTui(backend))
-    await term.waitForText("hya ·")
+    await term.waitForText("layout reply marker l1")
     await term.waitForText("jobs · pane-6")
-    await term.waitForText("Resumed ")
     await prompt(term, "/layout reset")
-    await term.waitForText("Layout · 5 panes")
     await expect.poll(() => term.find("pane-6")).toBeNull()
     await term.waitForText("Sessions")
   })
 
   test("the default viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeGreaterThanOrEqual(110)
     await prompt(term, "hello layout")
@@ -109,10 +105,8 @@ test.describe("layout", () => {
     await term.waitForText("fake/model")
     await term.waitForText(/▸ 1\. /)
 
-    // Main column: header on row 0, transcript on the base background, no three-panel titles.
-    const header = (await term.find("hya · "))!
-    expect(header.row).toBe(0)
-    expect(header.col).toBeLessThan(sessions.col)
+    // Main column: transcript starts without a heading and uses the base background.
+    expect(await term.find("hya · ")).toBeNull()
     const reply = (await term.find("layout reply marker l1"))!
     expect(reply.col).toBeLessThan(sessions.col)
     expect((await term.cell(reply.row, reply.col))?.bg).toBe(colors.bg)
@@ -126,12 +120,11 @@ test.describe("layout", () => {
     await term.waitForText("layout reply marker l1")
     await prompt(term, "/sidebar")
     await expect.poll(() => sidebarShown(term)).toBe(true)
-    await term.waitForText("Sidebar shown · Ctrl+B toggles")
   })
 
   test("about 80 columns hides the sidebar until Ctrl+B or /sidebar opens it", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeGreaterThanOrEqual(78)
     expect(cols).toBeLessThanOrEqual(84)
@@ -152,7 +145,6 @@ test.describe("layout", () => {
 
     await prompt(term, "/sidebar off")
     await expect.poll(() => sidebarShown(term)).toBe(false)
-    await term.waitForText("Sidebar hidden · Ctrl+B toggles")
   })
 })
 
@@ -162,15 +154,13 @@ test.describe("pane focus", () => {
 
   test("switching panes keeps the conversation viewport where the user left it", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "show a long reply")
     await term.waitForText("END OF LONG REPLY", 20_000)
     await term.press("PageUp")
     await expect.poll(() => term.find("END OF LONG REPLY")).toBeNull()
     await term.press("Alt+ArrowRight")
-    await term.waitForText(/Layout · 5 panes · pane-[345] (sessions|todos|context)/)
     await term.press("Alt+ArrowLeft")
-    await term.waitForText("pane-1 conversation")
     expect(await term.find("END OF LONG REPLY")).toBeNull()
   })
 })
@@ -180,7 +170,7 @@ test.describe("pending interactions", () => {
 
   test("an ask of the open session is a prompt; another session's ask is a compact pending block", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run something")
     // The open session's ask: the permission prompt docked above the composer, no pending block.
     await term.waitForText("asked by hya-main", 20_000)
@@ -206,11 +196,10 @@ test.describe("jobs pane", () => {
 
   test("shows the open session working while its turn streams", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/layout split vertical jobs")
     await term.waitForText("▸ jobs · pane-6")
     await term.press("Alt+ArrowLeft")
-    await term.waitForText("pane-1 conversation")
     await prompt(term, "show the work")
     await term.waitForText("turn running", 20_000)
     await term.waitForText("finished from tiled jobs pane", 20_000)

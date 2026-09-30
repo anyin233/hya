@@ -21,7 +21,7 @@ async function prompt(term: Tui, text: string): Promise<void> {
 /** Empty the input (the first Ctrl+C clears it). */
 async function clearInput(term: Tui): Promise<void> {
   await term.press("Control+c")
-  await term.waitForText("Press Ctrl+C again to quit")
+  expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
 }
 
 test.describe("undo and redo", () => {
@@ -39,7 +39,7 @@ test.describe("undo and redo", () => {
   test("/undo hides the turn, deletes the written file, and refills the input; /redo restores; a new prompt commits", async ({ tui, backend }, testInfo) => {
     const file = join(backend.dir, "notes.txt")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "write notes")
     await term.waitForText("Wrote the notes.", 20_000)
     await expect.poll(() => existsSync(file)).toBe(true)
@@ -90,7 +90,7 @@ test.describe("undo while busy", () => {
 
   test("/undo while a turn runs shows the refusal and changes nothing", async ({ tui, backend, fakeModel }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "take your time")
     await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
     await prompt(term, "/undo")
@@ -106,7 +106,7 @@ test.describe("fork", () => {
 
   test("/fork before a picked prompt opens a new session with the earlier messages and the prompt in the input; /fork at the head copies everything", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "alpha question")
     await term.waitForText("First reply.", 20_000)
     await prompt(term, "beta question")
@@ -143,7 +143,7 @@ test.describe("fork", () => {
 
   test("at about 80 columns the fork picker and the pending-revert line fit", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThanOrEqual(82)
     await prompt(term, "alpha question")
     await term.waitForText("First reply.", 20_000)

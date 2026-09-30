@@ -32,7 +32,7 @@ async function newSession(term: Tui, previousId?: string): Promise<string> {
 
 /** The session the TUI opened on connect (a plain start creates one). */
 async function connected(term: Tui): Promise<string> {
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.waitForText(/hya · hysec_\w+/)
   return /hya · (hysec_\w+)/.exec(await term.text())![1]!
 }
@@ -110,15 +110,14 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
   await term.attach(testInfo, "sessions-rename")
   await term.press("Enter")
 
-  // Header and sidebar (title over the raw id).
-  await term.waitForText(/hya · Fix the flaky test ·/)
+  // Picker and sidebar show the new title.
   await at(term, "Fix the flaky test")
 
   // A rename reopens the picker (so browsing continues) already showing the new title.
   await term.waitForText(/▸ ● Fix the flaky test/)
   await escape(term, "Filter ")
-  // The picker covers the header's status row until it closes.
-  await term.waitForText("Renamed to Fix the flaky test")
+  await prompt(term, "/status")
+  await term.waitForText(/Session\s+Fix the flaky test/)
 })
 
 test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes and opens another session", async ({ tui, backend }) => {
@@ -161,7 +160,7 @@ test("fits about 80 columns", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend), { viewport: narrow })
   const { cols } = await term.size()
   expect(cols).toBeLessThanOrEqual(84)
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await newSession(term)
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")

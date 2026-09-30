@@ -16,7 +16,7 @@ const title = "Help · keys and commands"
 test.describe("key help", () => {
   test("? on an empty input opens the overlay; it lists keys by group and filters; Esc closes", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("?")
     await term.waitForText(title)
     // Composer keys include the browser-safe Shift+Enter newline binding.
@@ -37,7 +37,7 @@ test.describe("key help", () => {
 
   test("/help opens the same overlay with commands by source", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/help")
     await term.waitForText(title)
     await term.type("shift+enter")
@@ -55,7 +55,7 @@ test.describe("key help", () => {
 
   test("? inside text types a question mark instead of opening help", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("why?")
     await term.waitForText("why?")
     expect(await term.find(title)).toBeNull()
@@ -63,7 +63,7 @@ test.describe("key help", () => {
 
   test("the overlay fits about 80 columns", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     await term.type("?")
     await term.waitForText(title)

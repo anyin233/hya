@@ -50,7 +50,7 @@ test.describe("read card", () => {
   test("a finished read shows ✓, the path, the line range, and the duration; a click expands it", async ({ tui, backend }, testInfo) => {
     await writeFile(join(backend.dir, "notes.txt"), "alpha line\nbeta line\ngamma line\n")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read my notes")
     await term.waitForText("Read the notes.", 20_000)
     await term.waitForText(/✓ read\s+notes\.txt · lines 1-2 of 3\s+\d+ms/)
@@ -70,7 +70,6 @@ test.describe("read card", () => {
     expect(await term.find("gamma line")).toBeNull()
     // The click leaves the input focused.
     await prompt(term, "/tools off")
-    await term.waitForText("Tool calls collapsed · Ctrl+G toggles")
     expect(await term.find("alpha line")).toBeNull()
   })
 })
@@ -85,7 +84,7 @@ test.describe("bash card", () => {
 
   test("the command is the summary; Ctrl+G and /tools expand and collapse the output", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run printf")
     await term.waitForText("Ran it.", 20_000)
     await term.waitForText(/✓ bash\s+printf 'first\\nsecond\\n'\s+\d+ms/)
@@ -96,7 +95,6 @@ test.describe("bash card", () => {
     await term.waitForText("│ first")
     const output = await at(term, "│ second")
     expect((await term.cell(output.row, output.col + 2))?.fg).toBe(colors.muted)
-    await term.waitForText("Tool calls expanded · Ctrl+G toggles")
     await term.attach(testInfo, "bash-expanded")
 
     await term.press("Control+g")
@@ -125,7 +123,7 @@ test.describe("edit and write cards", () => {
   test("edits and writes show the path and a colored diff", async ({ tui, backend }, testInfo) => {
     await writeFile(join(backend.dir, "poem.txt"), "one\ntwo\nthree\n")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "edit the poem")
     await term.waitForText("Edited.", 20_000)
     await term.waitForText(/✓ edit\s+poem\.txt · \+1 -1/)
@@ -151,7 +149,7 @@ test.describe("failed tool", () => {
 
   test("a failed call shows ✗ and its error message in the error color", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read the missing file")
     await term.waitForText("It is missing.", 20_000)
     await term.waitForText(/✗ read\s+missing\.txt/)
@@ -170,7 +168,7 @@ test.describe("running tool", () => {
 
   test("a running call animates a spinner, then shows ✓ and its duration", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "sleep a bit")
     await term.waitForText(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash\s+sleep 2/, 20_000)
     const row = (await term.find("bash  sleep 2"))!
@@ -197,7 +195,7 @@ test.describe("subagents", () => {
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
     await term.waitForText(/task\s+hya-task · survey the repo/)
@@ -252,7 +250,7 @@ test.describe("narrow terminal", () => {
   test("cards fit about 80 columns", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
     expect((await term.size()).cols).toBeLessThanOrEqual(84)
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run it")
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/tools on")

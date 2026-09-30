@@ -17,7 +17,8 @@ test("initial workspace renders before any backend data arrives", async () => {
   ), { width: 156, height: 41 })
   try {
     await setup.renderOnce()
-    expect(setup.captureCharFrame()).toContain("hya · connecting")
+    expect(controller.ui.transcript).toBeDefined()
+    expect(controller.ui.command?.active()).toBe(false)
   } finally {
     setup.renderer.destroy()
   }

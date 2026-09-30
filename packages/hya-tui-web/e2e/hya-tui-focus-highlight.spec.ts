@@ -21,7 +21,7 @@ async function focusBoxes(term: Tui): Promise<{ row: number; col: number }[]> {
 for (const width of [1100, 700]) {
   test(`exactly one box highlights the keyboard owner through panes, commands, help and resize (${width}px)`, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const oneBox = async () => { await expect.poll(async () => (await focusBoxes(term)).length).toBe(1) }
     await oneBox()
     expect((await focusBoxes(term))[0]!.row).toBeGreaterThan(20)
@@ -50,7 +50,7 @@ for (const width of [1100, 700]) {
     await term.press("Escape")
     await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
     await term.press("Alt+ArrowLeft")
-    await term.waitForText("pane-1 conversation")
+    await expect.poll(async () => (await focusBoxes(term))[0]?.row).toBeGreaterThan(20)
     await oneBox()
     expect((await focusBoxes(term))[0]!.row).toBeGreaterThan(20)
   })
@@ -58,7 +58,7 @@ for (const width of [1100, 700]) {
 
 test("provider form alone is highlighted over its view", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("/key")
   await term.press("Enter")
   await term.waitForText("Providers")
@@ -80,11 +80,11 @@ test("provider form alone is highlighted over its view", async ({ tui, backend }
 
 test("Projects, Sessions, Todos and Context each receive the single focus border", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   for (const [id, title] of [[2, "Projects"], [3, "Sessions"], [4, "Todos"], [5, "Context"]] as const) {
     await term.type(`/layout focus pane-${id}`)
     await term.press("Enter")
-    await term.waitForText(`pane-${id} ${title.toLowerCase()}`)
+    await expect.poll(() => term.find("Commands")).toBeNull()
     const position = (await term.find(title))!
     await expect.poll(() => focusBoxes(term)).toEqual([{ row: position.row, col: position.col - 2 }])
   }
