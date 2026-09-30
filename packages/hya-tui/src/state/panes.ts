@@ -185,11 +185,18 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
   return { ...layout, root: resize(layout.root)[0] }
 }
 
+function migrateLegacyDefault(root: PaneNode): PaneNode {
+  if (root.type !== "split" || root.axis !== "vertical" || root.weight !== 0.18 || root.first.type !== "pane" || root.first.kind !== "projects") return root
+  const center = root.second
+  if (center.type !== "split" || center.axis !== "vertical" || center.weight !== 0.74 || center.first.type !== "pane" || center.first.kind !== "conversation") return root
+  return { ...root, weight: 0.1, second: { ...center, weight: 0.88 } }
+}
+
 /** Validate a preference file's untrusted JSON before it reaches the layout store. */
 export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  if ((record.version !== 1 && record.version !== 2 && record.version !== 3) || typeof record.active !== "string") return undefined
+  if ((record.version !== 1 && record.version !== 2) || typeof record.active !== "string") return undefined
   const ids = new Set<string>()
   let conversations = 0
   const valid = (node: unknown, depth: number): node is PaneNode => {
@@ -205,7 +212,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     return valid(row.first, depth + 1) && valid(row.second, depth + 1)
   }
   if (!valid(record.root, 0) || conversations !== 1 || !ids.has(record.active)) return undefined
-  if (record.version === 2 || record.version === 3) return { version: 2, root: record.root, active: record.active }
+  if (record.version === 2) return { version: 2, root: migrateLegacyDefault(record.root), active: record.active }
   if (ids.size > maxPanes - 4) return undefined
   // Version 1 saved only the center. Preserve that subtree and add the old sidebars as editable leaves.
   let next = Math.max(...[...ids].map((id) => Number(id.slice(5))))
