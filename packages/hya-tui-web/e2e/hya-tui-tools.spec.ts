@@ -7,7 +7,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, test, textStep, toolStep, toolsStep } from "./hya"
+import { expect, hangStep, hyaTui, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 
 const colors = {
   fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b",
@@ -201,7 +201,7 @@ test.describe("subagents", () => {
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)

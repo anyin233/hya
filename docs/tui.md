@@ -634,7 +634,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
-| `/sidebar [on\|off]` or Ctrl+B | Show or hide the right sidebar (110 columns or more; below that it is always hidden and the top status line shows its `Context` fields). Without an argument it toggles what is visible now. |
+| `/sidebar [on\|off]` or Ctrl+B | Show or hide the right sidebar (150 columns or more; below that it is always hidden and the top status line shows its `Context` fields). Without an argument it toggles what is visible now. Drag its left border with the mouse to resize it (29 columns at least). |
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
@@ -764,14 +764,19 @@ the bordered input, and the instruction line. The permission mode picker
   model, the merged transcript's message count, context occupancy, tokens,
   directory, git branch, todo count, server, WebUI, connection state). These
   are three independent panes in the right branch of the editable layout
-  tree. They need 110 columns: below that they are always hidden (no pin
-  brings them back), so an 80-column terminal gets the full width for the
-  transcript, and the top status line carries the `Context` fields instead.
-  At 110 columns or more they are shown unless hidden: Ctrl+B or `/sidebar`
-  toggles them, `/sidebar on` and `/sidebar off` set them. The status line
-  confirms the change (`Sidebar shown · Ctrl+B toggles`); below 110 columns
-  Ctrl+B and `/sidebar on` only answer `Sidebar needs 110+ columns · the top
-  status line shows its Context`. The top status line and the `Context` box
+  tree. They need 150 columns: below that they are always hidden (no pin
+  brings them back), so a terminal up to 149 columns gets the full width for
+  the transcript, and the top status line carries the `Context` fields
+  instead. At 150 columns or more they are shown unless hidden: Ctrl+B or
+  `/sidebar` toggles them, `/sidebar on` and `/sidebar off` set them. The
+  status line confirms the change (`Sidebar shown · Ctrl+B toggles`); below
+  150 columns Ctrl+B and `/sidebar on` only answer `Sidebar needs 150+
+  columns · the top status line shows its Context`. The sidebar is never
+  drawn narrower than 29 columns (60% wider than the 18 columns its default
+  12% share gave at 149 columns); above that its width is its saved share,
+  which you change by dragging its left border with the mouse (see
+  [Tiled workspace](#tiled-workspace), "Resizing with the mouse"). The top status line
+  and the `Context` box
   are mutually exclusive: exactly one of them is on screen. Its `Sessions`
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
@@ -780,9 +785,9 @@ the bordered input, and the instruction line. The permission mode picker
   the left: one row per Project (`ListProjects`, live via `projectsUpdated`
   the same as the Project view), the active one marked `▸`, a busy marker
   `●` while a session of it runs a turn, and its session count. It needs
-  both sidebars and the chat column to fit, so it follows a wider threshold
-  than the right sidebar (150 columns; an 80-column or even a 130-column
-  terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
+  both sidebars and the chat column to fit, so it follows a threshold no
+  lower than the right sidebar's (150 columns; an 80-column or even a
+  149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
   hidden — Up/Down move the highlight, Enter switches (`switchProject`),
   Esc (or Ctrl+P again) returns focus to the composer without closing it;
   `/projects-sidebar [on|off]` toggles visibility alone (and, unlike the
@@ -874,8 +879,8 @@ layout does not start another session stream or create another chat input.
 
 The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
 Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
-Projects is hidden unless `/projects-sidebar on` pins it open. Below 110
-columns, Sessions, Todos, and Context are always hidden; at 110 or more,
+Projects is hidden unless `/projects-sidebar on` pins it open. Below 150
+columns, Sessions, Todos, and Context are always hidden; at 150 or more,
 `/sidebar off` (or Ctrl+B) hides them. These modes filter the matching pane
 jobs in any layout; the saved tree remains intact. `Ctrl+P` opens and
 selects a Projects pane; `Ctrl+B` toggles panes assigned Sessions, Todos,
@@ -892,7 +897,10 @@ root: PaneNode, active: string}`. A `PaneNode` is either
 `{type: "pane", id: "pane-N", kind: PaneKind}` or
 `{type: "split", axis: "horizontal"|"vertical", weight: number,
 first: PaneNode, second: PaneNode}`. `weight` is the first child's fraction
-and stays between `0.1` and `0.9`. `PaneKind` is `conversation`, `projects`, `jobs`,
+and stays between `0.1` and `0.9`; a mouse drag writes it on release. A split
+whose second side holds only Sessions, Todos, or Context panes is drawn with
+that side at least 29 columns wide whatever its weight. `PaneKind` is
+`conversation`, `projects`, `jobs`,
 `sessions`, `todos`, `context`, `models`, `workflows`, `interactions`,
 `status`, or `api`. Saved trees with duplicate ids, no conversation,
 unknown jobs, invalid weights, or more than 16 panes are ignored. Saved
@@ -900,6 +908,20 @@ version-1 center-only trees are migrated by placing them between editable
 Projects and right-side panes. Layout
 editing uses no new backend route: each pane reads the existing session,
 catalog, interaction, and stream data already held by the TUI.
+
+**Resizing with the mouse.** Drag the border between two side-by-side panes
+with the left mouse button to move it: the right sidebar's left border, the
+Projects sidebar's right border, or the border of any vertical `/layout
+split`. Press on the border column (or the column just left of it) and drag;
+the panes follow the pointer while you drag. On release the new share is
+written into the saved layout (the split's `weight`), so the next TUI start
+keeps it. A drag stays within the `0.1`–`0.9` weight range, and it cannot
+make the right sidebar narrower than 29 columns. `/layout resize <+10|-10>`
+changes the focused pane's share from the keyboard, and `/layout reset`
+returns to the default widths. For example, on a 174-column terminal the
+right sidebar starts at its 29-column minimum; dragging its left border 25
+columns to the left makes it 54 columns wide, and a new TUI opens with the
+same width.
 
 The colors come from the theme in effect (see [Themes](#themes)). The
 default `hya` theme:
@@ -1033,7 +1055,7 @@ alive before the working line's own elapsed clock is very interesting.
 **Status bar (top status line) and the Context box.** Both show one field
 set (`state/contextFields.ts` `contextFields()`), and exactly one of them is
 on screen: the right sidebar's `Context` box while a Context pane is
-visible (110 columns or more, sidebar not hidden), else the top status line
+visible (150 columns or more, sidebar not hidden), else the top status line
 of the Conversation pane (`contextStatusShown()`). The fields, in order —
 each omitted when it has no data:
 

@@ -409,8 +409,15 @@ export function hyaTui(backend: Backend): string[] {
 }
 
 /**
+ * A browser viewport wide enough for the right sidebar (≈174 columns; it
+ * needs 150): the default 1100×640 viewport is ≈128 columns, where the
+ * sidebar is hidden and the top status line shows its Context fields.
+ */
+export const wideViewport = { width: 1500, height: 640 }
+
+/**
  * The top status line (docs/tui.md "Status line"): `[-- INSERT -- · ]mode <mode> · <session> · <agent> · …`.
- * It is on screen only while no Context pane is: below 110 columns, or after Ctrl+B / `/sidebar off`.
+ * It is on screen only while no Context pane is: below 150 columns, or after Ctrl+B / `/sidebar off`.
  * It starts a row, or follows the left Projects pane's border (`┐`/`│`) on a wide terminal.
  */
 export const statusLinePattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · /m

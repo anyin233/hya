@@ -1,7 +1,7 @@
 kind: WorkflowBundle
 identity:
   id: hya/plan-impl-review
-  version: 0.43.33
+  version: 0.43.34
   publisher: hya
 workflow:
   id: plan-impl-review

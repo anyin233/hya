@@ -2,7 +2,7 @@
  * The top status line (docs/tui.md "Status line"): the Context fields
  * (state/contextFields.ts) as ` · `-separated segments on at most two rows,
  * least essential fields dropped first. Drawn only while no `context` pane is
- * on screen (below 110 columns, `/sidebar off`, or a layout without one), so
+ * on screen (below 150 columns, `/sidebar off`, or a layout without one), so
  * the Context box and this line never show at the same time.
  */
 import { For, Show } from "solid-js"

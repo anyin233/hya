@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
+import { sidebarMinColumns } from "../src/state/layout"
 import {
-  closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves,
-  resizePane, setPaneKind, splitPane, type PaneLayout,
+  boundaryWeight, closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves,
+  renderedWeight, resizePane, setPaneKind, setSplitWeight, splitPane, visiblePaneRoot, type PaneLayout, type PaneSplit,
 } from "../src/state/panes"
 
 const singlePaneLayout = (): PaneLayout => ({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } })
@@ -55,4 +56,45 @@ test("version 2 default layout migrates its legacy sidebar widths", () => {
   if (migrated?.root.type !== "split" || migrated.root.second.type !== "split") return
   expect(migrated.root.weight).toBe(0.1)
   expect(migrated.root.second.weight).toBe(0.88)
+})
+
+/** The Conversation | Sessions/Todos/Context split of the default layout, as shown below the Projects breakpoint. */
+function rightSplit(layout: PaneLayout = defaultPaneLayout()): PaneSplit {
+  const root = visiblePaneRoot(layout.root, 150, "auto", "closed")
+  if (root.type !== "split") throw new Error("expected the right sidebar split")
+  return root
+}
+
+test("the right sidebar is drawn at least sidebarMinColumns wide; wider when its weight allows", () => {
+  const split = rightSplit()
+  // 12% of 150 columns is 18: the drawn weight leaves the sidebar exactly its minimum.
+  expect(150 * (1 - renderedWeight(split, 150))).toBeCloseTo(sidebarMinColumns)
+  // 12% of 300 columns is 36, above the minimum: the saved weight is drawn as is.
+  expect(renderedWeight(split, 300)).toBe(0.88)
+  // Only a split whose second side is the right sidebar is held open.
+  const jobs = splitPane({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }, "vertical", "jobs").root as PaneSplit
+  expect(renderedWeight({ ...jobs, weight: 0.9 }, 150)).toBe(0.9)
+})
+
+test("dragging a split boundary to a column sets its weight within the limits", () => {
+  const split = rightSplit()
+  // Split drawn from column 0, 200 columns wide: the boundary at column 120 is weight 0.6.
+  expect(boundaryWeight(split, 0, 200, 120)).toBeCloseTo(0.6)
+  expect(boundaryWeight(split, 20, 200, 140)).toBeCloseTo(0.6)
+  // Dragged past the sidebar's minimum: it stops at sidebarMinColumns.
+  expect(200 * (1 - boundaryWeight(split, 0, 200, 199))).toBeCloseTo(sidebarMinColumns)
+  // Dragged to the far left: the conversation keeps 10%.
+  expect(boundaryWeight(split, 0, 200, 0)).toBe(0.1)
+})
+
+test("setSplitWeight changes the split between two panes in the saved tree and nothing else", () => {
+  const layout = defaultPaneLayout()
+  const next = setSplitWeight(layout, "pane-1", "pane-3", 0.7)
+  if (next.root.type !== "split" || next.root.second.type !== "split") throw new Error("expected nested vertical splits")
+  expect(next.root.weight).toBe(0.1)
+  expect(next.root.second.weight).toBe(0.7)
+  expect(rightSplit(next).weight).toBe(0.7)
+  expect(parsePaneLayout(JSON.parse(JSON.stringify(next)))).toEqual(next)
+  // No split has pane-3 on its first side and pane-1 on its second: nothing to resize.
+  expect(setSplitWeight(layout, "pane-3", "pane-1", 0.7)).toBe(layout)
 })

@@ -413,7 +413,7 @@ test("argument completion comes from the command's own completer", () => {
 
 test("/sidebar toggles or sets the sidebar and /thinking expands or collapses reasoning", async () => {
   const { store, run, registry } = harness()
-  store.setColumns(130)
+  store.setColumns(160)
   await run("/sidebar")
   expect(store.state.sidebar).toBe("closed")
   expect(store.state.status).toBe("Sidebar hidden · Ctrl+B toggles")
@@ -421,7 +421,7 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
   expect(store.state.sidebar).toBe("auto")
   expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
   // Too narrow: the sidebar cannot be shown; the status line says why.
-  store.setColumns(80)
+  store.setColumns(149)
   await run("/sidebar on")
   expect(store.state.sidebar).toBe("auto")
   expect(store.state.status).toBe(sidebarTooNarrowNotice)
