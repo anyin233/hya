@@ -236,8 +236,10 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
       <Match when={!card().task}>
         <box width="100%" flexDirection="column" border borderColor={colors.border} paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
           <CardHeader status={waiting() ? "waiting" : card().status} tool={card().tool} summary={waiting() ? "awaiting approval" : ""} duration={card().duration} />
-          <text width="100%" wrapMode={expanded() ? "word" : "none"} fg={colors.muted}>{card().args || "{}"}</text>
-          <Show when={expanded()}>
+          <Show when={!expanded()} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{card().args || "{}"}</text>}>
+            <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{card().args || "{}"}</text>
+          </Show>
+          <Show when={expanded() && ((card().output ?? card().body).length > 0 || Boolean(card().error))}>
             <box width="100%" flexDirection="column">
               <text width="100%" height={1} wrapMode="none" fg={colors.border}>────────────────</text>
               <For each={card().output ?? card().body}>
