@@ -102,6 +102,8 @@ const WORKFLOW_TUI_SOURCE_COPY: &str = "cp -R packages/hya-tui/src/. \"$tui/src/
 const WORKFLOW_TUI_INSTALL: &str =
     "(cd \"$tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
 const WORKFLOW_TUI_WEB_SOURCE_COPY: &str = "cp -R packages/hya-tui-web/src/. \"$tui_web/src/\"";
+const WORKFLOW_FRONTEND_VERSION_COPY: &str =
+    "cp packages/hya-tui/frontend-version.ts \"$tui/frontend-version.ts\"";
 const WORKFLOW_TUI_WEB_PAGE_COPY: &str = "cp -R packages/hya-tui-web/web/. \"$tui_web/web/\"";
 const WORKFLOW_TUI_WEB_INSTALL: &str =
     "(cd \"$tui_web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
@@ -139,7 +141,13 @@ const BUN_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
 const TUI_RUNTIME: BunRuntime = BunRuntime {
     source: "packages/hya-tui",
     destination: "lib/hya/tui",
-    files: &["package.json", "bun.lock", "bunfig.toml", "tsconfig.json"],
+    files: &[
+        "package.json",
+        "bun.lock",
+        "bunfig.toml",
+        "tsconfig.json",
+        "frontend-version.ts",
+    ],
     directories: &["src"],
 };
 
@@ -168,6 +176,7 @@ const TUI_WEB_DEV_ONLY: [&str; 4] = [
     "typescript",
 ];
 /// Files the staged programs load at runtime beyond their copied sources.
+const FRONTEND_VERSION_FILE: &str = "lib/hya/tui/frontend-version.ts";
 const TUI_RUNTIME_FILES: [&str; 1] = ["src/main.ts"];
 const TUI_WEB_RUNTIME_FILES: [&str; 6] = [
     "src/main.ts",
@@ -444,6 +453,10 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         (
             WORKFLOW_TUI_SOURCE_COPY,
             "recursively copy the complete TUI source tree",
+        ),
+        (
+            WORKFLOW_FRONTEND_VERSION_COPY,
+            "copy the aggregate frontend version into the self-contained TUI runtime",
         ),
         (
             WORKFLOW_TUI_INSTALL,
@@ -784,10 +797,24 @@ fn validate_release_metadata(
         "Cargo.toml workspace version `{workspace_version}` does not match `{version}`"
     );
 
+    let (backend_version, frontend_version) = aggregate_versions(root)?;
+    ensure!(
+        backend_version == version,
+        "versions.toml backend version `{backend_version}` does not match `{version}`"
+    );
+    let frontend_source = read_text(root, "packages/hya-tui/frontend-version.ts")?;
+    ensure!(
+        frontend_source.contains(&format!("= \"{frontend_version}\"")),
+        "packages/hya-tui/frontend-version.ts does not carry frontend version {frontend_version}"
+    );
     let readme = read_text(root, "README.md")?;
     ensure!(
-        readme.contains(&format!("workspace version `{version}`")),
-        "README.md does not report workspace version `{version}`"
+        readme.contains(&format!("backend version `{version}`")),
+        "README.md does not report backend version `{version}`"
+    );
+    ensure!(
+        readme.contains(&format!("frontend version `{frontend_version}`")),
+        "README.md does not report frontend version `{frontend_version}`"
     );
 
     let lockfile = read_text(root, "Cargo.lock")?;
@@ -861,7 +888,7 @@ fn tag_pattern_matches(pattern: &str, tag: &str) -> bool {
     pattern.ends_with('*') || remainder.is_empty()
 }
 
-/// Validate that every hya workspace package in the lockfile uses one version.
+/// Validate the aggregate backend package and placeholder component versions.
 fn validate_lockfile_versions(lockfile: &str, version: &str) -> Result<()> {
     let mut found = false;
     for package in lockfile.split("[[package]]").skip(1) {
@@ -874,9 +901,14 @@ fn validate_lockfile_versions(lockfile: &str, version: &str) -> Result<()> {
         found = true;
         let package_version = lockfile_field(package, "version")
             .with_context(|| format!("Cargo.lock package {name} has no version"))?;
+        let expected = if name == "hya-backend" {
+            version
+        } else {
+            "0.0.0"
+        };
         ensure!(
-            package_version == version,
-            "Cargo.lock package {name} has version `{package_version}`, expected `{version}`"
+            package_version == expected,
+            "Cargo.lock package {name} has version `{package_version}`, expected `{expected}`"
         );
     }
     ensure!(found, "Cargo.lock contains no hya packages");
@@ -887,6 +919,20 @@ fn validate_lockfile_versions(lockfile: &str, version: &str) -> Result<()> {
 fn read_text(root: &Path, relative: &str) -> Result<String> {
     let path = root.join(relative);
     fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
+}
+
+fn aggregate_versions(root: &Path) -> Result<(String, String)> {
+    let source = read_text(root, "versions.toml")?;
+    let manifest: toml::Value = toml::from_str(&source).context("parse versions.toml")?;
+    let version = |component: &str| {
+        manifest
+            .get(component)
+            .and_then(|section| section.get("version"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .with_context(|| format!("versions.toml [{component}].version is missing"))
+    };
+    Ok((version("backend")?, version("frontend")?))
 }
 
 /// Read one field from a Cargo.lock package block.
@@ -1291,6 +1337,7 @@ fn verify_archive_listing(
     for path in [
         "bin/hya",
         PACKAGED_BUN,
+        FRONTEND_VERSION_FILE,
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
         "lib/hya/bun-adapter/src/main.ts",
@@ -1981,6 +2028,7 @@ mod tests {
         WORKFLOW_TUI_SOURCE_COPY,
         WORKFLOW_TUI_INSTALL,
         WORKFLOW_TUI_WEB_SOURCE_COPY,
+        WORKFLOW_FRONTEND_VERSION_COPY,
         WORKFLOW_TUI_WEB_PAGE_COPY,
         WORKFLOW_TUI_WEB_INSTALL,
         WORKFLOW_FIRST_PARTY_STAGE,
@@ -2056,29 +2104,55 @@ mod tests {
         assert!(opentui_native_package("x86_64-pc-windows-msvc").is_err());
         Ok(())
     }
-    /// Keep the packaged frontend's self-reported version aligned with the backend.
+
+    /// The release metadata separates aggregate versions from component placeholders.
     #[test]
-    fn packaged_frontend_versions_match_workspace() -> Result<()> {
+    fn version_contract_separates_backend_and_frontend_aggregates() -> Result<()> {
         let root = repo_root()?;
-        let cargo: toml::Value = toml::from_str(&read_text(&root, "Cargo.toml")?)?;
-        let version = cargo
-            .get("workspace")
-            .and_then(|workspace| workspace.get("package"))
-            .and_then(|package| package.get("version"))
-            .and_then(toml::Value::as_str)
-            .context("workspace package version is missing")?;
+        let versions = read_text(&root, "versions.toml")?;
+        assert!(versions.contains("[backend]\nversion = \"0.43.40\""));
+        assert!(versions.contains("[frontend]\nversion = \"0.43.40\""));
+
+        let backend = read_text(&root, "crates/hya-backend/Cargo.toml")?;
+        assert!(backend.contains("version.workspace = true"));
+        let component = read_text(&root, "crates/hya-provider/Cargo.toml")?;
+        assert!(component.contains("version = \"0.0.0\""));
+        assert!(component.contains("version-reference = \"backend\""));
+
         for path in [
             "packages/hya-tui/package.json",
             "packages/hya-tui-web/package.json",
+            "crates/hya-plugin-bun/adapter/package.json",
         ] {
             let package: serde_json::Value = serde_json::from_str(&read_text(&root, path)?)?;
-            let package_version = package
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                .with_context(|| format!("{path} package version is missing"))?;
+            assert_eq!(package["version"], "0.0.0", "{path}");
+            assert_eq!(package["hya"]["version-reference"], "frontend", "{path}");
+        }
+        Ok(())
+    }
+    /// Keep frontend components on the placeholder plus aggregate-reference contract.
+    #[test]
+    fn packaged_frontend_versions_use_aggregate_reference() -> Result<()> {
+        let root = repo_root()?;
+        let (_, frontend_version) = aggregate_versions(&root)?;
+        let source = read_text(&root, "packages/hya-tui/frontend-version.ts")?;
+        ensure!(
+            source.contains(&format!("= \"{frontend_version}\"")),
+            "packages/hya-tui/frontend-version.ts does not carry frontend version {frontend_version}"
+        );
+        for path in [
+            "packages/hya-tui/package.json",
+            "packages/hya-tui-web/package.json",
+            "crates/hya-plugin-bun/adapter/package.json",
+        ] {
+            let package: serde_json::Value = serde_json::from_str(&read_text(&root, path)?)?;
             ensure!(
-                package_version == version,
-                "{path} has version {package_version}, expected workspace version {version}"
+                package.get("version").and_then(serde_json::Value::as_str) == Some("0.0.0"),
+                "{path} must use placeholder version 0.0.0"
+            );
+            ensure!(
+                package["hya"]["version-reference"] == "frontend",
+                "{path} must reference the frontend aggregate"
             );
         }
         Ok(())
@@ -2107,6 +2181,7 @@ mod tests {
     /// Write a minimal staged TUI/WebUI tree that passes [`verify_tui_layout`].
     fn write_tui_fixture(package_root: &Path, target: &str) -> Result<()> {
         let native = opentui_native_package(target)?;
+        copy_or_write(&package_root.join(FRONTEND_VERSION_FILE))?;
         let tui = package_root.join(TUI_RUNTIME.destination);
         for file in TUI_RUNTIME.files.iter().chain(&TUI_RUNTIME_FILES) {
             copy_or_write(&tui.join(file))?;

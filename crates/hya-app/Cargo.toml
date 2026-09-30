@@ -1,9 +1,11 @@
 [package]
 name = "hya-app"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+[package.metadata.hya]
+version-reference = "backend"
 
 [lints]
 workspace = true
@@ -14,6 +16,7 @@ hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
 hya-bundle = { workspace = true }
+hya-version = { workspace = true }
 hya-core = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }

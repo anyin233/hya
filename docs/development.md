@@ -145,14 +145,27 @@ suite (plus the `packages/hya-tui` and adapter typecheck/test above) in the
 
 ## Version bumps
 
-Every change to shipped behavior bumps `[workspace.package].version` in
-`Cargo.toml`, together with every coupled version: the first-party and extra
-`bundle.yaml` identity versions, `packages/hya-tui/package.json`,
-`packages/hya-tui-web/package.json`, the `README.md` status paragraph, and a new
-root `CHANGELOG.md` (the previous one moves to `docs/changes/`). Shipped
-behavior means Rust crates, `proto/`, `bundles/`, `packages/hya-tui`,
-`packages/hya-tui-web`, the Bun adapter, and anything else in the release
-archive or source install.
+Shipped behavior uses two aggregate release versions in `versions.toml`:
+`[backend].version` for the unified Rust backend and `[frontend].version` for
+the Bun/OpenTUI frontend. The root `[workspace.package].version` mirrors the
+backend aggregate, and `packages/hya-tui/frontend-version.ts` embeds the
+frontend aggregate for the self-contained TUI package. These are the only real
+release versions.
+
+All other Rust package manifests use the placeholder `0.0.0` plus
+`[package.metadata.hya] version-reference = "backend"`; frontend package
+manifests use `0.0.0` plus the equivalent `frontend` reference. Bundle source
+manifests use `version_ref: backend` and identity version `0.0.0`; preparation
+resolves that reference to the backend aggregate, so prepared and released
+bundles still carry the actual backend version without editing every source
+manifest on each bump.
+
+Every shipped behavior change bumps the two aggregate entries together when
+backend and frontend ship in the same release, updates the README status and
+root `CHANGELOG.md`, and moves the previous root changelog to
+`docs/changes/`. Shipped behavior means Rust crates, `proto/`, `bundles/`,
+`packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else
+in the release archive or source install.
 
 These changes do **not** bump the version or write a new root changelog:
 
@@ -162,9 +175,10 @@ These changes do **not** bump the version or write a new root changelog:
 - tests only, when no shipped code changes.
 
 A mixed change follows its shipped part: if any file affects shipped behavior,
-bump the version once for the whole atomic change. See the
-[Workspace Version Bump](spec/backend/quality-guidelines.md#scenario-workspace-version-bump)
-scenario for the file list and the tests that enforce it.
+bump the aggregate version once for the whole atomic change. `cargo test -p
+xtask` validates the aggregate/reference contract, `cargo test -p hya-bundle`
+validates bundle preparation, and the release rehearsal validates the README,
+lockfile, package layout, and archive copies.
 
 ## Dev tasks (`xtask` package)
 

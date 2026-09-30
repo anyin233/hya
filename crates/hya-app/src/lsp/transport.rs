@@ -172,7 +172,7 @@ impl Client {
         };
         let initialized = client.request("initialize", json!({
             "processId": std::process::id(),
-            "clientInfo": {"name": "hya", "version": env!("CARGO_PKG_VERSION")},
+            "clientInfo": {"name": "hya", "version": hya_version::BACKEND_VERSION},
             "rootUri": uri, "workspaceFolders": folders,
             "initializationOptions": config.initialization_options,
             "capabilities": {

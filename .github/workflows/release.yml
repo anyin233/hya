@@ -108,6 +108,11 @@ jobs:
             echo "tag version $version does not match hya version $cargo_version" >&2
             exit 1
           fi
+          frontend_version="$(python3 -c 'import tomllib; print(tomllib.load(open("versions.toml", "rb"))["frontend"]["version"])')"
+          if [[ "$frontend_version" != "$version" ]]; then
+            echo "tag version $version does not match frontend version $frontend_version" >&2
+            exit 1
+          fi
 
           if [[ ! -s CHANGELOG.md ]]; then
             echo "CHANGELOG.md must exist and contain the newest release notes" >&2
@@ -166,6 +171,7 @@ jobs:
           tui="dist/$package_dir/lib/hya/tui"
           tui_web="dist/$package_dir/lib/hya/tui-web"
           mkdir -p "$tui/src" "$tui_web/src" "$tui_web/web"
+          cp packages/hya-tui/frontend-version.ts "$tui/frontend-version.ts"
           cp packages/hya-tui/package.json packages/hya-tui/bun.lock \
             packages/hya-tui/bunfig.toml packages/hya-tui/tsconfig.json "$tui/"
           cp -R packages/hya-tui/src/. "$tui/src/"

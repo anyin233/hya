@@ -1,5 +1,5 @@
-# 0.43.39
+# 0.43.40
 
-## Release
+## Version management
 
-- Align the workspace, bundled extensions, TUI packages, lockfile, and release documentation at version 0.43.39.
+- Track backend and frontend release versions as aggregates; component manifests use placeholder versions with explicit aggregate references.

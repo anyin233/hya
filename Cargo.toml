@@ -6,12 +6,13 @@ members = ["crates/*", "bundles/presets/base-tools/native", "bundles/presets/tod
 exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.43.39"
+version = "0.43.40"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+hya-version = { path = "crates/hya-version" }
 # --- internal crates (path deps) ---
 hya-api = { path = "crates/hya-api" }
 hya-bundle = { path = "crates/hya-bundle" }

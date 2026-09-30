@@ -222,7 +222,7 @@ pub unsafe fn with_runtime_v1(
 pub fn abi_digest_v1() -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"hya.tool.native-bundle-abi/v1");
-    hash.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hash.update(hya_version::BACKEND_VERSION.as_bytes());
     hash.update(std::env::consts::OS.as_bytes());
     hash.update(std::env::consts::ARCH.as_bytes());
     hash.update(std::mem::size_of::<ToolCtx>().to_be_bytes());
