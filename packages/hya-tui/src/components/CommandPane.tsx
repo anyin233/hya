@@ -169,17 +169,6 @@ export function CommandPane() {
 
   return (
     <box position="absolute" top={2} left={left()} width={width()} zIndex={90} flexShrink={0} border borderColor={colors.accent} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
-      <Show when={visibleMenu()}>
-        {(shown) => (
-          <For each={shown().items}>
-            {(entry, row) => (
-              <text height={1} wrapMode="none" fg={row() === shown().index ? colors.accent : colors.fg}>
-                {`${row() === shown().index ? "▸" : " "} ${entry.label}`}
-              </text>
-            )}
-          </For>
-        )}
-      </Show>
       <input
         ref={(element: InputRenderable) => {
           editor = element
@@ -196,6 +185,17 @@ export function CommandPane() {
         onSubmit={submit}
         onContentChange={sync}
       />
+      <Show when={visibleMenu()}>
+        {(shown) => (
+          <For each={shown().items}>
+            {(entry, row) => (
+              <text height={1} wrapMode="none" fg={row() === shown().index ? colors.accent : colors.fg}>
+                {`${row() === shown().index ? "▸" : " "} ${entry.label}`}
+              </text>
+            )}
+          </For>
+        )}
+      </Show>
       <text height={1} wrapMode="none" fg={colors.muted}>Up/Down select · Shift+Up/Down history · Tab chooses · Enter chooses/runs · Esc returns</text>
     </box>
   )
