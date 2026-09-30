@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MessageInfo } from "../src/client"
-import { dividerView, finishNotice, lastReplyText, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
+import { dividerView, finishNotice, lastReplyText, messageBlockGap, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
 import { createAppStore } from "../src/state/store"
 
 const fallback = { agent: "hya-main", model: "fake/model" }
@@ -262,5 +262,13 @@ test("lastReplyText: the text of the newest assistant message with text, blocks 
   expect(lastReplyText([view("u", "ROLE_USER", ["hi"])])).toBeUndefined()
   expect(lastReplyText([view("a", "ROLE_ASSISTANT", ["one", "two"]), view("u", "ROLE_USER", ["next"])])).toBe("one\n\ntwo")
   // An assistant message with no text (only tool calls) is skipped.
+
   expect(lastReplyText([view("a", "ROLE_ASSISTANT", ["answer"]), view("b", "ROLE_ASSISTANT", [])])).toBe("answer")
+})
+
+test("assistant text blocks have a blank row between each output block", () => {
+  const first = { kind: "text" as const, id: "a", text: "one" }
+  const second = { kind: "text" as const, id: "b", text: "two" }
+  expect(messageBlockGap(first, second)).toBe(true)
+  expect(messageBlockGap(first, { kind: "tool", id: "t", card: { tool: "read", status: "done" as const, summary: "", args: "{}", body: [], output: [] } })).toBe(false)
 })

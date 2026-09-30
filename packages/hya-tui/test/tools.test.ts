@@ -180,3 +180,13 @@ test("diff lines skip file headers and tone each row", () => {
     { text: "@@ -1 +1 @@", tone: "hunk" }, { text: "- x", tone: "remove" }, { text: "+ y", tone: "add" },
   ])
 })
+
+test("tool cards retain complete arguments and separate expandable output", () => {
+  const card = toolCard({
+    tool: "github__search_issues", state: ok,
+    inputJson: json({ repo: "a/b", query: "bug", page: 2 }),
+    outputJson: json({ output: "3 issues" }),
+  })
+  expect(card.args).toBe('{"repo":"a/b","query":"bug","page":2}')
+  expect(card.output).toEqual([{ text: "3 issues", tone: "muted" }])
+})
