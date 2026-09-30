@@ -1,4 +1,3 @@
-# 0.43.34
+# 0.43.35
 
-- The TUI's right sidebar (Sessions, Todos, Context) needs 150 columns; below that it is hidden and the top status line shows its Context fields. It is never drawn narrower than 29 columns, 60% wider than the 18 columns its default share gave at 149 columns.
-- Drag the border between side-by-side panes with the mouse to resize them: the right sidebar's left border, the Projects sidebar's right border, or any vertical `/layout split`. The panes follow the pointer, and the new width is saved with the layout on release.
+- `hya serve restart` now hot-updates the TUI as well: once a TUI (the terminal one and every WebUI tab) has attached to the new daemon, it starts itself again from the TUI files on disk, so new TUI features apply without quitting `hya`. The open session and the unsent composer text carry over; the reloaded TUI says `TUI reloaded (hya serve restart)`. Crash recovery, `/reconnect`, and remote backends do not reload. See docs/tui.md "Hot update after `hya serve restart`".

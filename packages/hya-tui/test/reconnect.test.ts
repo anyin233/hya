@@ -220,6 +220,34 @@ test("a restart that never brings a server back ends stopped after about 60 s", 
   expect(h.statuses.at(-1)).toBe("Backend did not come back after hya serve restart · /reconnect starts it again")
 })
 
+test("only an attach after `restart` reports the restart (the TUI reloads then); crash recovery and /reconnect do not", async () => {
+  const restarted: ServerSwitch[] = []
+  const make = (found: (ServerSwitch | undefined)[]) => createReconnector({
+    url: () => "http://127.0.0.1:1",
+    probe: async () => false,
+    reconnect: async () => started,
+    find: async () => found.shift(),
+    switchTo: async () => undefined,
+    status: () => undefined,
+    onRestarted: (next) => restarted.push(next),
+    sleep: async () => undefined,
+  })
+  const afterRestart = make([moved])
+  afterRestart.stopping("http://127.0.0.1:1", "restart")
+  await afterRestart.lost()
+  expect(restarted).toEqual([moved])
+
+  const crashed = make([])
+  await crashed.lost()
+  await crashed.reconnectNow()
+  // A stop, then a server another client started: attached, but not a restart.
+  const afterStop = make([moved])
+  afterStop.stopping("http://127.0.0.1:1", "stop")
+  await afterStop.lost()
+  await afterStop.lost()
+  expect(restarted).toEqual([moved])
+})
+
 test("a reason told by another server does not apply to this one", async () => {
   const h = harness([false, false], async () => started)
   h.reconnector.stopping("http://127.0.0.1:9", "stop")

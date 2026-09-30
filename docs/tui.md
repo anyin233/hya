@@ -343,7 +343,7 @@ then acts on the reason:
 | --- | --- | --- |
 | `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the status bar shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
 | `signal` (SIGTERM/SIGINT/SIGHUP from anything but `hya serve stop`, for example Ctrl+C on a foreground `hya serve`), or an unknown reason | As `stop`. | `Backend stopped (signal) · /reconnect starts it again` |
-| `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
+| `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. Then it reloads its own code ([Hot update after `hya serve restart`](#hot-update-after-hya-serve-restart)). If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` and, from the reloaded TUI, `… · TUI reloaded (hya serve restart)` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
 | none (the stream ended without the frame: a crash, `kill -9`, a lost connection) | Runs the same find-or-start as at launch. | `Server stopped · reconnecting…`, then `Started a new server · pid <pid>` when it started the daemon, or `Server moved · now pid <pid>` when it found one |
 
 `/reconnect` runs find-or-start at once, from any state, and says `Started a
@@ -379,6 +379,54 @@ transcript and terminal round events are authoritative; after moving to a
 successor the TUI re-reads messages and folds only durable replay plus new live
 frames. A `resync` frame means the stream gap itself is not replayed: the TUI
 re-reads the projection (or replays `ListEvents` from the last durable seq).
+
+### Hot update after `hya serve restart`
+
+`hya serve restart` is how a running backend takes new code
+([cli.md](cli.md#self-proof-and-rollback)); the TUIs attached to it
+take theirs in the same step. Once a TUI has attached to the new daemon
+after a `restart`, it starts itself again from the TUI files on disk: the
+source tree in a checkout, or the installed `lib/hya/tui` next to `hya`. New
+TUI features therefore show up at once, in the terminal TUI and in every
+WebUI tab, without quitting `hya`.
+
+What carries over: the open session (the new TUI opens it with `--session
+<id>`, a subagent's view included), the unsent composer text and cursor, and
+every other flag of the first start (`--db`, `--dir`, `--hya`, `--web-tab`,
+`--web-url`, …; `--server` becomes the new daemon's URL). `--continue` and
+`--resume` are not repeated. Scroll position, open views and pickers, and
+the prompt history of the old process are not kept. The session is left as
+a signal leaves it: never archived. The reloaded TUI adds `TUI reloaded (hya
+serve restart)` to its first status line.
+
+Only a `restart` reloads the TUI. An attach after a crash, after `hya serve
+stop` plus another client's start, or through `/reconnect` does not, and
+neither does a remote backend (`/connect-remote`, `hya --connect`), a
+`--grpc` start, or a fixed `--server` without `--db`.
+
+How it works: the process a host starts (`bun <tui>/src/main.ts …`, run by
+bare `hya`, by each WebUI tab of the web host, or by hand) is a small
+supervisor (`src/supervisor.ts`). It runs the same entry again as the app
+(`src/tui.ts`) on the same terminal, with stdin, stdout, and stderr
+inherited, and forwards SIGINT, SIGTERM, and SIGHUP to it. To reload, the app
+restores the terminal, writes `{"argv": [...], "draft": {"text", "cursor"}}`
+to the file the supervisor named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the
+temporary directory), and exits with status **75**; the supervisor starts a
+new app with those arguments and hands the draft over in `HYA_TUI_RELOAD`.
+Any other exit (or 75 without a readable request, or any exit after a
+forwarded signal) ends the supervisor with the same status (128 + the signal
+number when the app died of a signal). The app removes `HYA_TUI_RELOAD_FILE`,
+`HYA_TUI_SUPERVISOR` (the supervisor's pid), and `HYA_TUI_RELOAD` from its
+environment at start, so a TUI started from its `!` shell is independent, and
+it exits on its own when the supervisor is gone. The supervisor itself is
+not reloaded: it is loaded once per host start and changes only with a new
+`hya` start.
+
+| Environment variable | Set by | Value |
+| --- | --- | --- |
+| `HYA_TUI_RELOAD_FILE` | supervisor, for the app | Path of the reload request file; its presence makes `src/main.ts` run as the app. |
+| `HYA_TUI_SUPERVISOR` | supervisor, for the app | The supervisor's pid. |
+| `HYA_TUI_RELOAD` | supervisor, for a reloaded app | `{"draft"?: {"text": string, "cursor": number}}`. |
 
 ### Remote backends (`/connect-remote`)
 

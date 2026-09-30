@@ -150,6 +150,35 @@ test.describe("backend daemon", () => {
     await expect.poll(() => servePids(workspace)).toEqual([successorPid])
   })
 
+  test("`hya serve restart` hot-updates the TUI too: a fresh TUI process on the same session keeps the unsent draft", async ({ tui, workspace }, testInfo) => {
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Connected to hya", 30_000)
+    await prompt(term, "first prompt")
+    await term.waitForText("Before the stop.", 20_000)
+    await term.waitForText(/^Ready/m)
+    await showStatusLine(term)
+    const session = await statusSessionId(term)
+    const before = (await daemonStatus(workspace))!.pid
+    // Typed, not sent: the reload must hand it to the next TUI process.
+    await term.type("unsent draft text")
+    await term.waitForText("unsent draft text")
+
+    const restarted = await daemon(workspace, ["restart", "--json"])
+    expect(restarted.code).toBe(0)
+    await expect.poll(async () => (await daemonStatus(workspace))?.pid ?? before, { timeout: 30_000 }).not.toBe(before)
+
+    // Only a newly started TUI process says this (app/run.tsx `reloadedNotice`).
+    await term.waitForText("TUI reloaded (hya serve restart)", 30_000)
+    await term.attach(testInfo, "reloaded")
+    await term.waitForText("unsent draft text")
+    await term.waitForText("Before the stop.")
+    expect(await statusSessionId(term)).toBe(session)
+    // The draft is sent in the reloaded TUI, on the new daemon.
+    await term.press("Enter")
+    await term.waitForText("After the new server.", 20_000)
+    expect(await statusSessionId(term)).toBe(session)
+  })
+
   test("a daemon killed with SIGKILL (no reason sent): the TUI starts the next one by itself", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
