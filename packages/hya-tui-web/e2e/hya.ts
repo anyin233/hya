@@ -409,6 +409,27 @@ export function hyaTui(backend: Backend): string[] {
 }
 
 /**
+ * The top status line (docs/tui.md "Status line"): `[-- INSERT -- · ]mode <mode> · <session> · <agent> · …`.
+ * It is on screen only while no Context pane is: below 110 columns, or after Ctrl+B / `/sidebar off`.
+ * It starts a row, or follows the left Projects pane's border (`┐`/`│`) on a wide terminal.
+ */
+export const statusLinePattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · /m
+/** Captures the open session's id from the top status line (while the session has no title). */
+export const statusSessionPattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · (hysec_\w+)/m
+
+/** Hide the right sidebar on a wide viewport (Ctrl+B) so the top status line shows. */
+export async function showStatusLine(term: Tui): Promise<void> {
+  await term.press("Control+b")
+  await term.waitForText(statusLinePattern)
+}
+
+/** The open session's id from the top status line (which must be on screen). */
+export async function statusSessionId(term: Tui, timeout?: number): Promise<string> {
+  await term.waitForText(statusSessionPattern, timeout)
+  return statusSessionPattern.exec(await term.text())![1]!
+}
+
+/**
  * `tui()` arguments that run packages/hya-tui with no `--server`, so it
  * starts its own `hya serve` (`HYA_BIN` = the binary under test) in
  * `workspace.dir` with the workspace's isolated environment: its default

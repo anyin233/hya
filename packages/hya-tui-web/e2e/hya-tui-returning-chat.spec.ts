@@ -3,7 +3,7 @@
 // or interaction ID from the narrow pending box.
 
 import type { Tui } from "./harness"
-import { api, expect, fakeModelRef, hyaTui, test, textStep, toolStep } from "./hya"
+import { api, expect, fakeModelRef, hyaTui, statusSessionId, test, textStep, toolStep } from "./hya"
 
 async function prompt(term: Tui, value: string): Promise<void> {
   await term.type(value)
@@ -16,7 +16,7 @@ test.use({ model: { steps: [toolStep("bash", { command: "git status --short --br
 test("a plain relaunch restores the waiting chat and offers approval keys, then keeps its history", async ({ tui, backend }, testInfo) => {
   const first = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
   await first.waitForText("Connected to hya")
-  const id = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+  const id = await statusSessionId(first)
   await prompt(first, "Check this repository")
   await first.waitForText("│ $ git status --short --branch", 20_000)
   await prompt(first, "/exit")
@@ -33,7 +33,7 @@ test("a plain relaunch restores the waiting chat and offers approval keys, then 
 
   const second = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
   await second.waitForText("Check this repository", 20_000)
-  expect(await second.text()).not.toContain("hya · Newer saved chat")
+  expect(await second.text()).not.toContain("Newer saved chat")
   await second.waitForText("│ $ git status --short --branch", 20_000)
   await second.waitForText(/1 {2}Allow once/)
   await second.waitForText(/2 {2}Always allow/)

@@ -5,6 +5,7 @@ import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference } from "../src/state/format"
+import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 
@@ -412,15 +413,18 @@ test("argument completion comes from the command's own completer", () => {
 
 test("/sidebar toggles or sets the sidebar and /thinking expands or collapses reasoning", async () => {
   const { store, run, registry } = harness()
-  store.setColumns(80)
+  store.setColumns(130)
   await run("/sidebar")
-  expect(store.state.sidebar).toBe("open")
-  expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
-  await run("/sidebar off")
   expect(store.state.sidebar).toBe("closed")
   expect(store.state.status).toBe("Sidebar hidden · Ctrl+B toggles")
   await run("/sidebar on")
-  expect(store.state.sidebar).toBe("open")
+  expect(store.state.sidebar).toBe("auto")
+  expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
+  // Too narrow: the sidebar cannot be shown; the status line says why.
+  store.setColumns(80)
+  await run("/sidebar on")
+  expect(store.state.sidebar).toBe("auto")
+  expect(store.state.status).toBe(sidebarTooNarrowNotice)
   await expect(run("/sidebar maybe")).rejects.toThrow("Usage: /sidebar [on|off]")
 
   await run("/thinking")

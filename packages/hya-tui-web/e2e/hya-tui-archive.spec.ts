@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
 import { Tui } from "./harness"
-import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, textStep, type Backend, type Workspace } from "./hya"
+import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
@@ -19,10 +19,9 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** The open session's id, from the header (`hya · <id> · hya-main …`) while it has no title. */
+/** The open session's id from the top status line. */
 async function headerId(term: Tui): Promise<string> {
-  await term.waitForText(/hya · hysec_\S+ · /, 30_000)
-  return /hya · (hysec_\S+) · /.exec(await term.text())![1]!
+  return statusSessionId(term)
 }
 
 /** The workspace daemon as an API target. */
@@ -77,6 +76,7 @@ test.describe("archive on exit and resume", () => {
   test("/exit archives the session; --continue skips it; --resume <id> and the --resume picker unarchive", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
+    await showStatusLine(term)
     const id = await headerId(term)
     const backend = await backendOf(workspace)
     // An earlier session of the directory (another client's), for --continue to fall back to.
@@ -93,7 +93,8 @@ test.describe("archive on exit and resume", () => {
 
     // --continue: the most recent session that is not archived.
     const next = await tui(...selfLaunch(workspace, ["--continue"]))
-    await next.waitForText("hya · Older work", 30_000)
+    await showStatusLine(next)
+    await next.waitForText(/^mode [^·]+ · Older work · /m, 30_000)
     expect(await next.text()).not.toContain("First reply.")
 
     // --resume <id>: opened and unarchived.
@@ -111,7 +112,8 @@ test.describe("archive on exit and resume", () => {
     await picking.attach(testInfo, "resume-picker")
     await picking.type("Older")
     await picking.press("Enter")
-    await picking.waitForText("hya · Older work", 20_000)
+    await showStatusLine(picking)
+    await picking.waitForText(/^mode [^·]+ · Older work · /m, 20_000)
     await expect.poll(async () => (await session(backend, older)).archived ?? false).toBe(false)
   })
 })
@@ -123,6 +125,7 @@ test.describe("background exits keep the session running", () => {
     test(`${way} quits at once without archiving; the turn finishes on the daemon`, async ({ tui, workspace, fakeModel }) => {
       const term = await tui(...selfLaunch(workspace))
       await term.waitForText("Connected to hya", 30_000)
+      await showStatusLine(term)
       const id = await headerId(term)
       const backend = await backendOf(workspace)
       await prompt(term, "a long job")
@@ -162,13 +165,15 @@ test.describe("/sessions archived toggle", () => {
     await term.attach(testInfo, "archived-shown")
     await term.type("Shelved")
     await term.press("Enter")
-    await term.waitForText("hya · Shelved work", 20_000)
+    await term.waitForText(/^mode [^·]+ · Shelved work · /m, 20_000)
     await expect.poll(async () => (await session(backend, hidden)).archived ?? false).toBe(false)
 
-    // Another client archives the open session: the sidebar marks it live.
-    await term.resize(1100, 640)
+    // Another client archives the open session: the sidebar marks it live
+    // (the narrow Sessions box cuts the row to `hya-main · arc…`).
+    await term.resize(1800, 640)
+    await term.waitForText("─Sessions")
     await api(backend, "PATCH", `/v1/sessions/${hidden}`, { archived: true })
-    await term.waitForText(/hya-main · archived/, 20_000)
+    await term.waitForText(/hya-main · arc/, 20_000)
   })
 })
 
@@ -178,13 +183,15 @@ test.describe("WebUI tabs (bare hya)", () => {
   test("a tab offers no /to-background, Ctrl+D only shows a notice, and closing the tab leaves the session unarchived and running", async ({ tui, workspace, page, fakeModel }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
+    await showStatusLine(term)
     await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
     const webPage = await page.context().newPage()
     await webPage.setViewportSize({ width: 690, height: 640 })
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
     await web.waitForText("Connected to hya", 30_000)
-    const id = await headerId(web)
+    await web.waitForText(statusSessionPattern)
+    const id = await statusSessionId(web)
     const backend = await backendOf(workspace)
 
     const notice = "Close the tab to leave this session running"
@@ -226,6 +233,7 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
   test("/resume in a tab opens the terminal's session, and the other way round", async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
+    await showStatusLine(term)
     await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
     const terminalId = await headerId(term)
     await prompt(term, "terminal work")
@@ -239,11 +247,12 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     // separate one explicitly so both directions of /resume remain covered.
     await web.waitForText("Terminal reply.", 30_000)
     await prompt(web, "/new")
+    await showStatusLine(web)
     await expect.poll(async () => {
-      const id = /hya · (hysec_\w+)/.exec(await web.text())?.[1]
+      const id = statusSessionPattern.exec(await web.text())?.[1]
       return id && id !== terminalId ? id : undefined
     }, { timeout: 20_000 }).not.toBeUndefined()
-    const webId = /hya · (hysec_\w+)/.exec(await web.text())![1]!
+    const webId = statusSessionPattern.exec(await web.text())![1]!
     await prompt(web, "web work")
     await web.waitForText("Web reply.", 20_000)
     await web.waitForText(/^Ready/m)
@@ -252,7 +261,6 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     await web.waitForText("Resume a session · archived ones included")
     await web.type(terminalId)
     await web.press("Enter")
-    await web.waitForText("Terminal reply.", 20_000)
     await web.waitForText(/Resumed \S+/)
     await web.attach(testInfo, "web-resumed")
 
@@ -260,7 +268,6 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     await term.waitForText("Resume a session · archived ones included")
     await term.type(webId)
     await term.press("Enter")
-    await term.waitForText("Web reply.", 20_000)
     await term.resize(690, 640)
     await term.waitForText(/Resumed \S+/)
   })

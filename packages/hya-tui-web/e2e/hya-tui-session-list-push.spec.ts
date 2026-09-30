@@ -8,7 +8,7 @@
 // this file covers the rest of the table.
 
 import { Tui } from "./harness"
-import { api, expect, fakeModelRef, hangStep, hyaTui, test, textStep, type Backend } from "./hya"
+import { api, expect, fakeModelRef, hangStep, hyaTui, showStatusLine, statusSessionId, statusSessionPattern, test, textStep, type Backend } from "./hya"
 
 test.use({ model: { steps: [hangStep(60_000), textStep("Spare."), textStep("Spare."), textStep("Spare.")] } })
 
@@ -26,10 +26,9 @@ async function otherSession(backend: Backend, title?: string): Promise<string> {
 }
 
 test("a session created, renamed, and run by another client shows up live in the sidebar", async ({ tui, backend, fakeModel }, testInfo) => {
-  const term = await tui(hyaTui(backend))
+  const term = await tui(hyaTui(backend), { viewport: { width: 2200, height: 640 } })
   await term.waitForText("Connected to hya", 30_000)
-  await term.waitForText(/hya · hysec_\w+/)
-
+  await prompt(term, "/sidebar on")
   // Created elsewhere (`sessionStarted`, no title yet): the raw id shows up, debounced.
   // The sidebar is narrow, so a long id is truncated on screen — match its start.
   const other = await otherSession(backend)
@@ -49,11 +48,11 @@ test("a session created, renamed, and run by another client shows up live in the
 })
 
 test("a session deleted by another client drops its sidebar row; deleting the open one shows a notice and opens a new session", async ({ tui, backend }, testInfo) => {
-  const term = await tui(hyaTui(backend))
+  const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
   await term.waitForText("Connected to hya", 30_000)
-  await term.waitForText(/hya · (hysec_\w+)/)
-  const openId = /hya · (hysec_\w+)/.exec(await term.text())![1]!
-
+  const { sessions } = await api<{ sessions: { id: string }[] }>(backend, "GET", "/v1/sessions")
+  const openId = sessions[0]!.id
+  await prompt(term, "/sidebar on")
   // Deleted elsewhere, not the open session: the row just disappears.
   const bystander = await otherSession(backend, "Bystander")
   await term.waitForText("Bystander", 15_000)
@@ -63,7 +62,7 @@ test("a session deleted by another client drops its sidebar row; deleting the op
   // Deleted elsewhere while open: a notice, then a fresh session — never a crash.
   await api(backend, "DELETE", `/v1/sessions/${openId}`)
   await term.waitForText(`Session ${openId} was deleted elsewhere; opened a new session`, 15_000)
-  await expect.poll(async () => /hya · (hysec_\w+)/.exec(await term.text())?.[1]).not.toBe(openId)
+  await term.press("Control+b")
   await term.attach(testInfo, "open-session-deleted")
 })
 

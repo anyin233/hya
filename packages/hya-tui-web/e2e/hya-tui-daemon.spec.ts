@@ -11,7 +11,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, textStep, workspaceDb, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, textStep, workspaceDb, type Workspace } from "./hya"
 
 const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
@@ -79,7 +79,8 @@ test.describe("backend daemon", () => {
     await prompt(term, "first prompt")
     await term.waitForText("Before the stop.", 20_000)
     await term.waitForText(/^Ready/m)
-    const session = /hya · (\S+) · hya-main/.exec(await term.text())![1]!
+    await showStatusLine(term)
+    const session = await statusSessionId(term)
     const before = await statusPid(term)
 
     const stopped = await daemon(workspace, ["stop"])
@@ -103,7 +104,7 @@ test.describe("backend daemon", () => {
     const after = Number(/Started a new server · pid (\d+)/.exec(await term.text())![1])
     expect(after).not.toBe(before)
     expect((await daemonStatus(workspace))?.pid).toBe(after)
-    await term.waitForText(new RegExp(`hya · ${session}`))
+    await term.waitForText(/^mode [^·]+ · /m)
     await term.waitForText("Before the stop.")
     await prompt(term, "second prompt")
     await term.waitForText("After the new server.", 20_000)
@@ -118,7 +119,8 @@ test.describe("backend daemon", () => {
     await prompt(term, "first prompt")
     await term.waitForText("Before the stop.", 20_000)
     await term.waitForText(/^Ready/m)
-    const session = /hya · (\S+) · hya-main/.exec(await term.text())![1]!
+    await showStatusLine(term)
+    const session = await statusSessionId(term)
     const initial = await daemonStatus(workspace)
     expect(initial?.pid).toBeDefined()
     const before = initial!.pid
@@ -138,12 +140,12 @@ test.describe("backend daemon", () => {
       return successorPid !== before
     }, { timeout: 30_000 }).toBe(true)
     expect(await term.text()).not.toContain("Started a new server")
-    expect(await term.text()).toContain(`hya · ${session}`)
+    expect(await statusSessionId(term)).toBe(session)
     expect(successorPid).not.toBe(before)
     await expect.poll(() => servePids(workspace)).toEqual([successorPid])
     await prompt(term, "after the restart")
     await term.waitForText("After the new server.", 20_000)
-    expect(await term.text()).toContain(`hya · ${session}`)
+    expect(await statusSessionId(term)).toBe(session)
     await expect.poll(() => statusPid(term), { timeout: 30_000 }).toBe(successorPid)
     await expect.poll(() => servePids(workspace)).toEqual([successorPid])
   })
@@ -188,8 +190,10 @@ test.describe("backend daemon", () => {
 
       // Both still share live state: the second follows the first's session.
       await prompt(first, "shared after the move")
-      const session = /hya · (\S+) · hya-main/.exec(await first.text())![1]!
+      await showStatusLine(first)
+      const session = await statusSessionId(first)
       await prompt(second, `/open ${session}`)
+      await showStatusLine(second)
       await second.waitForText("shared after the move", 20_000)
     } finally {
       await stopHost(host)

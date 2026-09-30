@@ -4,7 +4,7 @@ import { HttpError, parseApiCommand, type SessionInfo } from "../client"
 import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
-import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
+import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
 import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
@@ -377,12 +377,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/sessions",
-    description: "Pick a session (open, rename with F2, or delete with Ctrl+D), and show the sidebar",
+    description: "Pick a session (open, rename with F2, or delete with Ctrl+D)",
     run: async (context) => {
       const { store, actions } = context
       store.setView("chat")
-      // The list lives in the sidebar; show it when the width hides it.
-      if (!sidebarVisible(store.state.sidebar, store.state.columns)) store.setSidebar("open")
       await actions.refresh()
       await openSessionsPicker(context)
     },
@@ -728,7 +726,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
       const shown = parseSwitch(args[0], sidebarVisible(store.state.sidebar, store.state.columns), "Usage: /sidebar [on|off]")
-      store.setSidebar(shown ? "open" : "closed")
+      if (shown && store.state.columns < layoutBreakpoints.sidebar) {
+        store.setStatus(sidebarTooNarrowNotice)
+        return
+      }
+      store.setSidebar(shown ? "auto" : "closed")
       store.setStatus(`Sidebar ${shown ? "shown" : "hidden"} · Ctrl+B toggles`)
     },
   },

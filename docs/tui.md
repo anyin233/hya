@@ -193,7 +193,7 @@ switch this TUI to an HTTP relay bridge during the session.
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server` or `--grpc`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). Unlike a plain launch, it never reopens an archived session. |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
-| `--server-label <text>` | Show this text instead of the server URL in the header, the sidebar `Context` box, and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
+| `--server-label <text>` | Show this text instead of the server URL in the top status line, the sidebar `Context` box, and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
 | `--resume [id]` | Open that session and unarchive it (`PATCH {archived:false}`). Without an id (the next argument starts with `-`, or there is none), open a picker of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first; Enter resumes (and unarchives) the highlighted one, Esc starts a new session instead. Cannot be combined with `--continue` or `--session`. |
 | `--web-tab` | This TUI runs in a WebUI tab: `/to-background` is not offered and Ctrl+D only shows `Close the tab to leave this session running` (closing the tab already leaves the session running). Bare `hya` adds it to its web host's tab command; pass it yourself in the command of a web host you start by hand (see [tui-web.md](tui-web.md#usage)). |
@@ -410,7 +410,7 @@ When the bridge prints its readiness line
    bridge's per-bridge `token` as `x-hya-bridge-token` (the bridge answers
    `401 unauthenticated` to a connection without it, so another local
    process cannot use the remote through it), and shows the label
-   (`remote: <relay>/<room>`) instead of that URL in the header, the sidebar
+   (`remote: <relay>/<room>`) instead of that URL in the top status line, the sidebar
    `Context` box, `/status` (`Server      <label> · via <url>`, `Backend
    remote · through this TUI's relay bridge …`), and every status line,
 3. behaves like a `--remote` start: no Project is ensured for `--dir`, no
@@ -478,7 +478,7 @@ a shell, a `/connect-remote` bridge) inherits them.
 - The bridge's stderr lines and the readiness line's `room`, `proxy`, and
   `label` can carry text from the remote side: terminal controls (escape
   sequences, C0/C1 control characters, DEL) are stripped before any of it
-  reaches the status line or the header.
+  reaches either status line.
 - Each WebUI tab is its own TUI process: `/connect-remote` in one tab moves
   only that tab. The WebUI shows exactly what the TUI draws.
 
@@ -634,7 +634,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
-| `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
+| `/sidebar [on\|off]` or Ctrl+B | Show or hide the right sidebar (110 columns or more; below that it is always hidden and the top status line shows its `Context` fields). Without an argument it toggles what is visible now. |
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
@@ -662,9 +662,6 @@ A second, narrower sidebar on the left lists every Project live
 | Mouse wheel | Scroll the transcript. |
 | Click on a `Thinking` line | Expand or collapse that one reasoning block. |
 | Click on a tool card | Expand or collapse that one card; on a `task` card, open the subagent's session read-only. |
-
-`/sessions` also shows the sidebar when the terminal is too narrow for it, so
-the list it refreshes is on screen.
 
 The bottom instruction row is separate from the status message above the
 input. Status updates and completion suggestions can change without erasing
@@ -739,10 +736,10 @@ list as plain text instead.
 └───────────┘└───────────────────────────────┘└──────────────┘
 ```
 
-The Conversation pane holds, from top to bottom: the header line (session, agent,
-model, server, in the accent color), the status bar (permission mode,
-directory, git branch, a compact todo count while the sidebar is hidden,
-connection state — see
+The Conversation pane holds, from top to bottom: the top status line (one or
+two muted rows with the same fields as the sidebar's `Context` box — session,
+agent, model, permission mode, occupancy, directory, branch, server, … — shown
+only while the `Context` box is not; see
 [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
 the transcript (or the panel of the current view: models, Workflows, keys,
 API, help), the working indicator while a turn this client admitted runs,
@@ -763,13 +760,19 @@ the bordered input, and the instruction line. The permission mode picker
   see [Sidebar live updates](#sidebar-live-updates)), `Todos` (the
   live todo list — see
   [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
-  and `Context` (session, agent, model, the merged transcript's message
-  count, directory, server). These are three independent panes in the right
-  branch of the editable layout tree. By default they follow the width: shown at 110
-  columns or more, hidden below, so an 80-column terminal gets the full
-  width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
-  any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
-  line confirms the change (`Sidebar shown · Ctrl+B toggles`). Its `Sessions`
+  and `Context` (vim mode, permission mode, session, fork source, agent,
+  model, the merged transcript's message count, context occupancy, tokens,
+  directory, git branch, todo count, server, WebUI, connection state). These
+  are three independent panes in the right branch of the editable layout
+  tree. They need 110 columns: below that they are always hidden (no pin
+  brings them back), so an 80-column terminal gets the full width for the
+  transcript, and the top status line carries the `Context` fields instead.
+  At 110 columns or more they are shown unless hidden: Ctrl+B or `/sidebar`
+  toggles them, `/sidebar on` and `/sidebar off` set them. The status line
+  confirms the change (`Sidebar shown · Ctrl+B toggles`); below 110 columns
+  Ctrl+B and `/sidebar on` only answer `Sidebar needs 110+ columns · the top
+  status line shows its Context`. The top status line and the `Context` box
+  are mutually exclusive: exactly one of them is on screen. Its `Sessions`
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
   [Projects](#projects) and [Pickers](#pickers)).
@@ -782,8 +785,8 @@ the bordered input, and the instruction line. The permission mode picker
   terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
   hidden — Up/Down move the highlight, Enter switches (`switchProject`),
   Esc (or Ctrl+P again) returns focus to the composer without closing it;
-  `/projects-sidebar [on|off]` toggles visibility alone, the same way
-  `/sidebar` does for the right one. See [Projects](#projects).
+  `/projects-sidebar [on|off]` toggles visibility alone (and, unlike the
+  right sidebar, can pin it open at any width). See [Projects](#projects).
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
   above the status line; see
@@ -815,7 +818,7 @@ the bordered input, and the instruction line. The permission mode picker
 
 The complete screen is one editable tree of nested rectangles. The default
 tree has Projects on the left, Conversation in the middle, and Sessions,
-Todos, and Context stacked on the right. Conversation contains the header,
+Todos, and Context stacked on the right. Conversation contains the top status line,
 transcript, prompts, command input, message composer, and footer, so moving
 it moves the whole interactive surface. Each other rectangle has an assigned
 job; you can split, resize, reassign, or close any auxiliary rectangle.
@@ -872,11 +875,12 @@ layout does not start another session stream or create another chat input.
 The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
 Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
 Projects is hidden unless `/projects-sidebar on` pins it open. Below 110
-columns, Sessions, Todos, and Context are hidden unless `/sidebar on` pins
-them open. These modes filter the matching pane jobs in any layout; the
-saved tree remains intact. `Ctrl+P` opens and selects a Projects pane;
-`Ctrl+B` toggles panes assigned Sessions, Todos, and Context, wherever they
-are placed.
+columns, Sessions, Todos, and Context are always hidden; at 110 or more,
+`/sidebar off` (or Ctrl+B) hides them. These modes filter the matching pane
+jobs in any layout; the saved tree remains intact. `Ctrl+P` opens and
+selects a Projects pane; `Ctrl+B` toggles panes assigned Sessions, Todos,
+and Context, wherever they are placed. The top status line is shown exactly
+when no Context pane is visible, so a layout without one shows it too.
 Resizing the terminal or toggling a sidebar keeps unsent message and command
 drafts, including their in-process input histories.
 
@@ -1026,28 +1030,45 @@ While a streaming assistant message has no blocks yet, its header's `●`
 marker is the spinner too, so a slow first token still shows the turn is
 alive before the working line's own elapsed clock is very interesting.
 
-**Status bar.** One muted line under the header: with
-[vim mode](#vim-mode) on, first the input's mode (`-- INSERT --` muted,
-`-- NORMAL --` in the accent color, followed by a half-typed command such
-as `2d`); then the permission mode
-(`mode <mode>`, from `SessionInfo.permissionMode`, colored per mode — see
-[Permission modes](#permission-modes)), the session's `<model>:<effort>`
-(see [Thinking effort](#thinking-effort)), the context occupancy (`ctx 42%`),
-the session's token total (`12.3k tok`), the WebUI that bare `hya` serves
-(`WebUI http://127.0.0.1:3250`, or `WebUI unavailable` in the warning color;
-see [Start it](#start-it); ahead of the directory, so at about 80 columns,
-where the sidebar and its `WebUI` row are hidden, the address stays visible),
-the workspace directory (shortened, keeping the tail), the git branch
-(`GetVcsStatus`, refreshed when a session opens and after a turn ends;
-omitted when unknown or the directory is not a repository), a compact todo count (`Todos <completed>/
-<total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
-box already lists them), and `reconnecting` (warning color) while the
-session event stream is down, or `backend stopped` (error color) after
-`hya serve stop` (see [When the server goes away](#when-the-server-goes-away)). Segments with no data are omitted rather than
-shown empty; on a narrow terminal the least essential segments (from the
-end) drop first, then the whole line clips, so it always fits the terminal
-width. The header line above it already carries agent, model, session, and
-server, so the status bar does not repeat them.
+**Status bar (top status line) and the Context box.** Both show one field
+set (`state/contextFields.ts` `contextFields()`), and exactly one of them is
+on screen: the right sidebar's `Context` box while a Context pane is
+visible (110 columns or more, sidebar not hidden), else the top status line
+of the Conversation pane (`contextStatusShown()`). The fields, in order —
+each omitted when it has no data:
+
+| Field | `Context` box row | Top status line segment | Color |
+| --- | --- | --- | --- |
+| [Vim mode](#vim-mode) (when on) | `Vim      NORMAL 2d` | `-- NORMAL -- 2d` / `-- INSERT --` | accent in normal mode, muted in insert |
+| Permission mode (`SessionInfo.permissionMode`, see [Permission modes](#permission-modes)) | `Mode     manual` | `mode manual` | per mode: text, `⚠ yolo` error, a bundle mode accent |
+| Session (title, else id; `none`, or `connecting…` before bootstrap) | `Session  Fix login` | `Fix login` | accent |
+| Fork source | `Forked   from Parser` | `forked from Parser` | |
+| Agent | `Agent    hya-main` | `hya-main` | |
+| Model and [effort](#thinking-effort) | `Model    openai/gpt-6-astra:max` | `gpt-6-astra:max` | |
+| Messages (merged transcript) | `Messages 12` | `12 msgs` | |
+| Context occupancy | `Context  42% · 42k/100k` | `ctx 42%` | warning from 80 %, error from 95 % |
+| Session tokens | `Tokens   42.3k` | `42.3k tok` | |
+| Directory | `Dir      …/work` (keeps the tail) | tail, at most 24 columns | |
+| Git branch (`GetVcsStatus`, after session open and turn end) | `Branch   main` | `⎇ main` | |
+| Todos | `Todos    1/3` | `Todos 1/3` | |
+| Server (`--server-label` wins) | `Server   127.0.0.1:8080` | `127.0.0.1:8080` | |
+| WebUI of bare `hya` (see [Start it](#start-it)) | `WebUI    127.0.0.1:3250` / `unavailable` | `WebUI http://127.0.0.1:3250` / `WebUI unavailable` | warning when unavailable |
+| Connection | `Backend  reconnecting` / `stopped` | `reconnecting` / `backend stopped` | warning / error (see [When the server goes away](#when-the-server-goes-away)) |
+
+The top status line joins the segments with ` · ` and packs them onto at
+most two rows. When they do not fit, the least essential field drops first
+(server and fork source, then messages, todos and branch, directory,
+tokens, agent and WebUI, occupancy, model and connection, session); the
+vim and permission modes are never dropped. Other segments are muted. The
+`Context` box cuts long values to its width (paths keep their tail).
+
+Interfaces (`packages/hya-tui/src/state/contextFields.ts`):
+`contextFields(state, server): ContextField[]` with `ContextField { label,
+value, short, tone: "plain" | "strong" | "accent" | "warning" | "error",
+cut: "start" | "end", priority }` (priority `0` never drops; higher drops
+first); `contextRows(fields, width): ContextRow[]` for the box;
+`statusLines(fields, width, rows = 2): StatusLineSegment[][]` for the top
+status line; `contextStatusShown(state): boolean`.
 
 - **`ctx N%`** is the prompt the latest provider round sent against the
   context window of the model that served it (the rule in the protocol
@@ -1068,9 +1089,8 @@ server, so the status bar does not repeat them.
   `uint64` decimal strings on the wire; they show as `950`, `12.3k`, `123k`,
   `1.2M`. Hidden while the total is zero or unknown.
 
-The sidebar's `Context` box repeats both when known: `Context  42% ·
-42k/100k` (prompt tokens / window) and `Tokens   42.3k`. Under bare `hya` it
-ends with a `WebUI` row: the address without the scheme, or `unavailable`.
+The `Context` box shows both with the window size: `Context  42% ·
+42k/100k` (prompt tokens / window) and `Tokens   42.3k`.
 
 **Todo panel.** The sidebar's `Todos` box is seeded from `GetSessionTodo`
 when a session opens and then kept current by the session stream: every
@@ -2279,9 +2299,9 @@ Thinking effort controls how hard the model reasons on each request. The TUI
 exists, between turns, or while a turn runs — and always shows the effort in
 use right after the model name, as `<model>:<effort>`:
 
-- the header: `hya · <title> · hya-main openai/gpt-6-astra:max · <server>`;
-- the status bar, right after the mode: `mode manual · gpt-6-astra:max · …`
-  (kept at 80 columns, where the header truncates);
+- the `Context` box: `Model    openai/gpt-6-astra:max`;
+- the top status line (when the `Context` box is hidden), right after the
+  session and agent: `mode manual · <title> · hya-main · gpt-6-astra:max · …`;
 - `/status`: `Thinking    max (pref)`, with the layer that chose it (`pref`,
   `agent`, `suffix`, `model default`, `global default`).
 
@@ -2408,7 +2428,7 @@ a picker with no `actions` behaves exactly as before. See
 
 ### Session titles
 
-The header (`hya · <title or id> · <agent> <provider/model>:<effort> · <server>`),
+The top status line and the `Context` box (`<title or id>`),
 the sidebar's `Sessions` box, and the `/sessions` picker all show the
 session's `title` when the backend has set one (`/rename`, the picker's F2,
 or the backend's own auto-generated title once it lands), falling back to
@@ -2856,7 +2876,7 @@ rules follow the protocol guide's
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id. With `includeDescendants=true` a subagent's asks arrive here too (`event.session` = the child): they change only the pending list, never the open session's transcript. Other frames of another session are ignored. |
 | `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); also for a subagent's ask. |
 | `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. |
-| `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, the header and sidebar) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
+| `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, the top status line or `Context` box) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
 | `compactionApplied {untilSeq, strategy, message, foldedCount, manual}` | durable | Appended to `state.dividers` (once per seq) and spliced into the transcript right before `message`, the summary, or right after the message that was newest at the time until the summary is read (see [Notices](#notices)). A summary message (system role, `HYA_COMPACTED_CONTEXT` first line) without such a divider — a compaction from before the session was opened — gets a derived `── context compacted ──` divider (`state/messages.ts` `withDividers`, id `compaction-<message id>`). |
 | `tokensRecorded {message, model, usage}` | durable | With a non-empty `message`: the newest round, the live source of `ctx N%` (`state.liveRound`). Any `tokensRecorded` also re-reads the open session (debounced) for `SessionInfo.usage`. |
 | `todoUpdated {items}` | durable | Replaces the sidebar's todo list with `items` (the whole list). |
@@ -2938,7 +2958,8 @@ together.
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
 | `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
-| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
+| `src/state/format.ts` | Pure text for the sidebar (session list with `sessionTree()` nesting), pending lines, usage (`contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
+| `src/state/contextFields.ts`, `src/components/StatusBar.tsx` | The shared `Context` fields (`contextFields()`), the box rows (`contextRows()`), the top status line (`statusLines()`), and which of the two is shown (`contextStatusShown()`). |
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |

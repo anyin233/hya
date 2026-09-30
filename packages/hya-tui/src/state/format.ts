@@ -1,4 +1,4 @@
-/** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
+/** Pure text for the sidebar, pending block, and non-chat views, derived from the store. */
 import type { WebInfo } from "../cli"
 import type { Interaction, ModelSummary, SessionInfo, TodoItem, TokenUsage } from "../client"
 import { keyHelpText } from "../commands/help"
@@ -62,15 +62,9 @@ export function truncateStart(text: string, width: number): string {
   return text.length <= width ? text : `…${text.slice(text.length - width + 1)}`
 }
 
-/** What the header and sidebar call the server: its label (`--server-label`), else its URL, else `fallback`. */
+/** What the status line and the Context box call the server: its label (`--server-label`), else its URL, else `fallback`. */
 export function shownServer(state: AppState, fallback: string): string {
   return state.serverLabel || state.serverUrl || fallback
-}
-
-export function headerText(state: AppState, server: string): string {
-  if (!state.ready) return "hya · connecting…"
-  const selected = state.selected
-  return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelEffortLabel(selected)}` : "· no session"} · ${server}`
 }
 
 export interface SessionRow {
@@ -179,42 +173,7 @@ export function otherAskNotice(interaction: Interaction, sessions: readonly Sess
   return `${kind} in ${label === sessionId ? "a saved session" : label} · F4 to review`
 }
 
-/** The sidebar's context box: the open session, its agent and model, message count, context occupancy and session tokens (when known), directory, server. */
-export function contextText(state: AppState, server: string, width = 30): string {
-  const session = state.selected
-  const row = (label: string, value: string) => `${label.padEnd(9)}${truncateStart(value, Math.max(4, width - 9))}`
-  const host = server.replace(/^https?:\/\//, "").replace(/\/$/, "")
-  if (!session) return [row("Session", "none"), row("Server", host), ...webRows(state, row)].join("\n")
-  // The merged transcript (projection + streaming overlay), not the raw
-  // projection: a fresh turn's messages exist only in the overlay until the
-  // next projection read, so `state.messages.length` alone under-counts.
-  const messageCount = mergeTranscript(state.messages, state.overlay).length
-  const usage = contextUsage(state)
-  const tokens = sessionTokens(session.usage)
-  const forked = forkSourceText(session.forkedFrom, state.sessions)
-  return [
-    row("Session", session.title || session.id),
-    // The source's name is cut at its end (a title reads from the start), unlike the path rows.
-    ...(forked ? [`${"Forked".padEnd(9)}${truncate(forked.replace(/^forked /, ""), Math.max(4, width - 9))}`] : []),
-    row("Agent", session.agent),
-    row("Model", modelReference(session) || "default"),
-    row("Messages", String(messageCount)),
-    ...(usage ? [row("Context", `${usage.percent}% · ${formatTokens(usage.tokens)}/${formatTokens(usage.limit)}`)] : []),
-    ...(tokens !== undefined ? [row("Tokens", formatTokens(tokens))] : []),
-    row("Dir", session.workdir),
-    row("Server", host),
-    ...webRows(state, row),
-  ].join("\n")
-}
-
-/** The context box's `WebUI` row: the address without the scheme, or `unavailable`. */
-function webRows(state: AppState, row: (label: string, value: string) => string): string[] {
-  const web = state.web
-  if (!web) return []
-  return [row("WebUI", web.url ? web.url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "unavailable")]
-}
-
-/** `WebUI http://127.0.0.1:3250` (status bar), or `WebUI unavailable`; `undefined` without a WebUI. */
+/** `WebUI http://127.0.0.1:3250` (status line), or `WebUI unavailable`; `undefined` without a WebUI. */
 export function webLabel(web: WebInfo | undefined): string | undefined {
   if (!web) return undefined
   return web.url ? `WebUI ${web.url.replace(/\/$/, "")}` : "WebUI unavailable"
@@ -243,13 +202,6 @@ export function todoStatusText(status: string): string {
  */
 export const todoGlyphs: Record<string, string> = {
   pending: "○", in_progress: "◐", blocked: "✗", completed: "✓",
-}
-
-/** `Todos <completed>/<total>`, the sidebar's compact form when it is hidden; `undefined` with no todos. */
-export function todosCompactText(items: readonly TodoItem[]): string | undefined {
-  if (!items.length) return undefined
-  const completed = items.filter((item) => todoStatusText(item.status) === "completed").length
-  return `Todos ${completed}/${items.length}`
 }
 
 /**
@@ -341,78 +293,6 @@ export function contextUsage(state: Pick<AppState, "liveRound" | "messages" | "o
   const tokens = promptTokens(round.usage)
   if (!limit || !tokens) return undefined
   return { percent: Math.round((tokens * 100) / limit), tokens, limit }
-}
-
-/** Status bar fields (E22); `statusBarText` renders them with graceful truncation at `width`. */
-export interface StatusBarFields {
-  /** Permission mode label (state/modes.ts `modeDisplay`: `manual`, `⚠ yolo`, or a bundle mode's title); StatusBar colors it. */
-  mode: string
-  /** Context occupancy percent (`contextUsage`); omitted when unknown. */
-  context?: number
-  /** Session token total, formatted (`12.3k tok`); omitted when unknown. */
-  tokens?: string
-  directory: string
-  /** Current git branch; "" when unknown or not a repository. */
-  branch: string
-  /** Compact todo count (`Todos n/m`) shown only while the sidebar is hidden. */
-  todos?: string
-  connected: boolean
-  /** The backend was stopped on purpose (`hya serve stop`; app/reconnect.ts): `backend stopped` in the error color instead of `reconnecting`. */
-  stopped?: boolean
-  /** The WebUI bare `hya` serves (`WebUI <url>`), or `WebUI unavailable` in the warning color. */
-  web?: WebInfo
-  /** The open session's `model:effort` (`modelEffortLabel`, short form); omitted with no open session or model. */
-  model?: string
-  /** Vim mode is on: the composer's mode and a half-typed command (`2d`), shown first. */
-  vim?: { mode: "insert" | "normal"; pending: string }
-}
-
-export type StatusTone = "muted" | "mode" | "accent" | "warning" | "error"
-
-export interface StatusSegment {
-  text: string
-  tone: StatusTone
-}
-
-/** Context percent from which the status bar warns (warning color) and alarms (error color). */
-export const contextWarnPercent = 80
-export const contextAlarmPercent = 95
-
-/**
- * The status bar's segments in order: with vim mode on `-- INSERT --` /
- * `-- NORMAL --` (plus a pending command, `-- NORMAL -- 2d`), `mode <mode>`,
- * `<model>:<effort>` (kept ahead of the dropping tail so the effort stays
- * visible at 80 columns even when the header line truncates), `ctx N%`,
- * `<n> tok`, `WebUI <url>` (or `WebUI unavailable`; ahead of the directory,
- * because at 80 columns the sidebar and its WebUI row are hidden), the
- * directory, `⎇ <branch>`, `Todos n/m`, `reconnecting` (or `backend
- * stopped`). Segments with no data are omitted; the least essential (from
- * the end) drop first so the line fits `width`.
- */
-export function statusBarSegments(fields: StatusBarFields, width: number): StatusSegment[] {
-  const context = fields.context
-  const vim = fields.vim
-  const segments: (StatusSegment | undefined)[] = [
-    vim ? { text: `-- ${vim.mode === "normal" ? "NORMAL" : "INSERT"} --${vim.pending ? ` ${vim.pending}` : ""}`, tone: vim.mode === "normal" ? "accent" : "muted" } : undefined,
-    { text: `mode ${fields.mode}`, tone: "mode" },
-    fields.model ? { text: fields.model, tone: "muted" } : undefined,
-    context !== undefined ? { text: `ctx ${context}%`, tone: context >= contextAlarmPercent ? "error" : context >= contextWarnPercent ? "warning" : "muted" } : undefined,
-    fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
-    fields.web ? { text: webLabel(fields.web)!, tone: fields.web.url ? "muted" : "warning" } : undefined,
-    fields.directory ? { text: truncateStart(fields.directory, 24), tone: "muted" } : undefined,
-    fields.branch ? { text: `⎇ ${fields.branch}`, tone: "muted" } : undefined,
-    fields.todos ? { text: fields.todos, tone: "muted" } : undefined,
-    fields.stopped ? { text: "backend stopped", tone: "error" } : fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
-  ]
-  const shown = segments.filter((segment): segment is StatusSegment => Boolean(segment))
-  const keep = vim ? 2 : 1
-  while (shown.length > keep && shown.map((segment) => segment.text).join(" · ").length > width) shown.pop()
-  return shown
-}
-
-/** The status bar as one line (`statusBarSegments` joined with ` · `, clipped to `width`). */
-export function statusBarText(fields: StatusBarFields, width: number): string {
-  return truncate(statusBarSegments(fields, width).map((segment) => segment.text).join(" · "), width)
 }
 
 /** One line per todo item: a status glyph and its content. */

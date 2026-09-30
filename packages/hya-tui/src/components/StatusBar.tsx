@@ -1,73 +1,39 @@
 /**
- * E22 status bar (docs/tui.md "Status bar"): one muted line below the
- * header: with vim mode on, the composer's mode (`-- NORMAL --` in the
- * accent color, `-- INSERT --` muted; docs/tui.md "Vim mode"), the permission mode (colored per mode: manual plain, `⚠ yolo` in
- * the error color, a bundle mode's title in the accent color —
- * state/modes.ts `modeDisplay`), the context occupancy `ctx N%` (warning
- * color from 80 %, error color from 95 %; state/format.ts `contextUsage`),
- * the session token total (`12.3k tok`, `SessionInfo.usage`), the workspace
- * directory (shortened), the git branch (`GetVcsStatus`, refreshed on
- * session open and after turns), a compact todo count while the sidebar is
- * hidden, and the connection state (`reconnecting`, or `backend stopped`
- * after `hya serve stop`). Segments with no data are hidden.
- * Agent, model, session, and server already appear on the header line
- * (components/Header.tsx); this line does not repeat them, so both stay
- * within 80 columns. The `model:effort` label is the one repeat: the header
- * line truncates from the right, so the effort keeps a dedicated segment here.
+ * The top status line (docs/tui.md "Status line"): the Context fields
+ * (state/contextFields.ts) as ` · `-separated segments on at most two rows,
+ * least essential fields dropped first. Drawn only while no `context` pane is
+ * on screen (below 110 columns, `/sidebar off`, or a layout without one), so
+ * the Context box and this line never show at the same time.
  */
-import { For } from "solid-js"
+import { For, Show } from "solid-js"
 import { useApp } from "../app/context"
-import { sidebarVisible } from "../state/layout"
-import { contextUsage, formatTokens, modelEffortLabel, sessionTokens, statusBarSegments, todosCompactText, truncate, type StatusTone } from "../state/format"
-import { effectiveMode, modeDisplay, type ModeTone } from "../state/modes"
+import { contextFields, contextStatusShown, statusLines, type ContextTone } from "../state/contextFields"
+import { shownServer } from "../state/format"
 import { colors } from "../theme"
 
 /** A function, not a table: the palette is reactive (theme.ts), so read it where it is used. */
-const modeColor = (tone: ModeTone): string => tone === "error" ? colors.error : tone === "accent" ? colors.accent : colors.fg
+const statusColor = (tone: ContextTone): string =>
+  tone === "strong" ? colors.fg : tone === "accent" ? colors.accent : tone === "warning" ? colors.warning : tone === "error" ? colors.error : colors.muted
 
-export function StatusBar() {
-  const { store } = useApp()
-  const mode = () => modeDisplay(effectiveMode(store.state), store.state.permissionModes)
-  const segments = () => {
-    const state = store.state
-    const shown = sidebarVisible(state.sidebar, state.columns)
-    const tokens = sessionTokens(state.selected?.usage)
-    return statusBarSegments({
-      mode: mode().text,
-      ...(state.selected ? { model: modelEffortLabel(state.selected, true) } : {}),
-      context: contextUsage(state)?.percent,
-      tokens: tokens === undefined ? undefined : `${formatTokens(tokens)} tok`,
-      directory: state.selected?.workdir ?? "",
-      branch: state.gitBranch,
-      todos: shown ? undefined : todosCompactText(state.todos),
-      connected: state.connected,
-      stopped: state.backendStopped,
-      ...(state.web ? { web: state.web } : {}),
-      ...(state.vim ? { vim: { mode: state.vimMode, pending: state.vimPending } } : {}),
-    }, state.columns)
-  }
-  const color = (tone: StatusTone): string => tone === "warning" ? colors.warning : tone === "error" ? colors.error : tone === "accent" ? colors.accent : colors.muted
-  /** The segments as spans, clipped to the width: `mode <label>` draws the label in the mode's color. */
-  const spans = () => {
-    let left = store.state.columns
-    const out: { text: string; fg: string }[] = []
-    segments().forEach((segment, index) => {
-      const pieces = segment.tone === "mode"
-        ? [{ text: "mode ", fg: colors.muted }, { text: segment.text.slice(5), fg: modeColor(mode().tone) }]
-        : [{ text: segment.text, fg: color(segment.tone) }]
-      if (index > 0) pieces.unshift({ text: " · ", fg: colors.muted })
-      for (const piece of pieces) {
-        if (left <= 0) return
-        const text = truncate(piece.text, left)
-        left -= text.length
-        out.push({ text, fg: piece.fg })
-      }
-    })
-    return out
-  }
+export function StatusBar(props: { width: number }) {
+  const { store, server } = useApp()
+  const lines = () => statusLines(contextFields(store.state, shownServer(store.state, server)), Math.max(1, props.width))
   return (
-    <text height={1} wrapMode="none">
-      <For each={spans()}>{(span) => <span style={{ fg: span.fg }}>{span.text}</span>}</For>
-    </text>
+    <Show when={contextStatusShown(store.state)}>
+      <For each={lines()}>
+        {(line) => (
+          <text height={1} wrapMode="none">
+            <For each={line}>
+              {(segment, index) => (
+                <>
+                  <Show when={index() > 0}><span style={{ fg: colors.muted }}>{" · "}</span></Show>
+                  <span style={{ fg: statusColor(segment.tone) }}>{segment.text}</span>
+                </>
+              )}
+            </For>
+          </text>
+        )}
+      </For>
+    </Show>
   )
 }

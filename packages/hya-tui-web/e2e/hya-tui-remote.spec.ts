@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hyaBin, launchTest, selfLaunch } from "./hya"
+import { expect, hyaBin, launchTest, selfLaunch, showStatusLine, statusSessionPattern } from "./hya"
 
 type Remote = { link: string; relay: string; root: string; stopServe: () => Promise<void> }
 
@@ -83,7 +83,8 @@ test.describe("/connect-remote", () => {
   test("connects through the relay, works there, and /disconnect-remote comes back to the local backend", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
-    await term.waitForText(/hya · hysec_\w+/)
+    await showStatusLine(term)
+    await term.waitForText(statusSessionPattern)
     const room = /\/([a-z0-9]+)#/.exec(remote.link)![1]!
     expect(room.length).toBeGreaterThan(0)
 
@@ -138,7 +139,7 @@ test.describe("/connect-remote", () => {
     await prompt(term, "/disconnect-remote")
     await term.waitForText("Back on the local backend", 30_000)
     await expect.poll(() => term.find(`remote: ${remote.relay}/`)).toBeNull()
-    await term.waitForText(/hya · hysec_\w+ · .* · http:\/\/127\.0\.0\.1:\d+/)
+    await term.waitForText(/mode [^·]+ · hysec_\w+/)
     expect(await term.find("remote-project")).toBeNull()
     expect(await term.find(secretOf(remote.link))).toBeNull()
   })
@@ -203,7 +204,9 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText("No projects yet · n creates one", 30_000)
     await term.press("Escape")
-    await term.waitForText(/hya · no session · remote: /)
+    await expect.poll(() => term.find("No projects yet · n creates one")).toBeNull()
+    await showStatusLine(term)
+    await term.waitForText(/mode [^·]+ · none · remote: /)
     expect(await term.find(secretOf(remote.link))).toBeNull()
   })
 
@@ -223,7 +226,7 @@ test.describe("/connect-remote", () => {
   test("a link that the remote rejects is reported, and the TUI stays on its local backend", async ({ tui, workspace, remote }) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
     await term.waitForText("Connected to hya", 30_000)
-    await term.waitForText(/hya · hysec_\w+/)
+    await term.waitForText(statusSessionPattern)
     // Same relay, room, and PSK (the proxy lets it through), a wrong server key: the remote
     // rejects the handshake. (A wrong PSK never reaches the remote: the proxy answers it like
     // an offline room, and the bridge starts and reports "offline, or the link was rotated".)
@@ -233,8 +236,7 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText("Remote connection failed: the remote backend rejected the relay link", 30_000)
     expect(await term.find(secretOf(wrong).slice(0, 12))).toBeNull()
-    // At this narrow width the header intentionally keeps the `model:effort` label
-    // visible and clips the server URL; `/status` exposes the full local URL.
+    // The status line may drop the server segment; `/status` exposes the full local URL.
     await prompt(term, "/status")
     await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
   })
@@ -242,7 +244,8 @@ test.describe("/connect-remote", () => {
   test("with the remote backend offline, Project view requests fail as one status line, never a stack trace", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
-    await term.waitForText(/hya · hysec_\w+/)
+    await showStatusLine(term)
+    await term.waitForText(statusSessionPattern)
     await term.type(`/connect-remote ${remote.link}`)
     await term.press("Enter")
     await term.waitForText("No projects yet · n creates one", 30_000)
