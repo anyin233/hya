@@ -3,7 +3,7 @@ import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
 import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
+import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
 import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
@@ -90,7 +90,7 @@ async function openSessionsPicker(context: CommandContext, showArchived = true):
   const title = ["Sessions", ...(allProjects ? ["all projects"] : []), ...(showArchived ? ["archived included"] : [])].join(" · ")
   actions.openPicker({
     title,
-    rows: sessionRows(sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects }),
+    rows: sessionRows(sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects, numbered: store.state.sessions }),
     // Kept at 72 columns or less (docs/tui.md "Sidebar"): the picker box's content
     // width is `min(96, terminalWidth - 4) - 4` (border + `paddingX`), and 80-column
     // terminals are common (`min(96, 80 - 4) - 4 = 72`).
@@ -430,9 +430,9 @@ export const nativeCommandSpecs: CommandSpec[] = [
     complete: (position, context) => position.words.length === 1 ? matchSessions(position, context.sessions) : [],
     run: async ({ store, actions }, { args }) => {
       const target = args[0]
-      // Main sessions use 1-based numbers; descendants use hierarchical numbers (e.g. 2.1.3).
+      // The sidebar's numbers (state/format.ts `sessionNumbers`): the active Project's sessions, subagents as 2.1.3.
       const id = target && /^\d+(?:\.\d+)*$/.test(target)
-        ? sessionTree(store.state.sessions).find((row) => row.number === target)?.session.id
+        ? [...sessionNumbers(store.state.sessions, store.state.activeProjectId)].find(([, number]) => number === target)?.[0]
         : target
       if (!id) throw new Error("Usage: /open <session id or number>")
       await actions.openSession(id)

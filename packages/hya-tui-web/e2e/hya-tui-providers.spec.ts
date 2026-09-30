@@ -158,7 +158,8 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+3 models/)
       await term.press("Escape")
       await term.waitForText("Enter a prompt · /new creates a session")
-      await term.waitForText(/hya-main gw\/alpha/)
+      // The status line renders the selected provider model as `<model>:<variant>`.
+      await term.waitForText(/hya-main · alpha:default/)
       // The new models reached the /model picker without a restart.
       await term.type("/model")
       await term.press("Enter")

@@ -162,30 +162,35 @@ export function sessionListText(state: AppState, width?: number): string {
 export function pendingLines(state: AppState, width?: number): string[] {
   const prompted = new Set(promptQueue(state.interactions, state).map((item) => item.id))
   return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => {
-    const label = item.session ? askSessionLabel(item.session, state.sessions) : undefined
+    const label = item.session ? askSessionLabel(item.session, state.sessions, state.activeProjectId) : undefined
     const session = label ? ` · ${label === item.session ? "saved session" : label}` : ""
     return truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}${session}`, width)
   })
 }
 
-/** The hierarchical session number used by `/open`, or `undefined` when absent. */
-function sessionNumber(sessionId: string, sessions: readonly SessionInfo[]): string | undefined {
-  return sessionTree(sessions).find((row) => row.session.id === sessionId)?.number
+/**
+ * The session numbers the sidebar shows and `/open <n>` takes: the tree of
+ * the active Project's sessions (state/projects.ts `sessionsInScope`, with
+ * every temporary session), roots `1`, `2`, … and subagents `2.1`, `2.1.3`.
+ * A session of another Project has none.
+ */
+export function sessionNumbers(sessions: readonly SessionInfo[], activeProjectId: string | undefined): Map<string, string> {
+  return new Map(sessionTree(sessionsInScope(sessions, activeProjectId, false)).map((row) => [row.session.id, row.number]))
 }
 
-/** Which session an ask belongs to: `<n>. <title>`, or its id when unlisted. */
-export function askSessionLabel(sessionId: string, sessions: readonly SessionInfo[]): string {
-  const number = sessionNumber(sessionId, sessions)
-  if (number === undefined) return sessionId
-  const session = sessions.find((row) => row.id === sessionId)!
-  return `${number}. ${session.title || session.id}`
+/** Which session an ask belongs to: `<n>. <title>`, its title (or id) when it has no number here, or its id when unlisted. */
+export function askSessionLabel(sessionId: string, sessions: readonly SessionInfo[], activeProjectId: string | undefined): string {
+  const session = sessions.find((row) => row.id === sessionId)
+  if (!session) return sessionId
+  const number = sessionNumbers(sessions, activeProjectId).get(sessionId)
+  return number === undefined ? session.title || session.id : `${number}. ${session.title || session.id}`
 }
 
 /** Status line when an ask arrives for another session: F4 opens its normal prompt. */
-export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[]): string {
+export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[], activeProjectId: string | undefined): string {
   const sessionId = interaction.session ?? ""
   const kind = interaction.type?.includes("QUESTION") ? "Question" : "Permission needed"
-  const label = askSessionLabel(sessionId, sessions)
+  const label = askSessionLabel(sessionId, sessions, activeProjectId)
   return `${kind} in ${label === sessionId ? "a saved session" : label} · F4 to review`
 }
 

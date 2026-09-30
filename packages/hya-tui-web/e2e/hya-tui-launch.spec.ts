@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiMain } from "./hya"
+import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, tuiMain } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -137,7 +137,8 @@ test.describe("one-command launch", () => {
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     // No exit handler runs: only its closed session stream tells the daemon.
-    const pids = tuiPids(workspace.dir)
+    // The TUI is a supervisor and its app; killing the supervisor must end the app too.
+    const pids = tuiInstances(tuiPids(workspace.dir))
     expect(pids).toHaveLength(1)
     process.kill(pids[0]!, "SIGKILL")
     await expect.poll(() => tuiPids(workspace.dir).length, { timeout: 10_000 }).toBe(0)

@@ -69,3 +69,18 @@ test("sessionRows puts a New session row first, then the numbered tree with suba
   expect(rows[2]?.detail).toContain("running")
   expect(rows[1]?.detail).toContain("1h")
 })
+
+test("sessionRows numbers only the active Project's sessions, as the sidebar and /open do", () => {
+  const scoped: SessionInfo[] = [
+    { id: "hysec_o", agent: "hya-main", workdir: "/o", projectId: "prj_o", title: "Elsewhere" },
+    { id: "hysec_w", agent: "hya-main", workdir: "/w", projectId: "prj_w", title: "Here" },
+  ]
+  expect(sessionRows(scoped, undefined, 0, { activeProjectId: "prj_w" }).slice(1).map((row) => row.label)).toEqual(["1. Here"])
+  // Rename edits, and a delete confirmation names, the title alone (state/picker.ts `name`).
+  expect(sessionRows(scoped, undefined, 0, { activeProjectId: "prj_w" })[1]?.name).toBe("Here")
+  // F3 lists every Project; a session outside the active one has no number to type.
+  expect(sessionRows(scoped, undefined, 0, { activeProjectId: "prj_w", allProjects: true }).slice(1).map((row) => row.label)).toEqual(["Elsewhere", "1. Here"])
+  // The archived view lists sessions the sidebar does not: they have no number, and the others keep theirs.
+  const archived: SessionInfo = { id: "hysec_a", agent: "hya-main", workdir: "/w", projectId: "prj_w", title: "Old", archived: true }
+  expect(sessionRows([archived, ...scoped], undefined, 0, { activeProjectId: "prj_w", numbered: scoped }).slice(1).map((row) => row.label)).toEqual(["Old", "1. Here"])
+})

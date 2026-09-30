@@ -60,7 +60,8 @@ test.describe("Projects sidebar", () => {
     await term.waitForText(/Created second/)
     await esc(term, "Created second")
 
-    await term.waitForText("second")
+    // The Projects sidebar may cut the name (`seco… (0)`).
+    await term.waitForText(/seco(?:nd|…) \(0\)/)
     await term.press("Control+p")
     await term.press("ArrowDown")
     await term.press("Enter")
@@ -185,12 +186,30 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.press("ArrowDown")
     await term.press("Enter")
     await term.waitForText("b", 20_000)
+    // The transcript can update before the status line; capture the id when it changes.
+    let otherId: string | undefined
+    await expect.poll(async () => {
+      const id = statusSessionPattern.exec(await term.text())?.[1]
+      otherId = id && id !== firstId ? id : undefined
+      return otherId ?? firstId
+    }).not.toBe(firstId)
+    expect(otherId).toBeDefined()
 
     await prompt(term, "/sessions")
     await term.waitForText("F3 all")
     expect(await term.find(firstId)).toBeNull()
     await term.press("F3")
     await term.waitForText("Sessions · all projects")
+    // The other Project's session is listed without a number: `/open <n>` counts only this Project's.
     await term.waitForText(firstId)
+    expect((await term.lines()).find((line) => line.includes(firstId))).not.toMatch(/\d\. hysec_/)
+    await term.waitForText(`1. ${otherId}`)
+    await esc(term, "Sessions · all projects")
+
+    // `/open 1` is this Project's first session, as the sidebar numbers it — not the other Project's.
+    await prompt(term, "/open 1")
+    await term.waitForText(statusSessionPattern)
+    expect(statusSessionPattern.exec(await term.text())![1]).toBe(otherId)
+    expect(await term.find(firstId)).toBeNull()
   })
 })
