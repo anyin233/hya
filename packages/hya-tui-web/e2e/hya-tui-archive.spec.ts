@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
 import { Tui } from "./harness"
-import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
+import { expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
@@ -94,8 +94,7 @@ test.describe("archive on exit and resume", () => {
 
     // --continue: the most recent session that is not archived.
     const next = await tui(...selfLaunch(workspace, ["--continue"]))
-    await prompt(next, "/status")
-    await next.waitForText(/Session\s+Older work/, 30_000)
+    await expectStatus(next, "Session", "Older work")
     expect(await next.text()).not.toContain("First reply.")
 
     // --resume <id>: opened and unarchived.
@@ -194,9 +193,9 @@ test.describe("WebUI tabs (bare hya)", () => {
     const backend = await backendOf(workspace)
 
     await prompt(web, "/to-background")
-    expect(tabTuis(workspace).length).toBe(1)
+    expect(tuiInstances(tabTuis(workspace)).length).toBe(1)
     await web.press("Control+d")
-    expect(tabTuis(workspace).length).toBe(1)
+    expect(tuiInstances(tabTuis(workspace)).length).toBe(1)
     // The command pane offers /todos but not /to-background in the tab…
     await web.type("/to")
     await web.waitForText("/todos")

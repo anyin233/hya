@@ -240,7 +240,7 @@ test.describe("shell turns", () => {
     // The user block shows what was typed; the assistant shows the bash call with the command as its arguments.
     await term.waitForText("┃ !echo hello", 20_000)
     // The user typed the command, so it runs without a permission prompt even in manual mode.
-    await term.waitForText(/✓ bash\s+echo hello/, 20_000)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo hello"'), 20_000)
     await term.waitForIdle()
     const text = await term.text()
     expect(text).not.toMatch(/asked by |perm_\w+|awaiting approval/)

@@ -1,8 +1,8 @@
-import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
+import { expect, hyaTui, test, wideViewport } from "./hya"
 
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     // One main column (transcript, status, composer, footer) and the sidebar boxes;
     // the old Chat and Pending panels are gone.
@@ -16,7 +16,7 @@ test.describe("hya TUI in the browser", () => {
   })
 
   test("admits a prompt and shows the offline model's reply", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("hello from the browser")
     await term.press("Enter")
@@ -33,7 +33,7 @@ test.describe("hya TUI in the browser", () => {
   })
 
   test("Tab completes slash commands", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/workf")
     await term.press("Tab")

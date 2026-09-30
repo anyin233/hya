@@ -1,5 +1,5 @@
 // Vim mode (docs/tui.md "Vim mode"): `/vim` toggles it and saves `vim` in
-// the preferences file; the status bar shows `-- INSERT --` / `-- NORMAL --`;
+// the preferences file; the cursor is a bar in insert mode and a block in normal;
 // Esc in insert mode switches to normal mode, Esc in normal mode keeps its
 // usual meaning (cancel the running turn, clear the input).
 
@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, showStatusLine, test } from "./hya"
+import { expect, hangStep, hyaTui, test } from "./hya"
 
 let dir: string
 test.beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hya-tui-vim-")) })
@@ -21,13 +21,19 @@ async function composerText(term: Tui): Promise<string> {
   return lines.slice(top + 1, bottom).map((line) => line.slice(1, right).trim()).join("\n").trim()
 }
 
-/** The top status line; it replaces the old header/status rows. */
-async function statusBar(term: Tui): Promise<string> {
-  return (await term.lines()).find((line) => /^(?:-- [A-Z]+ --(?: \d+d)? · )?mode /.test(line)) ?? ""
-}
-async function statusRow(term: Tui): Promise<number> {
-  const line = await statusBar(term)
-  return (await term.lines()).findIndex((value) => value === line)
+/** Observe DECSCUSR through xterm's public parser API, without TUI internals. */
+async function cursorStyle(term: Tui): Promise<number | null> {
+  return term.page.evaluate(() => {
+    const state = window as typeof window & { observedCursor?: { style: number | null } }
+    if (!state.observedCursor) {
+      state.observedCursor = { style: null }
+      window.hyaTerm.term.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+        state.observedCursor!.style = Number(params[0])
+        return false
+      })
+    }
+    return state.observedCursor.style
+  })
 }
 
 /**
@@ -37,31 +43,28 @@ async function statusRow(term: Tui): Promise<number> {
  */
 async function normal(term: Tui): Promise<void> {
   await term.press("Escape")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL --/)
+  await expect.poll(() => cursorStyle(term)).toBe(2)
 }
 
 async function keys(term: Tui, sequence: string): Promise<void> {
   for (const key of sequence) await term.press(key)
 }
 
-test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator, and persistence", async ({ tui, backend }, testInfo) => {
+test("/vim: insert and normal mode, motions, dd, undo, the cursor shape, and persistence", async ({ tui, backend }, testInfo) => {
   const prefs = join(dir, "tui.json")
   let term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
   await term.waitForText("Message, !shell, or @file · / commands")
-  expect(await statusBar(term)).not.toContain("INSERT")
+  await cursorStyle(term)
+  expect(await term.find("-- INSERT --")).toBeNull()
 
   await term.type("/vim")
   await term.press("Enter")
-  await term.waitForText("Vim mode on · Esc for normal mode, i to insert")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT -- · mode manual/)
+  await expect.poll(() => cursorStyle(term)).toBe(5)
   expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ vim: true })
-  // The indicator is drawn in the muted color in insert mode, the accent color in normal mode.
-  expect((await term.cell(await statusRow(term), 3))?.fg).toBe("#9caab9")
 
   await term.type("alpha beta gamma")
   await term.press("Escape")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL --/)
-  expect((await term.cell(await statusRow(term), 3))?.fg).toBe("#73c8e8")
+  await expect.poll(() => cursorStyle(term)).toBe(2)
   // Esc in insert mode only switched modes: the text is still there.
   expect(await composerText(term)).toBe("alpha beta gamma")
 
@@ -72,11 +75,7 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
   await expect.poll(() => composerText(term)).toBe("alpha beta gamma")
   await term.press("Control+r")
   await expect.poll(() => composerText(term)).toBe("alpha gamma")
-  // A half-typed command shows next to the mode.
-  await keys(term, "2d")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL -- 2d · /)
-  await term.press("Escape")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL -- · /)
+  // Delete a line and restore it through the editor's undo stack.
   await keys(term, "dd")
   await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
   await term.press("u")
@@ -84,7 +83,7 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
 
   // A (append at the line end), type, Esc; x deletes; o opens a line.
   await keys(term, "A")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
+  await expect.poll(() => cursorStyle(term)).toBe(5)
   await term.type(" delta")
   await normal(term)
   await keys(term, "bx")
@@ -101,32 +100,30 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
   await term.press("Enter")
   await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
   expect(await term.find("next line")).not.toBeNull()
-  await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
+  await expect.poll(() => cursorStyle(term)).toBe(5)
 
   // A restarted TUI reads `vim: true` and starts in insert mode.
   term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
   await term.waitForText("next line")
-  await showStatusLine(term)
-  await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
+  await cursorStyle(term)
   await term.type("/vim off")
   await term.press("Enter")
-  await term.waitForText("Vim mode off")
-  await expect.poll(() => statusBar(term)).toMatch(/^mode manual/)
+  await expect.poll(async () => JSON.parse(await readFile(prefs, "utf8")).vim).toBe(false)
   expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ vim: false })
   // Off: letters type again.
   await term.type("hjkl")
   await expect.poll(() => composerText(term)).toBe("hjkl")
 })
 
-test("at about 80 columns the vim indicator and the permission mode stay on the status bar", async ({ tui, backend }) => {
+test("at about 80 columns Vim keys work with no status heading", async ({ tui, backend }) => {
   const prefs = join(dir, "tui.json")
   await writeFile(prefs, JSON.stringify({ vim: true }))
   const term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs }, viewport: { width: 690, height: 640 } })
   await term.waitForText("Message, !shell, or @file · / commands")
   expect((await term.size()).cols).toBeLessThanOrEqual(84)
-  await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT -- · mode manual/)
+  await cursorStyle(term)
   await term.press("Escape")
-  await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL -- · mode manual/)
+  await expect.poll(() => cursorStyle(term)).toBe(2)
   // Esc with nothing pending in normal mode on an empty input does nothing else; ? is swallowed.
   await term.press("?")
   expect(await term.find("Help · keys and commands")).toBeNull()
@@ -149,13 +146,14 @@ test.describe("Esc precedence with vim on", () => {
     await term.press("Enter")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
     await term.waitForText("Esc to interrupt")
+    await cursorStyle(term)
     await term.type("draft")
     await term.press("Escape")
-    await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL --/)
+    await expect.poll(() => cursorStyle(term)).toBe(2)
     // Still running: the first Esc only left insert mode.
     expect(await term.find("Cancelled")).toBeNull()
     await term.press("Escape")
-    await term.waitForText("Cancelled · Ready", 20_000)
+    await term.waitForIdle(20_000)
     expect(await composerText(term)).toBe("draft")
     // No turn now: Esc in normal mode clears the input (the usual last meaning).
     await term.press("Escape")
