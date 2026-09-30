@@ -23,6 +23,8 @@ export interface PickerRow {
   id: string
   /** Main text of the row. */
   label: string
+  /** The row's own name when `label` decorates it (a session's title without its list number): what rename edits and a confirmation names. Default `label`. */
+  name?: string
   /** Muted text after the tag (a description). */
   detail?: string
   /** Short bracketed source or kind (`builtin`, a bundle id, a provider). */
@@ -175,10 +177,10 @@ export function pickerKey(state: PickerState, key: KeyLike): PickerOutcome {
     if (action.prompt === "none") return { type: "commit", id: action.id, row: row ?? { id: "", label: "" } }
     if (!row) return { type: "none" }
     if (action.prompt === "value") {
-      return { type: "update", state: { ...state, mode: "rename", actionRow: row.id, actionId: action.id, editValue: row.label } }
+      return { type: "update", state: { ...state, mode: "rename", actionRow: row.id, actionId: action.id, editValue: row.name ?? row.label } }
     }
     const template = action.confirmText ?? 'Delete "{label}"? Enter confirms · Esc cancels'
-    return { type: "update", state: { ...state, mode: "confirm", actionRow: row.id, actionId: action.id, confirmText: template.replace("{label}", row.label) } }
+    return { type: "update", state: { ...state, mode: "confirm", actionRow: row.id, actionId: action.id, confirmText: template.replace("{label}", row.name ?? row.label) } }
   }
   const move = (step: number): PickerOutcome => rows.length
     ? { type: "update", state: { ...state, index: (state.index + step + rows.length) % rows.length } }

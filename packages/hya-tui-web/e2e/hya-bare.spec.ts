@@ -12,7 +12,7 @@ import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
 import { join } from "node:path"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, hyaBin, launchTest as test, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, hyaBin, launchTest as test, showStatusLine, statusSessionPattern, tuiInstances, type Workspace } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -90,8 +90,7 @@ test.describe("bare hya", () => {
     // A plain tab reopens the terminal's conversation, so it may show
     // `Resumed …` rather than a generic connection message.
     await web.waitForText("hello from the terminal", 30_000)
-    // The header now keeps the current effort visible and may clip the server
-    // URL; `/status` is the unambiguous server contract.
+    // `/status` is the unambiguous server contract.
     await prompt(web, "/status")
     await web.waitForText(backend.replace(/\/$/, ""))
     await prompt(web, "/sessions")
@@ -157,8 +156,8 @@ test.describe("bare hya", () => {
     // The web host's own argv names the TUI command too; count only TUI processes.
     const tuis = pids(`--server ${backend}`, "--cwd")
     expect(host.length).toBe(1)
-    // The terminal TUI and the WebUI tab's TUI.
-    expect(tuis.length).toBe(2)
+    // The terminal TUI and the WebUI tab's TUI (each a supervisor with its app).
+    expect(tuiInstances(tuis).length).toBe(2)
     expect(await reachable(backend)).toBe(true)
 
     await prompt(term, "/exit")
@@ -191,9 +190,11 @@ test.describe("bare hya", () => {
       await new Tui(webPage, `http://127.0.0.1:${port}/`).waitForText("Message, !shell, or @file · / commands", 30_000)
       // Not the test harness host, whose argv ends with the same command.
       const hya = pids(`${hyaBin} --port ${port}`, "--cwd")
-      const children = [...pids(`--port ${port} --cwd`), ...pids(`--server ${backend}`, "--cwd")]
+      const tuis = pids(`--server ${backend}`, "--cwd")
+      const children = [...pids(`--port ${port} --cwd`), ...tuis]
       expect(hya.length).toBe(1)
-      expect(children.length).toBe(3)
+      // The web host and two TUIs (each a supervisor with its app).
+      expect(pids(`--port ${port} --cwd`).length + tuiInstances(tuis).length).toBe(3)
 
       if (signal === "SIGTERM") {
         process.kill(hya[0]!, signal)

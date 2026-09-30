@@ -1,4 +1,4 @@
-/** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
+/** Pure text for the sidebar, pending block, and non-chat views, derived from the store. */
 import type { WebInfo } from "../cli"
 import type { Interaction, ModelSummary, SessionInfo, TodoItem, TokenUsage } from "../client"
 import { keyHelpText } from "../commands/help"
@@ -62,21 +62,17 @@ export function truncateStart(text: string, width: number): string {
   return text.length <= width ? text : `…${text.slice(text.length - width + 1)}`
 }
 
-/** What the header and sidebar call the server: its label (`--server-label`), else its URL, else `fallback`. */
+/** What the status line and the Context box call the server: its label (`--server-label`), else its URL, else `fallback`. */
 export function shownServer(state: AppState, fallback: string): string {
   return state.serverLabel || state.serverUrl || fallback
-}
-
-export function headerText(state: AppState, server: string): string {
-  if (!state.ready) return "hya · connecting…"
-  const selected = state.selected
-  return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelEffortLabel(selected)}` : "· no session"} · ${server}`
 }
 
 export interface SessionRow {
   session: SessionInfo
   /** 0 for a top-level session, 1 for its subagents, 2 for theirs. */
   depth: number
+  /** Hierarchical display number: roots are 1-based, descendants use x.y notation. */
+  number: string
 }
 
 /**
@@ -94,14 +90,29 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
   }
   const rows: SessionRow[] = []
   const seen = new Set<string>()
-  const visit = (session: SessionInfo, depth: number): void => {
+  let rootNumber = 0
+  const visit = (session: SessionInfo, depth: number, number: string): void => {
     if (seen.has(session.id)) return
     seen.add(session.id)
-    rows.push({ session, depth })
-    for (const child of children.get(session.id) ?? []) visit(child, depth + 1)
+    rows.push({ session, depth, number })
+    let childNumber = 0
+    for (const child of children.get(session.id) ?? []) {
+      childNumber += 1
+      visit(child, depth + 1, `${number}.${childNumber}`)
+    }
   }
-  for (const session of sessions) if (!(session.parent && ids.has(session.parent))) visit(session, 0)
-  for (const session of sessions) visit(session, 0)
+  for (const session of sessions) {
+    if (!(session.parent && ids.has(session.parent))) {
+      rootNumber += 1
+      visit(session, 0, String(rootNumber))
+    }
+  }
+  for (const session of sessions) {
+    if (!seen.has(session.id)) {
+      rootNumber += 1
+      visit(session, 0, String(rootNumber))
+    }
+  }
   return rows
 }
 
@@ -122,7 +133,7 @@ export function sessionListText(state: AppState, width?: number): string {
   if (!sessions.length) return "No sessions. Type a prompt or /new."
   const groups: string[][] = []
   let announcedTemporary = false
-  sessionTree(sessions).forEach(({ session, depth }, index) => {
+  sessionTree(sessions).forEach(({ session, depth, number }) => {
     const mark = session.id === state.selected?.id ? "▸" : " "
     // A pending ask outranks `running`: the session is blocked on the user.
     const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
@@ -132,11 +143,11 @@ export function sessionListText(state: AppState, width?: number): string {
         groups.push([truncate("— Temporary —", width)])
       }
       groups.push([
-        truncate(`${mark} ${index + 1}. ${session.title || session.id}`, width),
+        truncate(`${mark} ${number}. ${session.title || session.id}`, width),
         truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width),
       ])
     } else {
-      groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${index + 1}. ${session.title || session.agent}${running}`, width))
+      groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.agent}${running}`, width))
     }
   })
   return groups.map((lines) => lines.join("\n")).join("\n\n")
@@ -151,70 +162,39 @@ export function sessionListText(state: AppState, width?: number): string {
 export function pendingLines(state: AppState, width?: number): string[] {
   const prompted = new Set(promptQueue(state.interactions, state).map((item) => item.id))
   return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => {
-    const label = item.session ? askSessionLabel(item.session, state.sessions) : undefined
+    const label = item.session ? askSessionLabel(item.session, state.sessions, state.activeProjectId) : undefined
     const session = label ? ` · ${label === item.session ? "saved session" : label}` : ""
     return truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}${session}`, width)
   })
 }
 
-/** The session list number `/open <n>` takes (sidebar order), or `undefined` when the list does not have it. */
-function sessionNumber(sessionId: string, sessions: readonly SessionInfo[]): number | undefined {
-  const index = sessionTree(sessions).findIndex((row) => row.session.id === sessionId)
-  return index < 0 ? undefined : index + 1
+/**
+ * The session numbers the sidebar shows and `/open <n>` takes: the tree of
+ * the active Project's sessions (state/projects.ts `sessionsInScope`, with
+ * every temporary session), roots `1`, `2`, … and subagents `2.1`, `2.1.3`.
+ * A session of another Project has none.
+ */
+export function sessionNumbers(sessions: readonly SessionInfo[], activeProjectId: string | undefined): Map<string, string> {
+  return new Map(sessionTree(sessionsInScope(sessions, activeProjectId, false)).map((row) => [row.session.id, row.number]))
 }
 
-/** Which session an ask belongs to: `<n>. <title>` (its `/open` number), or its id when the session list does not have it. */
-export function askSessionLabel(sessionId: string, sessions: readonly SessionInfo[]): string {
-  const number = sessionNumber(sessionId, sessions)
-  if (number === undefined) return sessionId
-  const session = sessions.find((row) => row.id === sessionId)!
-  return `${number}. ${session.title || session.id}`
+/** Which session an ask belongs to: `<n>. <title>`, its title (or id) when it has no number here, or its id when unlisted. */
+export function askSessionLabel(sessionId: string, sessions: readonly SessionInfo[], activeProjectId: string | undefined): string {
+  const session = sessions.find((row) => row.id === sessionId)
+  if (!session) return sessionId
+  const number = sessionNumbers(sessions, activeProjectId).get(sessionId)
+  return number === undefined ? session.title || session.id : `${number}. ${session.title || session.id}`
 }
 
 /** Status line when an ask arrives for another session: F4 opens its normal prompt. */
-export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[]): string {
+export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[], activeProjectId: string | undefined): string {
   const sessionId = interaction.session ?? ""
   const kind = interaction.type?.includes("QUESTION") ? "Question" : "Permission needed"
-  const label = askSessionLabel(sessionId, sessions)
+  const label = askSessionLabel(sessionId, sessions, activeProjectId)
   return `${kind} in ${label === sessionId ? "a saved session" : label} · F4 to review`
 }
 
-/** The sidebar's context box: the open session, its agent and model, message count, context occupancy and session tokens (when known), directory, server. */
-export function contextText(state: AppState, server: string, width = 30): string {
-  const session = state.selected
-  const row = (label: string, value: string) => `${label.padEnd(9)}${truncateStart(value, Math.max(4, width - 9))}`
-  const host = server.replace(/^https?:\/\//, "").replace(/\/$/, "")
-  if (!session) return [row("Session", "none"), row("Server", host), ...webRows(state, row)].join("\n")
-  // The merged transcript (projection + streaming overlay), not the raw
-  // projection: a fresh turn's messages exist only in the overlay until the
-  // next projection read, so `state.messages.length` alone under-counts.
-  const messageCount = mergeTranscript(state.messages, state.overlay).length
-  const usage = contextUsage(state)
-  const tokens = sessionTokens(session.usage)
-  const forked = forkSourceText(session.forkedFrom, state.sessions)
-  return [
-    row("Session", session.title || session.id),
-    // The source's name is cut at its end (a title reads from the start), unlike the path rows.
-    ...(forked ? [`${"Forked".padEnd(9)}${truncate(forked.replace(/^forked /, ""), Math.max(4, width - 9))}`] : []),
-    row("Agent", session.agent),
-    row("Model", modelReference(session) || "default"),
-    row("Messages", String(messageCount)),
-    ...(usage ? [row("Context", `${usage.percent}% · ${formatTokens(usage.tokens)}/${formatTokens(usage.limit)}`)] : []),
-    ...(tokens !== undefined ? [row("Tokens", formatTokens(tokens))] : []),
-    row("Dir", session.workdir),
-    row("Server", host),
-    ...webRows(state, row),
-  ].join("\n")
-}
-
-/** The context box's `WebUI` row: the address without the scheme, or `unavailable`. */
-function webRows(state: AppState, row: (label: string, value: string) => string): string[] {
-  const web = state.web
-  if (!web) return []
-  return [row("WebUI", web.url ? web.url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "unavailable")]
-}
-
-/** `WebUI http://127.0.0.1:3250` (status bar), or `WebUI unavailable`; `undefined` without a WebUI. */
+/** `WebUI http://127.0.0.1:3250` (status line), or `WebUI unavailable`; `undefined` without a WebUI. */
 export function webLabel(web: WebInfo | undefined): string | undefined {
   if (!web) return undefined
   return web.url ? `WebUI ${web.url.replace(/\/$/, "")}` : "WebUI unavailable"
@@ -243,13 +223,6 @@ export function todoStatusText(status: string): string {
  */
 export const todoGlyphs: Record<string, string> = {
   pending: "○", in_progress: "◐", blocked: "✗", completed: "✓",
-}
-
-/** `Todos <completed>/<total>`, the sidebar's compact form when it is hidden; `undefined` with no todos. */
-export function todosCompactText(items: readonly TodoItem[]): string | undefined {
-  if (!items.length) return undefined
-  const completed = items.filter((item) => todoStatusText(item.status) === "completed").length
-  return `Todos ${completed}/${items.length}`
 }
 
 /**
@@ -341,78 +314,6 @@ export function contextUsage(state: Pick<AppState, "liveRound" | "messages" | "o
   const tokens = promptTokens(round.usage)
   if (!limit || !tokens) return undefined
   return { percent: Math.round((tokens * 100) / limit), tokens, limit }
-}
-
-/** Status bar fields (E22); `statusBarText` renders them with graceful truncation at `width`. */
-export interface StatusBarFields {
-  /** Permission mode label (state/modes.ts `modeDisplay`: `manual`, `⚠ yolo`, or a bundle mode's title); StatusBar colors it. */
-  mode: string
-  /** Context occupancy percent (`contextUsage`); omitted when unknown. */
-  context?: number
-  /** Session token total, formatted (`12.3k tok`); omitted when unknown. */
-  tokens?: string
-  directory: string
-  /** Current git branch; "" when unknown or not a repository. */
-  branch: string
-  /** Compact todo count (`Todos n/m`) shown only while the sidebar is hidden. */
-  todos?: string
-  connected: boolean
-  /** The backend was stopped on purpose (`hya serve stop`; app/reconnect.ts): `backend stopped` in the error color instead of `reconnecting`. */
-  stopped?: boolean
-  /** The WebUI bare `hya` serves (`WebUI <url>`), or `WebUI unavailable` in the warning color. */
-  web?: WebInfo
-  /** The open session's `model:effort` (`modelEffortLabel`, short form); omitted with no open session or model. */
-  model?: string
-  /** Vim mode is on: the composer's mode and a half-typed command (`2d`), shown first. */
-  vim?: { mode: "insert" | "normal"; pending: string }
-}
-
-export type StatusTone = "muted" | "mode" | "accent" | "warning" | "error"
-
-export interface StatusSegment {
-  text: string
-  tone: StatusTone
-}
-
-/** Context percent from which the status bar warns (warning color) and alarms (error color). */
-export const contextWarnPercent = 80
-export const contextAlarmPercent = 95
-
-/**
- * The status bar's segments in order: with vim mode on `-- INSERT --` /
- * `-- NORMAL --` (plus a pending command, `-- NORMAL -- 2d`), `mode <mode>`,
- * `<model>:<effort>` (kept ahead of the dropping tail so the effort stays
- * visible at 80 columns even when the header line truncates), `ctx N%`,
- * `<n> tok`, `WebUI <url>` (or `WebUI unavailable`; ahead of the directory,
- * because at 80 columns the sidebar and its WebUI row are hidden), the
- * directory, `⎇ <branch>`, `Todos n/m`, `reconnecting` (or `backend
- * stopped`). Segments with no data are omitted; the least essential (from
- * the end) drop first so the line fits `width`.
- */
-export function statusBarSegments(fields: StatusBarFields, width: number): StatusSegment[] {
-  const context = fields.context
-  const vim = fields.vim
-  const segments: (StatusSegment | undefined)[] = [
-    vim ? { text: `-- ${vim.mode === "normal" ? "NORMAL" : "INSERT"} --${vim.pending ? ` ${vim.pending}` : ""}`, tone: vim.mode === "normal" ? "accent" : "muted" } : undefined,
-    { text: `mode ${fields.mode}`, tone: "mode" },
-    fields.model ? { text: fields.model, tone: "muted" } : undefined,
-    context !== undefined ? { text: `ctx ${context}%`, tone: context >= contextAlarmPercent ? "error" : context >= contextWarnPercent ? "warning" : "muted" } : undefined,
-    fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
-    fields.web ? { text: webLabel(fields.web)!, tone: fields.web.url ? "muted" : "warning" } : undefined,
-    fields.directory ? { text: truncateStart(fields.directory, 24), tone: "muted" } : undefined,
-    fields.branch ? { text: `⎇ ${fields.branch}`, tone: "muted" } : undefined,
-    fields.todos ? { text: fields.todos, tone: "muted" } : undefined,
-    fields.stopped ? { text: "backend stopped", tone: "error" } : fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
-  ]
-  const shown = segments.filter((segment): segment is StatusSegment => Boolean(segment))
-  const keep = vim ? 2 : 1
-  while (shown.length > keep && shown.map((segment) => segment.text).join(" · ").length > width) shown.pop()
-  return shown
-}
-
-/** The status bar as one line (`statusBarSegments` joined with ` · `, clipped to `width`). */
-export function statusBarText(fields: StatusBarFields, width: number): string {
-  return truncate(statusBarSegments(fields, width).map((segment) => segment.text).join(" · "), width)
 }
 
 /** One line per todo item: a status glyph and its content. */

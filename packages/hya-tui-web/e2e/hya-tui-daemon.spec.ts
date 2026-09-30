@@ -11,7 +11,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, textStep, workspaceDb, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, textStep, tuiInstances, tuiMain, workspaceDb, type Workspace } from "./hya"
 
 const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
@@ -33,6 +33,14 @@ async function statusSessionId(term: Tui): Promise<string> {
   await prompt(term, "/status")
   await term.waitForText(/Session\s+hysec_\w+/)
   return /Session\s+(hysec_\w+)/.exec(await term.text())![1]!
+}
+
+function appPids(workspace: Workspace): number[] {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const pattern = `^([^ ]*/)?bun ${escape(tuiMain)}.*--dir ${escape(workspace.dir)}`
+  const pids = execFileSync("pgrep", ["-f", pattern]).toString().trim().split("\n").map(Number)
+  const supervisors = tuiInstances(pids)
+  return pids.filter((pid) => !supervisors.includes(pid))
 }
 
 /** A second web host in a second tab, so two TUIs run at once. */
@@ -127,6 +135,7 @@ test.describe("backend daemon", () => {
     const initial = await daemonStatus(workspace)
     expect(initial?.pid).toBeDefined()
     const before = initial!.pid
+    const previousApps = appPids(workspace)
     // Also exercise reconnect behavior at about 80 columns.
     await term.resize(690, 640)
 
@@ -144,11 +153,45 @@ test.describe("backend daemon", () => {
     }, { timeout: 30_000 }).toBe(true)
     expect(successorPid).not.toBe(before)
     await expect.poll(() => servePids(workspace)).toEqual([successorPid])
+    await expect.poll(() => appPids(workspace), { timeout: 30_000 }).not.toEqual(previousApps)
+    await term.waitForText("Before the stop.", 30_000)
     await prompt(term, "after the restart")
     await term.waitForText("After the new server.", 20_000)
     expect(await statusPid(term)).toBe(successorPid)
     await expect.poll(() => statusPid(term), { timeout: 30_000 }).toBe(successorPid)
     await expect.poll(() => servePids(workspace)).toEqual([successorPid])
+  })
+
+  test("`hya serve restart` hot-updates the TUI too: a fresh TUI process on the same session keeps the unsent draft", async ({ tui, workspace }, testInfo) => {
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    await prompt(term, "first prompt")
+    await term.waitForText("Before the stop.", 20_000)
+    await term.waitForIdle()
+    const session = await statusSessionId(term)
+    const before = (await daemonStatus(workspace))!.pid
+    const previousApps = appPids(workspace)
+    expect(previousApps).toHaveLength(1)
+    await prompt(term, "/layout show")
+    await term.waitForText("Before the stop.")
+    // Typed, not sent: the reload must hand it to the next TUI process.
+    await term.type("unsent draft text")
+    await term.waitForText("unsent draft text")
+
+    const restarted = await daemon(workspace, ["restart", "--json"])
+    expect(restarted.code).toBe(0)
+    await expect.poll(async () => (await daemonStatus(workspace))?.pid ?? before, { timeout: 30_000 }).not.toBe(before)
+
+    // Verify a fresh app process without relying on a removed status row.
+    await expect.poll(() => appPids(workspace), { timeout: 30_000 }).not.toEqual(previousApps)
+    await expect.poll(() => appPids(workspace)).toHaveLength(1)
+    await term.attach(testInfo, "reloaded")
+    await term.waitForText("unsent draft text")
+    await term.waitForText("Before the stop.")
+    // The draft is sent in the reloaded TUI, on the new daemon.
+    await term.press("Enter")
+    await term.waitForText("After the new server.", 20_000)
+    expect(await statusSessionId(term)).toBe(session)
   })
 
   test("a daemon killed with SIGKILL (no reason sent): the TUI starts the next one by itself", async ({ tui, workspace }, testInfo) => {

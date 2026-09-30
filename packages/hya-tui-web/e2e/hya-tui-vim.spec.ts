@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, test } from "./hya"
+import { expect, hangStep, hyaTui, showStatusLine, test } from "./hya"
 
 let dir: string
 test.beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hya-tui-vim-")) })
@@ -21,9 +21,13 @@ async function composerText(term: Tui): Promise<string> {
   return lines.slice(top + 1, bottom).map((line) => line.slice(1, right).trim()).join("\n").trim()
 }
 
-/** The status bar (the row under the header). */
+/** The top status line; it replaces the old header/status rows. */
 async function statusBar(term: Tui): Promise<string> {
-  return (await term.lines())[1] ?? ""
+  return (await term.lines()).find((line) => /^(?:-- [A-Z]+ --(?: \d+d)? · )?mode /.test(line)) ?? ""
+}
+async function statusRow(term: Tui): Promise<number> {
+  const line = await statusBar(term)
+  return (await term.lines()).findIndex((value) => value === line)
 }
 
 /**
@@ -52,12 +56,12 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
   await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT -- · mode manual/)
   expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ vim: true })
   // The indicator is drawn in the muted color in insert mode, the accent color in normal mode.
-  expect((await term.cell(1, 3))?.fg).toBe("#9caab9")
+  expect((await term.cell(await statusRow(term), 3))?.fg).toBe("#9caab9")
 
   await term.type("alpha beta gamma")
   await term.press("Escape")
   await expect.poll(() => statusBar(term)).toMatch(/^-- NORMAL --/)
-  expect((await term.cell(1, 3))?.fg).toBe("#73c8e8")
+  expect((await term.cell(await statusRow(term), 3))?.fg).toBe("#73c8e8")
   // Esc in insert mode only switched modes: the text is still there.
   expect(await composerText(term)).toBe("alpha beta gamma")
 
@@ -102,6 +106,7 @@ test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator,
   // A restarted TUI reads `vim: true` and starts in insert mode.
   term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
   await term.waitForText("next line")
+  await showStatusLine(term)
   await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT --/)
   await term.type("/vim off")
   await term.press("Enter")

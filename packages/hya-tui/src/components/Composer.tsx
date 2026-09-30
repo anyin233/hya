@@ -13,7 +13,7 @@ import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
-import { projectsSidebarVisible } from "../state/layout"
+import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
 import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
@@ -593,7 +593,8 @@ export function Composer(props: { width: number }) {
         return
       case "toggleSidebar":
         consume()
-        store.toggleSidebar()
+        if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
+        else store.toggleSidebar()
         return
       case "toggleProjectsSidebar":
         consume()

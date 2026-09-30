@@ -135,7 +135,7 @@ test("builds the completion context from the current catalogs", () => {
   })
   const context = store.completionContext()
   expect(context.agents).toEqual(["hya-main"])
-  expect(context.sessions).toEqual(["hysec_1"])
+  expect(context.sessions).toEqual([{ id: "hysec_1", title: undefined }])
   expect(context.backendCommands).toEqual(["compact"])
   expect(context.apiOperations).toContain("GET /v1/health")
 })

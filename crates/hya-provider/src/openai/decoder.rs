@@ -207,15 +207,6 @@ impl Decoder for OpenAiChatDecoder {
             .pointer("/delta/tool_calls")
             .and_then(Value::as_array)
         {
-            if !tool_calls.is_empty()
-                && let Some(part) = self.text_part.take()
-            {
-                out.push(Event::TextEnd {
-                    session,
-                    message,
-                    part,
-                });
-            }
             for tc in tool_calls {
                 let index = usize::try_from(tc.get("index").and_then(Value::as_u64).unwrap_or(0))
                     .unwrap_or(0);

@@ -1,4 +1,4 @@
-import { expect, hyaTui, test } from "./hya"
+import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
 
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {

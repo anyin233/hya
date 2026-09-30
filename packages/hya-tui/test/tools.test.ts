@@ -45,6 +45,7 @@ test("bash: the command, exit status, duration, and output tail", () => {
   const clean = toolCard({ tool: "bash", state: ok, inputJson: json({ command: "echo hi" }), outputJson: json({ output: "hi\n", metadata: { exit: 0 } }) })
   expect(clean.summary).toBe("echo hi")
   expect(clean.body).toEqual([{ text: "$ echo hi", tone: "fg" }, { text: "hi", tone: "muted" }])
+  expect(clean.output).toEqual([{ text: "hi", tone: "muted" }])
 })
 
 test("bash: a shell turn's command is used when the part has no input yet", () => {
@@ -179,4 +180,14 @@ test("diff lines skip file headers and tone each row", () => {
   expect(diffLines("--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n")).toEqual([
     { text: "@@ -1 +1 @@", tone: "hunk" }, { text: "- x", tone: "remove" }, { text: "+ y", tone: "add" },
   ])
+})
+
+test("tool cards retain complete arguments and separate expandable output", () => {
+  const card = toolCard({
+    tool: "github__search_issues", state: ok,
+    inputJson: json({ repo: "a/b", query: "bug", page: 2 }),
+    outputJson: json({ output: "3 issues" }),
+  })
+  expect(card.args).toBe('{"repo":"a/b","query":"bug","page":2}')
+  expect(card.output).toEqual([{ text: "3 issues", tone: "muted" }])
 })

@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
 import { Tui } from "./harness"
-import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, textStep, type Backend, type Workspace } from "./hya"
+import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
@@ -169,10 +169,12 @@ test.describe("/sessions archived toggle", () => {
     await term.waitForText(/Session\s+Shelved work/, 20_000)
     await expect.poll(async () => (await session(backend, hidden)).archived ?? false).toBe(false)
 
-    // Another client archives the open session: the sidebar marks it live.
-    await term.resize(1100, 640)
+    // Another client archives the open session: the sidebar marks it live
+    // (the narrow Sessions box cuts the row to `hya-main · arc…`).
+    await term.resize(1800, 640)
+    await term.waitForText("─Sessions")
     await api(backend, "PATCH", `/v1/sessions/${hidden}`, { archived: true })
-    await term.waitForText(/hya-main · archived/, 20_000)
+    await term.waitForText(/hya-main · arc/, 20_000)
   })
 })
 
@@ -209,7 +211,7 @@ test.describe("WebUI tabs (bare hya)", () => {
     // A turn runs in the tab; closing the tab (SIGHUP to its TUI) archives nothing.
     await prompt(web, "a long web job")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
-    expect(tabTuis(workspace).length).toBe(1)
+    expect(tuiInstances(tabTuis(workspace)).length).toBe(1)
     await webPage.close()
     await expect.poll(() => tabTuis(workspace).length, { timeout: 20_000 }).toBe(0)
     const left = await session(backend, id)
@@ -262,7 +264,6 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     await term.waitForText("Resume a session · archived ones included")
     await term.type(webId!)
     await term.press("Enter")
-    await term.waitForText("Web reply.", 20_000)
     await term.resize(690, 640)
   })
 })

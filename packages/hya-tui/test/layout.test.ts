@@ -1,26 +1,29 @@
 import { expect, test } from "bun:test"
 import {
   layoutBreakpoints, parseSwitch,
-  projectsSidebarVisible, toggledProjectsSidebar,
+  projectsSidebarVisible, sidebarMinColumns, toggledProjectsSidebar,
   sidebarVisible, toggledSidebar, wrapLineCount,
 } from "../src/state/layout"
 import { createAppStore } from "../src/state/store"
 
-test("the sidebar follows the terminal width until it is toggled", () => {
-  expect(layoutBreakpoints.sidebar).toBe(110)
-  expect(sidebarVisible("auto", 130)).toBe(true)
-  expect(sidebarVisible("auto", 110)).toBe(true)
-  expect(sidebarVisible("auto", 109)).toBe(false)
+test("the sidebar needs the breakpoint width; a pin cannot show it below", () => {
+  // At 149 columns the default sidebar was 18 columns; its minimum is 60% wider (29) and it is closed there.
+  expect(layoutBreakpoints.sidebar).toBe(150)
+  expect(sidebarMinColumns).toBe(Math.ceil(18 * 1.6))
+  expect(sidebarVisible("auto", 160)).toBe(true)
+  expect(sidebarVisible("auto", 150)).toBe(true)
+  expect(sidebarVisible("auto", 149)).toBe(false)
   expect(sidebarVisible("auto", 80)).toBe(false)
-  expect(sidebarVisible("open", 80)).toBe(true)
-  expect(sidebarVisible("closed", 130)).toBe(false)
+  expect(sidebarVisible("open", 149)).toBe(false)
+  expect(sidebarVisible("open", 160)).toBe(true)
+  expect(sidebarVisible("closed", 160)).toBe(false)
 })
 
-test("toggling flips what is visible now, at any width", () => {
-  expect(toggledSidebar("auto", 80)).toBe("open")
-  expect(toggledSidebar("auto", 130)).toBe("closed")
-  expect(toggledSidebar("open", 80)).toBe("closed")
-  expect(toggledSidebar("closed", 130)).toBe("open")
+test("toggling flips what is visible on a wide terminal and changes nothing on a narrow one", () => {
+  expect(toggledSidebar("auto", 149)).toBe("auto")
+  expect(toggledSidebar("closed", 149)).toBe("closed")
+  expect(toggledSidebar("auto", 160)).toBe("closed")
+  expect(toggledSidebar("closed", 160)).toBe("auto")
 })
 
 test("on/off arguments set a switch; no argument toggles it", () => {
@@ -50,16 +53,17 @@ test("the store tracks the sidebar mode and the terminal width", () => {
   store.setColumns(80)
   expect(store.state.columns).toBe(80)
   store.toggleSidebar()
-  expect(store.state.sidebar).toBe("open")
+  expect(store.state.sidebar).toBe("auto")
+  store.setColumns(160)
   store.toggleSidebar()
   expect(store.state.sidebar).toBe("closed")
-  store.setSidebar("auto")
+  store.toggleSidebar()
   expect(store.state.sidebar).toBe("auto")
 })
 
-test("the left Projects sidebar needs both sidebars and the chat column to fit, wider than the right sidebar alone", () => {
+test("the left Projects sidebar needs both sidebars and the chat column to fit, not narrower than the right sidebar alone", () => {
   expect(layoutBreakpoints.projectsSidebar).toBe(150)
-  expect(layoutBreakpoints.projectsSidebar).toBeGreaterThan(layoutBreakpoints.sidebar)
+  expect(layoutBreakpoints.projectsSidebar).toBeGreaterThanOrEqual(layoutBreakpoints.sidebar)
   expect(projectsSidebarVisible("auto", 150)).toBe(true)
   expect(projectsSidebarVisible("auto", 149)).toBe(false)
   // At ~80 columns (a narrow terminal) it stays hidden even though the right sidebar's own threshold is lower.

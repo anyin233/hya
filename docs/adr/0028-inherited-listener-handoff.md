@@ -135,3 +135,30 @@ rollback; otherwise the predecessor parks as before.
 include versions it does not know (sqlx `ignore_missing`), so the pinned build
 can serve a database the failed successor migrated. Checksums of known
 migrations still must match, and migrations must remain additive.
+
+## Amendment (2026-09-30): TUIs reload with the backend
+
+A restart replaces the backend's code but left every attached TUI on the old
+TUI code until the user quit `hya`. Now a TUI that attached to the successor
+after `serverStopping {reason: "restart"}` also reloads itself
+([tui.md](../tui.md#hot-update-after-hya-serve-restart)).
+
+**Where the reload lives.** Inside `packages/hya-tui`: the process a host
+starts is a small supervisor that runs the app as a child Bun process on the
+same terminal and starts it again when the app exits with status 75 after
+writing a reload request (the open session and the unsent draft). Hosts are
+unchanged: bare `hya` and the WebUI host keep one pid per TUI, and the WebUI
+host stays generic (ADR-0018). An in-process `execve` through `bun:ffi` was
+rejected: it keeps every descriptor without `FD_CLOEXEC` (open backend
+streams among them) and the blocked-signal mask, and depends on the libc of
+each platform. Having the hosts restart the TUI on a special exit code was
+rejected because it would put TUI knowledge into the generic web host and
+leave a directly started TUI without the feature.
+
+**What is reloaded.** The app is read from the TUI files on disk, not from
+the generation pin: a checkout's `packages/hya-tui`, or the installed
+`lib/hya/tui`. After a rollback the backend runs the pinned previous build
+while the TUI runs the files on disk; the TUI's existing version check then
+shows `backend <v> ≠ tui <v> · hya serve restart`. Only a `restart` triggers
+a reload; crash recovery, `/reconnect`, and remote or fixed-URL TUIs do not.
+The supervisor itself is loaded once per host start.

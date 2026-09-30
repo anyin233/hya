@@ -491,7 +491,9 @@ Deleting `model_cache.db` is safe; it only costs one model-list request per
 provider on the next start.
 
 The cache is refreshed by startup discovery (see above), `hya models
---refresh`, and the v1 `RefreshProvider` / `UpsertProvider` routes (the TUI
+--refresh` and `hya provider list --refresh` (through the running backend of
+the database when one runs, so its clients see the new rows at once), and the
+v1 `RefreshProvider` / `UpsertProvider` routes (the TUI
 Provider View's refresh and add-provider actions). A refresh replaces the
 provider's rows; a 401/403 clears them; a transport, status, or decode failure
 keeps the old rows.

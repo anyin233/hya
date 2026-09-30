@@ -90,11 +90,14 @@ fn release_rehearsal_rejects_mutable_action_pin() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("read release workflow fixture");
-    let modified = source.replacen(
-        "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
-        "actions/checkout@v4",
-        1,
-    );
+    let pin_start = source
+        .find("actions/checkout@")
+        .expect("release workflow uses actions/checkout");
+    let pin_end = source[pin_start..]
+        .find(char::is_whitespace)
+        .map_or(source.len(), |offset| pin_start + offset);
+    let mut modified = source.clone();
+    modified.replace_range(pin_start..pin_end, "actions/checkout@v4");
     let directory = common::tempdir("release-action-pin");
     let workflow = directory.join("release.yml");
     fs::write(&workflow, modified).expect("write mutable action fixture");

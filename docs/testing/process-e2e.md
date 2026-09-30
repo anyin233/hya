@@ -205,6 +205,8 @@ cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
 
 `--test-threads=1` avoids port/process contention across concurrent backends.
+Locally, run the scenario files for the surface you changed (`--test pNN_…`);
+the whole-crate run is the CI gate.
 
 ## Related
 

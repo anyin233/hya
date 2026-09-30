@@ -1,5 +1,5 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
-import { projectsSidebarVisible, sidebarVisible, type SidebarMode } from "./layout"
+import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
 export const paneKinds = ["conversation", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api"] as const
 export type PaneKind = typeof paneKinds[number]
@@ -33,8 +33,8 @@ export const maxPanes = 16
 export function defaultPaneLayout(): PaneLayout {
   const leaf = (id: number, kind: PaneKind): PaneLeaf => ({ type: "pane", id: `pane-${id}`, kind })
   return { version: 2, active: "pane-1", root: {
-    type: "split", axis: "vertical", weight: 0.18, first: leaf(2, "projects"), second: {
-      type: "split", axis: "vertical", weight: 0.74, first: leaf(1, "conversation"), second: {
+    type: "split", axis: "vertical", weight: 0.1, first: leaf(2, "projects"), second: {
+      type: "split", axis: "vertical", weight: 0.88, first: leaf(1, "conversation"), second: {
         type: "split", axis: "horizontal", weight: 0.62, first: leaf(3, "sessions"), second: {
           type: "split", axis: "horizontal", weight: 0.36, first: leaf(4, "todos"), second: leaf(5, "context"),
         },
@@ -185,6 +185,55 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
   return { ...layout, root: resize(layout.root)[0] }
 }
 
+const rightSidebarKinds: readonly PaneKind[] = ["sessions", "todos", "context"]
+
+/**
+ * The weight `split` is drawn with at `columns` wide. A vertical split whose
+ * second side holds only right-sidebar panes (Sessions, Todos, Context)
+ * leaves that side at least `sidebarMinColumns`; the conversation keeps
+ * 10% however narrow the split. The saved weight is not changed.
+ */
+export function renderedWeight(split: PaneSplit, columns: number): number {
+  if (split.axis !== "vertical" || columns <= 0 || !paneLeaves(split.second).every((pane) => rightSidebarKinds.includes(pane.kind))) return split.weight
+  return Math.min(split.weight, Math.max(0.1, 1 - sidebarMinColumns / Math.floor(columns)))
+}
+
+/**
+ * The weight that puts `split`'s boundary (the first column of its second
+ * side) at screen column `pointer`, for a split drawn from column `left`,
+ * `columns` wide: within the 10–90% a saved layout allows and never
+ * narrower than `renderedWeight` draws the right sidebar.
+ */
+export function boundaryWeight(split: PaneSplit, left: number, columns: number, pointer: number): number {
+  const weight = Math.max(0.1, Math.min(0.9, (pointer - left) / columns))
+  return renderedWeight({ ...split, weight }, columns)
+}
+
+/**
+ * Set the weight of the split that separates pane `first` (on its first
+ * side) from pane `second` (on its second side) in the saved tree. The same
+ * layout when no split separates them that way.
+ */
+export function setSplitWeight(layout: PaneLayout, first: string, second: string, weight: number): PaneLayout {
+  const has = (node: PaneNode, id: string): boolean => paneLeaves(node).some((pane) => pane.id === id)
+  const update = (node: PaneNode): PaneNode => {
+    if (node.type === "pane") return node
+    if (has(node.first, first) && has(node.second, second)) return node.weight === weight ? node : { ...node, weight }
+    const target = has(node.first, first) ? "first" : "second"
+    const child = update(node[target])
+    return child === node[target] ? node : { ...node, [target]: child }
+  }
+  const root = update(layout.root)
+  return root === layout.root ? layout : { ...layout, root }
+}
+
+function migrateLegacyDefault(root: PaneNode): PaneNode {
+  if (root.type !== "split" || root.axis !== "vertical" || root.weight !== 0.18 || root.first.type !== "pane" || root.first.kind !== "projects") return root
+  const center = root.second
+  if (center.type !== "split" || center.axis !== "vertical" || center.weight !== 0.74 || center.first.type !== "pane" || center.first.kind !== "conversation") return root
+  return { ...root, weight: 0.1, second: { ...center, weight: 0.88 } }
+}
+
 /** Validate a preference file's untrusted JSON before it reaches the layout store. */
 export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
@@ -205,7 +254,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     return valid(row.first, depth + 1) && valid(row.second, depth + 1)
   }
   if (!valid(record.root, 0) || conversations !== 1 || !ids.has(record.active)) return undefined
-  if (record.version === 2) return { version: 2, root: record.root, active: record.active }
+  if (record.version === 2) return { version: 2, root: migrateLegacyDefault(record.root), active: record.active }
   if (ids.size > maxPanes - 4) return undefined
   // Version 1 saved only the center. Preserve that subtree and add the old sidebars as editable leaves.
   let next = Math.max(...[...ids].map((id) => Number(id.slice(5))))
@@ -213,7 +262,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   const right: PaneNode = { type: "split", axis: "horizontal", weight: 0.62, first: leaf("sessions"), second: {
     type: "split", axis: "horizontal", weight: 0.36, first: leaf("todos"), second: leaf("context"),
   } }
-  return { version: 2, active: record.active, root: { type: "split", axis: "vertical", weight: 0.18, first: leaf("projects"), second: {
-    type: "split", axis: "vertical", weight: 0.74, first: record.root, second: right,
+  return { version: 2, active: record.active, root: { type: "split", axis: "vertical", weight: 0.1, first: leaf("projects"), second: {
+    type: "split", axis: "vertical", weight: 0.88, first: record.root, second: right,
   } } }
 }

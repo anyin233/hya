@@ -2,7 +2,7 @@
 
 ## Breaking
 
-- **Intel Macs are no longer supported.** The release builds `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`; `x86_64-apple-darwin` is gone. 0.43.25 is the last release with an Intel Mac package. The installer, and so bare `hya update`, now stops on an Intel Mac with "no hya release for Intel Macs". An x86_64 shell under Rosetta on Apple silicon still gets the arm64 build. `cargo run -p xtask -- release-rehearsal` accepts only the three remaining targets.
+- **Intel Macs are no longer supported.** The release builds `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`; `x86_64-apple-darwin` is gone. 0.43.26 is the last release with an Intel Mac package. The installer, and so bare `hya update`, now stops on an Intel Mac with "no hya release for Intel Macs". An x86_64 shell under Rosetta on Apple silicon still gets the arm64 build. `cargo run -p xtask -- release-rehearsal` accepts only the three remaining targets.
 
 ## Build
 

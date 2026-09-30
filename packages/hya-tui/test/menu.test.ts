@@ -33,12 +33,16 @@ const entries: CommandEntry[] = [
   { name: "/models", description: "d", source: "local" },
 ]
 
-test("suggestions retain every command and nested argument beyond the visible eight rows", () => {
-  const names = Array.from({ length: 12 }, (_, index) => `/choice-${String(index).padStart(2, "0")}`)
+test("suggestions retain every command and nested argument beyond the twelve visible rows", () => {
+  const names = Array.from({ length: 32 }, (_, index) => `/choice-${String(index).padStart(2, "0")}`)
   const catalog = names.map((name): CommandEntry => ({ name, description: "", source: "local" }))
   expect(suggestCommandInput("/", () => catalog, () => []).map((row) => row.replacement)).toEqual(names)
   const replacements = names.map((name) => `/layout assign ${name.slice(1)}`)
   expect(suggestCommandInput("/layout assign ", () => [], () => replacements).map((row) => row.replacement)).toEqual(replacements)
+  const titled = names.map((name) => ({ label: `${name} (session title)`, replacement: `/open ${name.slice(1)}` }))
+  const suggestions = suggestCommandInput("/open ", () => [], () => titled)
+  expect(suggestions.map((row) => row.label)).toEqual(titled.map((row) => row.label))
+  expect(suggestions.map((row) => row.replacement)).toEqual(titled.map((row) => row.replacement))
 })
 
 test("filterCommands ranks exact, then prefix, then substring, then subsequence matches", () => {

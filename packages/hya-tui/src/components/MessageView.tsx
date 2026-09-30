@@ -4,8 +4,9 @@
  * - user: a panel-colored block with a heavy accent bar on the left; queued
  *   prompts use a muted bar and text and a `queued` tag.
  * - assistant (and other roles): an `● agent · provider/model` header, the
- *   blocks (Markdown text, collapsible reasoning, tool call cards — a `task`
- *   card links to its subagent), and at most one finish notice (error,
+ *   blocks (Markdown text, collapsible reasoning, transparent outlined tool
+ *   cards with complete arguments and expandable output — a `task` card links
+ *   to its subagent), and at most one finish notice (error,
  *   cancelled, length limit).
  *
  * Blocks are keyed by part id, so a streaming delta updates the existing
@@ -17,7 +18,7 @@ import { useApp } from "../app/context"
 import { formatBytes } from "../composer/attachments"
 import { childStatus, taskLink, type ChildStatus } from "../state/members"
 import { waitingKind } from "../state/prompts"
-import { reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
+import { messageBlockGap, reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
 import type { TaskInfo, Tone, ToolStatus } from "../state/tools"
 import { colors, diffColors, toolColors } from "../theme"
 import { Markdown } from "./Markdown"
@@ -137,7 +138,7 @@ function AssistantMessage(props: { view: MessageView }) {
 /** A blank row between a run of tool cards and the text before or after it. */
 function cardGap(previous: Block | undefined, block: Block): boolean {
   if (!previous) return false
-  return (previous.kind === "tool") !== (block.kind === "tool") && (previous.kind === "text" || block.kind === "text")
+  return messageBlockGap(previous, block) || ((previous.kind === "tool") !== (block.kind === "tool") && (previous.kind === "text" || block.kind === "text"))
 }
 
 function BlockView(props: { block: Block; streaming: boolean }) {
@@ -215,10 +216,11 @@ function iconColor(status: ToolStatus | "waiting"): string {
 }
 
 /**
- * A tool call card: one header line (state icon, tool name, muted summary,
- * duration on the right), the error line of a failed call, and, when
- * expanded, the body lines beside a bar. A click on the card toggles it; a
- * `task` card opens its child session instead (see `TaskCard`).
+ * A tool call card is transparent and outlined: the header shows state and the
+ * canonical tool name, the complete arguments occupy the first row, and the
+ * output/error is separated by a divider in the expanded state. A click on the
+ * card toggles it; a `task` card opens its child session instead (see
+ * `TaskCard`).
  */
 function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
   const { store } = useApp()
@@ -232,18 +234,20 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
         {(task) => <TaskCard block={props.block} task={task()} />}
       </Match>
       <Match when={!card().task}>
-        <box width="100%" flexDirection="column" onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
-          <CardHeader status={waiting() ? "waiting" : card().status} tool={card().tool} summary={`${card().summary}${waiting() ? " · awaiting approval" : ""}`} duration={card().duration} />
-          <Show when={card().error}>
-            <box width="100%" paddingLeft={2}>
-              <text width="100%" wrapMode="word" fg={colors.error}>{card().error}</text>
-            </box>
+        <box width="100%" flexDirection="column" border borderColor={colors.border} paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
+          <CardHeader status={waiting() ? "waiting" : card().status} tool={card().tool} summary={waiting() ? "awaiting approval" : ""} duration={card().duration} />
+          <Show when={!expanded()} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{card().args || "{}"}</text>}>
+            <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{card().args || "{}"}</text>
           </Show>
-          <Show when={expanded() && card().body.length > 0}>
-            <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
-              <For each={card().body}>
-                {(line) => <text width="100%" height={1} wrapMode="none" fg={toneColor(line.tone)}>{line.text || " "}</text>}
+          <Show when={expanded() && ((card().output ?? card().body).length > 0 || Boolean(card().error))}>
+            <box width="100%" flexDirection="column">
+              <text width="100%" height={1} wrapMode="none" fg={colors.border}>────────────────</text>
+              <For each={card().output ?? card().body}>
+                {(line) => <text width="100%" wrapMode="none" fg={toneColor(line.tone)}>{line.text || " "}</text>}
               </For>
+              <Show when={card().error}>
+                <text width="100%" wrapMode="word" fg={colors.error}>{card().error}</text>
+              </Show>
             </box>
           </Show>
         </box>

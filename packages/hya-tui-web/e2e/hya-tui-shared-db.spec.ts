@@ -9,7 +9,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { Page } from "@playwright/test"
 import { Tui } from "./harness"
-import { expect, hyaBin, launchTest as test, selfLaunch, textStep, type Workspace } from "./hya"
+import { expect, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, textStep, type Workspace } from "./hya"
 
 const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
@@ -93,15 +93,17 @@ test.describe("two frontends, one database", () => {
       expect(two.text).toMatch(new RegExp(`Backend\\s+daemon · pid ${pid} · db /`))
       await second.attach(testInfo, "second-status")
 
-      // The first TUI's session (created on connect); the second opens it by id.
-      await first.waitForText(/hya · hysec_\w+/)
-      const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+      // The first TUI's session (created on connect); the second opens it by id. The Status view
+      // needs no Esc first (the composer takes typing), and an Esc right before `/` reads as Alt+/.
+      await showStatusLine(first)
+      const session = await statusSessionId(first)
       await prompt(second, `/open ${session}`)
-      await second.waitForText(new RegExp(`hya · ${session}`))
+      await second.waitForText(session)
 
       // Live across the two TUIs: a rename and a turn in the first show up in the second.
       await prompt(first, "/rename Shared across TUIs")
-      await second.waitForText(/hya · Shared across TUIs/, 20_000)
+      await showStatusLine(second)
+      await second.waitForText(/mode [^·]+ · Shared across TUIs · /, 20_000)
       await prompt(first, "hello from the first TUI")
       await second.waitForText("hello from the first TUI", 20_000)
       await second.waitForText("Reply seen by both TUIs.", 20_000)
@@ -152,7 +154,8 @@ test.describe("two frontends, one database", () => {
     const creator = await tui(...selfLaunch(workspace))
     await creator.waitForText("Message, !shell, or @file · / commands", 30_000)
     await creator.waitForText("No messages yet")
-    const session = /hya · (hysec_\w+)/.exec(await creator.text())![1]!
+    await showStatusLine(creator)
+    const session = await statusSessionId(creator)
     const server = (await status(creator)).server
     const listed = async (): Promise<string[]> =>
       ((await (await fetch(`${server}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
@@ -160,14 +163,15 @@ test.describe("two frontends, one database", () => {
     const [command] = selfLaunch(workspace, ["--session", session])
     const { term: viewer, host } = await secondTab(page, command, workspace.dir, workspace.env)
     try {
-      await viewer.waitForText(new RegExp(`hya · ${session}`), 30_000)
+      await showStatusLine(viewer)
+      await viewer.waitForText(new RegExp(`mode [^·]+ · [^·]*${session}`), 30_000)
       // The creator quits: its session is still empty, but the viewer shows it.
       await prompt(creator, "/exit")
       expect(await creator.waitForExit()).toBe(0)
       // A kept session has no event to wait for: stay well past the daemon's 5 s grace.
       await page.waitForTimeout(8_000)
       expect(await listed()).toContain(session)
-      await viewer.waitForText(new RegExp(`hya · ${session}`))
+      await viewer.waitForText(new RegExp(`mode [^·]+ · [^·]*${session}`))
       expect(await viewer.text()).not.toContain("was deleted elsewhere")
 
       // The last viewer quits: now nobody shows it, so the daemon drops it (never archived).

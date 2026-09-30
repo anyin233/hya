@@ -162,9 +162,14 @@ missed instead of stacking it.
 ```sh
 cd packages/hya-tui-web
 bun run typecheck
-bun test ./test          # codec + host unit tests (bun run test)
-bunx playwright test     # browser E2E (bun run test:e2e)
+bun test ./test                       # codec + host unit tests (bun run test)
+bunx playwright test e2e/<spec>.ts    # browser E2E for the screens you changed
+bunx playwright test                  # whole browser suite (bun run test:e2e)
 ```
+
+Locally, run the specs that cover your change: the new or changed spec and the
+specs for the screens it touches. The whole suite is the CI gate; run it
+locally only when asked or when a change affects every screen.
 
 `e2e/hya-tui.spec.ts` needs a built backend. Run
 `cargo build -p hya-backend --bin hya` first, or set `HYA_BIN` to another

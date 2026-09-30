@@ -3,8 +3,8 @@ import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
 import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
-import { currentModel, modelBaseReference, modelReference, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
-import { parseSwitch, projectsSidebarVisible, sidebarVisible } from "../state/layout"
+import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
+import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
 import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
@@ -14,7 +14,21 @@ import type { PickerAction } from "../state/picker"
 import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 
-import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
+import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec, type Completion } from "./registry"
+import type { CompletionContext } from "../completion"
+
+/**
+ * Session id completions (`/open`, `/resume`): a titled session shows as
+ * `title (id)` and also matches by its title; the replacement is always the id.
+ */
+function matchSessions({ head, current }: ArgumentPosition, sessions: CompletionContext["sessions"]): Completion[] {
+  const prefix = current.toLowerCase()
+  return sessions
+    .filter((session) => session.id.toLowerCase().startsWith(prefix) || session.title?.toLowerCase().startsWith(prefix))
+    .map((session) => ({ replacement: `${head}${session.id}`, label: `${head}${session.title ? `${session.title} (${session.id})` : session.id}` }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+}
+
 /**
  * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never
  * Ctrl+R — that key means refresh), Ctrl+A shows or hides archived sessions,
@@ -76,7 +90,7 @@ async function openSessionsPicker(context: CommandContext, showArchived = true):
   const title = ["Sessions", ...(allProjects ? ["all projects"] : []), ...(showArchived ? ["archived included"] : [])].join(" · ")
   actions.openPicker({
     title,
-    rows: sessionRows(sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects }),
+    rows: sessionRows(sessions, store.state.selected?.id, Date.now(), { activeProjectId: store.state.activeProjectId, allProjects, numbered: store.state.sessions }),
     // Kept at 72 columns or less (docs/tui.md "Sidebar"): the picker box's content
     // width is `min(96, terminalWidth - 4) - 4` (border + `paddingX`), and 80-column
     // terminals are common (`min(96, 80 - 4) - 4 = 72`).
@@ -377,12 +391,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/sessions",
-    description: "Pick a session (open, rename with F2, or delete with Ctrl+D), and show the sidebar",
+    description: "Pick a session (open, rename with F2, or delete with Ctrl+D)",
     run: async (context) => {
       const { store, actions } = context
       store.setView("chat")
-      // The list lives in the sidebar; show it when the width hides it.
-      if (!sidebarVisible(store.state.sidebar, store.state.columns)) store.setSidebar("open")
       await actions.refresh()
       await openSessionsPicker(context)
     },
@@ -391,7 +403,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/resume",
     description: "Reopen a session and unarchive it: pick one of the active Project's sessions (archived ones included, newest first), or name its id",
     argumentHint: "[id]",
-    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.sessions) : [],
+    complete: (position, context) => position.words.length === 1 ? matchSessions(position, context.sessions) : [],
     run: ({ actions }, { args }) => actions.resume(args[0]),
   },
   {
@@ -403,20 +415,25 @@ export const nativeCommandSpecs: CommandSpec[] = [
       if (words.length === 2) return matchValues(head, current, context.models)
       return []
     },
-    run: ({ actions }, { args }) => {
-      if (args[0] === "--temp") return actions.newTemporarySession(args[1], args[2])
-      return actions.newSession(args[0], args[1])
+    run: async ({ store, actions }, { args }) => {
+      if (args[0] === "--temp") await actions.newTemporarySession(args[1], args[2])
+      else await actions.newSession(args[0], args[1])
+      // A new session waits for its first prompt: typing goes to the composer, not
+      // back to the Projects sidebar the command pane was opened from (CommandPane `close`).
+      store.setProjectsSidebarFocus(false)
     },
   },
   {
     name: "/open",
     description: "Open a session",
     argumentHint: "<id|number>",
-    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.sessions) : [],
+    complete: (position, context) => position.words.length === 1 ? matchSessions(position, context.sessions) : [],
     run: async ({ store, actions }, { args }) => {
       const target = args[0]
-      // Numbers count in the sidebar's order (subagent sessions nested under their parent).
-      const id = target && /^\d+$/.test(target) ? sessionTree(store.state.sessions)[Number(target) - 1]?.session.id : target
+      // The sidebar's numbers (state/format.ts `sessionNumbers`): the active Project's sessions, subagents as 2.1.3.
+      const id = target && /^\d+(?:\.\d+)*$/.test(target)
+        ? [...sessionNumbers(store.state.sessions, store.state.activeProjectId)].find(([, number]) => number === target)?.[0]
+        : target
       if (!id) throw new Error("Usage: /open <session id or number>")
       await actions.openSession(id)
     },
@@ -494,7 +511,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
       const selected = store.state.selected
       const title = argumentsText.trim()
       if (!selected || !title) throw new Error("Usage: /rename <title> in a session")
-      store.setSelected(await client.updateSession(selected.id, { title }))
+      const renamed = await client.updateSession(selected.id, { title })
+      store.setSelected(renamed)
+      // The list row too (sidebar, `/open` completion), without waiting for the global stream's `sessionUpdated`.
+      store.patchSessionRow(selected.id, { title: renamed.title ?? title })
       store.setStatus(`Renamed to ${title}`)
     },
   },
@@ -728,7 +748,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
       const shown = parseSwitch(args[0], sidebarVisible(store.state.sidebar, store.state.columns), "Usage: /sidebar [on|off]")
-      store.setSidebar(shown ? "open" : "closed")
+      if (shown && store.state.columns < layoutBreakpoints.sidebar) {
+        store.setStatus(sidebarTooNarrowNotice)
+        return
+      }
+      store.setSidebar(shown ? "auto" : "closed")
       store.setStatus(`Sidebar ${shown ? "shown" : "hidden"} · Ctrl+B toggles`)
     },
   },

@@ -6,8 +6,13 @@ import { For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useApp } from "../app/context"
 import type { TodoItem } from "../client"
-import { contextText, sessionListText, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
+import { contextFields, contextRows, type ContextTone } from "../state/contextFields"
+import { sessionListText, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
 import { colors, toolColors } from "../theme"
+
+/** Context box value color: plain and strong values in the text color, the rest in their theme color. */
+const boxColor = (tone: ContextTone): string =>
+  tone === "accent" ? colors.accent : tone === "warning" ? colors.warning : tone === "error" ? colors.error : colors.fg
 
 function SideBox(props: { title: string; active?: boolean; children: import("solid-js").JSX.Element }) {
   return (
@@ -79,7 +84,14 @@ export function SidebarPane(props: { kind: "sessions" | "todos" | "context"; wid
       <Show when={props.kind === "context"}>
         <SideBox title="Context" active={props.active}>
           <scrollbox ref={props.scrollRef} width="100%" flexGrow={1}>
-            <text width="100%" wrapMode="none" fg={colors.fg}>{contextText(store.state, shownServer(store.state, server), inner())}</text>
+            <For each={contextRows(contextFields(store.state, shownServer(store.state, server)), inner())}>
+              {(row) => (
+                <text width="100%" height={1} wrapMode="none">
+                  <span style={{ fg: colors.muted }}>{row.label}</span>
+                  <span style={{ fg: boxColor(row.tone) }}>{row.value}</span>
+                </text>
+              )}
+            </For>
           </scrollbox>
         </SideBox>
       </Show>
