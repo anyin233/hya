@@ -2,7 +2,7 @@
 // narrow widths, including focus and viewport behavior. See docs/tui.md "Layout".
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, statusLinePattern, statusSessionId, test, textStep, toolStep } from "./hya"
+import { expect, hyaTui, statusLinePattern, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
 const colors = { bg: "#11151b", panel: "#1c2530", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
@@ -60,7 +60,7 @@ test.describe("layout", () => {
   })
 
   test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
-    let term = await tui(hyaTui(backend))
+    let term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     await prompt(term, "/layout split vertical jobs")
     await term.waitForText("▸ jobs · pane-6")
@@ -78,7 +78,7 @@ test.describe("layout", () => {
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
-    term = await tui(hyaTui(backend))
+    term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("layout reply marker l1")
     await term.waitForText("jobs · pane-6")
     await term.waitForText("Resumed ")
@@ -88,11 +88,11 @@ test.describe("layout", () => {
     await term.waitForText("Sessions")
   })
 
-  test("the default viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+  test("a wide viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     const { cols } = await term.size()
-    expect(cols).toBeGreaterThanOrEqual(110)
+    expect(cols).toBeGreaterThanOrEqual(150)
     await prompt(term, "hello layout")
     await term.waitForText("layout reply marker l1", 20_000)
 
@@ -125,7 +125,7 @@ test.describe("layout", () => {
   })
 
   test("sidebar and top status line are mutually exclusive across resize", async ({ tui, backend }, testInfo) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     await term.waitForText("Context")
     expect((await term.lines()).some((line) => line.startsWith("mode "))).toBe(false)
@@ -140,10 +140,10 @@ test.describe("layout", () => {
     await term.attach(testInfo, "narrow")
 
     await term.press("Control+b")
-    await term.waitForText("Sidebar needs 110+ columns")
+    await term.waitForText("Sidebar needs 150+ columns")
     expect(await term.find("Sessions")).toBeNull()
 
-    await term.resize(1100, 640)
+    await term.resize(wideViewport.width, wideViewport.height)
     await term.waitForText("Context")
     await expect.poll(async () => (await term.lines()).some((line) => line.startsWith("mode "))).toBe(false)
 
@@ -159,7 +159,7 @@ test.describe("pane focus", () => {
   test.use({ model: { steps: [textStep(longReply)] } })
 
   test("switching panes keeps the conversation viewport where the user left it", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     await prompt(term, "show a long reply")
     await term.waitForText("END OF LONG REPLY", 20_000)

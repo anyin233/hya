@@ -1,10 +1,10 @@
-import { expect, hyaTui, showStatusLine, test } from "./hya"
+import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
 
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText(/Connected to hya \d+\.\d+\.\d+/)
-    // The default viewport shows the sidebar boxes; the top status line is hidden.
+    // A wide viewport shows the sidebar boxes; the top status line is hidden.
     // The old Chat and Pending panels are gone.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
     await term.waitForText("No messages yet. Type a prompt below.")

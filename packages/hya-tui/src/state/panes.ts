@@ -1,5 +1,5 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
-import { projectsSidebarVisible, sidebarVisible, type SidebarMode } from "./layout"
+import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
 export const paneKinds = ["conversation", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api"] as const
 export type PaneKind = typeof paneKinds[number]
@@ -183,6 +183,48 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
     return [node, false]
   }
   return { ...layout, root: resize(layout.root)[0] }
+}
+
+const rightSidebarKinds: readonly PaneKind[] = ["sessions", "todos", "context"]
+
+/**
+ * The weight `split` is drawn with at `columns` wide. A vertical split whose
+ * second side holds only right-sidebar panes (Sessions, Todos, Context)
+ * leaves that side at least `sidebarMinColumns`; the conversation keeps
+ * 10% however narrow the split. The saved weight is not changed.
+ */
+export function renderedWeight(split: PaneSplit, columns: number): number {
+  if (split.axis !== "vertical" || columns <= 0 || !paneLeaves(split.second).every((pane) => rightSidebarKinds.includes(pane.kind))) return split.weight
+  return Math.min(split.weight, Math.max(0.1, 1 - sidebarMinColumns / Math.floor(columns)))
+}
+
+/**
+ * The weight that puts `split`'s boundary (the first column of its second
+ * side) at screen column `pointer`, for a split drawn from column `left`,
+ * `columns` wide: within the 10–90% a saved layout allows and never
+ * narrower than `renderedWeight` draws the right sidebar.
+ */
+export function boundaryWeight(split: PaneSplit, left: number, columns: number, pointer: number): number {
+  const weight = Math.max(0.1, Math.min(0.9, (pointer - left) / columns))
+  return renderedWeight({ ...split, weight }, columns)
+}
+
+/**
+ * Set the weight of the split that separates pane `first` (on its first
+ * side) from pane `second` (on its second side) in the saved tree. The same
+ * layout when no split separates them that way.
+ */
+export function setSplitWeight(layout: PaneLayout, first: string, second: string, weight: number): PaneLayout {
+  const has = (node: PaneNode, id: string): boolean => paneLeaves(node).some((pane) => pane.id === id)
+  const update = (node: PaneNode): PaneNode => {
+    if (node.type === "pane") return node
+    if (has(node.first, first) && has(node.second, second)) return node.weight === weight ? node : { ...node, weight }
+    const target = has(node.first, first) ? "first" : "second"
+    const child = update(node[target])
+    return child === node[target] ? node : { ...node, [target]: child }
+  }
+  const root = update(layout.root)
+  return root === layout.root ? layout : { ...layout, root }
 }
 
 function migrateLegacyDefault(root: PaneNode): PaneNode {

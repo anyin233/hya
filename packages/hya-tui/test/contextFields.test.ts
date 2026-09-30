@@ -50,12 +50,12 @@ test("the status line wraps onto a second row, then drops the least essential fi
 
 test("the status line is shown exactly when the Context pane is not", () => {
   const store = createAppStore()
-  store.setColumns(140)
+  store.setColumns(160)
   expect(contextStatusShown(store.state)).toBe(false)
   store.setSidebar("closed")
   expect(contextStatusShown(store.state)).toBe(true)
   store.setSidebar("auto")
-  store.setColumns(109)
+  store.setColumns(149)
   expect(contextStatusShown(store.state)).toBe(true)
   // Below the breakpoint a pin no longer brings the sidebar back.
   store.setSidebar("open")

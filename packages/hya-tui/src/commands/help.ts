@@ -161,6 +161,7 @@ const mouseRows: HelpRow[] = [
   { group: "Transcript", keys: "Mouse drag", description: "Select text; on release it is copied to the clipboard (OSC 52) and the status line says Copied N chars" },
   { group: "Transcript", keys: "Mouse wheel", description: "Scroll the transcript" },
   { group: "Transcript", keys: "Click Thinking / a tool card", description: "Expand or collapse that block; a task card opens the subagent's session" },
+  { group: "Views", keys: "Drag a sidebar border", description: "Resize the pane beside it (the right sidebar stays at least 29 columns); the width is saved with the layout" },
 ]
 
 const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = { local: "local", command: "server", skill: "skill" }

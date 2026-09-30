@@ -199,7 +199,8 @@ test.describe("command menu", () => {
     await term.page.evaluate(() => window.hyaTerm.term.paste("/help"))
     await expect.poll(() => composerText(term)).toBe("/help")
     await term.press("Enter")
-    await term.waitForText("Messages 2")
+    // The top status line (the sidebar is hidden at this width) counts the user and assistant messages.
+    await term.waitForText("2 msgs")
     expect(await term.find("Help · keys and commands")).toBeNull()
   })
 

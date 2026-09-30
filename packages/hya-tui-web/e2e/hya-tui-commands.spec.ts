@@ -1,11 +1,11 @@
-import { expect, hyaTui, showStatusLine, test } from "./hya"
+import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
 
 // Characterization specs: they lock the existing TUI look and command behavior
 // so framework or module changes in packages/hya-tui cannot drift silently.
 
 test.describe("hya TUI commands and look", () => {
   test("keeps the panel colors and the status-line session in the accent color", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     const sessions = (await term.find("Sessions"))!
     const corner = await term.cell(sessions.row, sessions.col - 1)
@@ -71,12 +71,12 @@ test.describe("hya TUI commands and look", () => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
     await term.waitForText("Connected to hya")
     const { cols } = await term.size()
-    expect(cols).toBeLessThan(110)
+    expect(cols).toBeLessThan(150)
     expect(cols).toBeGreaterThanOrEqual(58)
     await term.waitForText(/^mode /m)
     expect(await term.text()).not.toContain("Sessions")
     await term.press("Control+b")
-    await term.waitForText("Sidebar needs 110+ columns")
+    await term.waitForText("Sidebar needs 150+ columns")
     expect(await term.text()).not.toContain("Sessions")
   })
 

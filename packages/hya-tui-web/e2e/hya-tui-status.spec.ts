@@ -6,7 +6,7 @@
 // logging proxy), and the `/compact` divider, live and after reopening.
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, initGitRepo, showStatusLine, statusLinePattern, statusSessionId, test, textStep, toolStep, toolsStep } from "./hya"
+import { expect, hyaTui, initGitRepo, showStatusLine, statusLinePattern, statusSessionId, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
@@ -139,13 +139,14 @@ test.describe("live todo panel", () => {
   test("the sidebar Todos box updates live from a real todo tool call; hiding the sidebar shows a compact count", async ({ tui, backend }) => {
     // Through a logging proxy: the list must come from the `todoUpdated` frame, not a `GetSessionTodo` re-read.
     const proxy = await startProxy(backend.url)
-    const term = await tui(hyaTui({ ...backend, url: proxy.url }))
+    const term = await tui(hyaTui({ ...backend, url: proxy.url }), { viewport: wideViewport })
     await term.waitForText("Connected to hya")
     await prompt(term, "track a todo")
     await term.waitForText("Added a todo.", 20_000)
-    await term.waitForText(/^Ready/m)
+    // At this width the Projects pane starts every row.
+    await term.waitForText(/(^|│)Ready/m)
 
-    await term.waitForText("○ write te…", 20_000)
+    await term.waitForText("○ write te", 20_000)
     // One `GetSessionTodo`: the seed when the new session opened (empty then); the item came on the stream.
     expect(proxy.log.filter((entry) => entry.method === "GET" && /\/todo$/.test(entry.path))).toHaveLength(1)
     // Sidebar Context box: the merged transcript's message count (user + assistant).
