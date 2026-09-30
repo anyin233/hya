@@ -51,6 +51,7 @@ function PaneLeafView(props: { node: PaneLeaf; width: number }) {
   const { store, server, ui } = useApp()
   let scroll: ScrollBoxRenderable | undefined
   const scroller = {
+    line: (direction: -1 | 1) => { if (scroll) scroll.scrollBy(direction) },
     page: (direction: -1 | 1) => { if (scroll) scroll.scrollBy(direction * pageStep(scroll.viewport.height)) },
     top: () => { if (scroll) scroll.scrollTop = 0 },
     bottom: () => { if (scroll) scroll.scrollTop = scroll.scrollHeight },

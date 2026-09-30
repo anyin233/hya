@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/network-tools
-  version: 0.43.33
+  version: 0.43.34
   publisher: hya
 namespace: network-tools
 extensions:

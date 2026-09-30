@@ -1,5 +1,5 @@
-# 0.43.33
+# 0.43.34
 
 ## Features
 
-- The global Commands overlay now puts its input bar first, with matching command and argument recommendations dropping down below it. The input stays at a fixed position as the suggestion list changes.
+- Workspace panes now own their keys and paste strictly; selecting an auxiliary pane preserves conversation drafts and prevents accidental submissions.

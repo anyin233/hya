@@ -842,7 +842,20 @@ panes also show `▸` and their pane id in the title.
 Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
 also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
 `/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
-pane. Focus changes keep each pane mounted, including its scroll position;
+pane. Up/Down scroll read-only panes one line. Ordinary typing, paste, Enter,
+Backspace, Esc, input history, Vim edits, and conversation shortcuts belong only
+to the focused pane; unsupported keys in an auxiliary pane are ignored. They
+never edit or submit the conversation draft, answer a permission request, or
+cancel a turn. Projects keeps its Up/Down/Enter selection and Esc return behavior.
+For example, draft a message, select Sessions with Alt+Right, inspect it, then
+return with Alt+Left to continue the same draft. `/` and `?`, Alt+arrows, Ctrl+X
+then `/`, Ctrl+B/P, Ctrl+R, F4, and the exit shortcuts remain global workspace
+actions. Ctrl+C from an auxiliary pane uses the usual two-press exit guard without
+clearing the conversation draft. Ctrl+P or Esc leaving Projects selects Conversation.
+This is client-side keyboard ownership based on `paneLayout.active` and the
+Projects focus flag; it adds no RPC or configuration fields.
+
+Focus changes keep each pane mounted, including its scroll position;
 for example, scroll up in Conversation, press Alt+Right to inspect a side pane,
 then Alt+Left to return to the same part of the transcript. The visible tree
 is recalculated when the layout, terminal width, or sidebar visibility changes,
@@ -1368,8 +1381,9 @@ under its header, in the error color:
 ## Composer
 
 The input at the bottom of the main column is a multi-line message editor
-(OpenTUI's built-in `<textarea>`). It keeps keyboard focus while the command
-pane is closed. Its placeholder is `Message, !shell, or @file · / commands`.
+(OpenTUI's built-in `<textarea>`). It receives keyboard focus only when Conversation
+is selected and no command input or modal owns the keyboard. Its placeholder is
+`Message, !shell, or @file · / commands`.
 
 **Writing.** Enter sends the whole input as a prompt or `!command` shell turn.
 Commands are entered in the separate [command pane](#command-pane). A slash
