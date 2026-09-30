@@ -839,6 +839,21 @@ command. For example:
 `vertical` divides left/right; `horizontal` divides top/bottom. A new pane
 starts selected. The selected pane has an accent border; generic auxiliary
 panes also show `▸` and their pane id in the title.
+The accent border marks exactly one keyboard owner: Conversation highlights
+its bottom message input, auxiliary panes highlight their rectangle, and opening
+Commands, Help, a picker, or a form moves the highlight to that overlay. Borders
+behind it return to the normal border color; closing it restores the workspace
+highlight. For example, select Jobs, press `/` to see Commands highlighted,
+then Esc to restore Jobs. This also applies after resizing the terminal.
+
+The focus contract is derived locally, in priority order: concealed secret
+entry, picker (including Help), the open full-screen view (its provider form
+when present), Commands, then the selected workspace pane. A provider form
+highlights its own box and dims the enclosing Provider View. Conversation uses
+the same owner decision for its textarea focus and border. Focus uses the theme's
+`accent` color, while inactive borders use `border`; it adds no persisted field
+or server API.
+
 Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
 also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
 `/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
@@ -1451,9 +1466,9 @@ explain these two functions:          ← Ctrl+J
 
 An input that starts with `!` runs the rest of the line as a shell command in
 the open session (a session is created first if none is open). The input box
-shows the shell mode while you type: its border turns the warning color and
-its title reads `! shell`. The command goes through the prompt queue like a
-prompt, so it waits while a turn runs.
+shows the shell mode while you type: its title reads `! shell`; its accent border
+continues to indicate keyboard focus, like an ordinary message. The command goes
+through the prompt queue like a prompt, so it waits while a turn runs.
 
 The backend runs it as a `ShellTurn`: its builtin `bash` tool runs the command
 in the session's working directory, with no model round, under the session's

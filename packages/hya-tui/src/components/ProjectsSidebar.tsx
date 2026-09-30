@@ -29,7 +29,7 @@ export function ProjectsSidebar(props: { width: number; active?: boolean }) {
         width="100%"
         flexGrow={1}
         border
-        borderColor={props.active || store.state.projectsSidebarFocus ? colors.accent : colors.border}
+        borderColor={props.active ? colors.accent : colors.border}
         title="Projects"
         backgroundColor={colors.panel}
         flexDirection="column"

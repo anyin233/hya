@@ -1,5 +1,5 @@
-# 0.43.35
+# 0.43.36
 
 ## Features
 
-- The Commands dropdown now shows up to twelve recommendations, while fitting short terminals and scrolling through every match.
+- Exactly one focus border follows keyboard ownership across the composer, workspace panes, Commands, Help, full-screen views, and provider forms.

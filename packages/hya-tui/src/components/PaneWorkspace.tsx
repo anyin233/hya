@@ -6,6 +6,7 @@ import { mainContent, modelReference, shownServer } from "../state/format"
 import type { AppState } from "../state/store"
 import { paneLeaves, visiblePaneRoot, type PaneKind, type PaneLeaf, type PaneNode } from "../state/panes"
 import { pageStep } from "../state/scroll"
+import { keyboardOwner } from "../state/focus"
 import { colors } from "../theme"
 import { ConversationPane } from "./ConversationPane"
 import { ProjectsSidebar } from "./ProjectsSidebar"
@@ -66,6 +67,7 @@ function PaneLeafView(props: { node: PaneLeaf; width: number }) {
   })
   onCleanup(() => { if (registeredId && ui.panes?.get(registeredId) === scroller) ui.panes.delete(registeredId) })
   const active = () => store.state.paneLayout.active === props.node.id
+  const highlighted = () => keyboardOwner(store.state, ui.command?.active() ?? false) === props.node.id
   const title = () => `${active() ? "▸ " : ""}${props.node.kind} · ${props.node.id}`
   const select = () => {
     if (active()) {
@@ -84,18 +86,18 @@ function PaneLeafView(props: { node: PaneLeaf; width: number }) {
       </Match>
       <Match when={props.node.kind === "projects"}>
         <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <ProjectsSidebar width={props.width} active={active()} />
+          <ProjectsSidebar width={props.width} active={highlighted()} />
         </box>
       </Match>
       <Match when={props.node.kind === "sessions" || props.node.kind === "todos" || props.node.kind === "context"}>
         <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <SidebarPane kind={props.node.kind as "sessions" | "todos" | "context"} width={props.width} active={active()} scrollRef={(element) => (scroll = element)} />
+          <SidebarPane kind={props.node.kind as "sessions" | "todos" | "context"} width={props.width} active={highlighted()} scrollRef={(element) => (scroll = element)} />
         </box>
       </Match>
       <Match when={true}>
     <box
       width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column"
-      border borderColor={active() ? colors.accent : colors.border}
+      border borderColor={highlighted() ? colors.accent : colors.border}
       title={title()} backgroundColor={colors.bg}
       onMouseDown={select}
     >

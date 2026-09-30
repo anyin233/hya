@@ -15,7 +15,7 @@ import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { projectsSidebarVisible } from "../state/layout"
 import { paneLeaves } from "../state/panes"
-import { focusedPane } from "../state/focus"
+import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
@@ -51,7 +51,7 @@ interface FileMenu {
  * (state/prompts.ts `promptKey`). Other keys always reach the editor.
  * Ctrl+C clears (or hints) and quits (archiving the session) on a second
  * press within 2 s; Ctrl+D on an empty input quits and leaves the session
- * running (in a WebUI tab it only shows a notice). `!command` input shows a shell-mode border; an
+ * running (in a WebUI tab it only shows a notice). `!command` input shows a shell-mode title; an
  * `@text` token opens a file suggestion list from `FindFiles`.
  *
  * Vim mode (`/vim`, composer/vim.ts): the state machine sees keys after the
@@ -78,6 +78,8 @@ interface FileMenu {
  */
 export function Composer(props: { width: number }) {
   const { store, controller, ui } = useApp()
+  const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
+    === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "conversation")?.id
   let editor: TextareaRenderable | undefined
   const [value, setValue] = createSignal("")
   const [rows, setRows] = createSignal(1)
@@ -722,7 +724,7 @@ export function Composer(props: { width: number }) {
         height={rows() + 2}
         flexShrink={0}
         border
-        borderColor={shell() ? colors.warning : colors.border}
+        borderColor={composerFocused() ? colors.accent : colors.border}
         title={shell() ? "! shell" : undefined}
         backgroundColor={colors.panel}
         paddingX={1}
@@ -749,7 +751,7 @@ export function Composer(props: { width: number }) {
           cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
-          focused={focusedPane(store.state)?.kind === "conversation" && !overlayViewOpen() && !store.state.picker && !store.state.secretEntry && !ui.command?.active()}
+          focused={composerFocused()}
           onSubmit={submit}
           onContentChange={sync}
           onCursorChange={() => {
