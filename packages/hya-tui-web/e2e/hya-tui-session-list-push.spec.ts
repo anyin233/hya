@@ -2,13 +2,13 @@
 // TUI's sidebar and open `/sessions` picker stay current from the global
 // stream without polling — a creation, rename, busy/idle flip, archive, or
 // delete another client makes shows up live. Deleting the TUI's own open
-// session (another client's doing) never crashes it: a notice, then a fresh
+// session (another client's doing) never crashes it: it opens a fresh
 // session. `/sessions` archive-from-elsewhere is already covered by
 // hya-tui-archive.spec.ts ("another client's archive marks the open row");
 // this file covers the rest of the table.
 
 import { Tui } from "./harness"
-import { api, expect, fakeModelRef, hangStep, hyaTui, showStatusLine, statusSessionId, statusSessionPattern, test, textStep, type Backend } from "./hya"
+import { api, expect, fakeModelRef, hangStep, hyaTui, statusSessionId, test, textStep, wideViewport, type Backend } from "./hya"
 
 test.use({ model: { steps: [hangStep(60_000), textStep("Spare."), textStep("Spare."), textStep("Spare.")] } })
 
@@ -26,9 +26,10 @@ async function otherSession(backend: Backend, title?: string): Promise<string> {
 }
 
 test("a session created, renamed, and run by another client shows up live in the sidebar", async ({ tui, backend, fakeModel }, testInfo) => {
-  const term = await tui(hyaTui(backend), { viewport: { width: 2200, height: 640 } })
-  await term.waitForText("Connected to hya", 30_000)
-  await prompt(term, "/sidebar on")
+  const term = await tui(hyaTui(backend), { viewport: wideViewport })
+  await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+  await statusSessionId(term)
+
   // Created elsewhere (`sessionStarted`, no title yet): the raw id shows up, debounced.
   // The sidebar is narrow, so a long id is truncated on screen — match its start.
   const other = await otherSession(backend)
@@ -47,22 +48,20 @@ test("a session created, renamed, and run by another client shows up live in the
   await expect.poll(async () => (await term.text()).includes("hya-main · running")).toBe(false)
 })
 
-test("a session deleted by another client drops its sidebar row; deleting the open one shows a notice and opens a new session", async ({ tui, backend }, testInfo) => {
-  const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
-  await term.waitForText("Connected to hya", 30_000)
-  const { sessions } = await api<{ sessions: { id: string }[] }>(backend, "GET", "/v1/sessions")
-  const openId = sessions[0]!.id
-  await prompt(term, "/sidebar on")
+test("a session deleted by another client drops its sidebar row; deleting the open one opens a new session", async ({ tui, backend }, testInfo) => {
+  const term = await tui(hyaTui(backend), { viewport: wideViewport })
+  await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+  const openId = await statusSessionId(term)
+
   // Deleted elsewhere, not the open session: the row just disappears.
   const bystander = await otherSession(backend, "Bystander")
   await term.waitForText("Bystander", 15_000)
   await api(backend, "DELETE", `/v1/sessions/${bystander}`)
   await expect.poll(async () => (await term.text()).includes("Bystander")).toBe(false)
 
-  // Deleted elsewhere while open: a notice, then a fresh session — never a crash.
+  // Deleted elsewhere while open: a fresh session — never a crash.
   await api(backend, "DELETE", `/v1/sessions/${openId}`)
-  await term.waitForText(`Session ${openId} was deleted elsewhere; opened a new session`, 15_000)
-  await term.press("Control+b")
+  await expect.poll(() => statusSessionId(term)).not.toBe(openId)
   await term.attach(testInfo, "open-session-deleted")
 })
 
@@ -70,7 +69,7 @@ test("the /sessions picker hint fits at 80 columns", async ({ tui, backend }, te
   const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
   const { cols } = await term.size()
   expect(cols).toBeLessThanOrEqual(84)
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   await term.waitForText("Esc closes")

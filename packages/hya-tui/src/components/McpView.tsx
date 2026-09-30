@@ -9,6 +9,7 @@ import { wrapLineCount } from "../state/layout"
 import { pickerWindow } from "../state/picker"
 import { mcpToolIndex, mcpToolLabel, mcpToolWindow, mcpViewHint, serverHeaderLine, serverLine, serverStateText, shownServers, type McpBusy, type McpNotice, type McpViewState } from "../state/mcp"
 import { colors } from "../theme"
+import { keyboardOwner } from "../state/focus"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: McpNotice): string {
@@ -31,7 +32,7 @@ function BusyLine(props: { busy: McpBusy }) {
 }
 
 export function McpView() {
-  const { store } = useApp()
+  const { store, ui } = useApp()
   const size = useTerminalDimensions()
   return (
     <Show when={store.state.mcpView}>
@@ -89,7 +90,7 @@ export function McpView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "mcp" ? colors.accent : colors.border}
             title={title()}
             backgroundColor={colors.bg}
             flexDirection="column"

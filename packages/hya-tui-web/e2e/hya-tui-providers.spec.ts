@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, backendConfigDir, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
+import { api, backendConfigDir, expectStatus, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
 
 // The Provider View (`/key`): a full-screen list of providers and, per
 // provider, its models. Providers are added against a fake OpenAI-compatible
@@ -9,7 +9,7 @@ import { api, backendConfigDir, expect, hangStep, hyaTui, startFakeModel, test, 
 // itself, so the backend stays on the offline model until one is picked.
 
 async function openProviders(term: Tui): Promise<void> {
-  await term.waitForText("Enter a prompt · /new creates a session")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("/key")
   await term.press("Enter")
   await term.waitForText("changes apply at once, no restart")
@@ -36,7 +36,7 @@ const config = (backend: Backend) => readFile(join(backendConfigDir(backend), "c
 test.describe("hya TUI Provider View", () => {
   test("/key opens the view; /keys and /login are gone; help lists the view's keys", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.press("?")
     await term.waitForText("Help · keys and commands")
     await term.type("/key")
@@ -64,14 +64,14 @@ test.describe("hya TUI Provider View", () => {
     await term.type("k")
     await term.waitForText("hya is the built-in offline provider")
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.text()).not.toContain("PROVIDER")
   })
 
   test("a provider added over the API while the TUI is running reaches the /model picker live, no restart or manual refresh (catalogUpdated)", async ({ tui, backend }) => {
     await withFake([], ["alpha"], async (fake) => {
       const term = await tui(hyaTui(backend))
-      await term.waitForText("Connected to hya")
+      await term.waitForText("Message, !shell, or @file · / commands")
       // Never opens the Provider View (whose own reload would also pick this
       // up): the global stream's live `catalogUpdated` frame is what must
       // carry it to the `/model` picker.
@@ -96,7 +96,7 @@ test.describe("hya TUI Provider View", () => {
   test("add a provider in the wizard: models are fetched, the session moves off hya/offline, a test replies", async ({ tui, backend }) => {
     await withFake([hangStep(), textStep("Hi", { finish: "length" })], ["alpha", "beta"], async (fake) => {
       const term = await tui(hyaTui(backend))
-      await term.waitForText("Connected to hya")
+      await term.waitForText("Message, !shell, or @file · / commands")
       // A session on the offline model.
       await term.type("hello")
       await term.press("Enter")
@@ -124,7 +124,7 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText("Model · pick one of gw's models for this session")
       await term.waitForText(/▸ ● alpha\s+\[gw\]/)
       await term.press("Enter")
-      await term.waitForText("Model → gw/alpha")
+      await expect.poll(() => term.find("Model · pick")).toBeNull()
       await term.waitForText("Providers › gw")
       await term.waitForText(/gw · openai · http:\/\/127\.0\.0\.1:\d+\/v1 · saved key · ready · 2 models/)
       await term.waitForText(/alpha\s+remote/)
@@ -157,9 +157,8 @@ test.describe("hya TUI Provider View", () => {
       await term.press("Escape")
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+3 models/)
       await term.press("Escape")
-      await term.waitForText("Enter a prompt · /new creates a session")
-      // The status line renders the selected provider model as `<model>:<variant>`.
-      await term.waitForText(/hya-main · alpha:default/)
+      await term.waitForText("Message, !shell, or @file · / commands")
+      await expectStatus(term, "Model", "gw/alpha")
       // The new models reached the /model picker without a restart.
       await term.type("/model")
       await term.press("Enter")

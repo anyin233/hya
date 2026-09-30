@@ -3,7 +3,7 @@
 // border with the mouse; the width is saved with the layout.
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, statusLinePattern, test, wideViewport as wide } from "./hya"
+import { expect, hyaTui, test, wideViewport as wide } from "./hya"
 
 const sidebarMinColumns = 29
 
@@ -31,20 +31,20 @@ async function drag(term: Tui, from: { row: number; col: number }, toCol: number
 }
 
 test.describe("right sidebar width", () => {
-  test("below 150 columns the sidebar is closed and the status line carries its fields", async ({ tui, backend }) => {
+  test("below 150 columns the sidebar stays closed without conversation metadata", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThan(150)
-    await term.waitForText(statusLinePattern)
+    expect(await term.find("mode manual")).toBeNull()
     expect(await term.find("Sessions")).toBeNull()
     await term.press("Control+b")
-    await term.waitForText("Sidebar needs 150+ columns")
+    await expect.poll(() => term.find("Commands")).toBeNull()
     expect(await term.find("Sessions")).toBeNull()
   })
 
   test("dragging its border resizes it, down to the minimum, and a new TUI keeps the width", async ({ tui, backend }, testInfo) => {
     let term = await tui(hyaTui(backend), { viewport: wide })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.waitForText("Sessions")
     const { cols } = await term.size()
     expect(cols).toBeGreaterThanOrEqual(150)

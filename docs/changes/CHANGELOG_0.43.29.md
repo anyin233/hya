@@ -1,5 +1,9 @@
 # 0.43.29
 
+## Fixes
+
+- Command suggestions now scroll through every matching command and nested argument when using Up/Down or Shift+Tab. The pane still shows at most eight rows, and selection wraps only at the ends of the full list. Commands below the initial visible rows, including `/layout`, are reachable without narrowing the search.
+
 ## Features
 
 - **The TUI can connect straight to a gRPC listener.** `bun packages/hya-tui/src/main.ts --grpc HOST:PORT --dir PATH` talks `hya.v1` over gRPC (h2c) instead of HTTP/JSON+SSE. It does not start a local daemon. Sessions, turns, event streams, and the `/api` view all use gRPC. `--grpc` cannot be combined with `--server` or `--db`. The package ships its own copy of the `hya.v1` protobuf definitions so installed releases stay self-contained.

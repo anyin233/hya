@@ -28,7 +28,7 @@ type McpStatus = { servers?: { name: string; state?: string; tools?: string[] }[
 test.describe("hya TUI MCP view", () => {
   test("/mcp: no servers configured, r refreshes, Esc closes", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/mcp")
     await term.press("Enter")
     await term.waitForText("MCP servers")
@@ -40,18 +40,18 @@ test.describe("hya TUI MCP view", () => {
     await term.press("r")
     await term.waitForText("Refreshed")
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("/mcp shows in the help overlay and command menu, and is listed as a native command", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.press("?")
     await term.waitForText("Help · keys and commands")
     await term.type("mcp")
     await term.waitForText(/\/mcp\s+\[local\]\s+Open the MCP view/)
     await term.press("Escape")
-    await term.waitForText("Enter a prompt · /new creates a session")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test.describe("many tools", () => {
@@ -66,7 +66,7 @@ test.describe("hya TUI MCP view", () => {
         .toBe(40)
 
       const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
-      await term.waitForText("Connected to hya")
+      await term.waitForText("Message, !shell, or @file · / commands")
       const { cols } = await term.size()
       expect(cols).toBeLessThanOrEqual(82)
       await term.type("/mcp")

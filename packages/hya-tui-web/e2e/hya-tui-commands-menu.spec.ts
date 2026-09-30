@@ -10,24 +10,30 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hyaTui, showStatusLine, test, textStep } from "./hya"
+import { statusSessionId, expect, hyaTui, test, textStep, type Backend } from "./hya"
 
 const accent = "#73c8e8"
 
-async function connected(term: Tui): Promise<void> {
-  await term.waitForText("Connected to hya")
+async function connected(term: Tui, backend: Backend): Promise<void> {
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await expect.poll(async () => {
+    const result = await (await fetch(`${backend.url}/v1/sessions`)).json() as { sessions?: unknown[] }
+    return result.sessions?.length ?? 0
+  }).toBeGreaterThan(0)
+  await statusSessionId(term)
 }
 
 /** Rows of the bordered box titled `title` (the topmost box whose border shows that title), trimmed. */
 async function box(term: Tui, title: string): Promise<{ top: number; rows: string[] } | undefined> {
   const lines = await term.lines()
-  const top = lines.findIndex((line) => line.startsWith("┌") && line.includes(title))
+  const top = lines.findIndex((line) => line.includes("┌") && line.includes(title))
   if (top < 0) return undefined
+  const left = lines[top]!.lastIndexOf("┌", lines[top]!.indexOf(title))
   let bottom = top + 1
-  while (bottom < lines.length && !lines[bottom]!.startsWith("└")) bottom++
+  while (bottom < lines.length && lines[bottom]![left] !== "└") bottom++
   const rows = lines.slice(top + 1, bottom).map((line) => {
-    const end = line.indexOf("│", 1)
-    return line.slice(1, end < 0 ? undefined : end).trim()
+    const end = line.indexOf("│", left + 1)
+    return line.slice(left + 1, end < 0 ? undefined : end).trim()
   })
   return { top, rows }
 }
@@ -47,9 +53,9 @@ async function composerText(term: Tui): Promise<string> {
   return text === placeholder ? "" : text
 }
 
-/** The command input is the row immediately above the pane's key hint. */
+/** The command input is the first row, above the suggestion dropdown. */
 async function commandText(term: Tui): Promise<string | undefined> {
-  return (await box(term, "Commands"))?.rows.at(-2)
+  return (await box(term, "Commands"))?.rows[0]
 }
 
 async function writeSkill(dir: string, name: string, description: string, body: string): Promise<void> {
@@ -67,17 +73,72 @@ async function writeSkill(dir: string, name: string, description: string, body: 
  * state to poll for (it can already be gone by the first check under load),
  * so wait for the actual outcome instead.
  */
-async function createSessionViaMenu(term: Tui): Promise<void> {
-  await term.type("/new")
-  await term.waitForText("▸ /new")
-  await term.press("Enter")
-  await term.waitForText(/^Created/m)
-}
-
 test.describe("command menu", () => {
+  for (const width of [1100, 700]) {
+    test(`Backspace closes an emptied command pane and preserves the message draft (${width}px)`, async ({ tui, backend }) => {
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await connected(term, backend)
+      await term.type("keep this draft")
+      await expect.poll(() => composerText(term)).toBe("keep this draft")
+      await term.press("Control+x")
+      await term.type("/h")
+      await term.waitForText("▸ /help")
+      await term.press("Backspace")
+      await expect.poll(() => commandText(term)).toBe("/")
+      await term.press("Home")
+      await term.press("Backspace")
+      await expect.poll(() => commandText(term)).toBe("/")
+      await term.press("End")
+      await term.press("Backspace")
+      await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+      expect(await composerText(term)).toBe("keep this draft")
+      await term.type(" continues")
+      await expect.poll(() => composerText(term)).toBe("keep this draft continues")
+      await term.press("Control+x")
+      await term.type("/")
+      await expect.poll(() => commandText(term)).toBe("/")
+      await term.press("Escape")
+      await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+    })
+
+    test(`Up/Down reach commands beyond the visible rows and wrap at the full list (${width}px)`, async ({ tui, backend }, testInfo) => {
+      await writeSkill(backend.dir, "zz-navigation-last", "Last navigation choice", "Say hello.")
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await connected(term, backend)
+      await term.type("/")
+      await term.waitForText("▸ /agent")
+      await term.press("ArrowUp")
+      await term.waitForText("▸ /zz-navigation-last")
+      await term.press("ArrowDown")
+      await term.waitForText("▸ /agent")
+
+      const highlighted = async () => (await box(term, "Commands"))?.rows.find((row) => row.startsWith("▸ "))
+      let selected = await highlighted()
+      const visited = new Set([selected])
+      for (let step = 0; step < 40 && !selected?.startsWith("▸ /layout "); step++) {
+        await term.press("ArrowDown")
+        await expect.poll(async () => {
+          const next = await highlighted()
+          return next !== undefined && next !== selected
+        }).toBe(true)
+        selected = await highlighted()
+        expect(visited.has(selected), "navigation wrapped before reaching /layout").toBe(false)
+        visited.add(selected)
+        expect((await box(term, "Commands"))!.rows.length - 2).toBeLessThanOrEqual(12)
+      }
+      expect(selected).toMatch(/^▸ \/layout /)
+      await term.attach(testInfo, "command-menu-scrolled")
+      await term.press("Tab")
+      await expect.poll(() => commandText(term)).toBe("/layout")
+      await term.waitForText("▸ /layout assign")
+      await term.press("Escape")
+      await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
+    })
+  }
+
   test("slash focuses a separate command pane without changing the message draft", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/")
     await term.waitForText("Commands")
     expect(await composerText(term)).toBe("")
@@ -96,7 +157,7 @@ test.describe("command menu", () => {
 
   test("typing / opens the menu; typing filters it by name, sources tagged", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/")
     await term.waitForText("Commands")
     await term.waitForText("▸ /agent")
@@ -112,7 +173,7 @@ test.describe("command menu", () => {
 
   test("the command pane shows second and third level layout choices while typing", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/layout ")
     await term.waitForText("▸ /layout assign")
     await term.waitForText("/layout split")
@@ -126,7 +187,7 @@ test.describe("command menu", () => {
 
   test("Tab accepts nested choices and Enter runs the completed layout command", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/layout s")
     await term.waitForText("▸ /layout show")
     await term.press("ArrowDown")
@@ -148,7 +209,7 @@ test.describe("command menu", () => {
 
   test("the same nested menu shows API methods and paths", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/api ")
     await term.waitForText("/api GET")
     await term.type("GET /v1/hea")
@@ -157,7 +218,7 @@ test.describe("command menu", () => {
 
   test("Up/Down move the highlight, Tab completes the name and keeps typing args", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/mod")
     await term.waitForText("▸ /model")
     const first = (await term.find("▸ /model"))!
@@ -174,7 +235,7 @@ test.describe("command menu", () => {
 
   test("Esc closes the command pane and keeps its draft for reopening", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/hel")
     await term.waitForText("Commands")
     await term.press("Escape")
@@ -186,7 +247,7 @@ test.describe("command menu", () => {
 
   test("command history stays in the command pane and pasted slash text stays a message", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/status")
     await term.waitForText("▸ /status")
     await term.press("Enter")
@@ -199,21 +260,23 @@ test.describe("command menu", () => {
     await term.page.evaluate(() => window.hyaTerm.term.paste("/help"))
     await expect.poll(() => composerText(term)).toBe("/help")
     await term.press("Enter")
-    // The top status line (the sidebar is hidden at this width) counts the user and assistant messages.
-    await term.waitForText("2 msgs")
+    await term.waitForText("┃ /help")
+    await term.waitForIdle()
     expect(await term.find("Help · keys and commands")).toBeNull()
   })
 
   test("/new from the focused Projects sidebar leaves the composer taking typed text", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1700, height: 800 } })
-    await connected(term)
+    await connected(term, backend)
     await term.press("Control+p")
-    await term.waitForText("Projects sidebar shown, focused")
+    const projects = (await term.find("Projects"))!
+    await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe(accent)
     // Not `createSessionViaMenu`: at this width the Projects sidebar starts every row, so `^Created` never matches.
     await term.type("/new")
     await term.waitForText("▸ /new")
     await term.press("Enter")
-    await term.waitForText(/Created hysec_/)
+    await expect.poll(() => term.find("Commands")).toBeNull()
+    await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe("#405366")
     // Before the fix the refocused sidebar swallowed these keys and they showed nowhere.
     await term.type("hello after new")
     await term.waitForText("│ hello after new")
@@ -221,7 +284,7 @@ test.describe("command menu", () => {
 
   test("Enter on a command with no arguments runs it; Enter on one with an argument hint completes and waits", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/help")
     await term.waitForText("▸ /help")
     await term.press("Enter")
@@ -245,7 +308,7 @@ test.describe("skill commands", () => {
   test("a skill runs as a command turn; the transcript shows /name args, then the reply", async ({ tui, backend }) => {
     await writeSkill(backend.dir, "greet", "Say hello", "Say hello to $ARGUMENTS.")
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/greet world")
     // The space after "greet" hides suggestions; the command input stays focused.
     await expect.poll(() => commandText(term)).toBe("/greet world")
@@ -257,7 +320,7 @@ test.describe("skill commands", () => {
   test("the menu tags a skill as a distinct source from a server command", async ({ tui, backend }) => {
     await writeSkill(backend.dir, "greet", "Say hello", "Say hello to $ARGUMENTS.")
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("/gre")
     await term.waitForText("▸ /greet")
     const menu = (await box(term, "Commands"))!
@@ -271,40 +334,46 @@ test.describe("/compact", () => {
 
   test("shows a compacting status, then the outcome", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
+    await connected(term, backend)
     await term.type("hi")
     await term.press("Enter")
-    await term.waitForText(/^Ready/m, 20_000)
+    await term.waitForIdle(20_000)
     await term.type("/compact")
     await term.waitForText("▸ /compact")
     await term.press("Enter")
     await term.attach(testInfo, "compacting")
     // A manual compaction is always `local_summarizer`, shown in words (docs/protocol/README.md "Compaction").
-    await term.waitForText("Compacted · local summary", 20_000)
+    await term.waitForText(/context compacted.*local summary/, 20_000)
   })
 })
 
 test.describe("/rename", () => {
-  test("updates the header and sidebar title", async ({ tui, backend }) => {
+  test("updates the status view and sidebar title", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
-    await createSessionViaMenu(term)
+    await connected(term, backend)
     await term.type("/rename Bug fix session")
     await term.press("Enter")
-    await term.waitForText("Renamed to Bug fix session")
-    await showStatusLine(term)
-    await term.waitForText(/^mode [^·]+ · Bug fix session · /m)
-    await term.press("Control+b")
-    await term.waitForText("Bug fix session")
+    await expect.poll(async () => {
+      const result = await (await fetch(`${backend.url}/v1/sessions`)).json() as { sessions?: { title?: string }[] }
+      return result.sessions?.some((row) => row.title === "Bug fix session")
+    }).toBe(true)
+    await term.type("/status")
+    await term.press("Enter")
+    await term.waitForText(/Session\s+Bug fix session/)
   })
 
   test("/open lists the titled session as title (id) and completes its id", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
-    await createSessionViaMenu(term)
+    await connected(term, backend)
     await term.type("/rename Bug fix session")
     await term.press("Enter")
-    await term.waitForText("Renamed to Bug fix session")
+    await expect.poll(async () => {
+      const result = await (await fetch(`${backend.url}/v1/sessions`)).json() as { sessions?: { title?: string }[] }
+      return result.sessions?.some((row) => row.title === "Bug fix session")
+    }).toBe(true)
+    await term.type("/status")
+    await term.press("Enter")
+    await term.waitForText(/Session\s+Bug fix session/)
     await term.type("/open bug")
     await term.waitForText(/▸ \/open Bug fix session \(hysec_\w+\)/)
     await term.press("Tab")
@@ -315,8 +384,7 @@ test.describe("/rename", () => {
 test.describe("/status", () => {
   test("shows server, version, directory, session, agent, model, and permission mode", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await connected(term)
-    await createSessionViaMenu(term)
+    await connected(term, backend)
     await term.type("/status")
     await term.waitForText("▸ /status")
     await term.press("Enter")

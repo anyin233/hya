@@ -9,7 +9,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { Page } from "@playwright/test"
 import { Tui } from "./harness"
-import { expect, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, textStep, type Workspace } from "./hya"
+import { expectStatus, expect, hyaBin, launchTest as test, selfLaunch, showStatusView, statusSessionId, textStep, type Workspace } from "./hya"
 
 const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
@@ -79,14 +79,14 @@ test.describe("two frontends, one database", () => {
 
   test("a second TUI uses the first one's daemon; both follow the same session live", async ({ tui, workspace, page }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
-    await first.waitForText("Connected to hya", 30_000)
+    await first.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(first)
     const pid = startedPid(one.text)
 
     const [command] = selfLaunch(workspace)
     const { term: second, host } = await secondTab(page, command, workspace.dir, workspace.env)
     try {
-      await second.waitForText("Connected to hya", 30_000)
+      await second.waitForText("Message, !shell, or @file · / commands", 30_000)
       const two = await status(second)
       // Same server, not a second writer.
       expect(two.server).toBe(one.server)
@@ -95,15 +95,14 @@ test.describe("two frontends, one database", () => {
 
       // The first TUI's session (created on connect); the second opens it by id. The Status view
       // needs no Esc first (the composer takes typing), and an Esc right before `/` reads as Alt+/.
-      await showStatusLine(first)
+      await showStatusView(first)
       const session = await statusSessionId(first)
       await prompt(second, `/open ${session}`)
-      await second.waitForText(session)
+      await expectStatus(second, "Session", session)
 
       // Live across the two TUIs: a rename and a turn in the first show up in the second.
       await prompt(first, "/rename Shared across TUIs")
-      await showStatusLine(second)
-      await second.waitForText(/mode [^·]+ · Shared across TUIs · /, 20_000)
+      await expectStatus(second, "Session", "Shared across TUIs")
       await prompt(first, "hello from the first TUI")
       await second.waitForText("hello from the first TUI", 20_000)
       await second.waitForText("Reply seen by both TUIs.", 20_000)
@@ -123,13 +122,13 @@ test.describe("two frontends, one database", () => {
 
   test("bare hya uses the running daemon of its database and leaves it running on quit", async ({ tui, workspace, page }, testInfo) => {
     const owner = await tui(...selfLaunch(workspace))
-    await owner.waitForText("Connected to hya", 30_000)
+    await owner.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(owner)
     const pid = startedPid(one.text)
 
     const { term: bare, host } = await secondTab(page, [hyaBin, "--port", "0"], workspace.dir, bareHyaEnv(workspace))
     try {
-      await bare.waitForText("Connected to hya", 60_000)
+      await bare.waitForText("Message, !shell, or @file · / commands", 60_000)
       const two = await status(bare)
       expect(two.server).toBe(one.server)
       expect(two.text).toMatch(new RegExp(`Backend\\s+daemon · pid ${pid} · db /`))
@@ -152,9 +151,9 @@ test.describe("two frontends, one database", () => {
   test("an empty session shown by two TUIs stays while either shows it; the daemon drops it after the last one quits", async ({ tui, workspace, page }) => {
     test.setTimeout(90_000)
     const creator = await tui(...selfLaunch(workspace))
-    await creator.waitForText("Connected to hya", 30_000)
+    await creator.waitForText("Message, !shell, or @file · / commands", 30_000)
     await creator.waitForText("No messages yet")
-    await showStatusLine(creator)
+    await showStatusView(creator)
     const session = await statusSessionId(creator)
     const server = (await status(creator)).server
     const listed = async (): Promise<string[]> =>
@@ -163,15 +162,15 @@ test.describe("two frontends, one database", () => {
     const [command] = selfLaunch(workspace, ["--session", session])
     const { term: viewer, host } = await secondTab(page, command, workspace.dir, workspace.env)
     try {
-      await showStatusLine(viewer)
-      await viewer.waitForText(new RegExp(`mode [^·]+ · [^·]*${session}`), 30_000)
+      await showStatusView(viewer)
+      await expectStatus(viewer, "Session", session)
       // The creator quits: its session is still empty, but the viewer shows it.
       await prompt(creator, "/exit")
       expect(await creator.waitForExit()).toBe(0)
       // A kept session has no event to wait for: stay well past the daemon's 5 s grace.
       await page.waitForTimeout(8_000)
       expect(await listed()).toContain(session)
-      await viewer.waitForText(new RegExp(`mode [^·]+ · [^·]*${session}`))
+      await expectStatus(viewer, "Session", session)
       expect(await viewer.text()).not.toContain("was deleted elsewhere")
 
       // The last viewer quits: now nobody shows it, so the daemon drops it (never archived).

@@ -1,6 +1,11 @@
-# 0.43.37
+# 0.43.38
 
-- `/open <number>` counts the sessions the sidebar lists (the active Project's, plus temporary ones), so `/open 2` opens the sidebar's 2 even when other Projects have sessions. `/sessions` and pending-ask labels use the same numbers; a session the sidebar does not list (another Project's under F3, an archived one under Ctrl+A) shows without a number.
-- `/sessions` rename (F2) edits the session's title, and a delete confirmation names it, without the list number (`1. `) or the subagent arrow.
-- Docs: shell-turn and waiting tool cards show the compact layout (`◌ bash  awaiting approval` over the JSON arguments).
-- Tests: the WebUI specs follow the compact tool cards, numbered session rows, the 150-column right sidebar, and a TUI being a supervisor plus its app.
+## Frontend
+
+- Merge upstream session numbering, titled session completion, sidebar resizing, compact tool cards, and TUI reload supervision with the ert global command overlay and editable tiled workspace.
+- Preserve strict pane input ownership, a single highlighted focus target, twelve visible command suggestions with full-list navigation, backspace-to-close, and the conversation without metadata headings.
+- Keep argument completion labels from upstream without truncating the selectable completion list.
+
+## Compatibility
+
+- Preserve legacy OpenAI Chat reasoning replay and reasoning-only assistant messages when integrating upstream provider changes.

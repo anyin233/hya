@@ -12,7 +12,7 @@ import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
 import { join } from "node:path"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, hyaBin, launchTest as test, showStatusLine, statusSessionPattern, tuiInstances, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -74,12 +74,12 @@ test.describe("bare hya", () => {
   test("starts the terminal TUI and a WebUI on --port that share one backend and each other's sessions", async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
-    await term.waitForText("Connected to hya", 60_000)
-    await showStatusLine(term)
-    await term.waitForText(`WebUI http://127.0.0.1:${port}`)
+    await term.waitForText("Message, !shell, or @file · / commands", 60_000)
+    await prompt(term, "/status")
+    await term.waitForText(`WebUI       http://127.0.0.1:${port}`)
     // A session created in the terminal (titled after its first prompt)…
     await prompt(term, "hello from the terminal")
-    await term.waitForText(/^Ready/m, 20_000)
+    await term.waitForText("No live provider is available", 20_000)
     const backend = await backendUrl(term)
 
     // …appears in the WebUI: the same TUI, served on --port, connected to the same server.
@@ -105,10 +105,10 @@ test.describe("bare hya", () => {
     await prompt(web, "/new")
     // …and the other way round: the tab's session shows up in the terminal.
     await prompt(web, "hello from the web tab")
-    await web.waitForText(/^Ready/m, 20_000)
+    await web.waitForText("No live provider is available", 20_000)
     // Titled after its first prompt (the automatic title arrives a moment later).
-    await showStatusLine(web)
-    await web.waitForText(/^mode [^·]+ · hello from the web tab · /m, 20_000)
+    await prompt(web, "/status")
+    await web.waitForText(/Session\s+hello from the web tab/, 20_000)
     await prompt(term, "/sessions")
     // The sidebar may already list the web tab's session: wait for the picker
     // itself, so the Esc below closes it instead of reaching the composer.
@@ -119,9 +119,10 @@ test.describe("bare hya", () => {
     // Closed before the resize (the TUI reads a lone Esc only after a short wait).
     await expect.poll(async () => (await term.text()).includes("Esc closes")).toBe(false)
 
-    // About 80 columns: the sidebar hides and the status line may wrap the WebUI address.
+    // About 80 columns: the sidebar hides and the explicit status view still fits the WebUI address.
     await term.resize(690, 640)
-    await expect.poll(async () => (await term.lines()).slice(0, 2).join(" ")).toMatch(new RegExp(`mode manual · .*WebUI http:\/\/127\\.0\\.0\\.1:${port}\\b`))
+    await prompt(term, "/status")
+    await term.waitForText(`WebUI       http://127.0.0.1:${port}`)
     await term.attach(testInfo, "terminal-narrow")
   })
 
@@ -129,10 +130,11 @@ test.describe("bare hya", () => {
     const { server, port } = await listen()
     try {
       const term = await tui(...bareHya(workspace, port))
-      await term.waitForText(`WebUI unavailable: port ${port} is in use · hya --port <N>`, 60_000)
-      await term.waitForText("WebUI unavailable")
+      await term.waitForText("Message, !shell, or @file · / commands", 60_000)
+      await prompt(term, "/status")
+      await term.waitForText(`WebUI       unavailable: port ${port} is in use`)
       await prompt(term, "still works")
-      await term.waitForText(/^Ready/m, 20_000)
+      await term.waitForText("No live provider is available", 20_000)
       await prompt(term, "/status")
       await term.waitForText(`WebUI       unavailable: port ${port} is in use`)
     } finally {
@@ -143,13 +145,12 @@ test.describe("bare hya", () => {
   test("/exit stops the WebUI host and its tabs' TUIs, leaves the daemon running, and exits 0", async ({ tui, workspace, page }) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
-    await showStatusLine(term)
-    await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 60_000)
     const backend = await backendUrl(term)
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    await web.waitForText("Connected to hya", 30_000)
+    await web.waitForText("Message, !shell, or @file · / commands", 30_000)
 
     const host = pids(`--port ${port} --cwd`)
     // The web host's own argv names the TUI command too; count only TUI processes.
@@ -182,12 +183,11 @@ test.describe("bare hya", () => {
     test(`${signal} to hya stops the TUI, the WebUI host, and its tabs' TUIs; the daemon keeps running`, async ({ tui, workspace, page }) => {
       const port = await freePort()
       const term = await tui(...bareHya(workspace, port))
-      await showStatusLine(term)
-      await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
+      await term.waitForText("Message, !shell, or @file · / commands", 60_000)
       const backend = await backendUrl(term)
       const webPage = await page.context().newPage()
       await webPage.goto(`http://127.0.0.1:${port}/`)
-      await new Tui(webPage, `http://127.0.0.1:${port}/`).waitForText("Connected to hya", 30_000)
+      await new Tui(webPage, `http://127.0.0.1:${port}/`).waitForText("Message, !shell, or @file · / commands", 30_000)
       // Not the test harness host, whose argv ends with the same command.
       const hya = pids(`${hyaBin} --port ${port}`, "--cwd")
       const tuis = pids(`--server ${backend}`, "--cwd")
@@ -213,29 +213,29 @@ test.describe("bare hya", () => {
   test("after `hya serve stop` the terminal TUI and the WebUI tab stay stopped; /reconnect in one starts the next, the other attaches", async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
-    await term.waitForText("Connected to hya", 60_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 60_000)
     const before = (await daemonStatus(workspace))!.pid
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    await web.waitForText("Connected to hya", 30_000)
+    await web.waitForText("Message, !shell, or @file · / commands", 30_000)
 
     expect((await daemon(workspace, ["stop"])).code).toBe(0)
-    const stoppedNotice = "Backend stopped (hya serve stop) · /reconnect starts it again"
-    await term.waitForText(stoppedNotice, 30_000)
-    await web.waitForText(stoppedNotice, 30_000)
-    expect(await daemonStatus(workspace)).toBeUndefined()
+    await expect.poll(() => daemonStatus(workspace), { timeout: 30_000 }).toBeUndefined()
     await web.attach(testInfo, "web-stopped")
 
     // /reconnect in the terminal starts the next daemon; the stopped WebUI tab finds it and attaches.
     await prompt(term, "/reconnect")
-    await term.waitForText(/Started a new server · pid \d+/, 30_000)
-    await web.waitForText(/Server moved · now pid \d+/, 30_000)
-    const after = (await daemonStatus(workspace))!.pid
+    let after = before
+    await expect.poll(async () => {
+      after = (await daemonStatus(workspace))?.pid ?? before
+      return after
+    }, { timeout: 30_000 }).not.toBe(before)
     expect(after).not.toBe(before)
-    expect(await web.text()).toContain(`Server moved · now pid ${after}`)
+    await prompt(web, "/status")
+    await web.waitForText(new RegExp(`Backend\\s+daemon · pid ${after}`), 30_000)
     await prompt(term, "still works after the move")
-    await term.waitForText(/^Ready/m, 20_000)
+    await term.waitForText("No live provider is available", 20_000)
     await term.attach(testInfo, "terminal-after")
     // A new tab of the same host (its command still names the old URL) finds the new daemon too.
     const late = await page.context().newPage()
@@ -253,7 +253,7 @@ test.describe("bare hya", () => {
     const port = await freePort()
     const { HYA_TUI_DIR: _tui, HYA_TUI_WEB_DIR: _web, ...env } = workspace.env
     const term = await tui([hyaBin, "--port", String(port), "--backend", url], { cwd: workspace.dir, env })
-    await term.waitForText("Connected to hya", 60_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 60_000)
     await prompt(term, "/status")
     await term.waitForText(`Server      ${url}`)
     await term.waitForText(new RegExp(`Backend\\s+daemon · pid ${pid} · via --backend/--server`))

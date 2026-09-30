@@ -9,9 +9,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hyaBin, launchTest, selfLaunch, showStatusLine, statusSessionPattern } from "./hya"
+import { api, expect, hyaBin, launchTest, selfLaunch, showStatusView, statusSessionId, expectStatus } from "./hya"
 
-type Remote = { link: string; relay: string; root: string; stopServe: () => Promise<void> }
+type Remote = { url: string; link: string; relay: string; root: string; stopServe: () => Promise<void> }
 
 /** Spawn `hya <args>` and resolve with the first match of `pattern` in its output. */
 function spawnUntil(args: string[], pattern: RegExp, env: Record<string, string>, children: ChildProcess[]): Promise<RegExpExecArray> {
@@ -55,7 +55,9 @@ const test = launchTest.extend<{ remote: Remote }>({
         serve.kill("SIGTERM")
         await exited
       }
-      await use({ link: served[1]!, relay: relay.replace(/^http:\/\//, ""), root: env.work!, stopServe })
+      const url = /hya server listening on (\S+)/.exec(served.input)?.[1]
+      if (!url) throw new Error("remote backend did not announce its listener")
+      await use({ url, link: served[1]!, relay: relay.replace(/^http:\/\//, ""), root: env.work!, stopServe })
     } finally {
       for (const child of children.reverse()) {
         if (child.exitCode !== null) continue
@@ -82,9 +84,8 @@ const secretOf = (link: string): string => link.slice(link.indexOf("#") + 1)
 test.describe("/connect-remote", () => {
   test("connects through the relay, works there, and /disconnect-remote comes back to the local backend", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
-    await showStatusLine(term)
-    await term.waitForText(statusSessionPattern)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    await statusSessionId(term)
     const room = /\/([a-z0-9]+)#/.exec(remote.link)![1]!
     expect(room.length).toBeGreaterThan(0)
 
@@ -104,7 +105,7 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
-    await term.waitForText(/Project remote-project/)
+    await expect.poll(() => term.find("Created remote-project")).toBeNull()
     // Keep /status in command history before /layout: the recall sequence
     // below checks that neither command includes the secret relay link.
     await prompt(term, "/status")
@@ -129,17 +130,16 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText("Relay link")
     await term.press("Escape")
-    await term.waitForText("Not connected · /connect-remote cancelled")
-    // The header can clip the remote URL after reserving space for effort;
+    await expect.poll(() => term.find("Relay link")).toBeNull()
+    // Inspect the full remote URL through explicit metadata;
     // `/status` exposes the complete connected server label. (Run after the
     // history recall above, so it does not sit between the recalled entries.)
     await prompt(term, "/status")
     await term.waitForText(`remote: ${remote.relay}`)
 
     await prompt(term, "/disconnect-remote")
-    await term.waitForText("Back on the local backend", 30_000)
-    await expect.poll(() => term.find(`remote: ${remote.relay}/`)).toBeNull()
-    await term.waitForText(/mode [^·]+ · hysec_\w+/)
+    await expectStatus(term, "Server", /^http:\/\/127\.0\.0\.1:\d+$/)
+    await statusSessionId(term)
     expect(await term.find("remote-project")).toBeNull()
     expect(await term.find(secretOf(remote.link))).toBeNull()
   })
@@ -152,7 +152,7 @@ test.describe("/connect-remote", () => {
     await writeFile(join(remote.root, "shots", "remote-ui.png"), Buffer.concat([signature, Buffer.alloc(3 * 1024, 1)]))
     await writeFile(join(workspace.dir, "local-only.png"), Buffer.concat([signature, Buffer.alloc(64, 1)]))
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await term.type(`/connect-remote ${remote.link}`)
     await term.press("Enter")
     await term.waitForText("No projects yet · n creates one", 30_000)
@@ -164,8 +164,10 @@ test.describe("/connect-remote", () => {
     await term.press("Enter")
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
-    await term.waitForText(/Project remote-project/)
+    await expect.poll(() => term.find("Created remote-project")).toBeNull()
 
+    const session = await statusSessionId(term)
+    const readMessages = async () => (await api<{ messages: unknown[] }>({ url: remote.url, dir: remote.root }, "GET", `/v1/sessions/${session}/messages`)).messages
     // The backend's file: previewed with its size, then sent over the relay and accepted.
     await term.type("@shots/remote-ui.png what is this")
     await term.waitForText("[image] remote-ui.png · 3 KB", 10_000)
@@ -177,13 +179,19 @@ test.describe("/connect-remote", () => {
     await term.type("@local-only.png ")
     await term.waitForText("[image] local-only.png · file not found", 10_000)
     await term.press("Enter")
-    await term.waitForText("Not sent · local-only.png: file not found")
+    await term.waitForText("Message, !shell, or @file · / commands")
+    // Follow with a valid turn and inspect the durable transcript: the
+    // refused attachment must never become a message on the backend.
+    await prompt(term, "after the refused attachment")
+    await expect.poll(async () => JSON.stringify(await readMessages())).toContain("after the refused attachment")
+    expect(JSON.stringify(await readMessages())).not.toContain("local-only.png")
+    expect(await term.find("attachment · local-only.png")).toBeNull()
     await term.attach(testInfo, "remote-attachment")
   })
 
   test("without a link it asks for one in a concealed entry; Esc cancels, a pasted link connects", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
 
     await prompt(term, "/connect-remote")
     await term.waitForText("Relay link")
@@ -192,7 +200,6 @@ test.describe("/connect-remote", () => {
     await term.waitForText(`${"•".repeat(20)}  20 characters`)
     expect(await term.find("hya+insecure://")).toBeNull()
     await term.press("Escape")
-    await term.waitForText("Not connected · /connect-remote cancelled")
     await expect.poll(() => term.find("Relay link")).toBeNull()
 
     await prompt(term, "/connect-remote")
@@ -205,14 +212,15 @@ test.describe("/connect-remote", () => {
     await term.waitForText("No projects yet · n creates one", 30_000)
     await term.press("Escape")
     await expect.poll(() => term.find("No projects yet · n creates one")).toBeNull()
-    await showStatusLine(term)
-    await term.waitForText(/mode [^·]+ · none · remote: /)
+    await showStatusView(term)
+    await term.waitForText(/Server\s+remote: /)
+    await term.waitForText(/Session\s+none/)
     expect(await term.find(secretOf(remote.link))).toBeNull()
   })
 
   test("the concealed entry fits about 80 columns", async ({ tui, workspace, remote }) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await prompt(term, "/connect-remote")
     await term.waitForText("paste or type the relay link (hidden) · Enter connects · Esc cancels")
     await term.page.evaluate((text) => window.hyaTerm.term.paste(text), remote.link)
@@ -223,10 +231,10 @@ test.describe("/connect-remote", () => {
     expect(await term.find(secretOf(remote.link))).toBeNull()
   })
 
-  test("a link that the remote rejects is reported, and the TUI stays on its local backend", async ({ tui, workspace, remote }) => {
+  test("a rejected link preserves the local backend and permits a successful retry", async ({ tui, workspace, remote }) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
-    await term.waitForText("Connected to hya", 30_000)
-    await term.waitForText(statusSessionPattern)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    await statusSessionId(term)
     // Same relay, room, and PSK (the proxy lets it through), a wrong server key: the remote
     // rejects the handshake. (A wrong PSK never reaches the remote: the proxy answers it like
     // an offline room, and the bridge starts and reports "offline, or the link was rotated".)
@@ -234,18 +242,27 @@ test.describe("/connect-remote", () => {
     const wrong = `${remote.link.slice(0, at)}${remote.link[at] === "A" ? "B" : "A"}${remote.link.slice(at + 1)}`
     await term.type(`/connect-remote ${wrong}`)
     await term.press("Enter")
-    await term.waitForText("Remote connection failed: the remote backend rejected the relay link", 30_000)
+    await expectStatus(term, "Server", /^http:\/\/127\.0\.0\.1:\d+$/)
     expect(await term.find(secretOf(wrong).slice(0, 12))).toBeNull()
-    // The status line may drop the server segment; `/status` exposes the full local URL.
+    // `/status` exposes the full local URL.
     await prompt(term, "/status")
     await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
+    // A failed handshake leaves the local client usable and releases the
+    // connection guard: retry with the valid link and reach the remote.
+    await expect.poll(async () => {
+      if (!(await term.text()).includes("No projects yet · n creates one")) {
+        await term.type(`/connect-remote ${remote.link}`)
+        await term.press("Enter")
+      }
+      return (await term.text()).includes("No projects yet · n creates one")
+    }, { timeout: 30_000 }).toBe(true)
+    expect(await term.find(secretOf(remote.link))).toBeNull()
   })
 
   test("with the remote backend offline, Project view requests fail as one status line, never a stack trace", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
-    await showStatusLine(term)
-    await term.waitForText(statusSessionPattern)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    await statusSessionId(term)
     await term.type(`/connect-remote ${remote.link}`)
     await term.press("Enter")
     await term.waitForText("No projects yet · n creates one", 30_000)

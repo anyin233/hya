@@ -11,6 +11,7 @@ import { pickerWindow } from "../state/picker"
 import { projectViewHint, type ProjectViewBusy, type ProjectViewNotice, type ProjectViewState } from "../state/projectView"
 import { truncate } from "../state/format"
 import { colors } from "../theme"
+import { keyboardOwner } from "../state/focus"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: ProjectViewNotice): string {
@@ -32,7 +33,7 @@ function BusyLine(props: { busy: ProjectViewBusy }) {
 }
 
 export function ProjectView() {
-  const { store } = useApp()
+  const { store, ui } = useApp()
   const size = useTerminalDimensions()
   return (
     <Show when={store.state.projectView}>
@@ -56,7 +57,7 @@ export function ProjectView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "project" ? colors.accent : colors.border}
             title="Projects"
             backgroundColor={colors.bg}
             flexDirection="column"

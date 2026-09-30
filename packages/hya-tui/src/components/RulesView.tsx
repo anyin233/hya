@@ -9,6 +9,7 @@ import { useApp } from "../app/context"
 import { pickerWindow } from "../state/picker"
 import { ruleHeaderLine, ruleLine, rulesViewHint, shownRules, type RulesBusy, type RulesNotice, type RulesViewState } from "../state/rules"
 import { colors } from "../theme"
+import { keyboardOwner } from "../state/focus"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: RulesNotice): string {
@@ -31,7 +32,7 @@ function BusyLine(props: { busy: RulesBusy }) {
 }
 
 export function RulesView() {
-  const { store } = useApp()
+  const { store, ui } = useApp()
   const size = useTerminalDimensions()
   return (
     <Show when={store.state.rulesView}>
@@ -56,7 +57,7 @@ export function RulesView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "rules" ? colors.accent : colors.border}
             title="Saved Rules"
             backgroundColor={colors.bg}
             flexDirection="column"

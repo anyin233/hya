@@ -62,6 +62,16 @@ export class Tui {
       .toBe(true)
   }
 
+  /** Wait until the conversation has no running-turn indicator. */
+  async waitForIdle(timeout = 10_000): Promise<void> {
+    await expect
+      .poll(async () => (await this.text()).includes("Esc to interrupt"), {
+        timeout,
+        message: "conversation never became idle",
+      })
+      .toBe(false)
+  }
+
   /** Row/column of the first occurrence of `needle` on screen, or null. */
   async find(needle: string): Promise<{ row: number; col: number } | null> {
     const lines = await this.lines()

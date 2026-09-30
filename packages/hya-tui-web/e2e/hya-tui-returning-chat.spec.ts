@@ -15,10 +15,10 @@ test.use({ model: { steps: [toolStep("bash", { command: "git status --short --br
 
 test("a plain relaunch restores the waiting chat and offers approval keys, then keeps its history", async ({ tui, backend }, testInfo) => {
   const first = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
-  await first.waitForText("Connected to hya")
+  await first.waitForText("Message, !shell, or @file · / commands")
   const id = await statusSessionId(first)
   await prompt(first, "Check this repository")
-  await first.waitForText("│ $ git status --short --branch", 20_000)
+  await first.waitForText(/"command":"git status --short --branch"/, 20_000)
   await prompt(first, "/exit")
   expect(await first.waitForExit()).toBe(0)
   const archived = await api<{ archived?: boolean; busy?: boolean }>(backend, "GET", `/v1/sessions/${id}`)
@@ -34,7 +34,7 @@ test("a plain relaunch restores the waiting chat and offers approval keys, then 
   const second = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
   await second.waitForText("Check this repository", 20_000)
   expect(await second.text()).not.toContain("Newer saved chat")
-  await second.waitForText("│ $ git status --short --branch", 20_000)
+  await second.waitForText(/"command":"git status --short --branch"/, 20_000)
   await second.waitForText(/1 {2}Allow once/)
   await second.waitForText(/2 {2}Always allow/)
   await second.waitForText(/3 {2}Deny/)

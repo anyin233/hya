@@ -1,12 +1,14 @@
-import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
+import { expect, hyaTui, statusSessionId, test, wideViewport } from "./hya"
 
 // Characterization specs: they lock the existing TUI look and command behavior
 // so framework or module changes in packages/hya-tui cannot drift silently.
 
 test.describe("hya TUI commands and look", () => {
-  test("keeps the panel colors and the status-line session in the accent color", async ({ tui, backend }) => {
+  test("keeps the panel colors and leaves the conversation free of headings", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
+    expect(await term.find("hya · ")).toBeNull()
+
     const sessions = (await term.find("Sessions"))!
     const corner = await term.cell(sessions.row, sessions.col - 1)
     expect(corner?.fg).toBe("#405366")
@@ -15,22 +17,15 @@ test.describe("hya TUI commands and look", () => {
     // The transcript (no box since the single-column layout) sits on the base background.
     const transcript = (await term.find("No messages yet"))!
     expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
-    await showStatusLine(term)
-    const statusLine = (await term.find("mode "))!
-    expect(statusLine.row).toBe(0)
-    const session = (await term.find("hysec_"))!
-    expect((await term.cell(session.row, session.col))?.fg).toBe("#73c8e8")
-
-    const connected = (await term.find("Connected to hya"))!
-    expect((await term.cell(connected.row, connected.col))?.fg).toBe("#9caab9")
-    const footer = (await term.find("Enter a prompt · /new creates a session"))!
-    expect((await term.cell(footer.row, footer.col))?.fg).toBe("#9caab9")
-    expect(footer.row).toBeGreaterThan(connected.row)
+    expect(await term.find("mode manual")).toBeNull()
+    const composer = (await term.find("Message, !shell, or @file · / commands"))!
+    expect(composer.row).toBeGreaterThan(transcript.row)
+    expect(transcript.row).toBeGreaterThanOrEqual(0)
   })
 
   test("/help opens the help overlay; /models and /api switch the main panel", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
 
     await term.type("/help")
     await term.press("Enter")
@@ -44,18 +39,18 @@ test.describe("hya TUI commands and look", () => {
     await term.press("Enter")
     await term.waitForText("Models")
     await term.waitForText("hya/offline")
-    await term.waitForText("Next: /model <provider/model> to switch this session · /key opens the Provider View · /help")
+    await term.waitForText("Message, !shell, or @file · / commands")
 
     await term.type("/api")
     await term.press("Enter")
     await term.waitForText("API commands")
     await term.waitForText("/v1/health")
-    await term.waitForText("Next: /api GET /v1/health · /help for command syntax")
+    await term.waitForText("Message, !shell, or @file · / commands")
   })
 
   test("a prompt sent while /status shows goes back to the transcript and shows its reply", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/status")
     await term.press("Enter")
     await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
@@ -67,25 +62,26 @@ test.describe("hya TUI commands and look", () => {
     await expect.poll(() => term.find("Server      http://")).toBeNull()
   })
 
-  test("narrow terminals keep the sidebar hidden and show the top status line", async ({ tui, backend }) => {
+  test("narrow terminals keep sidebars and conversation metadata hidden", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeLessThan(150)
     expect(cols).toBeGreaterThanOrEqual(58)
-    await term.waitForText(/^mode /m)
+    await statusSessionId(term)
+    expect(await term.find("mode manual")).toBeNull()
     expect(await term.text()).not.toContain("Sessions")
     await term.press("Control+b")
-    await term.waitForText("Sidebar needs 150+ columns")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.text()).not.toContain("Sessions")
   })
 
   test("Ctrl+C twice quits the TUI", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     // The renderer no longer quits on the first Ctrl+C (see hya-tui-composer.spec.ts).
     await term.press("Control+c")
-    await term.waitForText("Press Ctrl+C again to quit")
+    expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
     await term.press("Control+c")
     expect(await term.waitForExit()).toBe(0)
   })

@@ -495,13 +495,14 @@ impl ReasoningReplayPolicy {
                         .as_ref()
                         .is_some_and(is_signed_anthropic_reasoning)
             }
-            Self::ReasoningContent => {
-                provider_data
-                    .as_ref()
-                    .and_then(|data| data.get("type"))
-                    .and_then(serde_json::Value::as_str)
+            Self::ReasoningContent => provider_data.as_ref().is_some_and(|data| {
+                data.get("type").and_then(serde_json::Value::as_str)
                     == Some(openai::REASONING_CONTENT_TYPE)
-            }
+                    || data
+                        .get(openai::LEGACY_CHAT_REASONING_MARKER)
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+            }),
         }
     }
 }

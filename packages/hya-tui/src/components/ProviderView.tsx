@@ -14,6 +14,7 @@
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
+import { keyboardOwner } from "../state/focus"
 import { pickerWindow } from "../state/picker"
 import {
   modelHeaderLine,
@@ -98,6 +99,7 @@ function FieldRow(props: { field: FormField; index: number; form: FormState }) {
 
 /** The pop-up form over the view. */
 function FormBox(props: { view: ProviderViewState; form: FormState }) {
+  const { store, ui } = useApp()
   const size = useTerminalDimensions()
   const width = () => Math.max(30, Math.min(formMaxWidth, size().width - 4))
   const left = () => Math.max(0, Math.floor((size().width - width()) / 2))
@@ -112,7 +114,7 @@ function FormBox(props: { view: ProviderViewState; form: FormState }) {
       width={width()}
       zIndex={60}
       border
-      borderColor={colors.accent}
+      borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "providerForm" ? colors.accent : colors.border}
       title={title()}
       backgroundColor={colors.panel}
       flexDirection="column"
@@ -137,7 +139,7 @@ function FormBox(props: { view: ProviderViewState; form: FormState }) {
 }
 
 export function ProviderView() {
-  const { store } = useApp()
+  const { store, ui } = useApp()
   const size = useTerminalDimensions()
   return (
     <Show when={store.state.providerView}>
@@ -177,7 +179,7 @@ export function ProviderView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={colors.accent}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "providers" ? colors.accent : colors.border}
             title={title()}
             backgroundColor={colors.bg}
             flexDirection="column"
