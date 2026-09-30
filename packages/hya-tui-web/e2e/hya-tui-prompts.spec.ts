@@ -10,7 +10,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, headlessTurn, hyaTui, showStatusLine, statusSessionId, test, textStep, toolCard, toolStep, wideViewport } from "./hya"
+import { createSession, expect, hangStep, headlessTurn, hyaTui, showStatusView, statusSessionId, test, textStep, toolCard, toolStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
@@ -65,7 +65,6 @@ test.describe("bash permission prompt", () => {
     await term.waitForText("Ran it once.", 20_000)
     await term.waitForText(toolCard("✓", "bash", '"command":"echo prompt-once"'))
     await promptGone(term)
-    await term.waitForText(/Allowed once · bash|Ready/)
   })
 
   test("with text in the input, digits type; the text stays after answering with arrows + Enter", async ({ tui, backend }) => {
@@ -240,7 +239,6 @@ test.describe("question prompt", () => {
     const term = await tui(hyaTui(backend))
     await asked(term)
     await term.press("3")
-    await term.waitForText("Type the answer in the input · Enter sends it")
     await term.type("green")
     await term.waitForText("Enter sends the input as the answer")
     await term.press("Enter")
@@ -270,7 +268,7 @@ test.describe("subagent asks", () => {
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
@@ -296,6 +294,11 @@ test.describe("subagent asks", () => {
     const proxy = await startProxy(backend.url)
     const term = await tui(hyaTui({ ...backend, url: proxy.url }))
     await term.waitForText("Message, !shell, or @file · / commands")
+    await statusSessionId(term)
+    // Finish initial synchronization: catalog reads at boot and session
+    // creation, plus each stream's one seed read. These are allowed;
+    // subsequent asks must arrive as frames without another listing.
+    await expect.poll(() => proxy.log.filter((entry) => entry.method === "GET" && entry.path.startsWith("/v1/interactions")).length).toBeGreaterThanOrEqual(4)
     await prompt(term, "delegate the survey")
     await promptShown(term)
     await term.waitForText(/asked by subagent hya-task/)
@@ -349,8 +352,7 @@ test.describe("asks of other sessions", () => {
       const proxy = await startProxy(backend.url)
       const term = await tui(hyaTui({ ...backend, url: proxy.url }), viewport ? { viewport } : {})
       await term.waitForText("Message, !shell, or @file · / commands")
-      await prompt(term, "/new")
-      await term.waitForText(/Created hysec_/, 20_000)
+      await createSession(term)
       // The global stream is open (interactions-only: asks/resolves plus catalogUpdated, no other session's text).
       await expect.poll(() => proxy.log.some((entry) => entry.path.startsWith("/v1/events/stream?interactionsOnly=true"))).toBe(true)
 
@@ -360,7 +362,6 @@ test.describe("asks of other sessions", () => {
       await term.waitForText(/Pending \(1\)/, 20_000)
       const shown = Date.now()
       await term.waitForText(new RegExp(`! bash echo from-elsewhere · \\d+\\. ${other.slice(0, 12)}`))
-      await term.waitForText(/Permission needed in \d+\. hysec_\w+ · F4 to review/)
       await term.waitForText("F4 review request")
       // Pushed, not polled: no interactions listing between the other turn and the ask showing up.
       expect(proxy.log.filter((entry) => entry.at >= started && entry.at <= shown && entry.path.startsWith("/v1/interactions"))).toEqual([])
@@ -372,7 +373,7 @@ test.describe("asks of other sessions", () => {
       await term.press("F4")
       await term.waitForText("asked by hya-main", 20_000)
       await term.waitForText("│ $ echo from-elsewhere")
-      if (!viewport) await showStatusLine(term)
+      if (!viewport) await showStatusView(term)
       expect(await statusSessionId(term)).toBe(other)
       await term.press("1")
       await term.waitForText("Elsewhere done.", 20_000)

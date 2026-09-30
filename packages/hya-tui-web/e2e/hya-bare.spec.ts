@@ -12,7 +12,7 @@ import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
 import { join } from "node:path"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, hyaBin, launchTest as test, showStatusLine, statusSessionPattern, tuiInstances, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)

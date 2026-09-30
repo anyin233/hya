@@ -3,7 +3,7 @@
 // border with the mouse; the width is saved with the layout.
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, statusLinePattern, test, wideViewport as wide } from "./hya"
+import { expect, hyaTui, test, wideViewport as wide } from "./hya"
 
 const sidebarMinColumns = 29
 

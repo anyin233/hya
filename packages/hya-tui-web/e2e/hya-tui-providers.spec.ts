@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, backendConfigDir, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
+import { api, backendConfigDir, expectStatus, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
 
 // The Provider View (`/key`): a full-screen list of providers and, per
 // provider, its models. Providers are added against a fake OpenAI-compatible
@@ -124,7 +124,7 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText("Model · pick one of gw's models for this session")
       await term.waitForText(/▸ ● alpha\s+\[gw\]/)
       await term.press("Enter")
-      await term.waitForText("Model → gw/alpha")
+      await expect.poll(() => term.find("Model · pick")).toBeNull()
       await term.waitForText("Providers › gw")
       await term.waitForText(/gw · openai · http:\/\/127\.0\.0\.1:\d+\/v1 · saved key · ready · 2 models/)
       await term.waitForText(/alpha\s+remote/)
@@ -158,7 +158,7 @@ test.describe("hya TUI Provider View", () => {
       await term.waitForText(/gw\s+openai\s+saved key\s+ready\s+3 models/)
       await term.press("Escape")
       await term.waitForText("Message, !shell, or @file · / commands")
-      await term.waitForText(/hya-main gw\/alpha/)
+      await expectStatus(term, "Model", "gw/alpha")
       // The new models reached the /model picker without a restart.
       await term.type("/model")
       await term.press("Enter")

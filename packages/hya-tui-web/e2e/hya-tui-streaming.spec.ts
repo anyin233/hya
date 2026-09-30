@@ -102,11 +102,11 @@ test.describe("queued prompt", () => {
 test.describe("failed turn", () => {
   test.use({ model: { steps: [httpErrorStep(400)] } })
 
-  test("shows the provider error in the status line and the transcript", async ({ tui, backend }) => {
+  test("shows the provider error in the transcript", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "please fail")
-    await term.waitForText("Error · provider_error: http status 400", 20_000)
+    await term.waitForText("provider_error: http status 400", 20_000)
     // The failed assistant message carries the error line under its header.
     await term.waitForText("✗ provider_error: http status 400")
     const header = (await term.find("● hya-main · fake/model"))!

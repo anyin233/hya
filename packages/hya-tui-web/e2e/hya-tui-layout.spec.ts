@@ -2,7 +2,7 @@
 // narrow widths, including focus and viewport behavior. See docs/tui.md "Layout".
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, statusLinePattern, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
+import { expect, hyaTui, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
 const colors = { bg: "#11151b", panel: "#1c2530", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }

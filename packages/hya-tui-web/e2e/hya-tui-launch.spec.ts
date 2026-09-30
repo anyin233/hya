@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, tuiMain } from "./hya"
+import { daemonStatus, expect, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, tuiMain } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)

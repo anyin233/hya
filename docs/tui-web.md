@@ -171,6 +171,46 @@ Locally, run the specs that cover your change: the new or changed spec and the
 specs for the screens it touches. The whole suite is the CI gate; run it
 locally only when asked or when a change affects every screen.
 
+#### Keeping the browser gate aligned with the TUI
+
+Update the browser specs in the same change as a UI contract change. The
+conversation has no permanent metadata heading: read session, model, server,
+and permission fields through `/status`, and assert workflow results in the
+transcript, prompt dock, picker, or backend API. Do not reintroduce removed
+headings to satisfy a test. CI runs the entire `bun run test:e2e` suite.
+
+The shared helpers in `e2e/hya.ts` define these test interfaces:
+
+| Helper | Contract |
+| --- | --- |
+| `showStatusView(term): Promise<void>` | Open `/status` and wait for its version field. |
+| `statusField(term, field): Promise<string>` | Read a named field from the explicit status snapshot; leave that view open. |
+| `showConversation(term): Promise<void>` | Run `/layout show` and wait for the status view to close. |
+| `statusSessionId(term, timeout?): Promise<string>` | Read an untitled selected `hysec_…` session ID, then return to Conversation. |
+| `expectStatus(term, field, expected): Promise<void>` | Wait for a string or regular expression to match a metadata field, refreshing the snapshot on mismatch, then return to Conversation. |
+| `createSession(term): Promise<string>` | Run `/new`, wait for a different selected session ID, and return it. |
+| `wideViewport` | `{ width: 1500, height: 640 }`, enough for the right sidebar's 150-column minimum. |
+
+For example, a model switch test can run `/model fake/slow`, then
+`await expectStatus(term, "Model", "fake/slow")` before sending a prompt and
+checking the reply's model label. Helpers that run commands add entries to
+command history; history tests must account for that. Read named sessions
+with `expectStatus(term, "Session", title)` instead of `statusSessionId`.
+
+Use the default 1100×640 viewport for the main conversation and command
+overlays, `wideViewport` for sidebar assertions, and about 80 columns for
+narrow-layout checks. Assert actual terminal glyphs and colors with the
+`Tui` fixture; wait for modal disappearance or workflow completion with
+`expect.poll` rather than reading the screen immediately after a key.
+Vim tests observe DECSCUSR cursor-shape sequences through xterm's public
+parser API and verify editing behavior, without depending on a mode banner.
+
+The GitHub `tui` job uploads `tui-web-playwright-report` after its browser
+run. Failed runs also upload `tui-web-test-results`, containing terminal
+buffers, screenshots, and retained traces. Download the report artifact and
+open `index.html` to inspect individual failures. No test is excluded to
+accommodate a UI change.
+
 `e2e/hya-tui.spec.ts` needs a built backend. Run
 `cargo build -p hya-backend --bin hya` first, or set `HYA_BIN` to another
 `hya` binary. The `backend` fixture (`e2e/hya.ts`) starts `hya serve` on a
@@ -193,10 +233,11 @@ and `crates/hya-plugin-bun/adapter`, then `bun run typecheck && bun test` in
 `hya-tui-web`. It builds `hya` (`cargo build --locked -p hya-backend --bin hya`)
 with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
 that binary, installs Chromium (`bunx playwright install --with-deps chromium`),
-and runs `bunx playwright test` from `packages/hya-tui-web`, retrying a failed
+and runs `bun run test:e2e` from `packages/hya-tui-web`, retrying a failed
 test once (`retries` in `playwright.config.ts` when `CI` is set). On failure it
 uploads `packages/hya-tui-web/test-results/` as the `tui-web-test-results`
-artifact.
+artifact. The HTML report is uploaded as `tui-web-playwright-report` after
+each browser run.
 
 Reproduce it locally with the commands in
 ["Running the tests"](#running-the-tests) above; the only CI-specific pieces
@@ -209,17 +250,17 @@ HOME/`XDG_*` directories, config (`model`, `projectBundles` options), and
 workspace directory, but no running server. `selfLaunch(workspace, extra?,
 options?)` returns the `tui()` arguments that run the TUI with no
 `--server` and `HYA_BIN` set to the binary under test, so the TUI starts
-(and must stop) `hya serve` itself; its default database lands under the
+a detached `hya serve` daemon; the fixture stops it on cleanup. Its default database lands under the
 workspace's `XDG_STATE_HOME`, so a second launch in the same test sees the
 first one's sessions (`--continue`). See `e2e/hya-tui-launch.spec.ts`:
 
 ```ts
-import { expect, launchTest as test, selfLaunch, textStep } from "./hya"
+import { expect, launchTest as test, selfLaunch, statusSessionId, textStep } from "./hya"
 
 test.use({ model: { steps: [textStep("hi")] } })
 test("launches", async ({ tui, workspace }) => {
   const term = await tui(...selfLaunch(workspace))
-  await term.waitForText("Connected to hya", 30_000)
+  await statusSessionId(term)
   await term.type("/exit")
   await term.press("Enter")
   expect(await term.waitForExit()).toBe(0)

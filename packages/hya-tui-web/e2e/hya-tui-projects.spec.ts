@@ -8,7 +8,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, expect, hyaTui, showStatusLine, statusSessionPattern, test, textStep, tuiMain } from "./hya"
+import { api, expect, expectStatus, statusSessionId, hyaTui, test, textStep, tuiMain } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 const wide = { width: 1500, height: 640 }
@@ -65,7 +65,7 @@ test.describe("Projects sidebar", () => {
     await term.press("Control+p")
     await term.press("ArrowDown")
     await term.press("Enter")
-    await term.waitForText(/Project second/, 20_000)
+    await expectStatus(term, "Directory", secondRoot)
   })
 
   test("about 80 columns hides it even when the terminal is otherwise wide enough for the right sidebar", async ({ tui, backend }, testInfo) => {
@@ -75,9 +75,12 @@ test.describe("Projects sidebar", () => {
     expect(cols).toBeLessThanOrEqual(84)
     expect(await term.find("Projects")).toBeNull()
     await term.attach(testInfo, "sidebar-narrow-hidden")
+    await statusSessionId(term)
     // Ctrl+P opens (and focuses) it even here.
     await term.press("Control+p")
-    await term.waitForText("Projects")
+    // The narrow split clips the title; its active border and selected row remain visible.
+    await expect.poll(() => term.cell(0, 0)).toMatchObject({ char: "┌", fg: "#73c8e8" })
+    await term.waitForText("▸")
     await term.attach(testInfo, "sidebar-narrow-pinned")
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
   })
@@ -117,7 +120,7 @@ test.describe("Project view", () => {
 
     // Delete refusal: switch into the Project (creating a live session), then try to delete it.
     await term.press("Enter")
-    await term.waitForText(/Project multi-root/)
+    await expectStatus(term, "Directory", rootB)
     await prompt(term, "/project")
     await term.waitForText("multi-root")
     // The highlight starts on the active (just-switched-to) Project.
@@ -134,9 +137,9 @@ test.describe("Project view", () => {
     await prompt(term, "/project")
     await term.waitForText("Projects")
     await term.press("t")
-    await term.waitForText(statusSessionPattern, 20_000)
+    const first = await statusSessionId(term)
     await prompt(term, "/new --temp")
-    await term.waitForText(statusSessionPattern, 20_000)
+    expect(await statusSessionId(term)).not.toBe(first)
   })
 })
 
@@ -147,21 +150,17 @@ test.describe("--remote start", () => {
     const term = await tui(["bun", tuiMain, "--server", backend.url, "--remote"])
     await term.waitForText("Projects")
     // A fresh remote start has no Project yet; the view's own empty state says so
-    // (the status line's `noProjectStatus` sits underneath the full-screen view).
+    // without a conversation heading.
     await term.waitForText("No projects yet · n creates one")
   })
 
-  test("--server-label names the remote in the status line and /status instead of the local bridge URL", async ({ backend, tui }) => {
+  test("--server-label names the remote and exposes its bridge URL in /status", async ({ backend, tui }) => {
     const label = "remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4"
     const term = await tui(["bun", tuiMain, "--server", backend.url, "--remote", "--server-label", label])
     await term.waitForText("No projects yet · n creates one")
     await esc(term, "No projects yet")
-    await showStatusLine(term)
-    await term.waitForText(`mode manual · none · ${label}`)
-    const host = backend.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
-    expect(await term.find(host), "the loopback URL is not the shown server").toBeNull()
-    await prompt(term, "/status")
-    await term.waitForText(`Server      ${label} · via ${backend.url.replace(/\/$/, "")}`)
+    await expectStatus(term, "Server", `${label} · via ${backend.url.replace(/\/$/, "")}`)
+
   })
 })
 
@@ -173,8 +172,7 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
     await term.waitForText("a", 20_000)
-    await term.waitForText(statusSessionPattern)
-    const firstId = statusSessionPattern.exec(await term.text())![1]!
+    const firstId = await statusSessionId(term)
 
     // A second Project with its own session.
     const otherRoot = await mkdtemp(join(tmpdir(), "hya-e2e-other-"))
@@ -183,15 +181,13 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.waitForText("other-project")
     await term.press("ArrowDown")
     await term.press("Enter")
-    await term.waitForText("b", 20_000)
-    // The transcript can update before the status line; capture the id when it changes.
-    let otherId: string | undefined
+    let otherId = firstId
     await expect.poll(async () => {
-      const id = statusSessionPattern.exec(await term.text())?.[1]
-      otherId = id && id !== firstId ? id : undefined
-      return otherId ?? firstId
+      otherId = await statusSessionId(term)
+      return otherId
     }).not.toBe(firstId)
-    expect(otherId).toBeDefined()
+    await prompt(term, "hello other")
+    await term.waitForText("b", 20_000)
 
     await prompt(term, "/sessions")
     await term.waitForText("F3 all")
@@ -206,8 +202,7 @@ test.describe("/sessions is scoped to the active Project", () => {
 
     // `/open 1` is this Project's first session, as the sidebar numbers it — not the other Project's.
     await prompt(term, "/open 1")
-    await term.waitForText(statusSessionPattern)
-    expect(statusSessionPattern.exec(await term.text())![1]).toBe(otherId)
+    expect(await statusSessionId(term)).toBe(otherId)
     expect(await term.find(firstId)).toBeNull()
   })
 })

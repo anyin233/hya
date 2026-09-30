@@ -70,7 +70,7 @@ test.describe("read card", () => {
     expect(await term.find("gamma line")).toBeNull()
     // The click leaves the input focused.
     await prompt(term, "/tools off")
-    expect(await term.find("alpha line")).toBeNull()
+    await expect.poll(() => term.find("alpha line")).toBeNull()
   })
 })
 
@@ -198,7 +198,7 @@ test.describe("subagents", () => {
       textStep("Spawned a helper."),
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
@@ -223,12 +223,12 @@ test.describe("subagents", () => {
     await term.waitForText('{"path":"notes.txt"')
     await term.attach(testInfo, "child-view")
     await prompt(term, "can I type here")
-    await term.waitForText("Read-only: this is a subagent's session · Esc returns to the parent")
+    await term.waitForText("│ can I type here")
     expect(await term.find("┃ can I type here")).toBeNull()
 
     // Esc returns to the parent; the typed text stays, and a second Esc clears it.
     await term.press("Escape")
-    await term.waitForText("Back to the parent session")
+    await expect.poll(() => term.find("Viewing subagent")).toBeNull()
     await term.waitForText("Spawned a helper.")
     expect(await term.find("Viewing subagent")).toBeNull()
     await term.waitForText("│ can I type here")

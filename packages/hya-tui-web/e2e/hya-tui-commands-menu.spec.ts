@@ -10,7 +10,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hyaTui, showStatusLine, test, textStep, type Backend } from "./hya"
+import { statusSessionId, expect, hyaTui, test, textStep, type Backend } from "./hya"
 
 const accent = "#73c8e8"
 
@@ -20,12 +20,7 @@ async function connected(term: Tui, backend: Backend): Promise<void> {
     const result = await (await fetch(`${backend.url}/v1/sessions`)).json() as { sessions?: unknown[] }
     return result.sessions?.length ?? 0
   }).toBeGreaterThan(0)
-  await term.type("/status")
-  await term.press("Enter")
-  await term.waitForText(/Session\s+hysec_\w+/)
-  await term.type("/layout show")
-  await term.press("Enter")
-  await term.waitForText("No messages yet")
+  await statusSessionId(term)
 }
 
 /** Rows of the bordered box titled `title` (the topmost box whose border shows that title), trimmed. */

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startFakeModel, type FakeModel, type Protocol, type Step } from "./fake-model"
-import { test as base, type LaunchOptions, type Tui } from "./harness"
+import { expect, test as base, type LaunchOptions, type Tui } from "./harness"
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
 
@@ -408,32 +408,70 @@ export function hyaTui(backend: Backend): string[] {
   return ["bun", tuiMain, "--server", backend.url, "--dir", backend.dir]
 }
 
-/**
- * A browser viewport wide enough for the right sidebar (≈174 columns; it
- * needs 150): the default 1100×640 viewport is ≈128 columns, where the
- * sidebar is hidden and the top status line shows its Context fields.
- */
+/** A browser viewport wide enough for the right sidebar (150 columns minimum). */
 export const wideViewport = { width: 1500, height: 640 }
 
-/**
- * The top status line (docs/tui.md "Status line"): `[-- INSERT -- · ]mode <mode> · <session> · <agent> · …`.
- * It is on screen only while no Context pane is: below 150 columns, or after Ctrl+B / `/sidebar off`.
- * It starts a row, or follows the left Projects pane's border (`┐`/`│`) on a wide terminal.
- */
-export const statusLinePattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · /m
-/** Captures the open session's id from the top status line (while the session has no title). */
-export const statusSessionPattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · (hysec_\w+)/m
-
-/** Hide the right sidebar on a wide viewport (Ctrl+B) so the top status line shows. */
-export async function showStatusLine(term: Tui): Promise<void> {
-  await term.press("Control+b")
-  await term.waitForText(statusLinePattern)
+/** Open the explicit metadata view; startup can finish after the first frame. */
+export async function showStatusView(term: Tui): Promise<void> {
+  await expect.poll(async () => {
+    if (!/Version\s+\d+\./.test(await term.text())) {
+      await term.type("/status")
+      await term.press("Enter")
+    }
+    return /Version\s+\d+\./.test(await term.text())
+  }, { timeout: 30_000 }).toBe(true)
 }
 
-/** The open session's id from the top status line (which must be on screen). */
-export async function statusSessionId(term: Tui, timeout?: number): Promise<string> {
-  await term.waitForText(statusSessionPattern, timeout)
-  return statusSessionPattern.exec(await term.text())![1]!
+/** Read one field from /status without assuming a permanent conversation heading. */
+export async function statusField(term: Tui, field: string): Promise<string> {
+  await showStatusView(term)
+  const row = (await term.lines()).find((line) => new RegExp(`${field}\\s{2,}`).test(line))
+  if (!row) throw new Error(`/status has no ${field} field`)
+  return row.replace(new RegExp(`^.*?${field}\\s{2,}`), "").replace(/│.*$/, "").trim()
+}
+
+/** Return to the transcript without changing the split tree or message draft. */
+export async function showConversation(term: Tui): Promise<void> {
+  await term.type("/layout show")
+  await term.press("Enter")
+  await expect.poll(() => term.find("─Status")).toBeNull()
+}
+
+/** Read the untitled selected session, then return to Conversation. */
+export async function statusSessionId(term: Tui, timeout = 30_000): Promise<string> {
+  let id = ""
+  await expect.poll(async () => {
+    const value = await statusField(term, "Session")
+    id = /^hysec_\w+$/.test(value) ? value : ""
+    if (!id) await showConversation(term)
+    return id
+  }, { timeout }).not.toBe("")
+  await showConversation(term)
+  return id
+}
+
+/** Wait for a named field, then leave the transcript ready for subsequent interaction. */
+export async function expectStatus(term: Tui, field: string, expected: string | RegExp): Promise<void> {
+  await expect.poll(async () => {
+    const value = await statusField(term, field)
+    const matches = typeof expected === "string" ? value === expected : expected.test(value)
+    if (!matches) await showConversation(term)
+    return matches
+  }, { timeout: 30_000 }).toBe(true)
+  await showConversation(term)
+}
+
+/** /new completes asynchronously; verify the selected session actually changed. */
+export async function createSession(term: Tui): Promise<string> {
+  const previous = await statusSessionId(term)
+  await term.type("/new")
+  await term.press("Enter")
+  let next = previous
+  await expect.poll(async () => {
+    next = await statusSessionId(term)
+    return next
+  }, { timeout: 30_000 }).not.toBe(previous)
+  return next
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

@@ -1,11 +1,11 @@
-import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
+import { expect, hyaTui, statusSessionId, test, wideViewport } from "./hya"
 
 // Characterization specs: they lock the existing TUI look and command behavior
 // so framework or module changes in packages/hya-tui cannot drift silently.
 
 test.describe("hya TUI commands and look", () => {
   test("keeps the panel colors and leaves the conversation free of headings", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.find("hya · ")).toBeNull()
 
@@ -17,15 +17,10 @@ test.describe("hya TUI commands and look", () => {
     // The transcript (no box since the single-column layout) sits on the base background.
     const transcript = (await term.find("No messages yet"))!
     expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
-    await showStatusLine(term)
-    const statusLine = (await term.find("mode "))!
-    expect(statusLine.row).toBe(0)
-    const session = (await term.find("hysec_"))!
-    expect((await term.cell(session.row, session.col))?.fg).toBe("#73c8e8")
-
+    expect(await term.find("mode manual")).toBeNull()
     const composer = (await term.find("Message, !shell, or @file · / commands"))!
     expect(composer.row).toBeGreaterThan(transcript.row)
-    expect(transcript.row).toBe(1)
+    expect(transcript.row).toBeGreaterThanOrEqual(0)
   })
 
   test("/help opens the help overlay; /models and /api switch the main panel", async ({ tui, backend }) => {
@@ -67,16 +62,17 @@ test.describe("hya TUI commands and look", () => {
     await expect.poll(() => term.find("Server      http://")).toBeNull()
   })
 
-  test("narrow terminals keep the sidebar hidden and show the top status line", async ({ tui, backend }) => {
+  test("narrow terminals keep sidebars and conversation metadata hidden", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeLessThan(150)
     expect(cols).toBeGreaterThanOrEqual(58)
-    await term.waitForText(/^mode /m)
+    await statusSessionId(term)
+    expect(await term.find("mode manual")).toBeNull()
     expect(await term.text()).not.toContain("Sessions")
     await term.press("Control+b")
-    await term.waitForText("Sidebar needs 150+ columns")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.text()).not.toContain("Sessions")
   })
 

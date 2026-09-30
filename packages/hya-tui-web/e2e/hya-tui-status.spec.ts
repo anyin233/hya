@@ -1,12 +1,9 @@
-// The working indicator, status bar, live todo panel, and compaction
-// divider (docs/tui.md "Working indicator", "Status bar", "Todo panel",
-// "Notices"; Tier 1 E21-E24), driven against the scripted fake model: the
-// status bar's `ctx N%` and token total from reported usage and a model
-// context limit, `todoUpdated` frames (no todo re-reads, checked through a
-// logging proxy), and the `/compact` divider, live and after reopening.
+// Working indicators, sidebar metadata and Todos, and compaction dividers.
+// Fake-model usage drives Context fields; a logging proxy verifies live todo
+// updates arrive on the event stream without redundant reads.
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, initGitRepo, showStatusLine, statusLinePattern, statusSessionId, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
+import { createSession, expect, hyaTui, initGitRepo, showStatusView, statusSessionId, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
@@ -85,7 +82,7 @@ test.describe("streaming assistant header spinner", () => {
 
 const narrow = { width: 690, height: 640 }
 
-test.describe("working indicator and status bar at 80 columns", () => {
+test.describe("working indicator at 80 columns", () => {
   test.use({
     model: {
       permission: "allow",
@@ -93,7 +90,7 @@ test.describe("working indicator and status bar at 80 columns", () => {
     },
   })
 
-  test("both lines stay within the terminal width, sidebar hidden", async ({ tui, backend }, testInfo) => {
+  test("the working line stays within the terminal width, sidebar hidden", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
@@ -109,18 +106,18 @@ test.describe("working indicator and status bar at 80 columns", () => {
   })
 })
 
-test.describe("status bar", () => {
+test.describe("sidebar metadata", () => {
   test.use({ model: { steps: [textStep("status bar reply")] } })
 
   test("shows the permission mode, workspace directory, and git branch", async ({ tui, backend }) => {
     await initGitRepo(backend.dir, "main")
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hi")
     await term.waitForText("status bar reply", 20_000)
     await term.waitForIdle()
-    await term.waitForText("mode manual")
-    await term.waitForText("⎇ main")
+    await term.waitForText(/Mode\s+manual/)
+    await term.waitForText(/Branch\s+main/)
   })
 })
 
@@ -135,10 +132,10 @@ test.describe("live todo panel", () => {
     },
   })
 
-  test("the sidebar Todos box updates live from a real todo tool call; hiding the sidebar shows a compact count", async ({ tui, backend }) => {
+  test("the sidebar Todos box updates live from a real todo tool call; hiding the sidebar preserves the transcript", async ({ tui, backend }) => {
     // Through a logging proxy: the list must come from the `todoUpdated` frame, not a `GetSessionTodo` re-read.
     const proxy = await startProxy(backend.url)
-    const term = await tui(hyaTui({ ...backend, url: proxy.url }))
+    const term = await tui(hyaTui({ ...backend, url: proxy.url }), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "track a todo")
     await term.waitForText("Added a todo.", 20_000)
@@ -151,46 +148,45 @@ test.describe("live todo panel", () => {
     await term.waitForText("Messages 2")
     expect(await term.find("Todos 0/1")).toBeNull()
 
-    // Hiding the sidebar shows the compact count on the top status line.
+    // Hiding the sidebar removes its metadata without adding conversation headings.
     await term.press("Control+b")
-    await term.waitForText(statusLinePattern)
-    await term.waitForText("Todos 0/1", 20_000)
+    await expect.poll(() => term.find("Todos")).toBeNull()
     expect(await term.find("○ write tests")).toBeNull()
   })
 })
 
-test.describe("status bar context and tokens", () => {
+test.describe("sidebar context and tokens", () => {
   test.use({ model: { steps: [textStep("usage reply"), textStep("second usage reply")], contextLimit: 100_000 } })
 
-  test("shows ctx N% of the model's context limit and the session token total after a reply", async ({ tui, backend, fakeModel }, testInfo) => {
+  test("shows N% of the model's context limit and the session token total after a reply", async ({ tui, backend, fakeModel }, testInfo) => {
     fakeModel!.setUsage({ prompt: 42_000, completion: 300, reasoning: 0 })
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
-    // Unknown before any reply: hidden, not `ctx 0%`.
-    expect(await term.find("ctx ")).toBeNull()
+    // No usage reported yet: no percentage.
+    expect(await term.find("0%")).toBeNull()
     await prompt(term, "hi")
     await term.waitForText("usage reply", 20_000)
     await term.waitForIdle()
-    await term.waitForText(/mode manual · model:default · ctx 42% · 42\.3k tok/)
-    const ctx = await at(term, "ctx 42%")
-    expect((await term.cell(ctx.row, ctx.col))?.fg).toBe(colors.muted)
+    await term.waitForText(/Context\s+42%/)
+    await term.waitForText("42.3k")
+    const ctx = await at(term, "42%")
+    expect((await term.cell(ctx.row, ctx.col))?.fg).toBe(colors.fg)
     // The sidebar's Context box shows the same usage with its window size.
-    await term.resize(1500, 640)
-    await term.press("Control+b")
     await term.waitForText("Context")
     await term.waitForText("Tokens")
     await term.attach(testInfo, "usage")
 
-    await term.resize(1100, 640)
-    // A fuller prompt crosses 80 %: the segment turns the warning color.
+    await term.resize(690, 640)
+    await expect.poll(() => term.find("Tokens")).toBeNull()
+    await term.resize(1500, 640)
+    // A fuller prompt crosses 80 %: Context uses the warning color.
     fakeModel!.setUsage({ prompt: 85_000, completion: 100, reasoning: 0 })
     await prompt(term, "again")
     await term.waitForText("second usage reply", 20_000)
-    await showStatusLine(term)
-    await term.waitForText("ctx 85%")
-    const warn = await at(term, "ctx 85%")
+    await term.waitForText(/Context\s+85%/)
+    const warn = await at(term, "85%")
     expect((await term.cell(warn.row, warn.col))?.fg).toBe(colors.warning)
-    await term.waitForText("127k tok")
+    await term.waitForText("127k")
   })
 })
 
@@ -236,7 +232,7 @@ test.describe("compaction divider in history", () => {
     await prompt(first, "/compact")
     await first.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
     await first.waitForText("Summary: the user said hi.", 20_000)
-    await showStatusLine(first)
+    await showStatusView(first)
     const session = await statusSessionId(first)
     await prompt(first, "/exit")
     await first.waitForExit()
@@ -248,8 +244,7 @@ test.describe("compaction divider in history", () => {
     await second.attach(testInfo, "reopened")
 
     // Switch away and back.
-    await prompt(second, "/new")
-    await second.waitForText(/Created hysec_/, 20_000)
+    await createSession(second)
     expect(await second.find("context compacted")).toBeNull()
     await prompt(second, `/open ${session}`)
     await dividerOnce(second)
@@ -263,7 +258,7 @@ test.describe("compaction divider in history", () => {
     await first.waitForIdle()
     await prompt(first, "/compact")
     await first.waitForText("Summary: the user said hi.", 20_000)
-    await showStatusLine(first)
+    await showStatusView(first)
     const session = await statusSessionId(first)
     await prompt(first, "/exit")
     await first.waitForExit()

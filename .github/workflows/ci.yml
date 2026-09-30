@@ -145,11 +145,20 @@ jobs:
         working-directory: packages/hya-tui-web
         env:
           HYA_BIN: ${{ github.workspace }}/target/debug/hya
-        run: bunx playwright test
+        # Keep this identical to the documented local gate: the complete
+        # browser suite, including current pane, command and session flows.
+        run: bun run test:e2e
       - name: upload playwright test-results on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tui-web-test-results
           path: packages/hya-tui-web/test-results/
+          if-no-files-found: ignore
+      - name: upload playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tui-web-playwright-report
+          path: packages/hya-tui-web/playwright-report/
           if-no-files-found: ignore
