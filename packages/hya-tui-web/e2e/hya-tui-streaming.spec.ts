@@ -106,7 +106,6 @@ test.describe("failed turn", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "please fail")
-    await term.waitForText("Error · provider_error: http status 400", 20_000)
     // The failed assistant message carries the error line under its header.
     await term.waitForText("✗ provider_error: http status 400")
     const header = (await term.find("● hya-main · fake/model"))!

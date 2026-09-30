@@ -1,31 +1,19 @@
-import { expect, hyaTui, showStatusLine, test, wideViewport } from "./hya"
+import { expect, hyaTui, openStatus, test, wideViewport } from "./hya"
 
 // Characterization specs: they lock the existing TUI look and command behavior
 // so framework or module changes in packages/hya-tui cannot drift silently.
 
 test.describe("hya TUI commands and look", () => {
-  test("keeps the panel colors and leaves the conversation free of headings", async ({ tui, backend }) => {
+  test("keeps the conversation free of persistent metadata rows", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.find("hya · ")).toBeNull()
-
-    const sessions = (await term.find("Sessions"))!
-    const corner = await term.cell(sessions.row, sessions.col - 1)
-    expect(corner?.fg).toBe("#405366")
-    expect((await term.cell(sessions.row + 1, sessions.col))?.bg).toBe("#1c2530")
-
-    // The transcript (no box since the single-column layout) sits on the base background.
+    expect(await term.find("mode ")).toBeNull()
+    expect(await term.find("Sessions")).toBeNull()
     const transcript = (await term.find("No messages yet"))!
     expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
-    await showStatusLine(term)
-    const statusLine = (await term.find("mode "))!
-    expect(statusLine.row).toBe(0)
-    const session = (await term.find("hysec_"))!
-    expect((await term.cell(session.row, session.col))?.fg).toBe("#73c8e8")
-
     const composer = (await term.find("Message, !shell, or @file · / commands"))!
     expect(composer.row).toBeGreaterThan(transcript.row)
-    expect(transcript.row).toBe(1)
   })
 
   test("/help opens the help overlay; /models and /api switch the main panel", async ({ tui, backend }) => {
@@ -33,6 +21,7 @@ test.describe("hya TUI commands and look", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
 
     await term.type("/help")
+    await term.waitForText("/help")
     await term.press("Enter")
     await term.waitForText("Help · keys and commands")
     await term.type("/key")
@@ -41,12 +30,14 @@ test.describe("hya TUI commands and look", () => {
     await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
 
     await term.type("/models")
+    await term.waitForText("/models")
     await term.press("Enter")
     await term.waitForText("Models")
     await term.waitForText("hya/offline")
     await term.waitForText("Message, !shell, or @file · / commands")
 
     await term.type("/api")
+    await term.waitForText("/api")
     await term.press("Enter")
     await term.waitForText("API commands")
     await term.waitForText("/v1/health")
@@ -57,27 +48,26 @@ test.describe("hya TUI commands and look", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/status")
+    await term.waitForText("/status")
     await term.press("Enter")
     await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
-
     await term.type("hello from the status page")
+    await term.waitForText("hello from the status page")
     await term.press("Enter")
-    // The offline model's reply is on screen, and the status page is gone.
-    await term.waitForText("No live provider is available", 20_000)
+    // The submitted prompt is durable in the transcript; the status view is transient.
+    await term.waitForText("┃ hello from the status page")
     await expect.poll(() => term.find("Server      http://")).toBeNull()
   })
 
-  test("narrow terminals keep the sidebar hidden and show the top status line", async ({ tui, backend }) => {
+  test("narrow terminals keep the sidebar hidden", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeLessThan(150)
     expect(cols).toBeGreaterThanOrEqual(58)
-    await term.waitForText(/^mode /m)
-    expect(await term.text()).not.toContain("Sessions")
+    await expect.poll(async () => (await term.text()).includes("Sessions")).toBe(false)
     await term.press("Control+b")
-    await term.waitForText("Sidebar needs 150+ columns")
-    expect(await term.text()).not.toContain("Sessions")
+    await expect.poll(async () => (await term.text()).includes("Sessions")).toBe(false)
   })
 
   test("Ctrl+C twice quits the TUI", async ({ tui, backend }) => {

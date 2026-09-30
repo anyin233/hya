@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startFakeModel, type FakeModel, type Protocol, type Step } from "./fake-model"
-import { test as base, type LaunchOptions, type Tui } from "./harness"
+import { test as base, expect, type LaunchOptions, type Tui } from "./harness"
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
 
@@ -367,7 +367,12 @@ export const test = withOptions.extend<Fixtures>({
   tui: async ({ tui, backend }, use, testInfo) => {
     let last: Tui | undefined
     const isolated = { HYA_TUI_CONFIG: join(dirname(backend.dir), "config", "hya", "tui.json") }
-    await use(async (command, options = {}) => (last = await tui(command, { ...options, env: { ...isolated, ...options.env } })))
+    await use(async (command, options = {}) => {
+      last = await tui(command, { ...options, env: { ...isolated, ...options.env } })
+      // Plain v1 TUI starts create their ephemeral session asynchronously. Do
+      if (command.includes("--server") && !command.includes("--continue") && !command.includes("--remote") && !command.includes("--session")) await waitForSession(backend)
+      return last
+    })
     if (last) await last.attach(testInfo, "final-screen").catch(() => {})
   },
 })
@@ -392,6 +397,14 @@ export async function api<T>(backend: Backend, method: string, path: string, bod
   return text ? (JSON.parse(text) as T) : (undefined as T)
 }
 
+/** Wait until a plain TUI start has created its initial session. */
+export async function waitForSession(backend: Backend, timeout = 15_000): Promise<void> {
+  await expect.poll(async () => {
+    const result = await api<{ sessions?: unknown[] }>(backend, "GET", "/v1/sessions")
+    return result.sessions?.length ?? 0
+  }, { timeout }).toBeGreaterThan(0)
+}
+
 /**
  * A headless run next to the TUI: create a session on the fake model over
  * the HTTP API and admit one prompt turn in it (not awaited to its end).
@@ -410,30 +423,25 @@ export function hyaTui(backend: Backend): string[] {
 
 /**
  * A browser viewport wide enough for the right sidebar (≈174 columns; it
- * needs 150): the default 1100×640 viewport is ≈128 columns, where the
- * sidebar is hidden and the top status line shows its Context fields.
+ * needs 150). The default 1100×640 viewport is ≈128 columns, where the
+ * sidebar is intentionally hidden.
  */
 export const wideViewport = { width: 1500, height: 640 }
 
-/**
- * The top status line (docs/tui.md "Status line"): `[-- INSERT -- · ]mode <mode> · <session> · <agent> · …`.
- * It is on screen only while no Context pane is: below 150 columns, or after Ctrl+B / `/sidebar off`.
- * It starts a row, or follows the left Projects pane's border (`┐`/`│`) on a wide terminal.
- */
-export const statusLinePattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · /m
-/** Captures the open session's id from the top status line (while the session has no title). */
-export const statusSessionPattern = /(?:^|[┐│])(?:-- [A-Z]+ --[^·]*· )?mode [^·]+ · (hysec_\w+)/m
-
-/** Hide the right sidebar on a wide viewport (Ctrl+B) so the top status line shows. */
-export async function showStatusLine(term: Tui): Promise<void> {
-  await term.press("Control+b")
-  await term.waitForText(statusLinePattern)
+/** Open the explicit metadata view used in place of the removed top status line. */
+export async function openStatus(term: Tui, timeout?: number): Promise<void> {
+  await term.type("/status")
+  await term.waitForText("▸ /status")
+  await term.press("Enter")
+  await term.waitForText(/Status|Server\s+http/m, timeout)
 }
 
-/** The open session's id from the top status line (which must be on screen). */
+/** The open session's id from the explicit `/status` view. */
 export async function statusSessionId(term: Tui, timeout?: number): Promise<string> {
-  await term.waitForText(statusSessionPattern, timeout)
-  return statusSessionPattern.exec(await term.text())![1]!
+  await openStatus(term, timeout)
+  const pattern = /Session\s+(hysec_\w+)/m
+  await term.waitForText(pattern, timeout)
+  return pattern.exec(await term.text())![1]!
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

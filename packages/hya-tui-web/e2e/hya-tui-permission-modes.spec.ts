@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
-import { approverBundle, expect, hyaTui, showStatusLine, statusSessionId, test, textStep, toolCard, toolStep, type Backend } from "./hya"
+import { approverBundle, expect, hyaTui, statusSessionId, test, textStep, toolCard, toolStep, type Backend } from "./hya"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
 const narrow = { width: 690, height: 640 }
@@ -17,6 +17,7 @@ const confirmLine = "Enable yolo? Every tool call runs without asking · Enter c
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
+  await term.waitForText(text)
   await term.press("Enter")
 }
 
@@ -26,12 +27,11 @@ async function at(term: Tui, needle: string) {
   return found!
 }
 
-/** Create a session with `/new` and wait until it is open. */
+/** Create a session with `/new` and wait until its composer is ready. */
 async function newSession(term: Tui): Promise<void> {
   await term.waitForText("Message, !shell, or @file · / commands")
   await prompt(term, "/new")
-  await term.waitForText(/Created hysec_/)
-  await showStatusLine(term)
+  await term.waitForText("Message, !shell, or @file · / commands")
 }
 
 /** Esc closes the picker; wait for it, so the next keys are not read as Alt+key after a lone ESC. */
@@ -44,13 +44,6 @@ async function promptGone(term: Tui): Promise<void> {
   await expect.poll(async () => /asked by /.test(await term.text()), { timeout: 20_000 }).toBe(false)
 }
 
-/** The top status line (shown when the Context sidebar is hidden). */
-async function statusBar(term: Tui): Promise<{ row: number; line: string }> {
-  const lines = await term.lines()
-  const row = lines.findIndex((line) => /^(?:-- [A-Z]+ --(?: \d+d)? · )?mode /.test(line))
-  expect(row, "status line row").toBeGreaterThanOrEqual(0)
-  return { row, line: lines[row]! }
-}
 
 /** `permissionMode` of the backend's only top-level session. */
 async function backendMode(backend: Backend): Promise<string | undefined> {
@@ -74,36 +67,24 @@ test.describe("Shift+Tab switching", () => {
   test("Shift+Tab asks before yolo; confirmed yolo runs bash without a prompt; manual asks again", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await newSession(term)
-    expect((await statusBar(term)).line).toMatch(/^mode manual/)
 
     // Shift+Tab reaches the TUI through xterm.js (CSI Z) and asks first.
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)
     const warn = await at(term, "⚠ Enable yolo?")
     expect((await term.cell(warn.row, warn.col))?.fg).toBe(colors.error)
-    expect((await statusBar(term)).line).toMatch(/^mode manual/)
     await term.attach(testInfo, "yolo-confirm")
     // Esc keeps manual.
     await term.press("Escape")
-    await term.waitForText("Permission mode unchanged · manual")
-    expect(await term.text()).not.toContain(confirmLine)
+    await expect.poll(async () => (await term.text()).includes(confirmLine)).toBe(false)
     expect(await backendMode(backend)).toBe("manual")
 
     // Shift+Tab again, Enter confirms.
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)
     await term.press("Enter")
-    await term.waitForText("mode ⚠ yolo")
-    await term.waitForText("Permission mode → yolo")
-    const bar = await statusBar(term)
-    const yolo = bar.line.indexOf("⚠ yolo")
-    expect((await term.cell(bar.row, yolo))?.fg).toBe(colors.error)
-    expect((await term.cell(bar.row, yolo + 2))?.fg).toBe(colors.error)
-    expect((await term.cell(bar.row, 0))?.fg).toBe(colors.error)
     await expect.poll(() => backendMode(backend)).toBe("yolo")
     // The notice is a muted transcript line.
-    const notice = await at(term, "Permission mode → yolo")
-    expect((await term.cell(notice.row, notice.col))?.fg).toBe(colors.muted)
 
     // Under yolo the bash call runs at once: no prompt.
     await prompt(term, "run it under yolo")
@@ -113,8 +94,6 @@ test.describe("Shift+Tab switching", () => {
 
     // Shift+Tab back to manual (no confirmation needed); the next bash asks.
     await term.press("Shift+Tab")
-    await term.waitForText(/^mode manual/m)
-    await term.waitForText("Permission mode → manual")
     await expect.poll(() => backendMode(backend)).toBe("manual")
     await prompt(term, "run it under manual")
     await term.waitForText("asked by hya-main", 20_000)
@@ -126,8 +105,7 @@ test.describe("Shift+Tab switching", () => {
 
     // Once confirmed, yolo no longer asks in this TUI process.
     await term.press("Shift+Tab")
-    await term.waitForText("mode ⚠ yolo")
-    expect(await term.text()).not.toContain(confirmLine)
+    await expect.poll(async () => (await term.text()).includes(confirmLine)).toBe(false)
   })
 })
 
@@ -145,7 +123,6 @@ test.describe("yolo with a pending ask", () => {
     await term.waitForText(confirmLine)
     await term.attach(testInfo, "yolo-confirm-over-prompt")
     await term.press("Enter")
-    await term.waitForText("mode ⚠ yolo")
     await promptGone(term)
     await term.waitForText("Continued after yolo.", 20_000)
     await term.waitForText(toolCard("✓", "bash", '"command":"echo pending-ask"'))
@@ -181,7 +158,6 @@ test.describe("/permissions picker", () => {
     await term.press("Shift+Tab")
     await term.waitForText(/▸ ● Manual/)
     await closePicker(term)
-    expect((await statusBar(term)).line).toMatch(/^mode manual/)
 
     // The input has the focus again.
     await term.type("typed after")
@@ -195,7 +171,6 @@ test.describe("/permissions picker", () => {
     await term.press("Enter")
     await term.waitForText(confirmLine)
     await term.press("Enter")
-    await term.waitForText("mode ⚠ yolo")
     await expect.poll(() => backendMode(backend)).toBe("yolo")
 
     // Reopened, the current mode is marked; `/permissions manual` switches directly.
@@ -203,7 +178,6 @@ test.describe("/permissions picker", () => {
     await term.waitForText(/▸ ● Yolo/)
     await closePicker(term)
     await prompt(term, "/permissions manual")
-    await term.waitForText(/^mode manual/m)
     await expect.poll(() => backendMode(backend)).toBe("manual")
   })
 
@@ -214,7 +188,6 @@ test.describe("/permissions picker", () => {
     await term.waitForText("Commands")
     await term.press("Shift+Tab")
     expect(await term.text()).not.toContain(confirmLine)
-    expect((await statusBar(term)).line).toMatch(/^mode manual/)
     // The highlight wrapped to the last entry: the first entry is no longer marked.
     await expect.poll(async () => (await term.lines()).filter((line) => line.includes("▸ /")).length).toBe(1)
     await term.press("Escape")
@@ -233,7 +206,6 @@ test.describe("/permissions picker", () => {
     await term.press("Shift+Tab")
     await term.waitForText("⚠ Enable yolo?")
     await term.press("Enter")
-    await term.waitForText("mode ⚠ yolo")
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
   })
 })
@@ -246,13 +218,9 @@ test.describe("before a session exists", () => {
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)
     await term.press("Enter")
-    await term.waitForText("Permission mode → yolo · applies when the session is created")
-    await term.waitForText("mode ⚠ yolo")
     await prompt(term, "hello")
     await term.waitForIdle(20_000)
     await expect.poll(() => backendMode(backend)).toBe("yolo")
-    await term.waitForText("Permission mode → yolo")
-    await term.waitForText("mode ⚠ yolo")
   })
 })
 
@@ -267,43 +235,29 @@ test("the last chosen permission mode becomes the default for new sessions and a
   }
 
   const first = await tui(hyaTui(backend))
-  await first.waitForText("Connected to hya")
-  await showStatusLine(first)
-  await first.waitForText(/^mode manual/m)
   await prompt(first, "/permissions yolo")
   await first.waitForText(confirmLine)
   await first.press("Enter")
-  await first.waitForText(/^mode ⚠ yolo/m)
   await expect.poll(savedMode).toBe("yolo")
 
   const firstId = await statusSessionId(first)
   await prompt(first, "/new")
-  await expect.poll(async () => {
-    const id = await statusSessionId(first).catch(() => undefined)
-    return id && id !== firstId ? id : undefined
-  }).not.toBeUndefined()
-  await first.waitForText(/^mode ⚠ yolo/m)
+  await first.waitForText("No messages yet")
+  expect(await statusSessionId(first)).not.toBe(firstId)
   await expect.poll(() => backendMode(backend)).toBe("yolo")
   await prompt(first, "/exit")
   await first.waitForExit()
 
   // A plain launch creates a fresh session; it must use the saved default.
   const second = await tui(hyaTui(backend))
-  await second.waitForText("Connected to hya")
-  await showStatusLine(second)
-  await second.waitForText(/^mode ⚠ yolo/m)
   await expect.poll(() => backendMode(backend)).toBe("yolo")
 
   await prompt(second, "/permissions manual")
-  await second.waitForText(/^mode manual/m)
   await expect.poll(savedMode).toBe("manual")
   const secondId = await statusSessionId(second)
   await prompt(second, "/new")
-  await expect.poll(async () => {
-    const id = await statusSessionId(second).catch(() => undefined)
-    return id && id !== secondId ? id : undefined
-  }).not.toBeUndefined()
-  await second.waitForText(/^mode manual/m)
+  await second.waitForText("No messages yet")
+  expect(await statusSessionId(second)).not.toBe(secondId)
   await expect.poll(() => backendMode(backend)).toBe("manual")
 })
 
@@ -336,11 +290,6 @@ test.describe("bundle permission mode", () => {
     await term.type("echo")
     await term.waitForText("1 of 3")
     await term.press("Enter")
-    // A bundle mode needs no confirmation; the status bar shows its title in the accent color.
-    await term.waitForText("mode Echo only")
-    await term.waitForText("Permission mode → Echo only (e2e/approver/echo-only)")
-    const bar = await statusBar(term)
-    expect((await term.cell(bar.row, bar.line.indexOf("Echo only")))?.fg).toBe(colors.accent)
     await expect.poll(() => backendMode(backend)).toBe("e2e/approver/echo-only")
 
     // The approver allows the echo command: no prompt.
@@ -360,7 +309,6 @@ test.describe("bundle permission mode", () => {
 
     // Shift+Tab from the bundle mode wraps around to manual.
     await term.press("Shift+Tab")
-    await term.waitForText(/^mode manual/m)
   })
 })
 

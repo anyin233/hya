@@ -4,7 +4,7 @@
 // preferences file (`HYA_TUI_CONFIG` points it at a temp path here), and a
 // restarted TUI starts in the saved theme.
 
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
@@ -19,15 +19,11 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** Background of the main column (a cell of the empty transcript area) and the top status line's `mode` label color (the header it replaced is gone). */
-async function screenColors(term: Tui): Promise<{ bg: string; status: string }> {
+/** Background of the main column's transcript area. */
+async function screenColors(term: Tui): Promise<{ bg: string }> {
   const lines = await term.lines()
-  // The first blank row under the status line belongs to the transcript.
   const row = lines.findIndex((line, index) => index > 1 && line.slice(0, 20).trim() === "")
-  const bg = (await term.cell(row, 1))?.bg ?? "none"
-  const label = await term.find("mode ")
-  const fg = label ? (await term.cell(label.row, label.col))?.fg ?? "none" : "none"
-  return { bg, status: fg }
+  return { bg: (await term.cell(row, 1))?.bg ?? "none" }
 }
 
 let prefsDir: string
@@ -37,11 +33,11 @@ test.afterEach(async () => { await rm(prefsDir, { recursive: true, force: true }
 test.describe("/theme", () => {
   test("previews the highlighted theme, Esc restores, Enter saves; a restarted TUI starts in the saved theme", async ({ tui, backend }, testInfo) => {
     const prefs = join(prefsDir, "prefs", "tui.json")
+    await mkdir(join(prefsDir, "prefs"), { recursive: true })
     const env = { HYA_TUI_CONFIG: prefs }
     let term = await tui(hyaTui(backend), { env })
     await term.waitForText("Message, !shell, or @file · / commands")
-    expect(await screenColors(term)).toEqual({ bg: hya.bg, header: hya.accent })
-
+    expect(await screenColors(term)).toEqual({ bg: hya.bg })
     await prompt(term, "/theme")
     await term.waitForText("Theme")
     await term.waitForText(/▸ ● hya\s+\[dark\]/)
@@ -64,13 +60,9 @@ test.describe("/theme", () => {
     await term.waitForText(/▸ ● hya/)
     await term.press("ArrowDown")
     await term.press("Enter")
-    await term.waitForText("Theme → Light")
-    expect(await screenColors(term)).toEqual({ bg: light.bg, status: light.fg })
+    expect(await screenColors(term)).toEqual({ bg: light.bg })
     expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ theme: "light" })
 
-    // The status line follows the theme too.
-    const status = await term.find("Theme → Light")
-    expect((await term.cell(status!.row, status!.col))?.fg).toBe(light.muted)
 
     // A new TUI reads the file and starts in the light theme; the picker marks it.
     term = await tui(hyaTui(backend), { env })
@@ -91,17 +83,14 @@ test.describe("/theme", () => {
     await prompt(term, "/theme")
     await term.waitForText(/Light\s+\[light\]/)
     await term.press("ArrowDown")
+    await expect.poll(async () => (await screenColors(term)).bg).toBe(light.bg)
     await term.press("Enter")
-    await term.waitForText("Theme → Light")
     const { cols } = await term.size()
     // The right edge of the main column is themed too (no stale dark cells).
     const lines = await term.lines()
     const row = lines.findIndex((line, index) => index > 1 && line.trim() === "")
     expect((await term.cell(row, cols - 1))?.bg).toBe(light.bg)
     expect((await term.cell(row, 0))?.bg).toBe(light.bg)
-    // The status line near the header sits on the themed background.
-    const status = await term.find("Theme → Light")
-    expect(await term.cell(status!.row, status!.col + 1)).toMatchObject({ fg: light.muted, bg: light.bg })
   })
 })
 
@@ -116,8 +105,10 @@ test.describe("/theme over a transcript", () => {
     await prompt(term, "/theme")
     await term.waitForText(/Light\s+\[light\]/)
     await term.press("ArrowDown")
+    await expect.poll(async () => (await screenColors(term)).bg).toBe(light.bg)
     await term.press("Enter")
-    await term.waitForText("Theme → Light")
+    await expect.poll(() => term.find("Theme ·")).toBeNull()
+    await term.waitForText("Message, !shell, or @file · / commands")
     const user = (await term.find("show me code"))!
     expect(await term.cell(user.row, user.col)).toMatchObject({ fg: light.fg, bg: light.panel })
     const done = (await term.find("Done."))!

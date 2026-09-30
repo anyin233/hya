@@ -46,9 +46,8 @@ test.describe("image attachments", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "@huge.png describe this")
-    await prompt(term, "/status")
-    await term.waitForText("Status")
-    // Nothing reached the fake model.
+    await term.waitForIdle()
+    // Local validation leaves the prompt available and never calls the model.
     expect(fakeModel!.requests()).toHaveLength(0)
   })
 
@@ -75,8 +74,7 @@ test.describe("a model that refuses images", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "@shot.png describe this")
-    await prompt(term, "/status")
-    await term.waitForText("Status")
+    await term.waitForIdle()
     expect(fakeModel!.requests()).toHaveLength(0)
   })
 })

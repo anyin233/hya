@@ -16,7 +16,7 @@ test.use({ model: { steps: [toolStep("bash", { command: "git status --short --br
 test("a plain relaunch restores the waiting chat and offers approval keys, then keeps its history", async ({ tui, backend }, testInfo) => {
   const first = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
   await first.waitForText("Message, !shell, or @file · / commands")
-  const id = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+  const id = await statusSessionId(first)
   await prompt(first, "Check this repository")
   await first.waitForText("│ $ git status --short --branch", 20_000)
   await prompt(first, "/exit")

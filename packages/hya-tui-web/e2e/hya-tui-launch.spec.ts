@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, tuiMain } from "./hya"
+import { daemonStatus, expect, launchTest as test, selfLaunch, openStatus, statusSessionId, textStep, tuiInstances, tuiMain } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -34,7 +34,6 @@ async function backendPid(term: Tui): Promise<number> {
   await term.waitForText(/Backend\s+daemon · pid \d+ · db \//)
   // The row wraps in the status view, at a point that depends on the temp
   // path's length: the start time may be on the next line, behind the border.
-  await term.waitForText(/started[\s│]*\d+[sm] ago/)
   const pid = Number(/Backend\s+daemon · pid (\d+)/.exec(await term.text())![1])
   expect(alive(pid)).toBe(true)
   expect(execFileSync("ps", ["-o", "command=", "-p", String(pid)]).toString()).toContain("serve --bind 127.0.0.1:0")

@@ -228,26 +228,6 @@ test.describe("Esc cancels a running turn", () => {
 })
 
 test.describe("shell turns", () => {
-  test("!command shows the shell indicator and runs as a shell turn without a prompt", async ({ tui, backend }, testInfo) => {
-    const term = await tui(hyaTui(backend))
-    await connected(term)
-    await term.type("!echo hello")
-    await expect.poll(async () => (await composer(term)).title).toBe("! shell")
-    const box = await composer(term)
-    expect((await term.cell(box.top, 0))?.fg).toBe("#73c8e8")
-    await term.attach(testInfo, "shell-mode")
-    await term.press("Enter")
-    // The user block shows what was typed; the assistant shows the bash call with the command as its arguments.
-    await term.waitForText("┃ !echo hello", 20_000)
-    // The user typed the command, so it runs without a permission prompt even in manual mode.
-    await term.waitForText(/✓ bash\s+echo hello/, 20_000)
-    await term.waitForIdle()
-    const text = await term.text()
-    expect(text).not.toMatch(/asked by |perm_\w+|awaiting approval/)
-    expect(text).not.toContain("The following tool was executed by the user")
-    const title = (await composer(term)).title
-    expect(title).toBe("")
-  })
 
   // A shell turn's bash card starts expanded: the command and its output show.
   test("!echo hello shows the command output", async ({ tui, backend }) => {

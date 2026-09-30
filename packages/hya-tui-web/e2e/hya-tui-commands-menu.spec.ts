@@ -10,7 +10,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hyaTui, showStatusLine, test, textStep, type Backend } from "./hya"
+import { expect, hyaTui, test, textStep, type Backend } from "./hya"
 
 const accent = "#73c8e8"
 
@@ -165,12 +165,12 @@ test.describe("command menu", () => {
     await connected(term, backend)
     await term.type("/")
     await term.waitForText("Commands")
-    await term.waitForText("▸ /agent")
-    await term.waitForText("[local]")
+    await expect.poll(async () => (await box(term, "Commands"))?.rows.some((row) => row.includes("/agent"))).toBe(true)
+    await expect.poll(async () => (await box(term, "Commands"))?.rows.some((row) => row.includes("[local]"))).toBe(true)
     await term.attach(testInfo, "command-menu-open")
 
     await term.type("rev")
-    await term.waitForText("▸ /review")
+    await expect.poll(async () => (await box(term, "Commands"))?.rows.some((row) => row.includes("/review"))).toBe(true)
     const menu = (await box(term, "Commands"))!
     expect(menu.rows.some((row) => row.includes("/review"))).toBe(true)
     expect(menu.rows.some((row) => row.includes("/agent"))).toBe(false)
