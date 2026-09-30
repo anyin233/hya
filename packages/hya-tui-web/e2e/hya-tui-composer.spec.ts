@@ -5,7 +5,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, test, textStep, toolStep } from "./hya"
+import { expect, hangStep, hyaTui, test, textStep, toolCard, toolStep } from "./hya"
 
 const warning = "#e5c07b"
 const accent = "#73c8e8"
@@ -237,9 +237,8 @@ test.describe("shell turns", () => {
     expect((await term.cell(box.top, 0))?.fg).toBe("#73c8e8")
     await term.attach(testInfo, "shell-mode")
     await term.press("Enter")
-    // The user block shows what was typed; the assistant shows the command under the bash call.
+    // The user block shows what was typed; the assistant shows the bash call with the command as its arguments.
     await term.waitForText("┃ !echo hello", 20_000)
-    await term.waitForText("$ echo hello")
     // The user typed the command, so it runs without a permission prompt even in manual mode.
     await term.waitForText(/✓ bash\s+echo hello/, 20_000)
     await term.waitForIdle()
@@ -256,8 +255,7 @@ test.describe("shell turns", () => {
     await connected(term)
     await term.type("!echo hello")
     await term.press("Enter")
-    await term.waitForText("$ echo hello", 20_000)
-    await term.waitForText(/✓ bash\s+echo hello/, 20_000)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo hello"'), 20_000)
     await term.waitForText("│ hello")
   })
 })
@@ -273,14 +271,14 @@ test.describe("/approve", () => {
     await term.type("run it")
     await term.press("Enter")
     await term.waitForText(/perm_\w+/, 20_000)
-    await term.waitForText(/◌ bash\s+echo approve-me · awaiting approval/)
+    await term.waitForText(toolCard("◌", "bash", '"command":"echo approve-me"', "awaiting approval"))
     const card = (await term.find("◌ bash"))!
     expect((await term.cell(card.row, card.col))?.fg).toBe(warning)
     const id = /perm_\w+/.exec(await term.text())![0]
     await term.type(`/approve ${id}`)
     await term.press("Enter")
     await term.waitForText("Approved by command.", 20_000)
-    await term.waitForText(/✓ bash\s+echo approve-me/)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo approve-me"'))
   })
 })
 

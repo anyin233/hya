@@ -2,9 +2,10 @@ import { expect, test } from "bun:test"
 import { HttpError, type HyaClient } from "../src/client"
 import type { TuiPreferences } from "../src/prefs"
 import { nativeCommands, type CompletionContext } from "../src/completion"
-import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandContext } from "../src/commands"
+import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
-import { modelReference } from "../src/state/format"
+import { modelReference, sessionListText } from "../src/state/format"
+import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 
@@ -184,6 +185,52 @@ test("/open resolves list numbers and /key opens the Provider View", async () =>
   expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
 })
 
+test("/open <number> counts the active Project's sessions, as the sidebar numbers them", async () => {
+  const { store, calls, run } = harness()
+  store.applyCatalog({
+    sessions: [
+      { id: "hysec_other", agent: "hya-main", workdir: "/o", projectId: "prj_other" },
+      { id: "hysec_w1", agent: "hya-main", workdir: "/w", projectId: "prj_w" },
+      { id: "hysec_w1_kid", agent: "hya-task", workdir: "/w", projectId: "prj_w", parent: "hysec_w1" },
+      { id: "hysec_w2", agent: "hya-main", workdir: "/w", projectId: "prj_w" },
+    ],
+    interactions: [], models: [], workflows: [], providers: [], commands: [],
+  })
+  store.setActiveProject("prj_w")
+  expect(sessionListText(store.state)).toContain("2. hysec_w2")
+  await run("/open 2")
+  await run("/open 1.1")
+  expect(calls).toEqual(["open hysec_w2", "open hysec_w1_kid"])
+  // Another Project's session has no number here.
+  await expect(run("/open 3")).rejects.toThrow("Usage: /open <session id or number>")
+})
+
+test("/open and /resume completions show a titled session as title (id) and insert its id", () => {
+  const { registry, store } = harness()
+  store.applyCatalog({ sessions: [{ id: "hysec_a", agent: "hya-main", workdir: "/w", title: "Fix login" }, { id: "hysec_b", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  const complete = (input: string) => registry.complete(input, store.completionContext())
+  expect(suggestCommandInput("/open ", () => [], complete)).toEqual([
+    { label: "/open Fix login (hysec_a)", replacement: "/open hysec_a", kind: "argument", runOnEnter: false },
+    { label: "/open hysec_b", replacement: "/open hysec_b", kind: "argument", runOnEnter: false },
+  ])
+  // The shown title is typeable too; the completed line still carries the id.
+  expect(suggestCommandInput("/open fix", () => [], complete).map((row) => row.replacement)).toEqual(["/open hysec_a"])
+  expect(suggestCommandInput("/resume hysec_a", () => [], complete)).toEqual([])
+  expect(suggestCommandInput("/resume hy", () => [], complete).map((row) => row.label)).toEqual(["/resume Fix login (hysec_a)", "/resume hysec_b"])
+})
+
+test("/new hands keyboard focus from the Projects sidebar to the composer", async () => {
+  const { store, calls, run } = harness()
+  // The command pane restores the sidebar's focus when it closes (it was opened from there).
+  store.setProjectsSidebarFocus(true)
+  await run("/new")
+  expect(store.state.projectsSidebarFocus).toBe(false)
+  store.setProjectsSidebarFocus(true)
+  await run("/new --temp")
+  expect(store.state.projectsSidebarFocus).toBe(false)
+  expect(calls).toEqual(["new", "new temp"])
+})
+
 test("/diff, /mcp, /rules, /agent open their full-screen views", async () => {
   const { calls, run } = harness()
   await run("/diff")
@@ -314,9 +361,12 @@ test("/rename updates the session title", async () => {
   const { store, run } = harness({
     updateSession: async (session, patch) => ({ id: session, agent: "hya-main", workdir: "/w", title: patch.title }),
   })
+  store.applyCatalog({ sessions: [{ id: "hysec_1", agent: "hya-main", workdir: "/w" }], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
   await run("/rename New title")
   expect(store.state.selected?.title).toBe("New title")
+  // The list row as well, so the sidebar and `/open` show it before any stream frame.
+  expect(store.completionContext().sessions).toEqual([{ id: "hysec_1", title: "New title" }])
   expect(store.state.status).toBe("Renamed to New title")
   await expect(run("/rename   ")).rejects.toThrow("Usage: /rename <title> in a session")
 })
@@ -412,15 +462,18 @@ test("argument completion comes from the command's own completer", () => {
 
 test("/sidebar toggles or sets the sidebar and /thinking expands or collapses reasoning", async () => {
   const { store, run, registry } = harness()
-  store.setColumns(80)
+  store.setColumns(160)
   await run("/sidebar")
-  expect(store.state.sidebar).toBe("open")
-  expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
-  await run("/sidebar off")
   expect(store.state.sidebar).toBe("closed")
   expect(store.state.status).toBe("Sidebar hidden · Ctrl+B toggles")
   await run("/sidebar on")
-  expect(store.state.sidebar).toBe("open")
+  expect(store.state.sidebar).toBe("auto")
+  expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
+  // Too narrow: the sidebar cannot be shown; the status line says why.
+  store.setColumns(149)
+  await run("/sidebar on")
+  expect(store.state.sidebar).toBe("auto")
+  expect(store.state.status).toBe(sidebarTooNarrowNotice)
   await expect(run("/sidebar maybe")).rejects.toThrow("Usage: /sidebar [on|off]")
 
   await run("/thinking")

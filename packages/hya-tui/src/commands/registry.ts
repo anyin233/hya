@@ -112,6 +112,13 @@ export interface ArgumentPosition {
   head: string
 }
 
+/**
+ * One argument completion: the full replacement line, or that line plus the
+ * text the command pane shows for it (`/open Fix login (hysec_1)` for a
+ * titled session whose replacement is `/open hysec_1`).
+ */
+export type Completion = string | { replacement: string; label: string }
+
 export interface CommandSpec {
   /** Including the leading slash, e.g. `/models`. */
   name: string
@@ -119,7 +126,7 @@ export interface CommandSpec {
   argumentHint?: string
   /** Not offered in a WebUI tab (`--web-tab`): hidden from the command menu, help, and completion; typing it still runs it. */
   terminalOnly?: boolean
-  complete?(position: ArgumentPosition, context: CompletionContext): string[]
+  complete?(position: ArgumentPosition, context: CompletionContext): Completion[]
   run(context: CommandContext, invocation: CommandInvocation): Promise<void> | void
 }
 
@@ -161,7 +168,7 @@ export class CommandRegistry {
   }
 
   /** Complete the argument of a registered command; `[]` for unknown commands. */
-  complete(input: string, context: CompletionContext): string[] {
+  complete(input: string, context: CompletionContext): Completion[] {
     const space = input.indexOf(" ")
     if (space < 0) return []
     const spec = this.specs.get(input.slice(0, space))

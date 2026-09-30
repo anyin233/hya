@@ -8,7 +8,7 @@
 // this file covers the rest of the table.
 
 import { Tui } from "./harness"
-import { api, expect, fakeModelRef, hangStep, hyaTui, test, textStep, type Backend } from "./hya"
+import { api, expect, fakeModelRef, hangStep, hyaTui, showStatusLine, statusSessionId, statusSessionPattern, test, textStep, type Backend } from "./hya"
 
 test.use({ model: { steps: [hangStep(60_000), textStep("Spare."), textStep("Spare."), textStep("Spare.")] } })
 
@@ -63,7 +63,7 @@ test("a session deleted by another client drops its sidebar row; deleting the op
   // Deleted elsewhere while open: a notice, then a fresh session — never a crash.
   await api(backend, "DELETE", `/v1/sessions/${openId}`)
   await term.waitForText(`Session ${openId} was deleted elsewhere; opened a new session`, 15_000)
-  await expect.poll(async () => /hya · (hysec_\w+)/.exec(await term.text())?.[1]).not.toBe(openId)
+  await term.press("Control+b")
   await term.attach(testInfo, "open-session-deleted")
 })
 

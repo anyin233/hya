@@ -21,17 +21,12 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 
 ## Forum Rule
 
-- Agents discuss with each other and keep durable project knowledge on this
-  project's board, `.forum/` at the main checkout's root. Read `.forum/index.md`
-  first. Use the `forum` skill for thread and post formats and for `zg` search.
-- `.planning/` holds one task's working state. `.forum/` holds what other
-  agents and later sessions need: questions, handoffs, decisions and their
-  reasons, and knowledge threads for pitfalls and environment facts about this
-  repository. When a finished plan produces something worth keeping, promote it
-  to the forum.
-- `.forum/` is its own git repository, excluded locally through
-  `.git/info/exclude`. Never stage it or reference it in this repository's
-  commits.
+- `.planning/` holds one task's working state; `.forum/` (conventions: global
+  `AGENTS.md` and the `forum` skill) holds what other agents and later sessions
+  need. When a finished plan produces something worth keeping (a pitfall, an
+  environment fact, a decision and its reasons), record it on the forum as a
+  question with its answer; put proposals and handoffs between agents in a
+  discussion thread.
 
 ## Commit Rule
 
@@ -100,9 +95,12 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 ## Release & Changelog Rule
 
 - Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
-- Every fix or feature change must include an explicit project version number update in `[workspace.package].version` in `Cargo.toml`; keep the release tag and changelog aligned when publishing.
+- Every fix or feature change must include an explicit project version number update in `[workspace.package].version` in `Cargo.toml` (with every coupled version listed below); keep the release tag and changelog aligned when publishing.
+- Bump the version only for changes to shipped behavior: Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else that lands in the release archive or source install.
+- Do not bump the version for documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`) or CI-only changes (`.github/`, CI scripts and config). The same holds for test-only changes that leave shipped code untouched. Such changes also do not write a new root `CHANGELOG.md` entry.
+- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the version once for the whole atomic change.
 - The eleven first-party bundles are released with hya: every `bundles/presets/*/bundle.yaml` and `bundles/first-party/*/bundle.yaml` identity `version` must equal `[workspace.package].version`. Bump them together; `stage-first-party-bundles` and the `hya-bundle` first-party test reject a mismatch. The `bundles/extra/*/bundle.yaml` bundles follow the same rule; `crates/hya-bundle/tests/extra_bundles.rs` rejects a mismatch.
-- The same version also appears in `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json`, and the `README.md` status paragraph; `cargo test -p xtask` rejects a mismatch.
+- The same version also appears in `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json`, and the `README.md` status paragraph; `cargo test -p xtask` rejects a `package.json` mismatch, and the `release-rehearsal` metadata check rejects a stale `README.md` or `Cargo.lock`.
 - Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
 - When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
 - Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.
@@ -202,50 +200,55 @@ or verifiers; workers do not decide that their own objective is done.
 
 ## Verification
 
-- After any fix, feature, or refactor, run the CI-equivalent checks for the touched areas and build a local executable before reporting done.
+- After any fix, feature, or refactor, run the checks for the affected components and build a local executable before reporting done. Documentation-only changes need no build or tests; CI-only changes need only a syntax check of the edited workflow.
+- **Verify by component, not the full suite.** Local development runs only the tests of the components a change touches, plus the components that consume a changed public contract. CI (`.github/workflows/ci.yml`) runs the full workspace suite, Track P, and all TUI checks on every push; do not repeat that locally.
+- Do not run `cargo test --workspace`, `cargo clippy --workspace`, the full `hya-e2e` matrix, or the full Playwright suite locally unless the user asks, or the change is a cross-cutting refactor that touches most crates (for example a workspace-wide dependency or lint bump).
+- Report which components you verified and why that scope is enough. If you skipped a consumer on purpose, name it.
 
-For Rust changes, run:
+### Choosing the affected components
+
+- A change private to one crate or package (internal functions, tests, non-`pub` items): test that crate or package only.
+- A change to a crate's public API, wire types, or behavior that other crates rely on: also test its direct workspace dependents. List them with:
+
+```sh
+cargo tree --workspace -i <crate> --depth 1 -e normal,dev --prefix none
+```
+
+- Foundation crates (`hya-proto`, `hya-api`, `hya-tool`) have many dependents. Test the changed crate, then only the dependents that use the changed items (find them with `grep` or `xd://lsp` references), not the whole list.
+- `proto/hya/v1` changes: regenerate with `cargo run -p xtask -- gen-api`, then test `hya-api`, `hya-server`, `hya-sdk-v1`, `hya-client`, and `packages/hya-tui` when its generated catalog or protobuf definitions change.
+- Version bumps: `cargo test -p xtask` (frontend `package.json`) and `cargo test -p hya-bundle` (bundle identities) check the coupled versions; `README.md` and `Cargo.lock` are checked only by `release-rehearsal`.
+- `crates/hya-e2e/matrix.toml` or new Track P tests: `cargo run -p xtask -- matrix-check`.
+
+### Rust components
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --exclude hya-e2e
+cargo clippy -p <crate> [-p <dependent> ...] --all-targets -- -D warnings
+cargo test -p <crate> [-p <dependent> ...]
+cargo build -p hya-backend --bin hya
 ```
 
-Exclude `hya-e2e` from the default workspace suite (matches CI): Track P spawns
-real backend processes and must not run multi-threaded under the default suite.
+`cargo fmt --all --check` is cheap and stays workspace-wide. Pass `-p` once per affected crate so one cargo run covers all of them. Run a single test binary or filter (`cargo test -p <crate> --test <name>` or `cargo test -p <crate> <filter>`) while iterating; run the affected crates' full tests before reporting done.
 
-For process agent E2E (`crates/hya-e2e`) or agent-surface features that must not
-regress the PR matrix (permissions, skills, MCP, subagents, hyabundle), also:
+### Process agent E2E (`crates/hya-e2e`)
+
+Run Track P only when a change touches `crates/hya-e2e` or an agent surface the PR matrix covers (permissions, skills, MCP, subagents, hyabundle). Run the matrix rows for that surface, not the whole matrix:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e -- --test-threads=1
+cargo test -p hya-e2e --test <file> -- --test-threads=1
 ```
 
-Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`,
-`docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
+Track P spawns real backend processes and must always run single-threaded. It stays out of any workspace-wide `cargo test` (`--exclude hya-e2e`). Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`, `docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
 
-For Bun adapter changes, also run from
-`crates/hya-plugin-bun/adapter`:
+### Bun components
 
-```sh
-bun run typecheck
-bun test
-```
+Run only the packages you changed, from that package's directory:
 
-For OpenTUI frontend changes, run from `packages/hya-tui`:
+|Changed package|Commands|
+|---|---|
+|`crates/hya-plugin-bun/adapter`|`bun run typecheck && bun test`|
+|`packages/hya-tui`|`bun run typecheck && bun test` (use `bun test <file>` while iterating)|
+|`packages/hya-tui-web`|`bun run typecheck && bun test ./test`|
 
-```sh
-bun run typecheck
-bun test
-```
-
-For OpenTUI frontend and browser-rendered TUI changes, also run from
-`packages/hya-tui-web`:
-
-```sh
-bun run typecheck
-bun test ./test
-bunx playwright test
-```
+A user-visible TUI change also runs its Playwright specs from `packages/hya-tui-web`: the new or changed spec and the specs for the screens it touches (`bunx playwright test e2e/<spec>.ts`), not the whole suite. Specs that start the backend need `cargo build -p hya-backend --bin hya` first (see `docs/tui-web.md#running-the-tests`).

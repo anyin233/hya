@@ -8,7 +8,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, expect, hyaTui, test, textStep, tuiMain } from "./hya"
+import { api, expect, hyaTui, showStatusLine, statusSessionPattern, test, textStep, tuiMain } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 const wide = { width: 1500, height: 640 }
@@ -60,7 +60,8 @@ test.describe("Projects sidebar", () => {
     await term.waitForText(/Created second/)
     await esc(term, "Created second")
 
-    await term.waitForText("second")
+    // The Projects sidebar may cut the name (`seco… (0)`).
+    await term.waitForText(/seco(?:nd|…) \(0\)/)
     await term.press("Control+p")
     await term.press("ArrowDown")
     await term.press("Enter")
@@ -133,9 +134,9 @@ test.describe("Project view", () => {
     await prompt(term, "/project")
     await term.waitForText("Projects")
     await term.press("t")
-    await term.waitForText(/hya · hysec_\w+/, 20_000)
+    await term.waitForText(statusSessionPattern, 20_000)
     await prompt(term, "/new --temp")
-    await term.waitForText(/hya · hysec_\w+/, 20_000)
+    await term.waitForText(statusSessionPattern, 20_000)
   })
 })
 
@@ -150,12 +151,13 @@ test.describe("--remote start", () => {
     await term.waitForText("No projects yet · n creates one")
   })
 
-  test("--server-label names the remote in the header and /status instead of the local bridge URL", async ({ backend, tui }) => {
+  test("--server-label names the remote in the status line and /status instead of the local bridge URL", async ({ backend, tui }) => {
     const label = "remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4"
     const term = await tui(["bun", tuiMain, "--server", backend.url, "--remote", "--server-label", label])
     await term.waitForText("No projects yet · n creates one")
     await esc(term, "No projects yet")
-    await term.waitForText(`hya · no session · ${label}`)
+    await showStatusLine(term)
+    await term.waitForText(`mode manual · none · ${label}`)
     const host = backend.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
     expect(await term.find(host), "the loopback URL is not the shown server").toBeNull()
     await prompt(term, "/status")
@@ -171,8 +173,8 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
     await term.waitForText("a", 20_000)
-    await term.waitForText(/hya · hysec_\w+/)
-    const firstId = /hya · (hysec_\w+)/.exec(await term.text())![1]!
+    await term.waitForText(statusSessionPattern)
+    const firstId = statusSessionPattern.exec(await term.text())![1]!
 
     // A second Project with its own session.
     const otherRoot = await mkdtemp(join(tmpdir(), "hya-e2e-other-"))
@@ -182,12 +184,30 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.press("ArrowDown")
     await term.press("Enter")
     await term.waitForText("b", 20_000)
+    // The transcript can update before the status line; capture the id when it changes.
+    let otherId: string | undefined
+    await expect.poll(async () => {
+      const id = statusSessionPattern.exec(await term.text())?.[1]
+      otherId = id && id !== firstId ? id : undefined
+      return otherId ?? firstId
+    }).not.toBe(firstId)
+    expect(otherId).toBeDefined()
 
     await prompt(term, "/sessions")
     await term.waitForText("F3 all")
     expect(await term.find(firstId)).toBeNull()
     await term.press("F3")
     await term.waitForText("Sessions · all projects")
+    // The other Project's session is listed without a number: `/open <n>` counts only this Project's.
     await term.waitForText(firstId)
+    expect((await term.lines()).find((line) => line.includes(firstId))).not.toMatch(/\d\. hysec_/)
+    await term.waitForText(`1. ${otherId}`)
+    await esc(term, "Sessions · all projects")
+
+    // `/open 1` is this Project's first session, as the sidebar numbers it — not the other Project's.
+    await prompt(term, "/open 1")
+    await term.waitForText(statusSessionPattern)
+    expect(statusSessionPattern.exec(await term.text())![1]).toBe(otherId)
+    expect(await term.find(firstId)).toBeNull()
   })
 })

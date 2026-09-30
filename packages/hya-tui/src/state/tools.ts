@@ -1,9 +1,9 @@
 /**
  * The tool-card view model: one `ToolCallPart` (docs/protocol/README.md
  * "Tool calls") becomes a `ToolCardView` — a state, the tool name, a
- * one-line summary, the duration once done, the error once failed, and the
- * body lines shown when the card is expanded (already clipped, each with a
- * tone the component maps to a color).
+ * one-line summary, complete arguments, duration once done, error once failed,
+ * and body/output lines shown when the card is expanded (already clipped, each
+ * with a tone the component maps to a color).
  *
  * Summaries read the canonical registry tools' real argument and output
  * fields (docs/architecture/agent-tool-surface.md): `bash` (command, exit),
@@ -38,14 +38,18 @@ export interface TaskInfo {
 export interface ToolCardView {
   tool: string
   status: ToolStatus
-  /** One line; the component clips it to the width. */
+  /** One line summary retained for accessibility and compact views. */
   summary: string
+  /** Complete raw JSON arguments, shown as the first row of the card. */
+  args?: string
   /** Formatted wall time, once done. */
   duration?: string
   /** The error message, once failed. */
   error?: string
-  /** Expanded body, clipped to `toolBodyLines`. */
+  /** Expanded body, clipped to `toolBodyLines` (legacy alias for output). */
   body: ToolLine[]
+  /** Output shown below the divider when expanded. */
+  output?: ToolLine[]
   /** Shell command (bash), when known. */
   command?: string
   task?: TaskInfo
@@ -365,7 +369,11 @@ export function toolCard(call: ToolCallPart, options: { command?: string } = {})
   const output = call.outputJson ? parse(call.outputJson) ?? call.outputJson : undefined
   const described = describe(tool, input, output, raw, options.command)
   const ms = call.durationMs === undefined ? undefined : Number(call.durationMs)
-  const card: ToolCardView = { tool, status, summary: described.summary, body: described.body }
+  const args = raw || (described.command ? JSON.stringify({ command: described.command }) : Object.keys(input).length ? JSON.stringify(input) : "")
+  // Keep the historical body shape for callers, but omit bash's `$ command`
+  // presentation row from the output section of the new card.
+  const outputLines = described.command && described.body[0]?.text === `$ ${described.command}` ? described.body.slice(1) : described.body
+  const card: ToolCardView = { tool, status, summary: described.summary, args, body: described.body, output: outputLines }
   if (status === "done" && ms !== undefined && Number.isFinite(ms)) card.duration = formatDuration(ms)
   if (status === "failed") card.error = call.errorMessage || "failed"
   if (described.command !== undefined) card.command = described.command

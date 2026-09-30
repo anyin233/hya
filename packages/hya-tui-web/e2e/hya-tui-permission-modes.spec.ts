@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
-import { approverBundle, expect, hyaTui, test, textStep, toolStep, type Backend } from "./hya"
+import { approverBundle, expect, hyaTui, showStatusLine, statusSessionId, test, textStep, toolCard, toolStep, type Backend } from "./hya"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
 const narrow = { width: 690, height: 640 }
@@ -31,6 +31,7 @@ async function newSession(term: Tui): Promise<void> {
   await term.waitForText("Message, !shell, or @file · / commands")
   await prompt(term, "/new")
   await term.waitForText(/Created hysec_/)
+  await showStatusLine(term)
 }
 
 /** Esc closes the picker; wait for it, so the next keys are not read as Alt+key after a lone ESC. */
@@ -43,11 +44,11 @@ async function promptGone(term: Tui): Promise<void> {
   await expect.poll(async () => /asked by /.test(await term.text()), { timeout: 20_000 }).toBe(false)
 }
 
-/** The first row showing `mode …` (the status bar). */
+/** The top status line (shown when the Context sidebar is hidden). */
 async function statusBar(term: Tui): Promise<{ row: number; line: string }> {
   const lines = await term.lines()
-  const row = lines.findIndex((line) => line.startsWith("mode "))
-  expect(row, "status bar row").toBeGreaterThanOrEqual(0)
+  const row = lines.findIndex((line) => /^(?:-- [A-Z]+ --(?: \d+d)? · )?mode /.test(line))
+  expect(row, "status line row").toBeGreaterThanOrEqual(0)
   return { row, line: lines[row]! }
 }
 
@@ -98,7 +99,7 @@ test.describe("Shift+Tab switching", () => {
     const yolo = bar.line.indexOf("⚠ yolo")
     expect((await term.cell(bar.row, yolo))?.fg).toBe(colors.error)
     expect((await term.cell(bar.row, yolo + 2))?.fg).toBe(colors.error)
-    expect((await term.cell(bar.row, 0))?.fg).toBe(colors.muted)
+    expect((await term.cell(bar.row, 0))?.fg).toBe(colors.error)
     await expect.poll(() => backendMode(backend)).toBe("yolo")
     // The notice is a muted transcript line.
     const notice = await at(term, "Permission mode → yolo")
@@ -107,7 +108,7 @@ test.describe("Shift+Tab switching", () => {
     // Under yolo the bash call runs at once: no prompt.
     await prompt(term, "run it under yolo")
     await term.waitForText("Ran without asking.", 20_000)
-    await term.waitForText(/✓ bash\s+echo yolo-run/)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo yolo-run"'))
     expect(await term.text()).not.toContain("asked by")
 
     // Shift+Tab back to manual (no confirmation needed); the next bash asks.
@@ -138,7 +139,7 @@ test.describe("yolo with a pending ask", () => {
     await newSession(term)
     await prompt(term, "run the command")
     await term.waitForText("asked by hya-main", 20_000)
-    await term.waitForText(/◌ bash\s+echo pending-ask · awaiting approval/)
+    await term.waitForText(toolCard("◌", "bash", '"command":"echo pending-ask"', "awaiting approval"))
     // Shift+Tab works with the prompt shown; the confirmation takes Enter, not the prompt.
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)
@@ -147,7 +148,7 @@ test.describe("yolo with a pending ask", () => {
     await term.waitForText("mode ⚠ yolo")
     await promptGone(term)
     await term.waitForText("Continued after yolo.", 20_000)
-    await term.waitForText(/✓ bash\s+echo pending-ask/)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo pending-ask"'))
     // The ask was allowed by the switch, not by the prompt's Enter (Allow once).
     expect(await term.text()).not.toContain("Allowed once")
   })
@@ -266,6 +267,8 @@ test("the last chosen permission mode becomes the default for new sessions and a
   }
 
   const first = await tui(hyaTui(backend))
+  await first.waitForText("Connected to hya")
+  await showStatusLine(first)
   await first.waitForText(/^mode manual/m)
   await prompt(first, "/permissions yolo")
   await first.waitForText(confirmLine)
@@ -273,10 +276,10 @@ test("the last chosen permission mode becomes the default for new sessions and a
   await first.waitForText(/^mode ⚠ yolo/m)
   await expect.poll(savedMode).toBe("yolo")
 
-  const firstId = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+  const firstId = await statusSessionId(first)
   await prompt(first, "/new")
   await expect.poll(async () => {
-    const id = /hya · (hysec_\w+)/.exec(await first.text())?.[1]
+    const id = await statusSessionId(first).catch(() => undefined)
     return id && id !== firstId ? id : undefined
   }).not.toBeUndefined()
   await first.waitForText(/^mode ⚠ yolo/m)
@@ -286,17 +289,18 @@ test("the last chosen permission mode becomes the default for new sessions and a
 
   // A plain launch creates a fresh session; it must use the saved default.
   const second = await tui(hyaTui(backend))
-  await second.waitForText(/hya · hysec_\w+/)
+  await second.waitForText("Connected to hya")
+  await showStatusLine(second)
   await second.waitForText(/^mode ⚠ yolo/m)
   await expect.poll(() => backendMode(backend)).toBe("yolo")
 
   await prompt(second, "/permissions manual")
   await second.waitForText(/^mode manual/m)
   await expect.poll(savedMode).toBe("manual")
-  const secondId = /hya · (hysec_\w+)/.exec(await second.text())![1]!
+  const secondId = await statusSessionId(second)
   await prompt(second, "/new")
   await expect.poll(async () => {
-    const id = /hya · (hysec_\w+)/.exec(await second.text())?.[1]
+    const id = await statusSessionId(second).catch(() => undefined)
     return id && id !== secondId ? id : undefined
   }).not.toBeUndefined()
   await second.waitForText(/^mode manual/m)
@@ -342,7 +346,7 @@ test.describe("bundle permission mode", () => {
     // The approver allows the echo command: no prompt.
     await prompt(term, "echo something")
     await term.waitForText("Echo went through.", 30_000)
-    await term.waitForText(/✓ bash\s+echo approved-by-plugin/)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo approved-by-plugin"'))
     expect(await term.text()).not.toContain("asked by")
 
     // It defers anything else: the user is asked.
@@ -367,7 +371,7 @@ test.describe("!command shell turns never ask", () => {
 
     // Manual: the user typed the command, so it runs without a prompt.
     await prompt(term, "!echo manual-shell")
-    await term.waitForText(/✓ bash\s+echo manual-shell/, 20_000)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo manual-shell"'), 20_000)
     await term.waitForText("manual-shell", 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt in manual").toBe(false)
     await term.attach(testInfo, "manual-shell")
@@ -378,14 +382,14 @@ test.describe("!command shell turns never ask", () => {
     await term.press("Enter")
     await term.waitForText("Permission mode → yolo")
     await prompt(term, "!echo yolo-shell")
-    await term.waitForText(/✓ bash\s+echo yolo-shell/, 20_000)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo yolo-shell"'), 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt in yolo").toBe(false)
 
     // Back to manual: still no prompt.
     await term.press("Shift+Tab")
     await term.waitForText("Permission mode → manual")
     await prompt(term, "!echo manual-again")
-    await term.waitForText(/✓ bash\s+echo manual-again/, 20_000)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo manual-again"'), 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt back in manual").toBe(false)
     await term.attach(testInfo, "manual-again")
   })

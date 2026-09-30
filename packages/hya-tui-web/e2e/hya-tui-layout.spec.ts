@@ -2,7 +2,7 @@
 // narrow widths, including focus and viewport behavior. See docs/tui.md "Layout".
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, test, textStep, toolStep } from "./hya"
+import { expect, hyaTui, statusLinePattern, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
 const colors = { bg: "#11151b", panel: "#1c2530", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
@@ -36,8 +36,7 @@ test.describe("layout", () => {
     await expect.poll(async () => (await term.find("No messages yet"))!.col).toBeGreaterThan(initialConversation.col)
     await prompt(term, "/layout focus pane-3")
     await prompt(term, "/layout assign jobs")
-    await term.waitForText("jobs · pane-3")
-    expect((await term.find("jobs · pane-3"))!.col).toBeGreaterThan(initialSessions.col - 2)
+    await term.waitForText("No active")
     await expect.poll(() => term.find("Sessions")).toBeNull()
     await prompt(term, "/layout focus pane-2")
     await prompt(term, "/layout assign jobs")
@@ -58,7 +57,7 @@ test.describe("layout", () => {
   })
 
   test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
-    let term = await tui(hyaTui(backend))
+    let term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/layout split vertical jobs")
     await term.waitForText("▸ jobs · pane-6")
@@ -78,7 +77,7 @@ test.describe("layout", () => {
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
-    term = await tui(hyaTui(backend))
+    term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("layout reply marker l1")
     await term.waitForText("jobs · pane-6")
     await prompt(term, "/layout reset")
@@ -86,11 +85,11 @@ test.describe("layout", () => {
     await term.waitForText("Sessions")
   })
 
-  test("the default viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+  test("a wide viewport shows the main column with the sidebar on the right", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
-    expect(cols).toBeGreaterThanOrEqual(110)
+    expect(cols).toBeGreaterThanOrEqual(150)
     await prompt(term, "hello layout")
     await term.waitForText("layout reply marker l1", 20_000)
 
@@ -122,7 +121,7 @@ test.describe("layout", () => {
     await expect.poll(() => sidebarShown(term)).toBe(true)
   })
 
-  test("about 80 columns hides the sidebar until Ctrl+B or /sidebar opens it", async ({ tui, backend }, testInfo) => {
+  test("about 80 columns keeps the sidebar hidden without a metadata heading", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
@@ -137,11 +136,8 @@ test.describe("layout", () => {
     await term.attach(testInfo, "narrow-closed")
 
     await term.press("Control+b")
-    await expect.poll(() => sidebarShown(term)).toBe(true)
-    const sessions = (await term.find("Sessions"))!
-    expect(sessions.col).toBeGreaterThan(cols / 2)
-    await term.waitForText("layout reply marker l1")
-    await term.attach(testInfo, "narrow-open")
+    expect(await term.find("mode manual")).toBeNull()
+    expect(await term.find("Sessions")).toBeNull()
 
     await prompt(term, "/sidebar off")
     await expect.poll(() => sidebarShown(term)).toBe(false)
@@ -153,7 +149,7 @@ test.describe("pane focus", () => {
   test.use({ model: { steps: [textStep(longReply)] } })
 
   test("switching panes keeps the conversation viewport where the user left it", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "show a long reply")
     await term.waitForText("END OF LONG REPLY", 20_000)
@@ -169,7 +165,7 @@ test.describe("pending interactions", () => {
   test.use({ model: { steps: [toolStep("bash", { command: "echo pending-block" }), textStep("after the ask")] } })
 
   test("an ask of the open session is a prompt; another session's ask is a compact pending block", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run something")
     // The open session's ask: the permission prompt docked above the composer, no pending block.
@@ -195,7 +191,7 @@ test.describe("jobs pane", () => {
   test.use({ model: { steps: [textStep("finished from tiled jobs pane", { chunkSize: 3, delayMs: 120 })] } })
 
   test("shows the open session working while its turn streams", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/layout split vertical jobs")
     await term.waitForText("▸ jobs · pane-6")

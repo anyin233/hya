@@ -28,7 +28,8 @@
  *   to it when one appears.
  * - `restart` (`hya serve restart`): wait up to `restartWaitMs` (60 s) for
  *   the next server of the database (`find`) and attach to it; never start
- *   one. If none comes, the TUI is stopped.
+ *   one. If none comes, the TUI is stopped. After the attach `onRestarted`
+ *   lets the TUI reload its own code (src/reload.ts).
  * - No reason (crash, kill -9, lost network): find or start, as above.
  *
  * `reconnectNow()` (`/reconnect`) finds or starts a server at once, from any
@@ -64,6 +65,8 @@ export interface ReconnectorOptions {
   status(text: string): void
   /** The TUI entered (`true`) or left (`false`) the stopped state. */
   onStopped?(stopped: boolean): void
+  /** Attached to the successor after `restart` (`hya serve restart`): the TUI reloads its own code then (src/reload.ts). */
+  onRestarted?(next: ServerSwitch): void
   sleep?: (ms: number) => Promise<void>
   now?: () => number
   /** Failed probes before the server counts as gone (default 2). */
@@ -93,7 +96,7 @@ export const restartGoneNotice = "Backend did not come back after hya serve rest
 const bare = (url: string): string => url.replace(/\/+$/, "")
 
 export function createReconnector({
-  url, generation, probe, reconnect, find, switchTo, status, onStopped,
+  url, generation, probe, reconnect, find, switchTo, status, onStopped, onRestarted,
   sleep = (ms) => Bun.sleep(ms), now = () => Date.now(),
   probes = 2, gapMs = 500, restartWaitMs = 60_000, pollMs = 500,
 }: ReconnectorOptions) {
@@ -135,7 +138,11 @@ export function createReconnector({
     const deadline = now() + restartWaitMs
     while (!interrupted) {
       const next = await find?.().catch(() => undefined)
-      if (next && (!oldGeneration || (next.generation !== undefined && next.generation !== oldGeneration))) return attach(next)
+      if (next && (!oldGeneration || (next.generation !== undefined && next.generation !== oldGeneration))) {
+        await attach(next)
+        onRestarted?.(next)
+        return
+      }
       if (now() >= deadline) break
       await sleep(pollMs)
     }

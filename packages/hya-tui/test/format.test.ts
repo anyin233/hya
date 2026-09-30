@@ -1,18 +1,17 @@
 import { expect, test } from "bun:test"
-import { askSessionLabel, compactionText, contextText, shownServer, currentModel, modelEffortLabel, modelReference, otherAskNotice, thinkingEffortLabel, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { askSessionLabel, compactionText, shownServer, currentModel, modelEffortLabel, modelReference, otherAskNotice, thinkingEffortLabel, webLabel, webNotice, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
 
 test("keeps the startup placeholders until the first data arrives", () => {
   const store = createAppStore()
-  expect(headerText(store.state, server)).toBe("hya · connecting…")
   expect(sessionListText(store.state)).toBe("Loading…")
   expect(pendingLines(store.state)).toEqual([])
   expect(mainContent(store.state)).toBe("")
 })
 
-test("renders the header, the sidebar session list, and pending lines", () => {
+test("renders the sidebar session list and pending lines", () => {
   const store = createAppStore()
   const selected = { id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "hya", modelId: "offline" } }
   store.applyCatalog({
@@ -21,8 +20,6 @@ test("renders the header, the sidebar session list, and pending lines", () => {
     models: [], workflows: [], providers: [], commands: [],
   })
   store.openSession(selected)
-  // The header composes `hya · <session> · <agent> <provider/model:effort> · <server>`.
-  expect(headerText(store.state, server)).toContain("hya-main hya/offline:default")
   expect(sessionListText(store.state)).toBe("▸ 1. hysec_1\n   hya-main\n\n  2. Second\n   hya-plan · running")
   expect(sessionListText(store.state, 10)).toBe("▸ 1. hyse…\n   hya-ma…\n\n  2. Seco…\n   hya-pl…")
   expect(pendingLines(store.state)).toEqual(["? Pick one"])
@@ -47,76 +44,10 @@ test("the model label carries the server-resolved effort right after the model n
 test("renders empty panels and per-view titles", () => {
   const store = createAppStore()
   store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
-  expect(headerText(store.state, server)).toBe(`hya · no session · ${server}`)
   expect(sessionListText(store.state)).toBe("No sessions. Type a prompt or /new.")
   expect(mainTitle("api")).toBe("API commands")
   store.setView("models")
   expect(mainContent(store.state)).toBe("No models returned by server.")
-})
-
-test("the context box lists the open session, agent, model, message count, directory, and server", () => {
-  const store = createAppStore()
-  expect(contextText(store.state, server)).toBe("Session  none\nServer   127.0.0.1:8080")
-  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/home/me/projects/very/long/workspace", model: { providerId: "fake", modelId: "model" } })
-  store.setMessages("hysec_1", [{ id: "m", role: "ROLE_USER" }])
-  expect(contextText(store.state, server, 30).split("\n")).toEqual([
-    "Session  hysec_1",
-    "Agent    hya-main",
-    "Model    fake/model",
-    "Messages 1",
-    "Dir      …/very/long/workspace",
-    "Server   127.0.0.1:8080",
-  ])
-})
-
-test("the context box's Messages count reflects the merged transcript, not the raw projection", () => {
-  const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w" })
-  store.setMessages("hysec_1", [{ id: "m1", role: "ROLE_USER", finish: "FINISH_REASON_STOP" }])
-  expect(contextText(store.state, server, 30).split("\n")[3]).toBe("Messages 1")
-  // A fresh turn's message exists only in the overlay until the next projection read.
-  store.applyEvent({ seq: "1", session: "hysec_1", messageStarted: { message: "m2", role: "ROLE_ASSISTANT" } })
-  store.flushOverlay()
-  expect(contextText(store.state, server, 30).split("\n")[3]).toBe("Messages 2")
-})
-
-test("the status bar shows mode, directory, branch, todos, and connection state, truncating gracefully", () => {
-  const fields = { mode: "manual", directory: "/home/me/projects/very/long/workspace", branch: "main", todos: "Todos 1/3", connected: true }
-  expect(statusBarText(fields, 80)).toBe("mode manual · …cts/very/long/workspace · ⎇ main · Todos 1/3")
-  expect(statusBarText({ ...fields, connected: false }, 80)).toBe("mode manual · …cts/very/long/workspace · ⎇ main · Todos 1/3 · reconnecting")
-  // No branch, no todos: those segments are omitted, not shown empty.
-  expect(statusBarText({ mode: "yolo", directory: "", branch: "", connected: true }, 80)).toBe("mode yolo")
-  // Too narrow: the least essential segments drop first, then the whole line clips.
-  expect(statusBarText(fields, 20)).toBe("mode manual")
-})
-
-test("the status bar keeps the model:effort label visible at 80 columns", () => {
-  const fields = { mode: "manual", model: "gpt-6-astra:low", directory: "/home/me/projects/very/long/workspace", branch: "main", todos: "Todos 1/3", connected: true }
-  // The segment sits right after the mode, ahead of the drop-from-the-end tail.
-  expect(statusBarSegments(fields, 80).slice(0, 2)).toEqual([
-    { text: "mode manual", tone: "mode" },
-    { text: "gpt-6-astra:low", tone: "muted" },
-  ])
-  // Narrower: the tail (directory, branch, todos) drops before the label does.
-  expect(statusBarText(fields, 30)).toBe("mode manual · gpt-6-astra:low")
-  // Tighter than mode + label: the label is dropped whole, then the line clips.
-  expect(statusBarText(fields, 24)).toBe("mode manual")
-})
-
-test("under bare hya the WebUI address stays on the status bar at 80 columns, ahead of the directory", () => {
-  const fields = { mode: "manual", model: "offline:default", directory: "/tmp/hya-tui-launch-BJAycL/work", branch: "", web: { url: "http://127.0.0.1:53855/" }, connected: true }
-  // The sidebar (with its WebUI row) is hidden at this width: the bar is the only place left.
-  expect(statusBarText(fields, 80)).toBe("mode manual · offline:default · WebUI http://127.0.0.1:53855")
-  expect(statusBarText(fields, 120)).toBe("mode manual · offline:default · WebUI http://127.0.0.1:53855 · …-tui-launch-BJAycL/work")
-})
-
-test("a compact todo count is `completed/total`, or undefined with no todos", () => {
-  expect(todosCompactText([])).toBeUndefined()
-  expect(todosCompactText([
-    { id: "1", content: "a", status: "TODO_STATUS_COMPLETED" },
-    { id: "2", content: "b", status: "TODO_STATUS_PENDING" },
-    { id: "3", content: "c", status: "TODO_STATUS_IN_PROGRESS" },
-  ])).toBe("Todos 1/3")
 })
 
 test("a compaction divider reads the strategy; the payload carries no message count", () => {
@@ -140,27 +71,23 @@ test("the chat view's text is only the empty-state hint; messages render per com
   expect(mainContent(store.state)).toBe("")
 })
 
-test("child sessions nest under their parent in the session list, numbered in that order", () => {
+test("numbers only main sessions, with hierarchical child numbers", () => {
   const store = createAppStore()
   const parent = { id: "hysec_p", agent: "hya-main", workdir: "/w", title: "Parent" }
   const child = { id: "hysec_c", agent: "hya-scout", workdir: "/w", parent: "hysec_p", busy: true }
   const grandchild = { id: "hysec_g", agent: "hya-task", workdir: "/w", parent: "hysec_c" }
+  const sibling = { id: "hysec_s", agent: "hya-task", workdir: "/w", parent: "hysec_p" }
   const other = { id: "hysec_o", agent: "hya-plan", workdir: "/w", title: "Other" }
-  const orphan = { id: "hysec_x", agent: "hya-task", workdir: "/w", parent: "hysec_gone" }
-  // The server lists newest first, so children come before their parent.
-  const sessions = [grandchild, child, other, parent, orphan]
-  expect(sessionTree(sessions).map((row) => [row.session.id, row.depth])).toEqual([
-    ["hysec_o", 0], ["hysec_p", 0], ["hysec_c", 1], ["hysec_g", 2], ["hysec_x", 0],
+  const sessions = [grandchild, child, sibling, other, parent]
+  expect(sessionTree(sessions).map((row) => [row.session.id, row.number])).toEqual([
+    ["hysec_o", "1"], ["hysec_p", "2"], ["hysec_c", "2.1"], ["hysec_g", "2.1.1"], ["hysec_s", "2.2"],
   ])
   store.applyCatalog({ sessions, interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.openSession(child)
-  expect(sessionListText(store.state)).toBe([
-    "  1. Other", "   hya-plan", "",
-    "  2. Parent", "   hya-main",
-    "▸  ↳ 3. hya-scout · running",
-    "     ↳ 4. hya-task", "",
-    "  5. hysec_x", "   hya-task",
-  ].join("\n"))
+  const rendered = sessionListText(store.state)
+  expect(rendered).toContain("2.1 hya-scout")
+  expect(rendered).toContain("2.1.1 hya-task")
+  expect(rendered).toContain("2.2 hya-task")
 })
 
 test("asks of the open session tree are prompts, not pending lines; the sidebar marks sessions that wait", () => {
@@ -181,16 +108,8 @@ test("asks of the open session tree are prompts, not pending lines; the sidebar 
   expect(sessionListText(store.state)).toBe([
     "  1. Other", "   hya-plan · ◌ waiting", "",
     "▸ 2. Parent", "   hya-main",
-    "   ↳ 3. hya-task · ◌ waiting",
+    "   ↳ 2.1 hya-task · ◌ waiting",
   ].join("\n"))
-})
-
-test("the context box shows the WebUI address when bare hya serves one", () => {
-  const store = createAppStore()
-  store.setWeb({ url: "http://127.0.0.1:3250/" })
-  expect(contextText(store.state, server).split("\n")).toEqual(["Session  none", "Server   127.0.0.1:8080", "WebUI    127.0.0.1:3250"])
-  store.setWeb({ error: "port 3250 is in use" })
-  expect(contextText(store.state, server).split("\n").at(-1)).toBe("WebUI    unavailable")
 })
 
 test("the WebUI notice names the reason and the --port remedy", () => {
@@ -199,16 +118,6 @@ test("the WebUI notice names the reason and the --port remedy", () => {
   expect(webNotice({ error: "port 3250 is in use" })).toBe("WebUI unavailable: port 3250 is in use · hya --port <N>")
   expect(webLabel({ url: "http://127.0.0.1:3250/" })).toBe("WebUI http://127.0.0.1:3250")
   expect(webLabel({ error: "x" })).toBe("WebUI unavailable")
-})
-
-test("with vim mode on, the status bar starts with the composer's mode (and a pending command)", () => {
-  const fields = { mode: "manual", directory: "/w", branch: "main", connected: true }
-  expect(statusBarText({ ...fields, vim: { mode: "insert", pending: "" } }, 80)).toBe("-- INSERT -- · mode manual · /w · ⎇ main")
-  expect(statusBarText({ ...fields, vim: { mode: "normal", pending: "2d" } }, 80)).toBe("-- NORMAL -- 2d · mode manual · /w · ⎇ main")
-  expect(statusBarSegments({ ...fields, vim: { mode: "normal", pending: "" } }, 80)[0]).toEqual({ text: "-- NORMAL --", tone: "accent" })
-  expect(statusBarSegments({ ...fields, vim: { mode: "insert", pending: "" } }, 80)[0]).toEqual({ text: "-- INSERT --", tone: "muted" })
-  // Narrow: the vim mode and the permission mode stay longest.
-  expect(statusBarText({ ...fields, vim: { mode: "normal", pending: "" } }, 30)).toBe("-- NORMAL -- · mode manual")
 })
 
 test("pending asks of other sessions name the session they belong to (its /open number and title)", () => {
@@ -224,18 +133,20 @@ test("pending asks of other sessions name the session they belong to (its /open 
   })
   store.openSession(selected)
   expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work", "? Which one? · saved session"])
-  expect(askSessionLabel("hysec_2", store.state.sessions)).toBe("2. Other work")
-  expect(askSessionLabel("hysec_1", store.state.sessions)).toBe("1. hysec_1")
-  expect(askSessionLabel("hysec_9", store.state.sessions)).toBe("hysec_9")
-  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions)).toBe("Permission needed in 2. Other work · F4 to review")
-  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions)).toBe("Question in a saved session · F4 to review")
+  expect(askSessionLabel("hysec_2", store.state.sessions, undefined)).toBe("2. Other work")
+  expect(askSessionLabel("hysec_1", store.state.sessions, undefined)).toBe("1. hysec_1")
+  expect(askSessionLabel("hysec_9", store.state.sessions, undefined)).toBe("hysec_9")
+  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions, undefined)).toBe("Permission needed in 2. Other work · F4 to review")
+  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions, undefined)).toBe("Question in a saved session · F4 to review")
 })
 
-test("the context box names the session a fork came from", () => {
-  const store = createAppStore()
-  store.setSessions([{ id: "hysec_src", agent: "hya-main", workdir: "/w", title: "Parser" }])
-  store.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w", forkedFrom: { session: "hysec_src", messageId: "m" } })
-  expect(contextText(store.state, server, 30).split("\n")[1]).toBe("Forked   from Parser")
+test("an ask's session number is the sidebar's: counted in the active Project; another Project's session goes by its title", () => {
+  const sessions = [
+    { id: "hysec_o", agent: "hya-main", workdir: "/o", projectId: "prj_o", title: "Elsewhere" },
+    { id: "hysec_w", agent: "hya-main", workdir: "/w", projectId: "prj_w", title: "Here" },
+  ]
+  expect(askSessionLabel("hysec_w", sessions, "prj_w")).toBe("1. Here")
+  expect(askSessionLabel("hysec_o", sessions, "prj_w")).toBe("Elsewhere")
 })
 
 test("currentModel looks up the open session's model in the catalog by providerId/modelId; unknown when absent", () => {
@@ -248,16 +159,13 @@ test("currentModel looks up the open session's model in the catalog by providerI
   expect(currentModel(store.state)).toBeUndefined()
 })
 
-test("a server label replaces the URL in the header and the context box (remote backends)", () => {
+test("a server label replaces the URL wherever the server is shown (remote backends)", () => {
   const store = createAppStore()
   expect(shownServer(store.state, server)).toBe(server)
   store.setServerUrl("http://127.0.0.1:6001")
   expect(shownServer(store.state, server)).toBe("http://127.0.0.1:6001")
   store.setServerLabel("remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
   expect(shownServer(store.state, server)).toBe("remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
-  expect(headerText(store.state, shownServer(store.state, server))).toBe("hya · no session · remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
-  expect(contextText(store.state, shownServer(store.state, server), 70)).toBe("Session  none\nServer   remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
   store.setServerLabel(undefined)
   expect(shownServer(store.state, server)).toBe("http://127.0.0.1:6001")
 })

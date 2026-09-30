@@ -338,9 +338,9 @@ then acts on the reason:
 
 | Reason | What the TUI does | Internal transition text |
 | --- | --- | --- |
-| `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the metadata state shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
+| `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the Context pane shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
 | `signal` (SIGTERM/SIGINT/SIGHUP from anything but `hya serve stop`, for example Ctrl+C on a foreground `hya serve`), or an unknown reason | As `stop`. | `Backend stopped (signal) · /reconnect starts it again` |
-| `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
+| `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. Then it reloads its own code ([Hot update after `hya serve restart`](#hot-update-after-hya-serve-restart)). If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` and, from the reloaded TUI, `… · TUI reloaded (hya serve restart)` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
 | none (the stream ended without the frame: a crash, `kill -9`, a lost connection) | Runs the same find-or-start as at launch. | `Server stopped · reconnecting…`, then `Started a new server · pid <pid>` when it started the daemon, or `Server moved · now pid <pid>` when it found one |
 
 `/reconnect` runs find-or-start at once, from any state, and says `Started a
@@ -376,6 +376,54 @@ transcript and terminal round events are authoritative; after moving to a
 successor the TUI re-reads messages and folds only durable replay plus new live
 frames. A `resync` frame means the stream gap itself is not replayed: the TUI
 re-reads the projection (or replays `ListEvents` from the last durable seq).
+
+### Hot update after `hya serve restart`
+
+`hya serve restart` is how a running backend takes new code
+([cli.md](cli.md#self-proof-and-rollback)); the TUIs attached to it
+take theirs in the same step. Once a TUI has attached to the new daemon
+after a `restart`, it starts itself again from the TUI files on disk: the
+source tree in a checkout, or the installed `lib/hya/tui` next to `hya`. New
+TUI features therefore show up at once, in the terminal TUI and in every
+WebUI tab, without quitting `hya`.
+
+What carries over: the open session (the new TUI opens it with `--session
+<id>`, a subagent's view included), the unsent composer text and cursor, and
+every other flag of the first start (`--db`, `--dir`, `--hya`, `--web-tab`,
+`--web-url`, …; `--server` becomes the new daemon's URL). `--continue` and
+`--resume` are not repeated. Scroll position, open views and pickers, and
+the prompt history of the old process are not kept. The session is left as
+a signal leaves it: never archived. The reloaded TUI adds `TUI reloaded (hya
+serve restart)` to its first status line.
+
+Only a `restart` reloads the TUI. An attach after a crash, after `hya serve
+stop` plus another client's start, or through `/reconnect` does not, and
+neither does a remote backend (`/connect-remote`, `hya --connect`), a
+`--grpc` start, or a fixed `--server` without `--db`.
+
+How it works: the process a host starts (`bun <tui>/src/main.ts …`, run by
+bare `hya`, by each WebUI tab of the web host, or by hand) is a small
+supervisor (`src/supervisor.ts`). It runs the same entry again as the app
+(`src/tui.ts`) on the same terminal, with stdin, stdout, and stderr
+inherited, and forwards SIGINT, SIGTERM, and SIGHUP to it. To reload, the app
+restores the terminal, writes `{"argv": [...], "draft": {"text", "cursor"}}`
+to the file the supervisor named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the
+temporary directory), and exits with status **75**; the supervisor starts a
+new app with those arguments and hands the draft over in `HYA_TUI_RELOAD`.
+Any other exit (or 75 without a readable request, or any exit after a
+forwarded signal) ends the supervisor with the same status (128 + the signal
+number when the app died of a signal). The app removes `HYA_TUI_RELOAD_FILE`,
+`HYA_TUI_SUPERVISOR` (the supervisor's pid), and `HYA_TUI_RELOAD` from its
+environment at start, so a TUI started from its `!` shell is independent, and
+it exits on its own when the supervisor is gone. The supervisor itself is
+not reloaded: it is loaded once per host start and changes only with a new
+`hya` start.
+
+| Environment variable | Set by | Value |
+| --- | --- | --- |
+| `HYA_TUI_RELOAD_FILE` | supervisor, for the app | Path of the reload request file; its presence makes `src/main.ts` run as the app. |
+| `HYA_TUI_SUPERVISOR` | supervisor, for the app | The supervisor's pid. |
+| `HYA_TUI_RELOAD` | supervisor, for a reloaded app | `{"draft"?: {"text": string, "cursor": number}}`. |
 
 ### Remote backends (`/connect-remote`)
 
@@ -607,11 +655,11 @@ A second, narrower sidebar on the left lists every Project live
 | `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
 | `/to-background` | Quit at once and leave the session running on the daemon, not archived. Terminal only: not offered in a WebUI tab (close the tab instead). |
 | `/resume [id]` | Unarchive and open that session; without an id, pick one of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first. |
-| `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). |
+| `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). Keyboard focus goes to the composer afterwards, even when the command pane was opened from the focused Projects sidebar. |
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
-| `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
+| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. The choice is also remembered as the active agent's default, unless `config.yaml` pins that agent's model (`agents.<id>.model`): then it changes only the current session (see [Configuration — Remembered Agent Models](configuration.md#remembered-agent-models)). |
 | `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -631,7 +679,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
-| `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
+| `/sidebar [on\|off]` or Ctrl+B | Show or hide the right sidebar (150 columns or more; below that it is always hidden). Without an argument it toggles what is visible now. Drag its left border with the mouse to resize it (29 columns at least). |
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
@@ -659,9 +707,6 @@ A second, narrower sidebar on the left lists every Project live
 | Mouse wheel | Scroll the transcript. |
 | Click on a `Thinking` line | Expand or collapse that one reasoning block. |
 | Click on a tool card | Expand or collapse that one card; on a `task` card, open the subagent's session read-only. |
-
-`/sessions` also shows the sidebar when the terminal is too narrow for it, so
-the list it refreshes is on screen.
 
 The bottom instruction row is separate from the status message above the
 input. Status updates and completion suggestions can change without erasing
@@ -727,7 +772,7 @@ list as plain text instead.
 │   app     ││ thinking none · mode manual   ││              │
 │           ││ ┃ your prompt                 │├─Todos─────────┤
 │           ││ ● build · fake/model          ││ ○ write tests│
-│           ││ ◌ bash · awaiting approval    │├─Context───────┤
+│           ││ ◌ bash  awaiting approval     │├─Context───────┤
 │           ││ ┌─Permission───────────────┐ ││ Agent  build │
 │           ││ │ 1 Allow · 2 Always · 3 Deny│ ││ Model  fake/…│
 │           ││ └──────────────────────────┘ ││              │
@@ -773,13 +818,14 @@ keyboard ownership and highlighted composer.
   see [Sidebar live updates](#sidebar-live-updates)), `Todos` (the
   live todo list — see
   [Working indicator, metadata state, and todo panel](#working-indicator-metadata-state-and-todo-panel)),
-  and `Context` (session, agent, model, the merged transcript's message
-  count, directory, server). These are three independent panes in the right
-  branch of the editable layout tree. By default they follow the width: shown at 110
-  columns or more, hidden below, so an 80-column terminal gets the full
-  width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
-  any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
-  state changes immediately. Its `Sessions`
+  and `Context` (permission mode, session, agent, model, message count,
+  context occupancy, tokens, directory, branch, server, and connection).
+  These are independent panes in the editable layout tree. The right sidebar
+  needs 150 columns and is always hidden below that width. At 150 columns or
+  more, Ctrl+B or `/sidebar [on|off]` toggles its visibility. It is never
+  narrower than 29 columns; drag its left border to resize it, and the saved
+  split weight persists across launches. Hiding Context does not add metadata
+  rows to Conversation. Its `Sessions`
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
   [Projects](#projects) and [Pickers](#pickers)).
@@ -787,16 +833,16 @@ keyboard ownership and highlighted composer.
   the left: one row per Project (`ListProjects`, live via `projectsUpdated`
   the same as the Project view), the active one marked `▸`, a busy marker
   `●` while a session of it runs a turn, and its session count. It needs
-  both sidebars and the chat column to fit, so it follows a wider threshold
-  than the right sidebar (150 columns; an 80-column or even a 130-column
-  terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
+  both sidebars and the chat column to fit, so it follows a threshold no
+  lower than the right sidebar's (150 columns; an 80-column or even a
+  149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
   hidden — Up/Down move the highlight, Enter switches (`switchProject`),
   Esc (or Ctrl+P again) returns focus to the composer without closing it;
-  `/projects-sidebar [on|off]` toggles visibility alone, the same way
-  `/sidebar` does for the right one. See [Projects](#projects).
+  `/projects-sidebar [on|off]` toggles visibility alone (and, unlike the
+  right sidebar, can pin it open at any width). See [Projects](#projects).
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
-  above the controller status state; see
+  above the message input; see
   [Permission and question prompts](#permission-and-question-prompts).
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
@@ -815,11 +861,11 @@ keyboard ownership and highlighted composer.
   keyboard layouts often remap them to accented or symbol characters instead
   of delivering a plain modified keypress, in a browser and in a native
   terminal alike.)
-- **Focus.** The message composer remains the text input when a read-only
-  pane is selected; its PgUp/PgDn and Ctrl+Home/Ctrl+End keys scroll that
-  pane. Clicking Projects selects it and routes Up/Down to the project
-  highlight and Enter to opening it. Alt+arrows move between panes. The
-  renderer runs with `autoFocus: false`.
+- **Focus.** Ordinary typing, editing, paste, and Enter belong exclusively
+  to the focused pane. An auxiliary pane ignores unsupported keys without
+  forwarding them to Conversation. Alt+arrows move focus between visible
+  panes; `/` opens the global command overlay. Exactly one box highlights
+  the keyboard owner. The renderer runs with `autoFocus: false`.
 
 ### Tiled workspace
 
@@ -909,12 +955,13 @@ layout does not start another session stream or create another chat input.
 
 The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
 Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
-Projects is hidden unless `/projects-sidebar on` pins it open. Below 110
-columns, Sessions, Todos, and Context are hidden unless `/sidebar on` pins
-them open. These modes filter the matching pane jobs in any layout; the
-saved tree remains intact. `Ctrl+P` opens and selects a Projects pane;
-`Ctrl+B` toggles panes assigned Sessions, Todos, and Context, wherever they
-are placed.
+Projects is hidden unless `/projects-sidebar on` pins it open. Below 150
+columns, Sessions, Todos, and Context are always hidden; at 150 or more,
+`/sidebar off` (or Ctrl+B) hides them. These modes filter the matching pane
+jobs in any layout; the saved tree remains intact. `Ctrl+P` opens and
+selects a Projects pane; `Ctrl+B` toggles panes assigned Sessions, Todos,
+and Context, wherever they are placed. Conversation stays free of metadata
+headings when Context is hidden.
 Resizing the terminal or toggling a sidebar keeps unsent message and command
 drafts, including their in-process input histories.
 
@@ -926,7 +973,10 @@ root: PaneNode, active: string}`. A `PaneNode` is either
 `{type: "pane", id: "pane-N", kind: PaneKind}` or
 `{type: "split", axis: "horizontal"|"vertical", weight: number,
 first: PaneNode, second: PaneNode}`. `weight` is the first child's fraction
-and stays between `0.1` and `0.9`. `PaneKind` is `conversation`, `projects`, `jobs`,
+and stays between `0.1` and `0.9`; a mouse drag writes it on release. A split
+whose second side holds only Sessions, Todos, or Context panes is drawn with
+that side at least 29 columns wide whatever its weight. `PaneKind` is
+`conversation`, `projects`, `jobs`,
 `sessions`, `todos`, `context`, `models`, `workflows`, `interactions`,
 `status`, or `api`. Saved trees with duplicate ids, no conversation,
 unknown jobs, invalid weights, or more than 16 panes are ignored. Saved
@@ -934,6 +984,20 @@ version-1 center-only trees are migrated by placing them between editable
 Projects and right-side panes. Layout
 editing uses no new backend route: each pane reads the existing session,
 catalog, interaction, and stream data already held by the TUI.
+
+**Resizing with the mouse.** Drag the border between two side-by-side panes
+with the left mouse button to move it: the right sidebar's left border, the
+Projects sidebar's right border, or the border of any vertical `/layout
+split`. Press on the border column (or the column just left of it) and drag;
+the panes follow the pointer while you drag. On release the new share is
+written into the saved layout (the split's `weight`), so the next TUI start
+keeps it. A drag stays within the `0.1`–`0.9` weight range, and it cannot
+make the right sidebar narrower than 29 columns. `/layout resize <+10|-10>`
+changes the focused pane's share from the keyboard, and `/layout reset`
+returns to the default widths. For example, on a 174-column terminal the
+right sidebar starts at its 29-column minimum; dragging its left border 25
+columns to the left makes it 54 columns wide, and a new TUI opens with the
+same width.
 
 The colors come from the theme in effect (see [Themes](#themes)). The
 default `hya` theme:
@@ -1232,61 +1296,48 @@ bottom. The transcript shows the newest 200 messages.
 
 ### Tool calls
 
-Every tool call of an assistant message is a card. The header is one line:
+
+
+Every tool call of an assistant message is a transparent, outlined card. The
+header names the canonical tool and shows its state icon and duration. The
+first content row is the complete compact JSON argument object; while collapsed
+it stays to one terminal row to keep large calls from pushing the composer down.
+Expanding the card wraps the complete arguments and shows the output below a
+divider (the divider is omitted when there is no output). Errors are shown below
+the output in the error color.
 
 ```text
-✓ read  src/main.rs · lines 1-40 of 212                          3ms
-⠹ bash  cargo test -p hya-core
-◌ bash  rm -rf target · awaiting approval
-✗ read  missing.txt
-  File not found: /work/missing.txt
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ✓ read                                                                  │
+│ {"path":"src/main.rs","offset":1,"limit":40}                         │
+│ ──────────────────────────────────────────────────────────────────────── │
+│ 1  fn main() {                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **State icon.** `○` pending (the model is still streaming the
-  arguments), a spinner (`⠋⠙⠹…`, accent) while it runs, `◌` (warning color)
-  while a permission request for this call waits (its interaction's
-  `payload.callId` is the card's call id), `✓` (green) done, `✗` (error
-  color) failed.
-- **Tool name** in bold, then a **summary** (muted) that depends on the tool
-  (below), clipped to the width, and the **duration** on the right once the
-  call is done (`42ms`, `1.5s`, `12s`, `1m 5s`).
-- A failed call adds its error message on the next line in the error color,
-  collapsed or not.
+- **State icon.** `○` pending, a spinner (`⠋⠙⠹…`) while running, `◌` while a
+  permission request waits, `✓` done, and `✗` failed. Duration appears on the
+  right once a call is done.
+- **Expanding.** Cards are collapsed by default. Ctrl+G or `/tools` expands or
+  collapses all of them (`/tools on`, `/tools off`; with no argument it toggles).
+  A click toggles one card; the input keeps focus. `!command` shell turns start
+  expanded. Tool output is clipped to the existing 12-line head/tail window.
 
-**Expanding.** Cards are collapsed by default; expanded, the body shows under
-the header beside a bar. Ctrl+G or `/tools` expands or collapses all of them
-(`/tools on`, `/tools off`; with no argument it toggles) and forgets
-per-card choices, like `/thinking`. A click on one card toggles just that
-card; the input keeps the focus. The cards of a `!command` shell turn start
-expanded, so you see the output you asked for. A body longer than 12 lines
-keeps its first 5 and last 6 lines around a `… N lines hidden` row.
+The tool name and arguments are independent of the tool-specific summary, which
+is still used in activity text and narrow views:
 
-| Tool (canonical name) | Summary | Expanded body |
+| Tool (canonical name) | Summary | Expanded output |
 | --- | --- | --- |
-| `bash` (hidden alias `shell`) | The command (first line), then `· exit N` for a non-zero exit and `· timed out` | `$ <command>`, the output (muted), the exit status (error color) |
-| `read` | `<path> · lines A-B of N` (from the output's display metadata; before that, from `offset` / `limit`) | The text with line numbers |
-| `edit` | `<path> · +A -D` | The diff: the output's `metadata.diff` (unified diff), else rows derived from the arguments (`edits[].oldText`/`newText`, `lines`; compat `oldString`/`newString`) |
-| `write` | `<path> · N lines` | The content, every row an addition |
-| `apply_patch` (alias `patch`) | The files, `· +A -D` | The patch envelope: file headers, `@@` hunks, `+`/`-`/context rows |
-| `grep` | `"<pattern>" in <path> (<glob>) · N matches` | `file:line: text` per match |
-| `glob`, `find` | `<pattern> in <path> · N files` | The paths |
-| `ls` | `<path> · N entries` | The listing |
-| `lsp` | `<operation> <file>:<line>:<character>` | The output |
-| `todo__read`, `todo__update_status`, `todo__update_content` (and older `todo*`) | `N todos · D done` | The list, `☐` pending, `▸` in progress, `!` blocked, `✓` completed |
-| `webfetch` (alias `fetch`) | The URL | The output |
-| `websearch` (alias `search`) | `"<query>"` | The output |
-| `skill` | The skill name | — |
-| `ask_user` (alias `question`) | `<header>: <question>` of the first question | The answers |
-| `task` | `<subagent_type> · <description>` | A subagent card (below) |
-| anything else (MCP `server__tool`, plugin tools) | The arguments as compact JSON | The output text |
+| `bash` (hidden alias `shell`) | The command, then exit/timed-out status | Command output and exit status |
+| `read` | Path and line range | File text with line numbers |
+| `edit`, `write`, `apply_patch` | Path and change summary | Diff, new content, or patch rows |
+| `grep`, `glob`, `find`, `ls`, `lsp` | Scope and count/operation | Matching output |
+| `task` | Agent type and description | Linked subagent activity |
+| anything else (MCP/plugin tools) | Compact JSON arguments | Tool output |
 
-Diff rows are colored: `+` added (green), `-` removed (red), hunk and file
-headers blue, context muted. While a call's arguments still stream (state
-`PENDING`, `inputJson` not complete), the summary reads the main string field
-(`command`, `path`, `pattern`, `url`, `query`, …) out of the partial JSON.
-
-Cards appear and update as the stream frames arrive, before the projection
-is re-read (see [Stream frames and the transcript](#stream-frames-and-the-transcript)).
+Arguments still stream before the call is complete; the card keeps updating from
+the call's argument fragments. Cards appear before the projection is re-read (see
+[Stream frames and the transcript](#stream-frames-and-the-transcript)).
 
 ### Subagents
 
@@ -1477,27 +1528,25 @@ The backend records the turn as two messages: a user message with the fixed
 text `The following tool was executed by the user`, and an assistant message
 with one `bash` tool call. The transcript shows the user message as
 `!<command>` and the tool call as a `bash` card (see
-[Tool calls](#tool-calls)) that starts expanded:
+[Tool calls](#tool-calls)) that starts expanded. The user typed the command,
+so it never asks for permission, in any permission mode:
 
 ```text
 ┃ !echo hello
 
 ● hya-main · openai/gpt-5
-◌ bash  echo hello · awaiting approval
+┌──────────────────────────────────────────────────────────────────┐
+│ ✓ bash                                                       4ms │
+│ {"command":"echo hello"}                                         │
+│ ────────────────                                                 │
+│ hello                                                            │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-and, once approved and finished:
-
-```text
-✓ bash  echo hello                                               4ms
-│ $ echo hello
-│ hello
-```
-
-The command comes from this TUI's own shell turns (before the part carries
-its input), or from the tool call's `inputJson` (`{"command": …}`); the
-output is the tool call's `outputJson`. Esc cancels a running shell command;
-the turn then reads `Cancelled · Ready`.
+The arguments row is the tool call's `inputJson` (this TUI's own shell turns
+fill in `{"command": …}` before the part carries its input); the output is
+the tool call's `outputJson`. Esc cancels a running shell command; the turn
+then reads `Cancelled · Ready`.
 
 ### File references
 
@@ -1664,9 +1713,14 @@ exposes `active(): boolean`, `open(): void`, `key(KeyEvent): boolean`, and
 and command draft, restoring Projects keyboard focus when opened there. Each row
 is a `CommandSuggestion` with `label: string`, `replacement: string`,
 `kind: "command" | "argument"`, and `runOnEnter: boolean`. A local command's
-`CommandSpec.complete(position, context)` supplies zero or more full-line
-replacement strings for any argument depth; `position` contains `words`,
-`current`, and `head` (the text before `current`). Name rows use the merged
+`CommandSpec.complete(position, context)` supplies zero or more completions
+for any argument depth; `position` contains `words`, `current`, and `head`
+(the text before `current`). A completion (`Completion`) is either a
+full-line replacement string, used as its own label, or
+`{ replacement: string, label: string }` when the row shows other text than
+it inserts: `/open` and `/resume` label a titled session `/open <title> (<id>)`
+and insert `/open <id>`. `CompletionContext.sessions` is
+`{ id: string, title?: string }[]`. Name rows use the merged
 local/backend catalog; argument rows use these existing local completers.
 No new server operation or payload is involved.
 
@@ -2849,7 +2903,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N&includeDescendants=true` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. `includeDescendants=true` adds the ask frames of every subagent session below (see [Subagent asks](#subagent-asks)). |
 | `GET /v1/events/stream?sinceSeq=18446744073709551615` | SSE | `StreamFrame`s of every session, live-only (no durable event passes the watermark); the TUI reads only ask/resolve frames (see [Asks of other sessions](#asks-of-other-sessions)). |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
-| `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
+| `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ <tool>  awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
@@ -3100,7 +3154,8 @@ bun test
 ```
 
 Then check the rendered TUI in the browser from `packages/hya-tui-web`
-(`bun run typecheck && bun test ./test && bunx playwright test`; see
+(`bun run typecheck && bun test ./test && bunx playwright test e2e/<spec>.ts`
+for the specs covering your change; CI runs the whole suite; see
 [tui-web.md](tui-web.md)). `e2e/hya-tui.spec.ts` and
 `e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
 entry, narrow widths, and Ctrl+C. `e2e/hya-tui-layout.spec.ts` covers the

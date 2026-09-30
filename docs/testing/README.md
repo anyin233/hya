@@ -23,9 +23,21 @@ Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../cr
 | [Process E2E harness](process-e2e.md) | How `hya-e2e` builds environments, scripts FakeLlm, and asserts outcomes |
 | [CI wiring](ci-agent-e2e-snippet.yml) | Historical note — Track P is now enforced directly in `.github/workflows/ci.yml` |
 
-## Default quality gate
+## Local gate: affected components only
 
-From the workspace root (see also [Development](../development.md)):
+Locally, run the checks for the components a change touches (and the direct
+dependents of a changed public contract), not the whole workspace. How to pick
+them: [Development](../development.md#choosing-the-affected-components).
+
+```sh
+cargo fmt --all --check
+cargo clippy -p <crate> [-p <dependent> ...] --all-targets -- -D warnings
+cargo test -p <crate> [-p <dependent> ...]
+```
+
+## CI gate: full suite
+
+CI runs the full suite on every push and pull request:
 
 ```sh
 cargo fmt --all --check
@@ -33,8 +45,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --exclude hya-e2e
 ```
 
-`--exclude hya-e2e` matches CI: Track P spawns real backend processes and is run
-separately below with `--test-threads=1`.
+`--exclude hya-e2e` keeps Track P out of the multi-threaded workspace run; it
+runs separately with `--test-threads=1`. Run this full gate locally only when
+asked or for a cross-cutting change that touches most crates.
 
 CI exercises both tracks in different modes, but they are not all separate
 gates: Track P is enforced; Track I remains an index-only classification within
@@ -45,11 +58,12 @@ red `fmt` used to abort the job before the test step ever ran, which hid six
 failing tests for weeks.
 
 Process agent E2E needs a built backend binary (not always present after a bare
-`cargo test` matrix without prior build):
+`cargo test` matrix without prior build). Locally, run only the scenario files
+for the agent surface you changed:
 
 ```sh
 cargo build -p hya-backend --bin hya
-cargo test -p hya-e2e -- --test-threads=1
+cargo test -p hya-e2e --test <pNN_scenario> -- --test-threads=1
 ```
 
 ## Coverage

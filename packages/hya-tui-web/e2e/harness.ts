@@ -36,13 +36,14 @@ export class Tui {
     readonly url: string,
   ) {}
 
-  /** Visible screen rows, right-trimmed. */
+  /** Visible screen rows, right-trimmed. Clipped to the current width: after a shrink xterm.js keeps the old cells past `cols` in its lines. */
   async lines(): Promise<string[]> {
     return this.page.evaluate(() => {
-      const buffer = window.hyaTerm.term.buffer.active
+      const term = window.hyaTerm.term
+      const buffer = term.buffer.active
       const rows: string[] = []
-      for (let y = 0; y < window.hyaTerm.term.rows; y++) {
-        rows.push(buffer.getLine(buffer.viewportY + y)?.translateToString(true) ?? "")
+      for (let y = 0; y < term.rows; y++) {
+        rows.push(buffer.getLine(buffer.viewportY + y)?.translateToString(true, 0, term.cols) ?? "")
       }
       return rows
     })

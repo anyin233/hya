@@ -563,10 +563,13 @@ decisions are unchanged.
 ## 13. Implementation phases
 
 Each phase lands TDD-first (one atomic failing test per behavior) with the
-Rust gate `cargo fmt --all --check && cargo clippy --workspace --all-targets
--- -D warnings && cargo test --workspace --exclude hya-e2e`, plus the
+component-scoped Rust gate for the crates it touches (`cargo fmt --all --check`,
+then `cargo clippy -p <crate> --all-targets -- -D warnings` and
+`cargo test -p <crate>` for each touched crate and its affected dependents; see
+[Development](../development.md#choosing-the-affected-components)), plus the
 process gate for agent-surface phases
-([docs/testing/agent-matrix.md](../testing/agent-matrix.md)).
+([docs/testing/agent-matrix.md](../testing/agent-matrix.md)). CI runs the full
+workspace suite.
 
 - **Phase 1 — lifecycle core.** Events (§9), report gate, handoff pipeline,
   archive transaction, revive, unified admission (§2), budget lease semantics,

@@ -6,9 +6,10 @@
 //! `auth/<id>.yaml`, and fetched models to the model cache, the same stores
 //! the TUI Provider View writes through `PUT /v1/providers/{id}`. A running
 //! backend of the database is told to rebuild the provider, so it serves the
-//! change without a restart.
+//! change without a restart; `list --refresh` fetches through that backend,
+//! so its TUI and WebUI offer the refreshed models at once.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context as _;
 use clap::{Args, Subcommand, ValueEnum};
@@ -121,7 +122,7 @@ impl Protocol {
 pub(crate) async fn run(command: ProviderCommand, db: String) -> anyhow::Result<()> {
     match command {
         ProviderCommand::Add(args) => add(args, &db).await,
-        ProviderCommand::List { refresh } => list(refresh).await,
+        ProviderCommand::List { refresh } => list(refresh, &db).await,
         ProviderCommand::Remove { id, yes } => remove(&id, yes, &db).await,
         ProviderCommand::Logout { id } => logout(&id, &db).await,
     }
@@ -410,7 +411,7 @@ fn source_note(source: ModelCatalogSource) -> &'static str {
     }
 }
 
-async fn list(refresh: bool) -> anyhow::Result<()> {
+async fn list(refresh: bool, db: &str) -> anyhow::Result<()> {
     let declared = config::provider_declarations()?;
     let orphans: Vec<String> = auth::list_tokens()
         .context("list saved keys")?
@@ -423,8 +424,10 @@ async fn list(refresh: bool) -> anyhow::Result<()> {
     }
     let mut models: BTreeMap<String, Vec<(String, ModelCatalogSource)>> = BTreeMap::new();
     if !declared.is_empty() {
+        // The backend writes the model cache that `load` then reads.
+        let refreshed = refresh && refresh_through_backend(db, None).await?.is_some();
         let resolved = config::load().await?.context("config.yaml is missing")?;
-        let catalog = if refresh {
+        let catalog = if refresh && !refreshed {
             config::rebuild_providers(
                 None,
                 config::DiscoverMode::Always,
@@ -568,4 +571,55 @@ async fn sync_running_backend(db: &str, id: &str, action: SyncAction) {
             "warning: could not reach the running backend at {url} ({error}); `hya serve restart` applies the change"
         ),
     }
+}
+
+/// Refresh the model list of every declared provider (only `only` when
+/// given) through the database's running backend: it fetches each list once,
+/// writes the model cache, and tells its clients (TUI, WebUI) that the
+/// catalog changed. Fetch failures are reported on stderr. Returns the
+/// refreshed provider ids, or `None` when no backend runs (the caller then
+/// fetches itself).
+pub(crate) async fn refresh_through_backend(
+    db: &str,
+    only: Option<&str>,
+) -> anyhow::Result<Option<BTreeSet<String>>> {
+    let Some(found) = crate::daemon::running(db).await else {
+        return Ok(None);
+    };
+    let url = found.url.trim_end_matches('/');
+    let client = reqwest::Client::new();
+    let mut refreshed = BTreeSet::new();
+    for provider in config::provider_declarations()? {
+        let id = provider.id.as_str();
+        if only.is_some_and(|only| only != id) {
+            continue;
+        }
+        let response = client
+            .post(format!("{url}/v1/providers/{id}/refresh"))
+            .json(&serde_json::json!({}))
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+            .with_context(|| format!("ask the backend at {url} to refresh `{id}`"))?;
+        let status = response.status();
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .with_context(|| format!("read the backend's refresh answer for `{id}`"))?;
+        if !status.is_success() {
+            anyhow::bail!("the backend at {url} answered {status} refreshing `{id}`: {body}");
+        }
+        let discovery = &body["discovery"];
+        if let Some(error) = discovery["errorMessage"]
+            .as_str()
+            .filter(|error| !error.is_empty())
+        {
+            eprintln!(
+                "hya: {id}: model list {}: {error}",
+                discovery["result"].as_str().unwrap_or("failed")
+            );
+        }
+        refreshed.insert(provider.id);
+    }
+    Ok(Some(refreshed))
 }

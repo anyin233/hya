@@ -3,24 +3,40 @@
 export type SidebarMode = "auto" | "open" | "closed"
 
 /** Terminal widths (columns) at which the layout changes. */
-export const layoutBreakpoints = { sidebar: 110, projectsSidebar: 150 } as const
+export const layoutBreakpoints = { sidebar: 150, projectsSidebar: 150 } as const
 
+/**
+ * The right sidebar is never drawn narrower than this: 60% wider than the
+ * 18 columns its default 12% share gave it at 149 columns (⌈18 × 1.6⌉).
+ * The pane tree holds it open (state/panes.ts `renderedWeight`), and a mouse
+ * drag cannot make it narrower either.
+ */
+export const sidebarMinColumns = 29
+
+/**
+ * The right sidebar (Sessions, Todos, Context) needs `layoutBreakpoints.sidebar`
+ * columns: below it it is always hidden and the top status line carries the
+ * Context fields (state/contextFields.ts). At or above it, `closed` hides it.
+ */
 export function sidebarVisible(mode: SidebarMode, columns: number): boolean {
-  if (mode === "auto") return columns >= layoutBreakpoints.sidebar
-  return mode === "open"
+  return columns >= layoutBreakpoints.sidebar && mode !== "closed"
 }
 
-/** The pinned mode after a toggle: the opposite of what is visible now. */
+/** The mode after a toggle: hide what is visible, show (`auto`) what is not; below the breakpoint nothing changes. */
 export function toggledSidebar(mode: SidebarMode, columns: number): SidebarMode {
-  return sidebarVisible(mode, columns) ? "closed" : "open"
+  if (columns < layoutBreakpoints.sidebar) return mode
+  return sidebarVisible(mode, columns) ? "closed" : "auto"
 }
+
+/** Status line when the sidebar cannot be shown at the current width. */
+export const sidebarTooNarrowNotice = `Sidebar needs ${layoutBreakpoints.sidebar}+ columns · the top status line shows its Context`
 
 /**
  * The left Projects sidebar (docs/tui.md "Projects"): shown automatically
  * only once both sidebars and the chat column fit
- * (`layoutBreakpoints.projectsSidebar`, wider than the right sidebar's own
+ * (`layoutBreakpoints.projectsSidebar`, not below the right sidebar's own
  * threshold), so at ~80 columns it stays hidden even when pinned `auto`.
- * Pinning it `open` shows it at any width, same as the right sidebar.
+ * Pinning it `open` shows it at any width, unlike the right sidebar.
  */
 export function projectsSidebarVisible(mode: SidebarMode, columns: number): boolean {
   if (mode === "auto") return columns >= layoutBreakpoints.projectsSidebar

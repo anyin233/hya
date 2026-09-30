@@ -19,15 +19,15 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** Background of the main column (a cell of the empty transcript area) and the header's text color. */
-async function screenColors(term: Tui): Promise<{ bg: string; header: string }> {
+/** Background of the main column (a cell of the empty transcript area) and the top status line's `mode` label color (the header it replaced is gone). */
+async function screenColors(term: Tui): Promise<{ bg: string; status: string }> {
   const lines = await term.lines()
-  // The first blank row under the header and status bar belongs to the transcript.
+  // The first blank row under the status line belongs to the transcript.
   const row = lines.findIndex((line, index) => index > 1 && line.slice(0, 20).trim() === "")
   const bg = (await term.cell(row, 1))?.bg ?? "none"
-  const header = await term.find("hya")
-  const fg = header ? (await term.cell(header.row, header.col))?.fg ?? "none" : "none"
-  return { bg, header: fg }
+  const label = await term.find("mode ")
+  const fg = label ? (await term.cell(label.row, label.col))?.fg ?? "none" : "none"
+  return { bg, status: fg }
 }
 
 let prefsDir: string
@@ -65,7 +65,7 @@ test.describe("/theme", () => {
     await term.press("ArrowDown")
     await term.press("Enter")
     await term.waitForText("Theme → Light")
-    expect(await screenColors(term)).toEqual({ bg: light.bg, header: light.accent })
+    expect(await screenColors(term)).toEqual({ bg: light.bg, status: light.fg })
     expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ theme: "light" })
 
     // The status line follows the theme too.

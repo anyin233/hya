@@ -815,7 +815,16 @@ const lifecycle = resolveLifecyclePresentation(node)
 
 ### 1. Scope / Trigger
 
-- Trigger: any fix or feature change, per the root `AGENTS.md` release rule.
+- Trigger: any fix or feature that changes shipped behavior, per the root
+  `AGENTS.md` release rule: Rust crates, `proto/`, `bundles/`,
+  `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, or anything
+  else in the release archive or source install.
+- Not a trigger: documentation-only changes (`docs/`, `*.md`, code comments,
+  `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and
+  config), and test-only changes that leave shipped code untouched. These
+  neither bump the version nor write a new root `CHANGELOG.md`.
+- Mixed change: if any file affects shipped behavior, bump once for the whole
+  atomic change.
 
 ### 2. Contracts
 
@@ -825,22 +834,33 @@ Bumping the version means updating **all** of these together:
 | --- | --- |
 | `Cargo.toml` | `[workspace.package].version` |
 | `Cargo.lock` | every `hya` / `hya-*` package version (a build refreshes it) |
+| `bundles/presets/*/bundle.yaml`, `bundles/first-party/*/bundle.yaml`, `bundles/extra/*/bundle.yaml` | identity `version` |
+| `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json` | `version` |
 | `README.md` | the `workspace version \`X.Y.Z\`` string |
 | `CHANGELOG.md` | first heading is exactly `# X.Y.Z` |
 | `docs/changes/CHANGELOG_<prev>.md` | move the previous root changelog here first |
 
 ### 3. Validation & Error Matrix
 
-- Bumping `Cargo.toml` alone -> `version_metadata` fails on `EXPECTED_RELEASE`.
-- Stale `README.md` / `package.json` -> same test fails later in the same run.
+- Stale `package.json` -> `cargo test -p xtask`
+  (`packaged_frontend_versions_match_workspace`) fails.
+- Stale first-party bundle -> `cargo test -p hya-bundle --test first_party` and
+  `stage-first-party-bundles` fail; stale extra bundle ->
+  `cargo test -p hya-bundle --test extra_bundles` fails.
+- Stale `README.md` or `Cargo.lock` -> the release metadata check in
+  `cargo run -p xtask -- release-rehearsal` fails.
 - Root `CHANGELOG.md` retaining old releases -> stale history is published verbatim
   as the GitHub Release body.
 
 ### 4. Good/Base/Bad Cases
 
-- Good: all seven updated in one `chore(release): X.Y.Z` commit.
-- Bad: bumping `Cargo.toml` and running only the crate's own tests — the failure
-  lives in `-p hya`, so a scoped test run misses it entirely.
+- Good: every file above updated in the same atomic change, verified with
+  `cargo test -p xtask` and `cargo test -p hya-bundle`.
+- Base: a docs-only or CI-only change keeps the current version and root
+  changelog untouched.
+- Bad: bumping `Cargo.toml` and running only the changed crate's tests — the
+  version checks live in `xtask` and `hya-bundle`, so that scoped run misses them.
+- Bad: bumping the version for a docs-only or CI-only change.
 
 ---
 

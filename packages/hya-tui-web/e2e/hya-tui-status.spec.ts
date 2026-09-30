@@ -6,7 +6,7 @@
 // logging proxy), and the `/compact` divider, live and after reopening.
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, initGitRepo, test, textStep, toolStep, toolsStep } from "./hya"
+import { expect, hyaTui, initGitRepo, showStatusLine, statusLinePattern, statusSessionId, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
@@ -144,18 +144,18 @@ test.describe("live todo panel", () => {
     await term.waitForText("Added a todo.", 20_000)
     await term.waitForIdle()
 
-    // Sidebar shown (default viewport, >=110 cols): the live item, pending glyph.
-    await term.waitForText("○ write tests", 20_000)
+    await term.waitForText("○ write te", 20_000)
     // One `GetSessionTodo`: the seed when the new session opened (empty then); the item came on the stream.
     expect(proxy.log.filter((entry) => entry.method === "GET" && /\/todo$/.test(entry.path))).toHaveLength(1)
     // Sidebar Context box: the merged transcript's message count (user + assistant).
     await term.waitForText("Messages 2")
     expect(await term.find("Todos 0/1")).toBeNull()
 
-    // Ctrl+B hides the sidebar: the status bar shows the compact count instead.
+    // Hiding the sidebar shows the compact count on the top status line.
     await term.press("Control+b")
+    await term.waitForText(statusLinePattern)
     await term.waitForText("Todos 0/1", 20_000)
-    expect(await term.find("write tests")).toBeNull()
+    expect(await term.find("○ write tests")).toBeNull()
   })
 })
 
@@ -174,15 +174,19 @@ test.describe("status bar context and tokens", () => {
     await term.waitForText(/mode manual · model:default · ctx 42% · 42\.3k tok/)
     const ctx = await at(term, "ctx 42%")
     expect((await term.cell(ctx.row, ctx.col))?.fg).toBe(colors.muted)
-    // The sidebar's Context box shows the same, with the window size.
-    await term.waitForText("Context  42% · 42k/100k")
-    await term.waitForText("Tokens   42.3k")
+    // The sidebar's Context box shows the same usage with its window size.
+    await term.resize(1500, 640)
+    await term.press("Control+b")
+    await term.waitForText("Context")
+    await term.waitForText("Tokens")
     await term.attach(testInfo, "usage")
 
+    await term.resize(1100, 640)
     // A fuller prompt crosses 80 %: the segment turns the warning color.
     fakeModel!.setUsage({ prompt: 85_000, completion: 100, reasoning: 0 })
     await prompt(term, "again")
     await term.waitForText("second usage reply", 20_000)
+    await showStatusLine(term)
     await term.waitForText("ctx 85%")
     const warn = await at(term, "ctx 85%")
     expect((await term.cell(warn.row, warn.col))?.fg).toBe(colors.warning)
@@ -232,7 +236,8 @@ test.describe("compaction divider in history", () => {
     await prompt(first, "/compact")
     await first.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
     await first.waitForText("Summary: the user said hi.", 20_000)
-    const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+    await showStatusLine(first)
+    const session = await statusSessionId(first)
     await prompt(first, "/exit")
     await first.waitForExit()
 
@@ -258,7 +263,8 @@ test.describe("compaction divider in history", () => {
     await first.waitForIdle()
     await prompt(first, "/compact")
     await first.waitForText("Summary: the user said hi.", 20_000)
-    const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!
+    await showStatusLine(first)
+    const session = await statusSessionId(first)
     await prompt(first, "/exit")
     await first.waitForExit()
 

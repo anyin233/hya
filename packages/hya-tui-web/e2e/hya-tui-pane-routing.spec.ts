@@ -1,7 +1,7 @@
 import { expect, hyaTui, test } from "./hya"
 
 test("Sessions owns typing, editing, paste, and Enter while conversation draft survives", async ({ tui, backend }, testInfo) => {
-  const term = await tui(hyaTui(backend))
+  const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("preserved draft")
   await term.press("Control+x")
