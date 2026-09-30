@@ -676,8 +676,8 @@ export function createController({ client, store, directory, remote: startedRemo
     if (asked.session && !store.state.sessions.some((row) => row.id === asked.session)) {
       await client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
     }
-    status(otherAskNotice(asked, store.state.sessions))
-    const where = asked.session ? ` · in ${askSessionLabel(asked.session, store.state.sessions)}` : ""
+    status(otherAskNotice(asked, store.state.sessions, store.state.activeProjectId))
+    const where = asked.session ? ` · in ${askSessionLabel(asked.session, store.state.sessions, store.state.activeProjectId)}` : ""
     notifyAsk(asked.id, event.permissionRequested ? "permission" : "question", `${asked.title ?? ""}${where}`)
   }
 

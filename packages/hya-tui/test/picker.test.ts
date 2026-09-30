@@ -79,16 +79,17 @@ test("the visible window keeps the highlight in view", () => {
   expect(pickerWindow(20, 19, 5)).toEqual({ start: 15, end: 20 })
 })
 
+// Numbered labels as `/sessions` shows them; `name` is what rename edits and delete names.
 const sessionRows: PickerRow[] = [
-  { id: "hysec_1", label: "Refactor auth", current: true },
-  { id: "hysec_2", label: "hysec_2" },
+  { id: "hysec_1", label: "1. Refactor auth", name: "Refactor auth", current: true },
+  { id: "hysec_2", label: "2. hysec_2", name: "hysec_2" },
 ]
 const sessionActions = [
   { id: "rename", key: "f2", label: "F2 rename", prompt: "value" as const },
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm" as const, confirmText: 'Delete "{label}"? Enter confirms · Esc cancels' },
 ]
 
-test("F2 on the highlighted row enters rename mode seeded with its label; typing edits, Enter commits, Esc backs out", () => {
+test("F2 on the highlighted row enters rename mode seeded with its name, not its numbered label; typing edits, Enter commits, Esc backs out", () => {
   let state = createPicker({ title: "Sessions", rows: sessionRows, actions: sessionActions })
   state = update(state, "f2")
   expect(state.mode).toBe("rename")

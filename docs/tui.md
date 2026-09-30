@@ -662,7 +662,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
-| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show: top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
+| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. The choice is also remembered as the active agent's default, unless `config.yaml` pins that agent's model (`agents.<id>.model`): then it changes only the current session (see [Configuration — Remembered Agent Models](configuration.md#remembered-agent-models)). |
 | `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -775,7 +775,7 @@ list as plain text instead.
 │   app     ││ thinking none · mode manual   ││              │
 │           ││ ┃ your prompt                 │├─Todos─────────┤
 │           ││ ● build · fake/model          ││ ○ write tests│
-│           ││ ◌ bash · awaiting approval    │├─Context───────┤
+│           ││ ◌ bash  awaiting approval     │├─Context───────┤
 │           ││ ┌─Permission───────────────┐ ││ Agent  build │
 │           ││ │ 1 Allow · 2 Always · 3 Deny│ ││ Model  fake/…│
 │           ││ └──────────────────────────┘ ││              │
@@ -1533,27 +1533,25 @@ The backend records the turn as two messages: a user message with the fixed
 text `The following tool was executed by the user`, and an assistant message
 with one `bash` tool call. The transcript shows the user message as
 `!<command>` and the tool call as a `bash` card (see
-[Tool calls](#tool-calls)) that starts expanded:
+[Tool calls](#tool-calls)) that starts expanded. The user typed the command,
+so it never asks for permission, in any permission mode:
 
 ```text
 ┃ !echo hello
 
 ● hya-main · openai/gpt-5
-◌ bash  echo hello · awaiting approval
+┌──────────────────────────────────────────────────────────────────┐
+│ ✓ bash                                                       4ms │
+│ {"command":"echo hello"}                                         │
+│ ────────────────                                                 │
+│ hello                                                            │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-and, once approved and finished:
-
-```text
-✓ bash  echo hello                                               4ms
-│ $ echo hello
-│ hello
-```
-
-The command comes from this TUI's own shell turns (before the part carries
-its input), or from the tool call's `inputJson` (`{"command": …}`); the
-output is the tool call's `outputJson`. Esc cancels a running shell command;
-the turn then reads `Cancelled · Ready`.
+The arguments row is the tool call's `inputJson` (this TUI's own shell turns
+fill in `{"command": …}` before the part carries its input); the output is
+the tool call's `outputJson`. Esc cancels a running shell command; the turn
+then reads `Cancelled · Ready`.
 
 ### File references
 
@@ -2892,7 +2890,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N&includeDescendants=true` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. `includeDescendants=true` adds the ask frames of every subagent session below (see [Subagent asks](#subagent-asks)). |
 | `GET /v1/events/stream?sinceSeq=18446744073709551615` | SSE | `StreamFrame`s of every session, live-only (no durable event passes the watermark); the TUI reads only ask/resolve frames (see [Asks of other sessions](#asks-of-other-sessions)). |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
-| `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
+| `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ <tool>  awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |

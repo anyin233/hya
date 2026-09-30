@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
 import { Tui } from "./harness"
-import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, type Backend, type Workspace } from "./hya"
+import { api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
@@ -215,7 +215,7 @@ test.describe("WebUI tabs (bare hya)", () => {
     // A turn runs in the tab; closing the tab (SIGHUP to its TUI) archives nothing.
     await prompt(web, "a long web job")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
-    expect(tabTuis(workspace).length).toBe(1)
+    expect(tuiInstances(tabTuis(workspace)).length).toBe(1)
     await webPage.close()
     await expect.poll(() => tabTuis(workspace).length, { timeout: 20_000 }).toBe(0)
     const left = await session(backend, id)

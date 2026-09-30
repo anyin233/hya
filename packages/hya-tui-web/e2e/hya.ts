@@ -4,7 +4,7 @@
 // argv that runs packages/hya-tui against it. The host itself stays generic;
 // only these specs know about hya.
 
-import { spawn, type ChildProcess } from "node:child_process"
+import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -434,6 +434,31 @@ export async function showStatusLine(term: Tui): Promise<void> {
 export async function statusSessionId(term: Tui, timeout?: number): Promise<string> {
   await term.waitForText(statusSessionPattern, timeout)
   return statusSessionPattern.exec(await term.text())![1]!
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * A tool card (docs/tui.md "Tool calls"): its header row `<icon> <tool>[  <summary>]`
+ * and, on the next row, its compact JSON arguments containing `args`
+ * (for example `"command":"echo hi"`). `summary` is `awaiting approval` while a permission waits.
+ */
+export function toolCard(icon: "✓" | "✗" | "◌" | "○", tool: string, args: string, summary?: string): RegExp {
+  const header = `${escapeRegExp(icon)} ${escapeRegExp(tool)}${summary ? `\\s+${escapeRegExp(summary)}` : ""}`
+  return new RegExp(`${header}[^\\n]*\\n[^\\n]*\\{[^\\n]*${escapeRegExp(args)}`)
+}
+
+/**
+ * One pid per running TUI among `pids` (matching TUI processes): a TUI is a
+ * supervisor plus the app it runs with the same command line (docs/tui.md
+ * "Hot update after `hya serve restart`"), so only the processes whose parent
+ * is not one of `pids` count.
+ */
+export function tuiInstances(pids: readonly number[]): number[] {
+  if (!pids.length) return []
+  const parents = new Map(execFileSync("ps", ["-axo", "pid=,ppid="], { maxBuffer: 64 * 1024 * 1024 }).toString().trim().split("\n")
+    .map((line) => line.trim().split(/\s+/).map(Number) as [number, number]))
+  return pids.filter((pid) => !pids.includes(parents.get(pid) ?? -1))
 }
 
 /**

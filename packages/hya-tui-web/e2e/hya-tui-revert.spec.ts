@@ -124,8 +124,8 @@ test.describe("fork", () => {
     await term.waitForText("Forked before “beta question” · the prompt is in the input")
     await term.waitForText("First reply.")
     await expect.poll(() => term.find("Second reply.")).toBeNull()
-    // The sidebar names the source session.
-    await term.waitForText(/Forked\s+from hysec_/)
+    // The status line labels the new session with a lowercase fork source.
+    await term.waitForText(/forked\s+from hysec_/)
     const input = await term.find("beta question")
     expect(input).not.toBeNull()
     expect(input!.row).toBeGreaterThan((await term.find("First reply."))!.row)

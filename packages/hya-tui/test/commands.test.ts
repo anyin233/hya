@@ -4,7 +4,7 @@ import type { TuiPreferences } from "../src/prefs"
 import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
-import { modelReference } from "../src/state/format"
+import { modelReference, sessionListText } from "../src/state/format"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
@@ -183,6 +183,26 @@ test("/open resolves list numbers and /key opens the Provider View", async () =>
   await run("/open hysec_x")
   await run("/key")
   expect(calls).toEqual(["open hysec_b", "open hysec_x", "providers"])
+})
+
+test("/open <number> counts the active Project's sessions, as the sidebar numbers them", async () => {
+  const { store, calls, run } = harness()
+  store.applyCatalog({
+    sessions: [
+      { id: "hysec_other", agent: "hya-main", workdir: "/o", projectId: "prj_other" },
+      { id: "hysec_w1", agent: "hya-main", workdir: "/w", projectId: "prj_w" },
+      { id: "hysec_w1_kid", agent: "hya-task", workdir: "/w", projectId: "prj_w", parent: "hysec_w1" },
+      { id: "hysec_w2", agent: "hya-main", workdir: "/w", projectId: "prj_w" },
+    ],
+    interactions: [], models: [], workflows: [], providers: [], commands: [],
+  })
+  store.setActiveProject("prj_w")
+  expect(sessionListText(store.state)).toContain("2. hysec_w2")
+  await run("/open 2")
+  await run("/open 1.1")
+  expect(calls).toEqual(["open hysec_w2", "open hysec_w1_kid"])
+  // Another Project's session has no number here.
+  await expect(run("/open 3")).rejects.toThrow("Usage: /open <session id or number>")
 })
 
 test("/open and /resume completions show a titled session as title (id) and insert its id", () => {

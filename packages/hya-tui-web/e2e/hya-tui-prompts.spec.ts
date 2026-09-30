@@ -10,7 +10,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, headlessTurn, hyaTui, showStatusLine, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
+import { expect, hangStep, headlessTurn, hyaTui, showStatusLine, statusSessionId, test, textStep, toolCard, toolStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
@@ -58,12 +58,12 @@ test.describe("bash permission prompt", () => {
     const first = await at(term, "▸ 1  Allow once")
     expect((await term.cell(first.row, first.col))?.fg).toBe(colors.accent)
     // The tool card waits meanwhile.
-    await term.waitForText(/◌ bash\s+echo prompt-once · awaiting approval/)
+    await term.waitForText(toolCard("◌", "bash", '"command":"echo prompt-once"', "awaiting approval"))
     await term.attach(testInfo, "bash-prompt")
 
     await term.press("1")
     await term.waitForText("Ran it once.", 20_000)
-    await term.waitForText(/✓ bash\s+echo prompt-once/)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo prompt-once"'))
     await promptGone(term)
     await term.waitForText(/Allowed once · bash|Ready/)
   })
@@ -111,7 +111,7 @@ test.describe("always allow", () => {
     // The same command again: no prompt (the turn would block on it), the reply arrives.
     await prompt(term, "run it again")
     await term.waitForText("Second run.", 20_000)
-    const cards = (await term.text()).match(/✓ bash\s+echo always-allowed/g) ?? []
+    const cards = (await term.text()).match(new RegExp(toolCard("✓", "bash", '"command":"echo always-allowed"').source, "g")) ?? []
     expect(cards.length).toBe(2)
   })
 })
@@ -126,7 +126,7 @@ test.describe("deny", () => {
     await promptShown(term)
     await term.press("3")
     await term.waitForText("It was denied.", 20_000)
-    await term.waitForText(/✗ bash\s+echo never/)
+    await term.waitForText(toolCard("✗", "bash", '"command":"echo never"'))
     const failed = await at(term, "✗ bash")
     expect((await term.cell(failed.row, failed.col))?.fg).toBe(colors.error)
     await promptGone(term)
@@ -140,7 +140,7 @@ test.describe("deny", () => {
     await promptShown(term)
     await term.press("Escape")
     await term.waitForText("It was denied.", 20_000)
-    await term.waitForText(/✗ bash\s+echo never/)
+    await term.waitForText(toolCard("✗", "bash", '"command":"echo never"'))
     await promptGone(term)
   })
 })
@@ -169,7 +169,7 @@ test.describe("edit permission prompt", () => {
     await term.attach(testInfo, "edit-prompt")
     await term.press("1")
     await term.waitForText("Edited the poem.", 20_000)
-    await term.waitForText(/✓ edit\s+poem\.txt/)
+    await term.waitForText(toolCard("✓", "edit", '"path":"poem.txt"'))
   })
 })
 
@@ -197,7 +197,7 @@ test.describe("queued asks", () => {
     await term.press("1")
     await promptGone(term)
     await term.waitForText("Parent done.", 20_000)
-    await term.waitForText(/✓ bash\s+echo parent-ask/)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo parent-ask"'))
   })
 })
 
@@ -319,8 +319,7 @@ test.describe("shell turns", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
     await prompt(term, "!echo shell-prompt")
-    await term.waitForText("│ $ echo shell-prompt", 20_000)
-    await term.waitForText(/✓ bash\s+echo shell-prompt/, 20_000)
+    await term.waitForText(toolCard("✓", "bash", '"command":"echo shell-prompt"'), 20_000)
     await term.waitForText("│ shell-prompt")
     expect(await term.text()).not.toMatch(/asked by /)
   })

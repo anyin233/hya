@@ -66,7 +66,7 @@ test("lists a New session row first, then the tree with the open session marked;
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   await term.waitForText("New session")
-  await term.waitForText(new RegExp(`▸ ● ${second}`))
+  await term.waitForText(new RegExp(`▸ ● \\d+\\. ${second}`))
   await term.waitForText("First session")
   await term.waitForText("F2 rename")
   await term.attach(testInfo, "sessions-picker")
@@ -97,11 +97,11 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   // The open session is the picker's "current" row: already highlighted, no ArrowDown needed.
-  await term.waitForText(new RegExp(`▸ ● ${session}`))
+  await term.waitForText(new RegExp(`▸ ● \\d+\\. ${session}`))
   await term.press("F2")
+  // Rename mode seeds the editable text with the session's name (the raw id, no title set yet),
+  // never the row's list number: clear it before typing the new title.
   await term.waitForText(new RegExp(`New title ${session}▏`))
-  // Rename mode seeds the editable text with the row's current label (the raw id, no title set yet):
-  // clear it before typing the new title.
   for (let index = 0; index < session.length; index++) await term.press("Backspace")
   await term.type("Fix the flaky test")
   await term.attach(testInfo, "sessions-rename")
@@ -113,7 +113,7 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
   await at(term, "Fix the flaky test")
 
   // A rename reopens the picker (so browsing continues) already showing the new title.
-  await term.waitForText(/▸ ● Fix the flaky test/)
+  await term.waitForText(/▸ ● \d+\. Fix the flaky test/)
   await escape(term, "Filter ")
 })
 
@@ -126,7 +126,7 @@ test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes an
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   // The open session (second) is the picker's "current" row: already highlighted.
-  await term.waitForText(new RegExp(`▸ ● ${second}`))
+  await term.waitForText(new RegExp(`▸ ● \\d+\\. ${second}`))
   await term.press("Control+d")
   await term.waitForText(/Delete .*Enter confirms · Esc cancels/)
   // Esc backs out to the list, still open; wait so the next Esc is not read as Alt+key.
@@ -135,7 +135,7 @@ test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes an
   await escape(term, "Filter ")
 
   await prompt(term, "/sessions")
-  await term.waitForText(new RegExp(`▸ ● ${second}`))
+  await term.waitForText(new RegExp(`▸ ● \\d+\\. ${second}`))
   await term.press("Control+d")
   await term.waitForText(/Delete .*Enter confirms/)
   await term.press("Enter")

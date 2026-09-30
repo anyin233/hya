@@ -133,11 +133,20 @@ test("pending asks of other sessions name the session they belong to (its /open 
   })
   store.openSession(selected)
   expect(pendingLines(store.state)).toEqual(["! bash echo x · 2. Other work", "? Which one? · saved session"])
-  expect(askSessionLabel("hysec_2", store.state.sessions)).toBe("2. Other work")
-  expect(askSessionLabel("hysec_1", store.state.sessions)).toBe("1. hysec_1")
-  expect(askSessionLabel("hysec_9", store.state.sessions)).toBe("hysec_9")
-  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions)).toBe("Permission needed in 2. Other work · F4 to review")
-  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions)).toBe("Question in a saved session · F4 to review")
+  expect(askSessionLabel("hysec_2", store.state.sessions, undefined)).toBe("2. Other work")
+  expect(askSessionLabel("hysec_1", store.state.sessions, undefined)).toBe("1. hysec_1")
+  expect(askSessionLabel("hysec_9", store.state.sessions, undefined)).toBe("hysec_9")
+  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions, undefined)).toBe("Permission needed in 2. Other work · F4 to review")
+  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions, undefined)).toBe("Question in a saved session · F4 to review")
+})
+
+test("an ask's session number is the sidebar's: counted in the active Project; another Project's session goes by its title", () => {
+  const sessions = [
+    { id: "hysec_o", agent: "hya-main", workdir: "/o", projectId: "prj_o", title: "Elsewhere" },
+    { id: "hysec_w", agent: "hya-main", workdir: "/w", projectId: "prj_w", title: "Here" },
+  ]
+  expect(askSessionLabel("hysec_w", sessions, "prj_w")).toBe("1. Here")
+  expect(askSessionLabel("hysec_o", sessions, "prj_w")).toBe("Elsewhere")
 })
 
 test("currentModel looks up the open session's model in the catalog by providerId/modelId; unknown when absent", () => {

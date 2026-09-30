@@ -93,8 +93,8 @@ test.describe("two frontends, one database", () => {
       expect(two.text).toMatch(new RegExp(`Backend\\s+daemon · pid ${pid} · db /`))
       await second.attach(testInfo, "second-status")
 
-      // The first TUI's session (created on connect); the second opens it by id.
-      await second.press("Escape")
+      // The first TUI's session (created on connect); the second opens it by id. The Status view
+      // needs no Esc first (the composer takes typing), and an Esc right before `/` reads as Alt+/.
       await showStatusLine(first)
       const session = await statusSessionId(first)
       await prompt(second, `/open ${session}`)

@@ -7,7 +7,7 @@
  * render the rows. `/agent` opens the Agents view (state/agentsView.ts).
  */
 import type { ModelSummary, SessionInfo } from "../client"
-import { modelReference, sessionTree } from "./format"
+import { modelReference, sessionNumbers, sessionTree } from "./format"
 import { sessionsInScope } from "./projects"
 import type { PickerRow } from "./picker"
 
@@ -88,17 +88,23 @@ export function relativeTime(time: string | undefined, now: number = Date.now())
  * `/sessions` picker rows: a `New session` row first, then the tree
  * (subagents indented and tagged `subagent`, busy noted in the detail).
  * Scoped to `activeProjectId` (state/projects.ts `sessionsInScope`) unless
- * `allProjects` (the picker's toggle, `Ctrl+A`) is set.
+ * `allProjects` (the picker's toggle, F3) is set. Numbers are the
+ * sidebar's (state/format.ts `sessionNumbers` over `scope.numbered`, the
+ * sidebar's list; default `sessions`), so another Project's sessions listed
+ * by `allProjects`, and archived ones the sidebar does not list, have none.
  */
 export function sessionRows(
   sessions: readonly SessionInfo[],
   current: string | undefined,
   now: number = Date.now(),
-  scope: { activeProjectId?: string; allProjects?: boolean } = {},
+  scope: { activeProjectId?: string; allProjects?: boolean; numbered?: readonly SessionInfo[] } = {},
 ): PickerRow[] {
   const newRow: PickerRow = { id: "__new__", label: "New session", tag: "new", detail: "Create a session with the current agent and model" }
   const scoped = sessionsInScope(sessions, scope.activeProjectId, scope.allProjects ?? false)
-  const rows = sessionTree(scoped).map(({ session, depth, number }): PickerRow => {
+  const numbers = sessionNumbers(scope.numbered ?? sessions, scope.activeProjectId)
+  const rows = sessionTree(scoped).map(({ session, depth }): PickerRow => {
+    const number = numbers.get(session.id)
+    const name = session.title || session.id
     const detail = [
       session.agent,
       modelReference(session) || "default",
@@ -107,7 +113,10 @@ export function sessionRows(
     ].filter(Boolean).join(" · ")
     return {
       id: session.id,
-      label: depth ? `${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.id}` : `${number}. ${session.title || session.id}`,
+      label: depth
+        ? `${"  ".repeat(depth - 1)}↳ ${number === undefined ? "" : `${number} `}${name}`
+        : number === undefined ? name : `${number}. ${name}`,
+      name,
       tag: depth ? "subagent" : session.archived ? "archived" : "",
       detail,
       current: session.id === current,
