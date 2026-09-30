@@ -10,7 +10,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, headlessTurn, hyaTui, test, textStep, toolStep } from "./hya"
+import { expect, hangStep, headlessTurn, hyaTui, showStatusLine, statusSessionId, test, textStep, toolStep } from "./hya"
 import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
@@ -372,7 +372,8 @@ test.describe("asks of other sessions", () => {
       await term.press("F4")
       await term.waitForText("asked by hya-main", 20_000)
       await term.waitForText("│ $ echo from-elsewhere")
-      await term.waitForText(`hya · ${other}`)
+      if (!viewport) await showStatusLine(term)
+      expect(await statusSessionId(term)).toBe(other)
       await term.press("1")
       await term.waitForText("Elsewhere done.", 20_000)
       await promptGone(term)

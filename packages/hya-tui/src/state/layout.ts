@@ -5,15 +5,23 @@ export type SidebarMode = "auto" | "open" | "closed"
 /** Terminal widths (columns) at which the layout changes. */
 export const layoutBreakpoints = { sidebar: 110, projectsSidebar: 150 } as const
 
+/**
+ * The right sidebar (Sessions, Todos, Context) needs `layoutBreakpoints.sidebar`
+ * columns: below it it is always hidden and the top status line carries the
+ * Context fields (state/contextFields.ts). At or above it, `closed` hides it.
+ */
 export function sidebarVisible(mode: SidebarMode, columns: number): boolean {
-  if (mode === "auto") return columns >= layoutBreakpoints.sidebar
-  return mode === "open"
+  return columns >= layoutBreakpoints.sidebar && mode !== "closed"
 }
 
-/** The pinned mode after a toggle: the opposite of what is visible now. */
+/** The mode after a toggle: hide what is visible, show (`auto`) what is not; below the breakpoint nothing changes. */
 export function toggledSidebar(mode: SidebarMode, columns: number): SidebarMode {
-  return sidebarVisible(mode, columns) ? "closed" : "open"
+  if (columns < layoutBreakpoints.sidebar) return mode
+  return sidebarVisible(mode, columns) ? "closed" : "auto"
 }
+
+/** Status line when the sidebar cannot be shown at the current width. */
+export const sidebarTooNarrowNotice = `Sidebar needs ${layoutBreakpoints.sidebar}+ columns · the top status line shows its Context`
 
 /**
  * The left Projects sidebar (docs/tui.md "Projects"): shown automatically

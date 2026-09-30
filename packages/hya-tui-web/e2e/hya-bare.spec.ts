@@ -12,7 +12,7 @@ import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
 import { join } from "node:path"
 import { Tui } from "./harness"
-import { daemon, daemonStatus, expect, hyaBin, launchTest as test, type Workspace } from "./hya"
+import { daemon, daemonStatus, expect, hyaBin, launchTest as test, showStatusLine, statusSessionPattern, type Workspace } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -75,6 +75,7 @@ test.describe("bare hya", () => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Connected to hya", 60_000)
+    await showStatusLine(term)
     await term.waitForText(`WebUI http://127.0.0.1:${port}`)
     // A session created in the terminal (titled after its first prompt)…
     await prompt(term, "hello from the terminal")
@@ -89,8 +90,7 @@ test.describe("bare hya", () => {
     // A plain tab reopens the terminal's conversation, so it may show
     // `Resumed …` rather than a generic connection message.
     await web.waitForText("hello from the terminal", 30_000)
-    // The header now keeps the current effort visible and may clip the server
-    // URL; `/status` is the unambiguous server contract.
+    // `/status` is the unambiguous server contract.
     await prompt(web, "/status")
     await web.waitForText(backend.replace(/\/$/, ""))
     await prompt(web, "/sessions")
@@ -107,7 +107,8 @@ test.describe("bare hya", () => {
     await prompt(web, "hello from the web tab")
     await web.waitForText(/^Ready/m, 20_000)
     // Titled after its first prompt (the automatic title arrives a moment later).
-    await web.waitForText(/hya · hello from the web tab/, 20_000)
+    await showStatusLine(web)
+    await web.waitForText(/^mode [^·]+ · hello from the web tab · /m, 20_000)
     await prompt(term, "/sessions")
     // The sidebar may already list the web tab's session: wait for the picker
     // itself, so the Esc below closes it instead of reaching the composer.
@@ -118,9 +119,9 @@ test.describe("bare hya", () => {
     // Closed before the resize (the TUI reads a lone Esc only after a short wait).
     await expect.poll(async () => (await term.text()).includes("Esc closes")).toBe(false)
 
-    // About 80 columns: the sidebar hides and the status bar still fits the WebUI address.
+    // About 80 columns: the sidebar hides and the status line may wrap the WebUI address.
     await term.resize(690, 640)
-    await term.waitForText(new RegExp(`^mode manual · .* · WebUI http://127\\.0\\.0\\.1:${port}\\b`, "m"))
+    await expect.poll(async () => (await term.lines()).slice(0, 2).join(" ")).toMatch(new RegExp(`mode manual · .*WebUI http:\/\/127\\.0\\.0\\.1:${port}\\b`))
     await term.attach(testInfo, "terminal-narrow")
   })
 
@@ -142,6 +143,7 @@ test.describe("bare hya", () => {
   test("/exit stops the WebUI host and its tabs' TUIs, leaves the daemon running, and exits 0", async ({ tui, workspace, page }) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
+    await showStatusLine(term)
     await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
     const backend = await backendUrl(term)
     const webPage = await page.context().newPage()
@@ -180,6 +182,7 @@ test.describe("bare hya", () => {
     test(`${signal} to hya stops the TUI, the WebUI host, and its tabs' TUIs; the daemon keeps running`, async ({ tui, workspace, page }) => {
       const port = await freePort()
       const term = await tui(...bareHya(workspace, port))
+      await showStatusLine(term)
       await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
       const backend = await backendUrl(term)
       const webPage = await page.context().newPage()
@@ -208,7 +211,7 @@ test.describe("bare hya", () => {
   test("after `hya serve stop` the terminal TUI and the WebUI tab stay stopped; /reconnect in one starts the next, the other attaches", async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
-    await term.waitForText(`WebUI http://127.0.0.1:${port}`, 60_000)
+    await term.waitForText("Connected to hya", 60_000)
     const before = (await daemonStatus(workspace))!.pid
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)

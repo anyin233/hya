@@ -2,11 +2,11 @@
 // "Session titles"): a `New session` row first, then the tree with a
 // relative update time and agent/model, opening another session, renaming
 // (F2) and deleting (Ctrl+D, with a confirmation line) a row, and a title
-// set with `/rename` showing live in the header, the sidebar, and the
+// (the top status line replaces the old header and status rows)
 // picker (`SessionUpdated.title`, no extra refresh needed).
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, test, textStep } from "./hya"
+import { expect, hyaTui, showStatusLine, statusSessionId, statusSessionPattern, test, textStep } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 
@@ -20,31 +20,28 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** Create a session with `/new` and return its id, read from the header once it differs from `previousId`. */
+/** Create a session with `/new` and return its id from the top status line. */
 async function newSession(term: Tui, previousId?: string): Promise<string> {
   await prompt(term, "/new")
   await expect.poll(async () => {
-    const match = /hya · (hysec_\w+)/.exec(await term.text())
+    const match = statusSessionPattern.exec(await term.text())
     return match?.[1] && match[1] !== previousId ? match[1] : undefined
   }, { timeout: 20_000 }).not.toBeUndefined()
-  return /hya · (hysec_\w+)/.exec(await term.text())![1]!
+  return statusSessionPattern.exec(await term.text())![1]!
 }
 
 /** The session the TUI opened on connect (a plain start creates one). */
 async function connected(term: Tui): Promise<string> {
   await term.waitForText("Connected to hya")
-  await term.waitForText(/hya · hysec_\w+/)
-  return /hya · (hysec_\w+)/.exec(await term.text())![1]!
+  await showStatusLine(term)
+  return statusSessionId(term)
 }
 
-/**
- * `/rename` the open session, so it is kept when the TUI moves on (an empty
- * session this TUI created is deleted when it is left, docs/tui.md
- * "Sessions on start and exit").
- */
+
+/** `/rename` the open session, so it is kept when the TUI moves on. */
 async function keep(term: Tui, title: string): Promise<void> {
   await prompt(term, `/rename ${title}`)
-  await term.waitForText(new RegExp(`hya · ${title} ·`))
+  await term.waitForText(new RegExp(`mode [^·]+ · ${title} ·`))
 }
 
 async function at(term: Tui, needle: string) {
@@ -78,7 +75,7 @@ test("lists a New session row first, then the tree with the open session marked;
   await term.type("First sess")
   await term.press("ArrowUp")
   await term.press("Enter")
-  await term.waitForText(/hya · First session/)
+  await term.waitForText(/mode [^·]+ · First session/)
 })
 
 test("an empty session this TUI created is deleted when it opens another; a used one is kept", async ({ tui, backend }) => {
@@ -112,7 +109,7 @@ test("F2 renames the highlighted row; the title shows live in the header, the si
   await term.waitForText("Renamed to Fix the flaky test")
 
   // Header and sidebar (title over the raw id).
-  await term.waitForText(/hya · Fix the flaky test ·/)
+  await term.waitForText(/mode [^·]+ · Fix the flaky test ·/)
   await at(term, "Fix the flaky test")
 
   // A rename reopens the picker (so browsing continues) already showing the new title.
@@ -144,7 +141,7 @@ test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes an
   await term.press("Enter")
   await term.waitForText(`Deleted session ${second}`)
   // The open session was deleted: the other top-level session opens instead.
-  await term.waitForText(/hya · First session/)
+  await term.waitForText(/mode [^·]+ · First session/)
 
   await prompt(term, "/sessions")
   await term.waitForText("F2 rename · Ctrl+D del")

@@ -8,7 +8,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, expect, hyaTui, test, textStep, tuiMain } from "./hya"
+import { api, expect, hyaTui, showStatusLine, statusSessionPattern, test, textStep, tuiMain } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 const wide = { width: 1500, height: 640 }
@@ -130,12 +130,13 @@ test.describe("Project view", () => {
   test("`t` starts a temporary session from the Project view; /new --temp does the same", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
+    await showStatusLine(term)
     await prompt(term, "/project")
     await term.waitForText("Projects")
     await term.press("t")
-    await term.waitForText(/hya · hysec_\w+/, 20_000)
+    await term.waitForText(statusSessionPattern, 20_000)
     await prompt(term, "/new --temp")
-    await term.waitForText(/hya · hysec_\w+/, 20_000)
+    await term.waitForText(statusSessionPattern, 20_000)
   })
 })
 
@@ -150,12 +151,13 @@ test.describe("--remote start", () => {
     await term.waitForText("No projects yet · n creates one")
   })
 
-  test("--server-label names the remote in the header and /status instead of the local bridge URL", async ({ backend, tui }) => {
+  test("--server-label names the remote in the status line and /status instead of the local bridge URL", async ({ backend, tui }) => {
     const label = "remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4"
     const term = await tui(["bun", tuiMain, "--server", backend.url, "--remote", "--server-label", label])
     await term.waitForText("No projects yet · n creates one")
     await esc(term, "No projects yet")
-    await term.waitForText(`hya · no session · ${label}`)
+    await showStatusLine(term)
+    await term.waitForText(`mode manual · none · ${label}`)
     const host = backend.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
     expect(await term.find(host), "the loopback URL is not the shown server").toBeNull()
     await prompt(term, "/status")
@@ -169,10 +171,11 @@ test.describe("/sessions is scoped to the active Project", () => {
   test("the picker shows only the active Project's sessions and temporary ones, until F3 shows every Project", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wide })
     await term.waitForText("Connected to hya")
+    await showStatusLine(term)
     await prompt(term, "hello")
     await term.waitForText("a", 20_000)
-    await term.waitForText(/hya · hysec_\w+/)
-    const firstId = /hya · (hysec_\w+)/.exec(await term.text())![1]!
+    await term.waitForText(statusSessionPattern)
+    const firstId = statusSessionPattern.exec(await term.text())![1]!
 
     // A second Project with its own session.
     const otherRoot = await mkdtemp(join(tmpdir(), "hya-e2e-other-"))

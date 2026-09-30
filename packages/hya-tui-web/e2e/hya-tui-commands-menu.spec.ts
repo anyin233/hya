@@ -10,7 +10,7 @@
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hyaTui, test, textStep } from "./hya"
+import { expect, hyaTui, showStatusLine, test, textStep } from "./hya"
 
 const accent = "#73c8e8"
 
@@ -276,7 +276,8 @@ test.describe("/rename", () => {
     await term.type("/rename Bug fix session")
     await term.press("Enter")
     await term.waitForText("Renamed to Bug fix session")
-    await term.waitForText("hya · Bug fix session ·")
+    await showStatusLine(term)
+    await term.waitForText(/^mode [^·]+ · Bug fix session · /m)
     await term.press("Control+b")
     await term.waitForText("Bug fix session")
   })

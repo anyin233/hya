@@ -6,7 +6,7 @@ import { createController } from "../src/app/controller"
 import { HyaClient } from "../src/client"
 import { createAppStore } from "../src/state/store"
 
-test("initial workspace renders before any backend data arrives", async () => {
+async function firstFrame(width: number): Promise<string> {
   const store = createAppStore()
   const client = new HyaClient("http://127.0.0.1:1", "/workspace")
   const controller = createController({ client, store, directory: "/workspace" })
@@ -14,11 +14,23 @@ test("initial workspace renders before any backend data arrives", async () => {
     <AppContext.Provider value={{ store, controller, server: client.baseUrl, ui: controller.ui }}>
       <App />
     </AppContext.Provider>
-  ), { width: 156, height: 41 })
+  ), { width, height: 41 })
   try {
     await setup.renderOnce()
-    expect(setup.captureCharFrame()).toContain("hya · connecting")
+    return setup.captureCharFrame()
   } finally {
     setup.renderer.destroy()
   }
+}
+
+test("initial workspace renders before any backend data arrives", async () => {
+  // Wide: the Context box carries the session context; no top status line.
+  const wide = await firstFrame(156)
+  expect(wide).toContain("─Context─")
+  expect(wide).toContain("Session  ")
+  expect(wide).not.toContain("mode manual")
+  // Narrow: no sidebar; the top status line carries the same fields.
+  const narrow = await firstFrame(90)
+  expect(narrow).toContain("mode manual · connecting…")
+  expect(narrow).not.toContain("Context")
 })

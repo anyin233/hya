@@ -2,7 +2,7 @@
 // narrow widths, including focus and viewport behavior. See docs/tui.md "Layout".
 
 import type { Tui } from "./harness"
-import { expect, hyaTui, test, textStep, toolStep } from "./hya"
+import { expect, hyaTui, statusLinePattern, statusSessionId, test, textStep, toolStep } from "./hya"
 
 const colors = { bg: "#11151b", panel: "#1c2530", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
@@ -24,7 +24,7 @@ test.describe("layout", () => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
     await term.waitForText("Connected to hya")
     await term.waitForText("Projects")
-    const initialConversation = (await term.find("hya ·"))!
+    const initialConversation = (await term.find("No messages yet"))!
     const initialSessions = (await term.find("Sessions"))!
     await term.press("Alt+ArrowLeft")
     await term.waitForText("pane-2 projects")
@@ -36,11 +36,10 @@ test.describe("layout", () => {
     await term.waitForText("pane-2 projects")
     await prompt(term, "/layout resize +5")
     await term.waitForText("pane-2 projects")
-    await expect.poll(async () => (await term.find("hya ·"))!.col).toBeGreaterThan(initialConversation.col)
+    await expect.poll(async () => (await term.find("No messages yet"))!.col).toBeGreaterThan(initialConversation.col)
     await prompt(term, "/layout focus pane-3")
     await prompt(term, "/layout assign jobs")
-    await term.waitForText("jobs · pane-3")
-    expect((await term.find("jobs · pane-3"))!.col).toBeGreaterThan(initialSessions.col - 2)
+    await term.waitForText(/Layout · 5 panes · pane-3 jobs/)
     await expect.poll(() => term.find("Sessions")).toBeNull()
     await prompt(term, "/layout focus pane-2")
     await prompt(term, "/layout assign jobs")
@@ -65,7 +64,7 @@ test.describe("layout", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "/layout split vertical jobs")
     await term.waitForText("▸ jobs · pane-6")
-    const conversation = (await term.find("hya ·"))!
+    const conversation = (await term.find("No messages yet"))!
     const jobs = (await term.find("jobs · pane-6"))!
     expect(jobs.col).toBeGreaterThan(conversation.col)
     await term.press("Alt+ArrowLeft")
@@ -75,12 +74,12 @@ test.describe("layout", () => {
     expect((await term.find("Todos"))!.col).toBeLessThan(jobs.col)
     await prompt(term, "/layout assign conversation")
     await term.waitForText("pane-7 conversation")
-    expect((await term.find("hya ·"))!.row).toBeGreaterThan(conversation.row)
+    expect((await term.find("No messages yet"))!.row).toBeGreaterThan(conversation.row)
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
     term = await tui(hyaTui(backend))
-    await term.waitForText("hya ·")
+    await term.waitForText("layout reply marker l1")
     await term.waitForText("jobs · pane-6")
     await term.waitForText("Resumed ")
     await prompt(term, "/layout reset")
@@ -108,10 +107,7 @@ test.describe("layout", () => {
     await term.waitForText("fake/model")
     await term.waitForText(/▸ 1\. /)
 
-    // Main column: header on row 0, transcript on the base background, no three-panel titles.
-    const header = (await term.find("hya · "))!
-    expect(header.row).toBe(0)
-    expect(header.col).toBeLessThan(sessions.col)
+    // Main column transcript remains on the base background; the sidebar is on the right.
     const reply = (await term.find("layout reply marker l1"))!
     expect(reply.col).toBeLessThan(sessions.col)
     expect((await term.cell(reply.row, reply.col))?.bg).toBe(colors.bg)
@@ -128,30 +124,33 @@ test.describe("layout", () => {
     await term.waitForText("Sidebar shown · Ctrl+B toggles")
   })
 
-  test("about 80 columns hides the sidebar until Ctrl+B or /sidebar opens it", async ({ tui, backend }, testInfo) => {
-    const term = await tui(hyaTui(backend), { viewport: narrow })
+  test("sidebar and top status line are mutually exclusive across resize", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
-    const { cols } = await term.size()
-    expect(cols).toBeGreaterThanOrEqual(78)
-    expect(cols).toBeLessThanOrEqual(84)
-    await prompt(term, "hello narrow")
-    await term.waitForText("layout reply marker l1", 20_000)
-    expect(await sidebarShown(term)).toBe(false)
-    await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
-    // Every row fits: no line is wider than the terminal.
-    for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
-    await term.attach(testInfo, "narrow-closed")
+    await term.waitForText("Context")
+    expect((await term.lines()).some((line) => line.startsWith("mode "))).toBe(false)
+    await term.attach(testInfo, "wide")
+
+    await term.resize(narrow.width, narrow.height)
+    await term.waitForText(statusLinePattern)
+    const sessionId = await statusSessionId(term)
+    const session = (await term.find(sessionId))!
+    expect((await term.cell(session.row, session.col))?.fg).toBe(colors.accent)
+    expect(session.row).toBe(0)
+    await term.attach(testInfo, "narrow")
 
     await term.press("Control+b")
-    await expect.poll(() => sidebarShown(term)).toBe(true)
-    const sessions = (await term.find("Sessions"))!
-    expect(sessions.col).toBeGreaterThan(cols / 2)
-    await term.waitForText("layout reply marker l1")
-    await term.attach(testInfo, "narrow-open")
+    await term.waitForText("Sidebar needs 110+ columns")
+    expect(await term.find("Sessions")).toBeNull()
 
-    await prompt(term, "/sidebar off")
-    await expect.poll(() => sidebarShown(term)).toBe(false)
-    await term.waitForText("Sidebar hidden · Ctrl+B toggles")
+    await term.resize(1100, 640)
+    await term.waitForText("Context")
+    await expect.poll(async () => (await term.lines()).some((line) => line.startsWith("mode "))).toBe(false)
+
+    await term.press("Control+b")
+    await term.waitForText(statusLinePattern)
+    expect(await term.find("Sessions")).toBeNull()
+    expect((await term.find("mode "))!.row).toBe(0)
   })
 })
 

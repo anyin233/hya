@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { daemonStatus, expect, launchTest as test, selfLaunch, textStep, tuiMain } from "./hya"
+import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusLine, statusSessionId, statusSessionPattern, textStep, tuiMain } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -69,8 +69,8 @@ test.describe("one-command launch", () => {
   test("starts the database's daemon, answers a prompt end to end; /exit leaves the daemon running and the next TUI uses it", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
-    // No --server: the header shows the daemon's local URL.
-    await term.waitForText(/http:\/\/127\.0\.0\.1:\d+/)
+    await showStatusLine(term)
+    await term.waitForText(/127\.0\.0\.1:\d+/)
     await prompt(term, "hello")
     await term.waitForText("Launched and replying.", 20_000)
     await term.waitForText(/^Ready/m)
@@ -96,8 +96,9 @@ test.describe("one-command launch", () => {
     // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Connected to hya", 30_000)
-    // Created on connect: the header names it before anything is typed.
-    await first.waitForText(/hya · hysec_\w+ · hya-main/)
+    // Created on connect: the top status line names it before anything is typed.
+    await showStatusLine(first)
+    await first.waitForText(statusSessionPattern)
     await first.waitForText("No messages yet")
     await prompt(first, "remember this")
     await first.waitForText("Launched and replying.", 20_000)
@@ -110,7 +111,8 @@ test.describe("one-command launch", () => {
     await fresh.waitForText("remember this", 30_000)
     await prompt(fresh, "/new")
     await fresh.waitForText("No messages yet")
-    const empty = /hya · (hysec_\w+)/.exec(await fresh.text())![1]!
+    await showStatusLine(fresh)
+    const empty = await statusSessionId(fresh)
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     await prompt(fresh, "/exit")
@@ -130,7 +132,8 @@ test.describe("one-command launch", () => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Connected to hya", 30_000)
     await term.waitForText("No messages yet")
-    const empty = /hya · (hysec_\w+)/.exec(await term.text())![1]!
+    await showStatusLine(term)
+    const empty = await statusSessionId(term)
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     // No exit handler runs: only its closed session stream tells the daemon.

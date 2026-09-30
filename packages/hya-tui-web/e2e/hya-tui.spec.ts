@@ -1,11 +1,11 @@
-import { expect, hyaTui, test } from "./hya"
+import { expect, hyaTui, showStatusLine, test } from "./hya"
 
 test.describe("hya TUI in the browser", () => {
   test("connects to the backend and lays out the main column and the sidebar", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText(/Connected to hya \d+\.\d+\.\d+/)
-    // One main column (transcript, status, composer, footer) and the sidebar boxes;
-    // the old Chat and Pending panels are gone.
+    // The default viewport shows the sidebar boxes; the top status line is hidden.
+    // The old Chat and Pending panels are gone.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
     await term.waitForText("No messages yet. Type a prompt below.")
     await term.waitForText("Enter a prompt · /new creates a session · /sessions history")
@@ -29,8 +29,8 @@ test.describe("hya TUI in the browser", () => {
     expect(text).not.toContain("user · stop")
     // The offline model echoes the prompt back, so it shows up in both messages.
     expect(text.match(/hello from the browser/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
-    // The header names the session: its id, or the generated title once the backend's title task ran (the echo model echoes the prompt).
-    expect(text).toMatch(/hya · (hysec_\w+|hello from the browser) · hya-main hya\/offline/)
+    await showStatusLine(term)
+    expect(await term.text()).toMatch(/mode [^·]+ · (hysec_\w+|hello from the browser) · hya-main · offline:default/)
   })
 
   test("Tab completes slash commands", async ({ tui, backend }) => {
