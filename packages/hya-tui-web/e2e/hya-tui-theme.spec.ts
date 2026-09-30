@@ -39,7 +39,7 @@ test.describe("/theme", () => {
     const prefs = join(prefsDir, "prefs", "tui.json")
     const env = { HYA_TUI_CONFIG: prefs }
     let term = await tui(hyaTui(backend), { env })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await screenColors(term)).toEqual({ bg: hya.bg, header: hya.accent })
 
     await prompt(term, "/theme")
@@ -74,7 +74,7 @@ test.describe("/theme", () => {
 
     // A new TUI reads the file and starts in the light theme; the picker marks it.
     term = await tui(hyaTui(backend), { env })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await expect.poll(async () => (await screenColors(term)).bg).toBe(light.bg)
     await prompt(term, "/theme")
     await term.waitForText(/▸ ● Light\s+\[light\]/)
@@ -86,7 +86,7 @@ test.describe("/theme", () => {
   test("at about 80 columns the light theme covers the screen and the picker fits", async ({ tui, backend }) => {
     const env = { HYA_TUI_CONFIG: join(prefsDir, "tui.json") }
     const term = await tui(hyaTui(backend), { env, viewport: { width: 690, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThanOrEqual(84)
     await prompt(term, "/theme")
     await term.waitForText(/Light\s+\[light\]/)
@@ -110,7 +110,7 @@ test.describe("/theme over a transcript", () => {
 
   test("switching repaints existing messages: the user block, Markdown text, and highlighted code", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: join(prefsDir, "tui.json") } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "show me code")
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/theme")

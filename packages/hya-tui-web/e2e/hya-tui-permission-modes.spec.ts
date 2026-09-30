@@ -28,7 +28,7 @@ async function at(term: Tui, needle: string) {
 
 /** Create a session with `/new` and wait until it is open. */
 async function newSession(term: Tui): Promise<void> {
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await prompt(term, "/new")
   await term.waitForText(/Created hysec_/)
 }
@@ -241,14 +241,14 @@ test.describe("before a session exists", () => {
   test("the chosen mode is shown and applied right after the session is created", async ({ tui, backend }) => {
     // --continue with no earlier session: none is open (a plain start creates one).
     const term = await tui([...hyaTui(backend), "--continue"])
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await term.waitForText("Permission mode → yolo · applies when the session is created")
     await term.waitForText("mode ⚠ yolo")
     await prompt(term, "hello")
-    await term.waitForText(/^Ready/m, 20_000)
+    await term.waitForIdle(20_000)
     await expect.poll(() => backendMode(backend)).toBe("yolo")
     await term.waitForText("Permission mode → yolo")
     await term.waitForText("mode ⚠ yolo")

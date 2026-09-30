@@ -79,14 +79,14 @@ test.describe("two frontends, one database", () => {
 
   test("a second TUI uses the first one's daemon; both follow the same session live", async ({ tui, workspace, page }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
-    await first.waitForText("Connected to hya", 30_000)
+    await first.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(first)
     const pid = startedPid(one.text)
 
     const [command] = selfLaunch(workspace)
     const { term: second, host } = await secondTab(page, command, workspace.dir, workspace.env)
     try {
-      await second.waitForText("Connected to hya", 30_000)
+      await second.waitForText("Message, !shell, or @file · / commands", 30_000)
       const two = await status(second)
       // Same server, not a second writer.
       expect(two.server).toBe(one.server)
@@ -121,13 +121,13 @@ test.describe("two frontends, one database", () => {
 
   test("bare hya uses the running daemon of its database and leaves it running on quit", async ({ tui, workspace, page }, testInfo) => {
     const owner = await tui(...selfLaunch(workspace))
-    await owner.waitForText("Connected to hya", 30_000)
+    await owner.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(owner)
     const pid = startedPid(one.text)
 
     const { term: bare, host } = await secondTab(page, [hyaBin, "--port", "0"], workspace.dir, bareHyaEnv(workspace))
     try {
-      await bare.waitForText("Connected to hya", 60_000)
+      await bare.waitForText("Message, !shell, or @file · / commands", 60_000)
       const two = await status(bare)
       expect(two.server).toBe(one.server)
       expect(two.text).toMatch(new RegExp(`Backend\\s+daemon · pid ${pid} · db /`))
@@ -150,7 +150,7 @@ test.describe("two frontends, one database", () => {
   test("an empty session shown by two TUIs stays while either shows it; the daemon drops it after the last one quits", async ({ tui, workspace, page }) => {
     test.setTimeout(90_000)
     const creator = await tui(...selfLaunch(workspace))
-    await creator.waitForText("Connected to hya", 30_000)
+    await creator.waitForText("Message, !shell, or @file · / commands", 30_000)
     await creator.waitForText("No messages yet")
     const session = /hya · (hysec_\w+)/.exec(await creator.text())![1]!
     const server = (await status(creator)).server

@@ -43,7 +43,7 @@ async function keys(term: Tui, sequence: string): Promise<void> {
 test("/vim: insert and normal mode, motions, dd, undo, the status bar indicator, and persistence", async ({ tui, backend }, testInfo) => {
   const prefs = join(dir, "tui.json")
   let term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   expect(await statusBar(term)).not.toContain("INSERT")
 
   await term.type("/vim")
@@ -117,7 +117,7 @@ test("at about 80 columns the vim indicator and the permission mode stay on the 
   const prefs = join(dir, "tui.json")
   await writeFile(prefs, JSON.stringify({ vim: true }))
   const term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs }, viewport: { width: 690, height: 640 } })
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   expect((await term.size()).cols).toBeLessThanOrEqual(84)
   await expect.poll(() => statusBar(term)).toMatch(/^-- INSERT -- · mode manual/)
   await term.press("Escape")
@@ -139,7 +139,7 @@ test.describe("Esc precedence with vim on", () => {
     const prefs = join(dir, "tui.json")
     await writeFile(prefs, JSON.stringify({ vim: true }))
     const term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("hang please")
     await term.press("Enter")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)

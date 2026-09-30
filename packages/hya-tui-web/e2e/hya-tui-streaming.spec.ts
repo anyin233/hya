@@ -11,9 +11,6 @@ function count(text: string, needle: string): number {
   return text.split(needle).length - 1
 }
 
-/** The status line reads exactly `Ready` (the sidebar may share its screen row). */
-const readyLine = /^Ready(?! ·)/m
-
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
   await term.press("Enter")
@@ -25,7 +22,7 @@ test.describe("streamed reply", () => {
 
   test("shows a slow chunked reply while it streams, then exactly once", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "stream please")
     // Partial text: the first chunks are on screen before the reply is complete.
     await term.waitForText("alpha br", 20_000)
@@ -37,7 +34,7 @@ test.describe("streamed reply", () => {
     await term.attach(testInfo, "streaming-screen")
     await term.waitForText(reply)
     await term.waitForText("● hya-main · fake/model")
-    await term.waitForText(readyLine)
+    await term.waitForIdle()
     const final = await term.text()
     expect(count(final, reply)).toBe(1)
     expect(count(final, "● hya-main · fake/model")).toBe(1)
@@ -50,7 +47,7 @@ test.describe("streamed Markdown heading", () => {
 
   test("keeps a heading styled without exposing markers between streamed chunks", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "show a heading")
 
     let rawHeadingFrame = ""
@@ -62,7 +59,7 @@ test.describe("streamed Markdown heading", () => {
       if (heading && (await term.cell(heading.row, heading.col))?.fg !== "#73c8e8") unstyledHeadingFrame = screen
       return screen.includes("After heading.")
     }, { intervals: [10], timeout: 20_000 }).toBe(true)
-    await term.waitForText(readyLine)
+    await term.waitForIdle()
     await term.attach(testInfo, "settled-heading")
     expect(rawHeadingFrame, "the streamed heading briefly exposed its Markdown markers").toBe("")
     expect(unstyledHeadingFrame, "the streamed heading briefly lost its accent color").toBe("")
@@ -74,7 +71,7 @@ test.describe("queued prompt", () => {
 
   test("queues a prompt during a running turn and sends it after the turn ends", async ({ tui, backend, fakeModel }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "first prompt")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
     await prompt(term, "second prompt")
@@ -92,7 +89,7 @@ test.describe("queued prompt", () => {
 
     fakeModel!.release()
     await term.waitForText("second reply marker q2", 20_000)
-    await term.waitForText(readyLine)
+    await term.waitForIdle()
     const text = await term.text()
     expect(text).not.toContain("queued")
     expect(count(text, "second prompt")).toBe(1)
@@ -107,7 +104,7 @@ test.describe("failed turn", () => {
 
   test("shows the provider error in the status line and the transcript", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "please fail")
     await term.waitForText("Error · provider_error: http status 400", 20_000)
     // The failed assistant message carries the error line under its header.

@@ -2,12 +2,14 @@ import { expect, hyaTui, test } from "./hya"
 
 test("Sessions owns typing, editing, paste, and Enter while conversation draft survives", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("preserved draft")
   await term.press("Control+x")
   await term.type("/layout focus pane-3")
   await term.press("Enter")
-  await term.waitForText("pane-3 sessions")
+  await expect.poll(() => term.find("Commands")).toBeNull()
+  const sessions = (await term.find("Sessions"))!
+  await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#73c8e8")
   await term.type("leaked text")
   await term.type("/")
   await term.waitForText("Commands")
@@ -24,7 +26,7 @@ test("Sessions owns typing, editing, paste, and Enter while conversation draft s
   await term.press("Escape")
   await expect.poll(() => term.find("Commands")).toBeNull()
   await term.press("Alt+ArrowLeft")
-  await term.waitForText("pane-1 conversation")
+  await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#405366")
   await term.type(" continues")
   await term.waitForText("preserved draft continues")
   expect(await term.text()).not.toContain("leaked")

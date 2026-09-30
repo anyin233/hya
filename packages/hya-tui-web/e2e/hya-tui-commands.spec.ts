@@ -4,12 +4,10 @@ import { expect, hyaTui, test } from "./hya"
 // so framework or module changes in packages/hya-tui cannot drift silently.
 
 test.describe("hya TUI commands and look", () => {
-  test("keeps the panel colors and the header in the accent color", async ({ tui, backend }) => {
+  test("keeps the panel colors and leaves the conversation free of headings", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
-    const header = (await term.find("hya · "))!
-    expect(header.row).toBe(0)
-    expect((await term.cell(header.row, header.col))?.fg).toBe("#73c8e8")
+    await term.waitForText("Message, !shell, or @file · / commands")
+    expect(await term.find("hya · ")).toBeNull()
 
     const sessions = (await term.find("Sessions"))!
     const corner = await term.cell(sessions.row, sessions.col - 1)
@@ -20,16 +18,14 @@ test.describe("hya TUI commands and look", () => {
     const transcript = (await term.find("No messages yet"))!
     expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
 
-    const status = (await term.find("Connected to hya"))!
-    expect((await term.cell(status.row, status.col))?.fg).toBe("#9caab9")
     const composer = (await term.find("Message, !shell, or @file · / commands"))!
-    expect(composer.row).toBeGreaterThan(status.row)
-    expect(status.row).toBe(header.row + 2)
+    expect(composer.row).toBeGreaterThan(transcript.row)
+    expect(transcript.row).toBe(1)
   })
 
   test("/help opens the help overlay; /models and /api switch the main panel", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
 
     await term.type("/help")
     await term.press("Enter")
@@ -54,7 +50,7 @@ test.describe("hya TUI commands and look", () => {
 
   test("a prompt sent while /status shows goes back to the transcript and shows its reply", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/status")
     await term.press("Enter")
     await term.waitForText(/Server\s+http:\/\/127\.0\.0\.1:\d+/)
@@ -68,7 +64,7 @@ test.describe("hya TUI commands and look", () => {
 
   test("narrow terminals hide the sidebar until Ctrl+B shows it", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeLessThan(110)
     expect(cols).toBeGreaterThanOrEqual(58)
@@ -79,10 +75,10 @@ test.describe("hya TUI commands and look", () => {
 
   test("Ctrl+C twice quits the TUI", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     // The renderer no longer quits on the first Ctrl+C (see hya-tui-composer.spec.ts).
     await term.press("Control+c")
-    await term.waitForText("Press Ctrl+C again to quit")
+    expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
     await term.press("Control+c")
     expect(await term.waitForExit()).toBe(0)
   })

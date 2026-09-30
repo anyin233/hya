@@ -15,7 +15,7 @@ import { expect, hyaTui, test, textStep } from "./hya"
 const accent = "#73c8e8"
 
 async function connected(term: Tui): Promise<void> {
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
 }
 
 /** Rows of the bordered box titled `title` (the topmost box whose border shows that title), trimmed. */
@@ -68,13 +68,6 @@ async function writeSkill(dir: string, name: string, description: string, body: 
  * state to poll for (it can already be gone by the first check under load),
  * so wait for the actual outcome instead.
  */
-async function createSessionViaMenu(term: Tui): Promise<void> {
-  await term.type("/new")
-  await term.waitForText("▸ /new")
-  await term.press("Enter")
-  await term.waitForText(/^Created/m)
-}
-
 test.describe("command menu", () => {
   for (const width of [1100, 700]) {
     test(`Backspace closes an emptied command pane and preserves the message draft (${width}px)`, async ({ tui, backend }) => {
@@ -321,27 +314,26 @@ test.describe("/compact", () => {
     await connected(term)
     await term.type("hi")
     await term.press("Enter")
-    await term.waitForText(/^Ready/m, 20_000)
+    await term.waitForIdle(20_000)
     await term.type("/compact")
     await term.waitForText("▸ /compact")
     await term.press("Enter")
     await term.attach(testInfo, "compacting")
     // A manual compaction is always `local_summarizer`, shown in words (docs/protocol/README.md "Compaction").
-    await term.waitForText("Compacted · local summary", 20_000)
+    await term.waitForText(/context compacted.*local summary/, 20_000)
   })
 })
 
 test.describe("/rename", () => {
-  test("updates the header and sidebar title", async ({ tui, backend }) => {
+  test("updates the status view and sidebar title", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
-    await createSessionViaMenu(term)
     await term.type("/rename Bug fix session")
     await term.press("Enter")
-    await term.waitForText("Renamed to Bug fix session")
-    await term.waitForText("hya · Bug fix session ·")
-    await term.press("Control+b")
     await term.waitForText("Bug fix session")
+    await term.type("/status")
+    await term.press("Enter")
+    await term.waitForText(/Session\s+Bug fix session/)
   })
 })
 
@@ -349,7 +341,6 @@ test.describe("/status", () => {
   test("shows server, version, directory, session, agent, model, and permission mode", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
-    await createSessionViaMenu(term)
     await term.type("/status")
     await term.waitForText("▸ /status")
     await term.press("Enter")

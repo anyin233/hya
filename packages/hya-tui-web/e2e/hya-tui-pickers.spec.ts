@@ -14,7 +14,7 @@ async function prompt(term: Tui, text: string): Promise<void> {
 }
 
 async function newSession(term: Tui): Promise<void> {
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await prompt(term, "/new")
   await term.waitForText(/Created hysec_/)
 }
@@ -49,7 +49,7 @@ test.describe("/model picker", () => {
   test("before a session exists the choice is remembered and applied to the next session", async ({ tui, backend }) => {
     // --continue with no earlier session: none is open (a plain start creates one).
     const term = await tui([...hyaTui(backend), "--continue"])
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/model")
     await term.waitForText("Model")
     await term.press("ArrowDown")

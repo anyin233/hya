@@ -31,13 +31,13 @@ test.describe("Projects sidebar", () => {
 
   test("hidden at the default viewport (both sidebars would not fit next to the chat column)", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     expect(await term.find("Projects")).toBeNull()
   })
 
   test("a wide terminal shows every Project, the active one and a session count; Enter switches", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: wide })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
     await term.waitForText("first reply", 20_000)
     await term.waitForText("Projects")
@@ -69,7 +69,7 @@ test.describe("Projects sidebar", () => {
 
   test("about 80 columns hides it even when the terminal is otherwise wide enough for the right sidebar", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeLessThanOrEqual(84)
     expect(await term.find("Projects")).toBeNull()
@@ -87,7 +87,7 @@ test.describe("Project view", () => {
 
   test("/project lists, creates with two roots (visible in the sidebar live), edits roots, and refuses to delete a Project in use", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: wide })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/project")
     await term.waitForText("Projects")
     await term.waitForText("Up/Down move · Enter opens/switches")
@@ -129,7 +129,7 @@ test.describe("Project view", () => {
 
   test("`t` starts a temporary session from the Project view; /new --temp does the same", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/project")
     await term.waitForText("Projects")
     await term.press("t")
@@ -168,7 +168,7 @@ test.describe("/sessions is scoped to the active Project", () => {
 
   test("the picker shows only the active Project's sessions and temporary ones, until F3 shows every Project", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wide })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
     await term.waitForText("a", 20_000)
     await term.waitForText(/hya · hysec_\w+/)

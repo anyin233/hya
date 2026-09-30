@@ -25,7 +25,7 @@ async function expectLastLineVisible(term: Tui) {
 test.describe("hya TUI Diff view", () => {
   test("not a git repository: the empty state", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/diff")
     await term.press("Enter")
     await term.waitForText("Diff")
@@ -45,7 +45,7 @@ test.describe("hya TUI Diff view", () => {
     await writeFile(join(backend.dir, "untracked.txt"), "new file\n")
 
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/diff")
     await term.press("Enter")
     await term.waitForText("Diff › tracked.txt")
@@ -81,7 +81,7 @@ test.describe("hya TUI Diff view", () => {
     await writeFile(join(backend.dir, "long.txt"), `intro\n${added.join("\n")}\n`)
 
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/diff")
     await term.press("Enter")
     await term.waitForText("Diff › long.txt")
@@ -146,7 +146,7 @@ test.describe("hya TUI Diff view", () => {
     }
 
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/diff")
     await term.press("Enter")
     await term.waitForText(`${fileCount} files changed`)

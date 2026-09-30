@@ -43,7 +43,7 @@ test.describe("bash permission prompt", () => {
 
   test("shows the command and who asks; 1 allows once and the card completes", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run the command")
     await promptShown(term)
     await term.waitForText("asked by hya-main")
@@ -70,7 +70,7 @@ test.describe("bash permission prompt", () => {
 
   test("with text in the input, digits type; the text stays after answering with arrows + Enter", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run the command")
     await promptShown(term)
     await term.type("draft 3")
@@ -101,7 +101,7 @@ test.describe("always allow", () => {
 
   test("2 always allows; a second identical call runs without asking", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run it")
     await promptShown(term)
     await term.waitForText("$ echo always-allowed")
@@ -121,7 +121,7 @@ test.describe("deny", () => {
 
   test("3 denies: the card fails and the model continues", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "try it")
     await promptShown(term)
     await term.press("3")
@@ -135,7 +135,7 @@ test.describe("deny", () => {
 
   test("Esc denies (it never approves)", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "try it")
     await promptShown(term)
     await term.press("Escape")
@@ -158,7 +158,7 @@ test.describe("edit permission prompt", () => {
   test("shows the path and a colored diff", async ({ tui, backend }, testInfo) => {
     await writeFile(join(backend.dir, "poem.txt"), "one\ntwo\nthree\n")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "edit the poem")
     await promptShown(term)
     await term.waitForText(/edit .*poem\.txt/)
@@ -185,7 +185,7 @@ test.describe("queued asks", () => {
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo child-ask" }), hangStep(20_000)])
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run both")
     await term.waitForText("Permission · 1 of 2", 20_000)
     await term.attach(testInfo, "queued")
@@ -213,7 +213,7 @@ test.describe("question prompt", () => {
   test.use({ model: { permission: "allow", steps: [toolStep("ask_user", question), textStep("Noted your answer.")] } })
 
   async function asked(term: Tui): Promise<void> {
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "ask me")
     await promptShown(term, "Question")
     await term.waitForText("Color: Which color do you want?")
@@ -271,7 +271,7 @@ test.describe("subagent asks", () => {
     ])
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
     await promptShown(term)
@@ -294,7 +294,7 @@ test.describe("subagent asks", () => {
     fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
     const proxy = await startProxy(backend.url)
     const term = await tui(hyaTui({ ...backend, url: proxy.url }))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await promptShown(term)
     await term.waitForText(/asked by subagent hya-task/)
@@ -315,7 +315,7 @@ test.describe("subagent asks", () => {
 test.describe("shell turns", () => {
   test("the user's own !command never shows a prompt", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "!echo shell-prompt")
     await term.waitForText("│ $ echo shell-prompt", 20_000)
     await term.waitForText(/✓ bash\s+echo shell-prompt/, 20_000)
@@ -330,7 +330,7 @@ test.describe("narrow terminal", () => {
   test("the prompt fits about 80 columns", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
     expect((await term.size()).cols).toBeLessThanOrEqual(84)
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run it")
     await promptShown(term)
     await term.waitForText("│ $ echo narrow-prompt")
@@ -348,7 +348,7 @@ test.describe("asks of other sessions", () => {
     test(`an ask raised in another session shows live; F4 opens its numbered prompt (${name})`, async ({ tui, backend }, testInfo) => {
       const proxy = await startProxy(backend.url)
       const term = await tui(hyaTui({ ...backend, url: proxy.url }), viewport ? { viewport } : {})
-      await term.waitForText("Connected to hya")
+      await term.waitForText("Message, !shell, or @file · / commands")
       await prompt(term, "/new")
       await term.waitForText(/Created hysec_/, 20_000)
       // The global stream is open (interactions-only: asks/resolves plus catalogUpdated, no other session's text).

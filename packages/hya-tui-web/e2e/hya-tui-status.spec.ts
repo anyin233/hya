@@ -43,7 +43,7 @@ test.describe("working indicator", () => {
 
   test("shows Running <tool>, then Writing…, with a spinner and elapsed time, and disappears when the turn ends", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "sleep then reply")
 
     // While the bash tool runs: `Running bash sleep 2`, a spinner, an mm:ss clock, the Esc hint.
@@ -59,7 +59,7 @@ test.describe("working indicator", () => {
 
     // The turn ends: the working line is gone.
     await term.waitForText("Slept a bit, thanks for waiting around.", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     expect(await term.find("Esc to interrupt")).toBeNull()
   })
 })
@@ -69,7 +69,7 @@ test.describe("streaming assistant header spinner", () => {
 
   test("the assistant header spins while no body text has arrived yet", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
     // Before the first chunk lands, the assistant header's marker (column 0
     // of its row) is the spinner, not ●: distinguish it from the top header
@@ -79,7 +79,7 @@ test.describe("streaming assistant header spinner", () => {
     const header = await match(term, running)
     expect((await term.cell(header.row, header.col))?.char).toMatch(spinner)
     await term.waitForText("delayed answer text", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
   })
 })
 
@@ -95,7 +95,7 @@ test.describe("working indicator and status bar at 80 columns", () => {
 
   test("both lines stay within the terminal width, sidebar hidden", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeGreaterThanOrEqual(78)
     expect(cols).toBeLessThanOrEqual(84)
@@ -104,7 +104,7 @@ test.describe("working indicator and status bar at 80 columns", () => {
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-working")
     await term.waitForText("Slept a bit, thanks for waiting around.", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
   })
 })
@@ -115,10 +115,10 @@ test.describe("status bar", () => {
   test("shows the permission mode, workspace directory, and git branch", async ({ tui, backend }) => {
     await initGitRepo(backend.dir, "main")
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hi")
     await term.waitForText("status bar reply", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     await term.waitForText("mode manual")
     await term.waitForText("⎇ main")
   })
@@ -139,10 +139,10 @@ test.describe("live todo panel", () => {
     // Through a logging proxy: the list must come from the `todoUpdated` frame, not a `GetSessionTodo` re-read.
     const proxy = await startProxy(backend.url)
     const term = await tui(hyaTui({ ...backend, url: proxy.url }))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "track a todo")
     await term.waitForText("Added a todo.", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
 
     // Sidebar shown (default viewport, >=110 cols): the live item, pending glyph.
     await term.waitForText("○ write tests", 20_000)
@@ -165,12 +165,12 @@ test.describe("status bar context and tokens", () => {
   test("shows ctx N% of the model's context limit and the session token total after a reply", async ({ tui, backend, fakeModel }, testInfo) => {
     fakeModel!.setUsage({ prompt: 42_000, completion: 300, reasoning: 0 })
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     // Unknown before any reply: hidden, not `ctx 0%`.
     expect(await term.find("ctx ")).toBeNull()
     await prompt(term, "hi")
     await term.waitForText("usage reply", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     await term.waitForText(/mode manual · model:default · ctx 42% · 42\.3k tok/)
     const ctx = await at(term, "ctx 42%")
     expect((await term.cell(ctx.row, ctx.col))?.fg).toBe(colors.muted)
@@ -195,10 +195,10 @@ test.describe("compaction divider", () => {
 
   test("/compact shows a manual divider with the folded message count before the summary", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hi there")
     await term.waitForText("First answer before compaction.", 20_000)
-    await term.waitForText(/^Ready/m)
+    await term.waitForIdle()
     await prompt(term, "/compact")
     await term.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
     const divider = await match(term, /── context compacted/)
@@ -225,10 +225,10 @@ test.describe("compaction divider in history", () => {
 
   test("a session opened later (a new TUI, or switching back) shows its past compaction at the same place, once", async ({ tui, backend }, testInfo) => {
     const first = await tui(hyaTui(backend))
-    await first.waitForText("Connected to hya")
+    await first.waitForText("Message, !shell, or @file · / commands")
     await prompt(first, "hi there")
     await first.waitForText("First answer before compaction.", 20_000)
-    await first.waitForText(/^Ready/m)
+    await first.waitForIdle()
     await prompt(first, "/compact")
     await first.waitForText(/── context compacted · \d+ messages? · manual · local summary ──/, 20_000)
     await first.waitForText("Summary: the user said hi.", 20_000)
@@ -238,7 +238,7 @@ test.describe("compaction divider in history", () => {
 
     // A new TUI on the same session: the compaction happened before it opened.
     const second = await tui([...hyaTui(backend), "--session", session])
-    await second.waitForText("Connected to hya")
+    await second.waitForText("Message, !shell, or @file · / commands")
     await dividerOnce(second)
     await second.attach(testInfo, "reopened")
 
@@ -252,10 +252,10 @@ test.describe("compaction divider in history", () => {
 
   test("about 80 columns: the history divider fits one line", async ({ tui, backend }) => {
     const first = await tui(hyaTui(backend))
-    await first.waitForText("Connected to hya")
+    await first.waitForText("Message, !shell, or @file · / commands")
     await prompt(first, "hi there")
     await first.waitForText("First answer before compaction.", 20_000)
-    await first.waitForText(/^Ready/m)
+    await first.waitForIdle()
     await prompt(first, "/compact")
     await first.waitForText("Summary: the user said hi.", 20_000)
     const session = /hya · (hysec_\w+)/.exec(await first.text())![1]!

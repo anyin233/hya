@@ -27,7 +27,7 @@ async function otherSession(backend: Backend, title?: string): Promise<string> {
 
 test("a session created, renamed, and run by another client shows up live in the sidebar", async ({ tui, backend, fakeModel }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya", 30_000)
+  await term.waitForText("Message, !shell, or @file · / commands", 30_000)
   await term.waitForText(/hya · hysec_\w+/)
 
   // Created elsewhere (`sessionStarted`, no title yet): the raw id shows up, debounced.
@@ -50,7 +50,7 @@ test("a session created, renamed, and run by another client shows up live in the
 
 test("a session deleted by another client drops its sidebar row; deleting the open one shows a notice and opens a new session", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
-  await term.waitForText("Connected to hya", 30_000)
+  await term.waitForText("Message, !shell, or @file · / commands", 30_000)
   await term.waitForText(/hya · (hysec_\w+)/)
   const openId = /hya · (hysec_\w+)/.exec(await term.text())![1]!
 
@@ -71,7 +71,7 @@ test("the /sessions picker hint fits at 80 columns", async ({ tui, backend }, te
   const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
   const { cols } = await term.size()
   expect(cols).toBeLessThanOrEqual(84)
-  await term.waitForText("Connected to hya")
+  await term.waitForText("Message, !shell, or @file · / commands")
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   await term.waitForText("Esc closes")

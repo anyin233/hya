@@ -82,7 +82,7 @@ const secretOf = (link: string): string => link.slice(link.indexOf("#") + 1)
 test.describe("/connect-remote", () => {
   test("connects through the relay, works there, and /disconnect-remote comes back to the local backend", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await term.waitForText(/hya · hysec_\w+/)
     const room = /\/([a-z0-9]+)#/.exec(remote.link)![1]!
     expect(room.length).toBeGreaterThan(0)
@@ -151,7 +151,7 @@ test.describe("/connect-remote", () => {
     await writeFile(join(remote.root, "shots", "remote-ui.png"), Buffer.concat([signature, Buffer.alloc(3 * 1024, 1)]))
     await writeFile(join(workspace.dir, "local-only.png"), Buffer.concat([signature, Buffer.alloc(64, 1)]))
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await term.type(`/connect-remote ${remote.link}`)
     await term.press("Enter")
     await term.waitForText("No projects yet · n creates one", 30_000)
@@ -182,7 +182,7 @@ test.describe("/connect-remote", () => {
 
   test("without a link it asks for one in a concealed entry; Esc cancels, a pasted link connects", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
 
     await prompt(term, "/connect-remote")
     await term.waitForText("Relay link")
@@ -209,7 +209,7 @@ test.describe("/connect-remote", () => {
 
   test("the concealed entry fits about 80 columns", async ({ tui, workspace, remote }) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await prompt(term, "/connect-remote")
     await term.waitForText("paste or type the relay link (hidden) · Enter connects · Esc cancels")
     await term.page.evaluate((text) => window.hyaTerm.term.paste(text), remote.link)
@@ -222,7 +222,7 @@ test.describe("/connect-remote", () => {
 
   test("a link that the remote rejects is reported, and the TUI stays on its local backend", async ({ tui, workspace, remote }) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await term.waitForText(/hya · hysec_\w+/)
     // Same relay, room, and PSK (the proxy lets it through), a wrong server key: the remote
     // rejects the handshake. (A wrong PSK never reaches the remote: the proxy answers it like
@@ -241,7 +241,7 @@ test.describe("/connect-remote", () => {
 
   test("with the remote backend offline, Project view requests fail as one status line, never a stack trace", async ({ tui, workspace, remote }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
-    await term.waitForText("Connected to hya", 30_000)
+    await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await term.waitForText(/hya · hysec_\w+/)
     await term.type(`/connect-remote ${remote.link}`)
     await term.press("Enter")

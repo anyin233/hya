@@ -3,15 +3,15 @@ import { expect, hyaTui, test } from "./hya"
 for (const width of [1100, 700]) {
   test(`commands float above the entire workspace and preserve drafts across resize (${width}px)`, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/layout split vertical jobs")
     await term.press("Enter")
     await term.waitForText("jobs · pane-6")
     await term.press("Alt+ArrowLeft")
-    await term.waitForText("pane-1 conversation")
+    await expect.poll(async () => (await term.cell(0, (await term.find("jobs · pane-6"))!.col - 4))?.fg !== "#73c8e8").toBe(true)
     await term.type("message draft")
     await term.press("Alt+ArrowRight")
-    await term.waitForText("pane-6 jobs")
+    await term.waitForText("▸ jobs · pane-6")
     await term.type("/")
     await term.waitForText("Commands")
     await term.waitForText("▸ /agent")

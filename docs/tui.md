@@ -20,7 +20,7 @@ needs a permission decision or asks a question, a prompt docked above the
 input shows the call and its options; press `1`, `2`, or `3` (see
 [Permission and question prompts](#permission-and-question-prompts)).
 Shift+Tab or `/permissions` switches the session's permission mode
-(`manual`, `yolo`, or a mode an installed bundle provides); the status bar
+(`manual`, `yolo`, or a mode an installed bundle provides); `/permissions`
 shows the mode in effect (see [Permission modes](#permission-modes)).
 Models and Workflows have dedicated views, and `/key` opens the full-screen
 [Provider View](#provider-view) (providers, keys, model lists, model tests,
@@ -55,13 +55,10 @@ hya --port 8000       # WebUI on another port
 hya serve status      # the daemon both use
 ```
 
-With a WebUI, the status bar shows `WebUI http://127.0.0.1:3250`, the
-sidebar's `Context` box shows `WebUI    127.0.0.1:3250`, and `/status` shows a
-`WebUI` row. If the WebUI could not start (for example because the port is
-taken), the TUI still works: the status line shows
-`WebUI unavailable: port 3250 is in use · hya --port <N>`, the status bar
-shows `WebUI unavailable` in the warning color, and `/status` repeats the
-reason. `/status` shows the daemon as
+The sidebar's `Context` box and the explicitly opened `/status` view show the
+WebUI address. If the WebUI could not start (for example because its port is
+taken), `/status` shows the reason. Conversation has no persistent connection
+or metadata banner. `/status` shows the daemon as
 `Backend     daemon · pid <pid> · db <db> · started <N>m ago`.
 
 ### Run it with Bun (development)
@@ -193,12 +190,12 @@ switch this TUI to an HTTP relay bridge during the session.
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server` or `--grpc`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). Unlike a plain launch, it never reopens an archived session. |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
-| `--server-label <text>` | Show this text instead of the server URL in the header, the sidebar `Context` box, and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
+| `--server-label <text>` | Show this text instead of the server URL in the sidebar `Context` box and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
 | `--resume [id]` | Open that session and unarchive it (`PATCH {archived:false}`). Without an id (the next argument starts with `-`, or there is none), open a picker of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first; Enter resumes (and unarchives) the highlighted one, Esc starts a new session instead. Cannot be combined with `--continue` or `--session`. |
 | `--web-tab` | This TUI runs in a WebUI tab: `/to-background` is not offered and Ctrl+D only shows `Close the tab to leave this session running` (closing the tab already leaves the session running). Bare `hya` adds it to its web host's tab command; pass it yourself in the command of a web host you start by hand (see [tui-web.md](tui-web.md#usage)). |
-| `--web-url <url>` | Show this WebUI address (status bar `WebUI <url>`, sidebar `Context` row, `/status`). Bare `hya` passes it; an HTTP(S) URL. |
-| `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in the status line and `/status`, and `WebUI unavailable` in the status bar. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
+| `--web-url <url>` | Show this WebUI address in the sidebar `Context` row and `/status`. Bare `hya` passes it; an HTTP(S) URL. |
+| `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in `/status`. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
 | `-h`, `--help` | Print the flags and the binary lookup order. |
 
 ### Sessions on start and exit
@@ -313,7 +310,7 @@ A `resync` on the global stream means these frames were lost: sessions (and
 pending interactions, as before) are listed again. This complements
 [Session titles](#session-titles) (title/agent/model on the *open*
 session's own stream) and the archived-marking above: `patchSessionRow`
-never touches `state.selected` — the open session's header and its
+never touches `state.selected` — the open session's transcript and its
 `permissionMode` notice stay the own stream's job — so a frame that reaches
 both streams (a root session's own change, echoed on the global stream too)
 is applied twice, harmlessly (each setter is an idempotent "set to this
@@ -339,9 +336,9 @@ answers was a blip, and the stream just reconnects (with the usual backoff).
 A TUI that knows its database (started without `--server` or `--grpc`, or with `--db`)
 then acts on the reason:
 
-| Reason | What the TUI does | Status line |
+| Reason | What the TUI does | Internal transition text |
 | --- | --- | --- |
-| `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the status bar shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
+| `stop` (`hya serve stop`) | Starts nothing. It is *stopped*: prompts and `!` commands are refused (`Not sent · the backend is stopped (hya serve stop) · /reconnect starts it again`), the metadata state shows `backend stopped` (error color), and slash commands such as `/reconnect`, `/exit`, and `/help` still work. While the streams keep retrying it only *looks* for a daemon (the discovery file plus a health probe): when another client starts one, it attaches. | `Backend stopped (hya serve stop) · /reconnect starts it again` |
 | `signal` (SIGTERM/SIGINT/SIGHUP from anything but `hya serve stop`, for example Ctrl+C on a foreground `hya serve`), or an unknown reason | As `stop`. | `Backend stopped (signal) · /reconnect starts it again` |
 | `restart` (`hya serve restart`) | Waits up to 60 s for the new daemon of the database and attaches to it; never starts one. If none answers in time, it is stopped as after `stop`. | `Backend restarting (hya serve restart) · waiting for the new one…`, then `Server moved · now pid <pid>` (or `Backend did not come back after hya serve restart · /reconnect starts it again`) |
 | none (the stream ended without the frame: a crash, `kill -9`, a lost connection) | Runs the same find-or-start as at launch. | `Server stopped · reconnecting…`, then `Started a new server · pid <pid>` when it started the daemon, or `Server moved · now pid <pid>` when it found one |
@@ -353,8 +350,8 @@ failed: <reason> · /reconnect to try again`.
 
 Whenever it moves to another server the TUI:
 
-1. switches every later request to the new server's URL (header, sidebar,
-   and `/status` show it),
+1. switches every later request to the new server's URL (the sidebar and
+   `/status` show it),
 2. resubscribes the session stream and the global ask stream,
 3. reloads the catalogs, the pending asks, and the open session's transcript
    from the database.
@@ -367,7 +364,7 @@ showing `Backend stopped`; `/reconnect` in the terminal starts the daemon and
 the tabs move to it by themselves. A turn that was running on the old server
 ends with it (the transcript shows how far it got; the server's shutdown
 closes it as cancelled). Prompts queued in the TUI are dropped. If no server
-can be found or started after a crash, the status line says `Server lost:
+can be found or started after a crash, the controller status state says `Server lost:
 <reason> · retrying`, and the next stream retry tries again. A TUI whose
 stream was down at the moment of a stop never gets the reason and treats the
 stop as a crash. A TUI with a fixed `--server` and no `--db` never moves; it
@@ -399,7 +396,7 @@ backend without restarting it; `/disconnect-remote` brings it back. Bare
 [--transport T] [--relay-ca PEM]` (the same binary lookup as the daemon start:
 `--hya`, `HYA_BIN`, `hya` on PATH; bare `hya`, `--connect` included, passes
 its own executable as `--hya`), writes the link and a newline to the
-child's stdin, and keeps that pipe open. The status line counts
+child's stdin, and keeps that pipe open. The controller status state counts
 `Connecting to the relay… Ns · <the bridge's latest line>` for up to 20 s.
 When the bridge prints its readiness line
 (`{"url","room","proxy","label","token"}`), the TUI:
@@ -410,9 +407,9 @@ When the bridge prints its readiness line
    bridge's per-bridge `token` as `x-hya-bridge-token` (the bridge answers
    `401 unauthenticated` to a connection without it, so another local
    process cannot use the remote through it), and shows the label
-   (`remote: <relay>/<room>`) instead of that URL in the header, the sidebar
-   `Context` box, `/status` (`Server      <label> · via <url>`, `Backend
-   remote · through this TUI's relay bridge …`), and every status line,
+   (`remote: <relay>/<room>`) instead of that URL in the sidebar
+   `Context` box and `/status` (`Server      <label> · via <url>`, `Backend
+   remote · through this TUI's relay bridge …`),
 3. behaves like a `--remote` start: no Project is ensured for `--dir`, no
    session is created, and the [Project view](#project-view) opens so you
    choose (or create) a Project on the remote, or press `t` for a temporary
@@ -423,7 +420,7 @@ When the bridge prints its readiness line
    `503 unavailable: remote backend is offline, or the relay link was rotated or is wrong …` while the remote is down (or the link was rotated), and
    the TUI picks up where it was when it comes back. The bridge's state
    changes (`hya bridge: remote backend online …`, `… offline`, `relay
-   unreachable`) appear on the status line. `/reconnect` only resubscribes.
+   unreachable`) appear on the controller status state. `/reconnect` only resubscribes.
 
 `Connected to remote: <relay>/<room> · choose a project, or t for a temporary
 session` confirms it. A failure leaves the TUI where it was:
@@ -436,7 +433,7 @@ second `/connect-remote` stops the running bridge first.
 **When the bridge exits on its own** (it was killed, or failed), the status
 line says `Remote bridge exited (<its last line>) · /connect-remote <link>
 connects again · /disconnect-remote goes back to the local backend`, the
-status bar shows the connection as lost, and prompts are refused (`Not sent
+metadata state shows the connection as lost, and prompts are refused (`Not sent
 · the relay bridge exited · /connect-remote <link> connects again`). Nothing
 local is started.
 
@@ -473,12 +470,12 @@ a shell, a `/connect-remote` bridge) inherits them.
   mistyped command that would run as a backend command) is refused and never
   sent: `Not sent · the input holds a relay link, which is a secret ·
   /connect-remote takes it`.
-- Status lines show relay links only in their redacted form (`hya://host/room#…`);
+- Controller status states show relay links only in their redacted form (`hya://host/room#…`);
   the bridge itself only prints the redacted form.
 - The bridge's stderr lines and the readiness line's `room`, `proxy`, and
   `label` can carry text from the remote side: terminal controls (escape
   sequences, C0/C1 control characters, DEL) are stripped before any of it
-  reaches the status line or the header.
+  reaches controller state or an explicit information view.
 - Each WebUI tab is its own TUI process: `/connect-remote` in one tab moves
   only that tab. The WebUI shows exactly what the TUI draws.
 
@@ -524,7 +521,7 @@ every scoped call: files, VCS, catalogs, bootstrap, agent models) follows.
   found too.
 - **`--remote`.** No Project is ensured and none is active. A prompt or
   `/new` without one is refused with `No project is open · choose a project
-  or start a temporary session` on the status line. Until a Project is
+  or start a temporary session` on the controller status state. Until a Project is
   chosen the client sends no directory scope at all (no `directory` field:
   `--dir` names nothing on the remote; the global catalogs work unscoped);
   choosing one sets the scope to its primary root. The same holds after
@@ -563,7 +560,7 @@ keys, `app/projectView.ts` the calls, `components/ProjectView.tsx` the
 rendering). Up/Down move the highlight; the active Project is marked and, in
 `--remote` mode with none active yet, the view opens by itself (see
 "`--remote`" above) and a new-session attempt without an active Project
-opens it too, instead of only setting the status line.
+opens it too, instead of only setting the controller status state.
 
 | Key | Effect |
 | --- | --- |
@@ -584,7 +581,7 @@ that line; opening the view while the backend cannot answer shows
 offline behind the relay reads, for example, `Temporary session failed:
 unavailable: remote backend is offline, or the relay link was rotated or is
 wrong (…)`. A failed switch from the left Projects sidebar puts the same line
-on the status line (`Switch failed: …`).
+on the controller status state (`Switch failed: …`).
 
 ### Left Projects sidebar
 
@@ -629,7 +626,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
 | `/answer <id> <text>` | Answer a question request. |
-| `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
+| `/cancel` or Esc | Cancel the running turn: the controller status state shows `Cancelling…`, then `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
@@ -639,12 +636,12 @@ A second, narrower sidebar on the left lists every Project live
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
-| `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the status line says `Copied N chars` (see [Copy](#copy)). |
+| `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the controller status state says `Copied N chars` (see [Copy](#copy)). |
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
 | `/editor`, Ctrl+X Ctrl+E | Edit the input in `$VISUAL` / `$EDITOR` (fallback `vi`); the edited text comes back into the input, unsent (see [External editor](#external-editor)). |
-| `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the status bar (see [Vim mode](#vim-mode)). |
+| `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the metadata state (see [Vim mode](#vim-mode)). |
 | `/notifications [on\|off]` | Turn desktop notifications on or off, saved in the preferences file (see [Desktop notifications](#desktop-notifications)). |
-| `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
+| `/compact` | Compact the session's context now (`CompactSession`); the controller status state shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/undo` | Revert the last prompt: it and every later message leave the transcript, the files its tools changed are restored, and the prompt goes back into an empty input. Again = one prompt further back (see [Undo, redo, and fork](#undo-redo-and-fork)). |
 | `/redo`, Ctrl+X R | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Ctrl+X U is `/undo` and Ctrl+X F is `/fork`; the chord works whatever the input holds. |
@@ -739,17 +736,30 @@ list as plain text instead.
 └───────────┘└───────────────────────────────┘└──────────────┘
 ```
 
-The Conversation pane holds, from top to bottom: the header line (session, agent,
-model, server, in the accent color), the status bar (permission mode,
-directory, git branch, a compact todo count while the sidebar is hidden,
-connection state — see
-[Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
-the transcript (or the panel of the current view: models, Workflows, keys,
-API, help), the working indicator while a turn this client admitted runs,
-the pending block (asks of other sessions), the permission or question
-prompt, the one-line yolo confirmation while it is asked, the status line,
-the bordered input, and the instruction line. The permission mode picker
-(`/permissions`) is drawn over the screen near the top while it is open.
+### Conversation without headings
+
+Conversation starts directly with the transcript (or the explicitly selected
+models, Workflows, API, or help view). It has no session/model/server header,
+metadata bar, routine status row, or footer instructions. These rows are removed;
+they are not relocated above or below the messages. This leaves conversation
+space for messages and the focused input rather than a built-in monitoring area.
+
+The running-turn indicator, pending requests, permission/question prompt,
+yolo confirmation, and message composer follow the transcript when applicable.
+Message content, Markdown headings, assistant/tool labels, and interactive
+permission controls keep their usual rendering.
+
+To inspect metadata deliberately, open `/status`, `/permissions`, or an assigned
+Context or status pane. For example, press `/`, enter `status`, and press Enter;
+Esc closes that view. Routine command completion and error status strings are
+no longer automatically printed in Conversation. A user-chosen monitor can read
+the existing `hya.v1` session, event, and catalog contracts independently.
+
+**Interface:** `ConversationPane` omits the former session header, metadata bar, and
+routine status component. This is a rendering change, with no new flag, saved preference,
+plugin API, RPC route, or event type. Controller status state and the existing
+explicit information views remain available; the conversation split keeps its
+keyboard ownership and highlighted composer.
 
 - **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
@@ -762,14 +772,14 @@ the bordered input, and the instruction line. The permission mode picker
   session's row also stays current live from another client's changes —
   see [Sidebar live updates](#sidebar-live-updates)), `Todos` (the
   live todo list — see
-  [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
+  [Working indicator, metadata state, and todo panel](#working-indicator-metadata-state-and-todo-panel)),
   and `Context` (session, agent, model, the merged transcript's message
   count, directory, server). These are three independent panes in the right
   branch of the editable layout tree. By default they follow the width: shown at 110
   columns or more, hidden below, so an 80-column terminal gets the full
   width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
   any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
-  line confirms the change (`Sidebar shown · Ctrl+B toggles`). Its `Sessions`
+  state changes immediately. Its `Sessions`
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
   [Projects](#projects) and [Pickers](#pickers)).
@@ -786,7 +796,7 @@ the bordered input, and the instruction line. The permission mode picker
   `/sidebar` does for the right one. See [Projects](#projects).
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
-  above the status line; see
+  above the controller status state; see
   [Permission and question prompts](#permission-and-question-prompts).
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
@@ -815,7 +825,7 @@ the bordered input, and the instruction line. The permission mode picker
 
 The complete screen is one editable tree of nested rectangles. The default
 tree has Projects on the left, Conversation in the middle, and Sessions,
-Todos, and Context stacked on the right. Conversation contains the header,
+Todos, and Context stacked on the right. Conversation contains the
 transcript, prompts, and message composer, so moving
 it moves the whole interactive surface. Each other rectangle has an assigned
 job; you can split, resize, reassign, or close any auxiliary rectangle.
@@ -933,7 +943,7 @@ default `hya` theme:
 | `bg` | `#11151b` | Screen and transcript background. |
 | `panel` | `#1c2530` | Boxes, user message blocks, code blocks, the input. |
 | `fg` | `#e8edf3` | Text. |
-| `muted` | `#9caab9` | Status line, instructions, `Thinking` lines, model names, queued prompts. |
+| `muted` | `#9caab9` | Controller status state, instructions, `Thinking` lines, model names, queued prompts. |
 | `accent` | `#73c8e8` | Header, user message bar, assistant name, headings, list markers. |
 | `border` | `#405366` | Box borders and titles. |
 | `error` | `#f07878` | Error notices and failed tool calls. |
@@ -968,11 +978,11 @@ file when it starts.
 row per theme, `[dark]`/`[light]` tagged; `●` marks the theme in effect.
 Moving the highlight (Up/Down, Tab/Shift+Tab, typing a filter) repaints the
 whole screen in the highlighted theme at once — the transcript, Markdown,
-highlighted code, tool cards, boxes, and the status line. Enter keeps it,
+highlighted code, tool cards, boxes, and the controller status state. Enter keeps it,
 writes it to the preferences file, and shows `Theme → <label>`; Esc (or
 Ctrl+C) closes the picker and restores the theme in effect when it opened,
 writing nothing. If the file cannot be written, the theme still applies for
-this run and the status line says `Theme → <label> · not saved: <reason>`.
+this run and the controller status state says `Theme → <label> · not saved: <reason>`.
 
 ```text
 /theme            # ↓ previews Light, Enter keeps it
@@ -1005,7 +1015,7 @@ interface TuiPreferences {
 
 - The file is read once at start, before the first frame. A missing file
   means the defaults. An unreadable file, invalid JSON, or a JSON value that
-  is not an object is ignored, and the status line says
+  is not an object is ignored, and the controller status state says
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
   wrong type is ignored.
@@ -1033,7 +1043,7 @@ a switch, sets it and rebuilds the blocks so fenced-code boxes repaint too.
 A new theme is one more `ThemeDefinition` entry in `themes` with every key
 of the four groups (`test/theme.test.ts` checks it).
 
-## Working indicator, status bar, and todo panel
+## Working indicator, metadata state, and todo panel
 
 **Working indicator.** While a turn this client admitted runs, one muted
 line sits below the transcript, above the pending block and the
@@ -1054,28 +1064,10 @@ While a streaming assistant message has no blocks yet, its header's `●`
 marker is the spinner too, so a slow first token still shows the turn is
 alive before the working line's own elapsed clock is very interesting.
 
-**Status bar.** One muted line under the header: with
-[vim mode](#vim-mode) on, first the input's mode (`-- INSERT --` muted,
-`-- NORMAL --` in the accent color, followed by a half-typed command such
-as `2d`); then the permission mode
-(`mode <mode>`, from `SessionInfo.permissionMode`, colored per mode — see
-[Permission modes](#permission-modes)), the session's `<model>:<effort>`
-(see [Thinking effort](#thinking-effort)), the context occupancy (`ctx 42%`),
-the session's token total (`12.3k tok`), the WebUI that bare `hya` serves
-(`WebUI http://127.0.0.1:3250`, or `WebUI unavailable` in the warning color;
-see [Start it](#start-it); ahead of the directory, so at about 80 columns,
-where the sidebar and its `WebUI` row are hidden, the address stays visible),
-the workspace directory (shortened, keeping the tail), the git branch
-(`GetVcsStatus`, refreshed when a session opens and after a turn ends;
-omitted when unknown or the directory is not a repository), a compact todo count (`Todos <completed>/
-<total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
-box already lists them), and `reconnecting` (warning color) while the
-session event stream is down, or `backend stopped` (error color) after
-`hya serve stop` (see [When the server goes away](#when-the-server-goes-away)). Segments with no data are omitted rather than
-shown empty; on a narrow terminal the least essential segments (from the
-end) drop first, then the whole line clips, so it always fits the terminal
-width. The header line above it already carries agent, model, session, and
-server, so the status bar does not repeat them.
+**Metadata.** The former metadata state and session header are not rendered in
+Conversation. Model, permission mode, directory, connection, and token/context
+information belong to explicit information views or user-selected monitoring
+panes. The existing Context pane can show usage when the backend reports it.
 
 - **`ctx N%`** is the prompt the latest provider round sent against the
   context window of the model that served it (the rule in the protocol
@@ -1096,7 +1088,7 @@ server, so the status bar does not repeat them.
   `uint64` decimal strings on the wire; they show as `950`, `12.3k`, `123k`,
   `1.2M`. Hidden while the total is zero or unknown.
 
-The sidebar's `Context` box repeats both when known: `Context  42% ·
+The sidebar's `Context` box shows both when known: `Context  42% ·
 42k/100k` (prompt tokens / window) and `Tokens   42.3k`. Under bare `hya` it
 ends with a `WebUI` row: the address without the scheme, or `unavailable`.
 
@@ -1136,7 +1128,7 @@ a short exchange shows:
 Summary: the user asked for …
 ```
 
-`/compact`'s status line reads the same way: `Compacting…`, then
+`/compact`'s controller status state reads the same way: `Compacting…`, then
 `Compacted · <strategy in words>` (e.g. `Compacted · local summary`).
 
 **Compactions from before the session was opened.** Opening a session
@@ -1161,8 +1153,8 @@ place (same position, full text) — a summary never gets two dividers.
 an assistant header block — no `●`, no agent or model.
 
 **Connection and version.** A lost stream connection shows `Stream
-reconnecting: <error>` in the status line while it retries (also reflected
-in the status bar's `reconnecting`); a version mismatch between this TUI and
+reconnecting: <error>` in the controller status state while it retries (also reflected
+in the metadata state's `reconnecting`); a version mismatch between this TUI and
 the backend's bootstrap version appends `backend <version> ≠ tui <version>`
 to the initial `Connected to hya …` status.
 The packaged TUI and WebUI use the same version as the backend in this source
@@ -1365,11 +1357,11 @@ turn), the prompt stays queued and is sent after the next turn end seen on the
 stream. Opening another session drops the queued prompts of the previous one.
 A queued prompt is still sent after a cancelled or failed turn.
 
-The status line above the input shows the turn state. While the
-[working line](#working-indicator-status-bar-and-todo-panel) shows a
+The controller status state above the input shows the turn state. While the
+[working line](#working-indicator-metadata-state-and-todo-panel) shows a
 running turn, the progress texts that repeat it (`Sending prompt…`,
 `Running · <turn id>…`, `Running shell · …`, `Queued · N waiting`) are left
-out of the status line, which stays empty until another message (a command
+out of the controller status state, which stays empty until another message (a command
 result, an error, `Ready`) arrives:
 
 | Status | Meaning |
@@ -1549,7 +1541,7 @@ supported type, larger than 10 MiB, the turn's attachments together over
 20 MiB, the file cannot be read, or the current model's `imageInput` is
 `false` ([Providers and keys](protocol/README.md#providers-and-keys),
 `ModelSummary.imageInput`; absent means unknown and is allowed). Enter refuses
-to send while any row has an error — the status line names the file and the
+to send while any row has an error — the controller status state names the file and the
 reason, and nothing is sent — so a bad reference never reaches the server.
 
 Once sent, the user message's transcript row shows each attachment under the
@@ -1721,7 +1713,7 @@ output. A terminal that ignores OSC 52 copies nothing.
 - **Mouse selection.** Drag over text in the transcript (any text on the
   screen is selectable): the selected cells get the theme's `selection`
   background while the text keeps its color. On release the selected text
-  is copied and the status line says `Copied N chars`. A plain click selects
+  is copied and the controller status state says `Copied N chars`. A plain click selects
   nothing and copies nothing (clicks on `Thinking` lines and tool cards keep
   toggling them).
 - **`/copy`** copies the text of the newest assistant reply that has text
@@ -1730,7 +1722,7 @@ output. A terminal that ignores OSC 52 copies nothing.
   `Nothing to copy: no assistant reply yet`.
 
 When the renderer knows the terminal refuses OSC 52 (its capability probe
-says so), nothing is sent and the status line says
+says so), nothing is sent and the controller status state says
 `Copy failed: this terminal does not accept OSC 52 clipboard writes`.
 
 **Interfaces.** `AppActions.copyText(text): boolean` (commands/registry.ts)
@@ -1749,7 +1741,7 @@ see [tui-web.md](tui-web.md#page-test-hook-windowhyaterm)).
 For long prompts, the input can be edited in your own editor.
 
 **Usage.** Ctrl+X then Ctrl+E (or Ctrl+X then E; the readline/zsh chord,
-browser-safe), or `/editor`. After Ctrl+X the status line shows
+browser-safe), or `/editor`. After Ctrl+X the controller status state shows
 `Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork`
 (see [Undo, redo, and fork](#undo-redo-and-fork)); any other next key drops the
 chord and is handled as usual. The TUI writes the input to a temporary file
@@ -1757,7 +1749,7 @@ chord and is handled as usual. The TUI writes the input to a temporary file
 gets the whole terminal; the TUI's screen comes back afterwards), and runs
 the editor on it. When the editor exits with status 0 the file's text
 replaces the input — it is **not** sent; press Enter to send it — and the
-status line says `Edited in the external editor · Enter sends`. One trailing
+controller status state says `Edited in the external editor · Enter sends`. One trailing
 newline the editor adds is dropped. The temporary directory is removed.
 
 ```sh
@@ -1765,7 +1757,7 @@ EDITOR="code -w" hya          # VS Code; -w waits for the tab to close
 VISUAL=nvim hya-tui ...       # VISUAL wins over EDITOR
 ```
 
-| Failure | Status line | Input |
+| Failure | Controller status state | Input |
 | --- | --- | --- |
 | The editor exits non-zero | `Editor <name> exited with status N · input unchanged` | kept |
 | The binary is not found | `Editor <name> not found · input unchanged` | kept |
@@ -1796,10 +1788,7 @@ Off by default.
 
 **Usage.** `/vim` toggles it (`/vim on`, `/vim off` set it); the choice is
 saved as `vim` in the [preferences file](#preferences-file) and applies to
-every later start. When on, the status bar starts with `-- INSERT --`
-(muted) or `-- NORMAL --` (accent color), plus a half-typed command
-(`-- NORMAL -- 2d`); the cursor is a bar in insert mode and a block in
-normal mode. The input starts in insert mode, where every key works as
+every later start. When on, the cursor is a bar in insert mode and a block in normal mode. The input starts in insert mode, where every key works as
 usual. Esc switches to normal mode (the cursor steps back onto the last
 character, as in vim). After a send, the next input starts in insert mode
 again.
@@ -1924,7 +1913,7 @@ The backend asks before some tool calls run (under the default permission
 model: `bash`, `edit`, `write`, network reads, MCP and plugin tools; see
 [Configuration — Permissions](configuration.md#permissions)), and the
 `ask_user` tool asks you questions. The TUI shows each of these pending
-interactions as a prompt docked above the status line, so you can answer
+interactions as a prompt docked above the controller status state, so you can answer
 without typing its id. The agent's turn waits until you answer.
 
 ### Permission prompt
@@ -2033,7 +2022,7 @@ ask too.
 An answer hides the prompt at once. The ask also closes when it is resolved
 elsewhere: another client answered it, or a switch of the session tree to
 the `yolo` permission mode allowed it (an `interactionResolved` frame, or the
-next listing). If the ask was already answered, the status line reads
+next listing). If the ask was already answered, the controller status state reads
 `Already answered elsewhere · <title>`; if the request fails, the prompt
 comes back with `Answer failed: …`.
 
@@ -2071,7 +2060,7 @@ its prompt only appears once you open that session.
 - the [pending block](#layout) lists it as `! <title> · <n>. <session>`
   (`?` for a question). For an archived or otherwise unlisted chat it says
   `saved session`, keeping raw IDs out of the narrow box;
-- the status line says `Permission needed in <n>. <session> · F4 to review`
+- the controller status state says `Permission needed in <n>. <session> · F4 to review`
   (`Question in …` for a question);
 - while the terminal is unfocused, a [desktop
   notification](#desktop-notifications) says `Permission needed: <title> ·
@@ -2119,7 +2108,7 @@ every (re)subscribe the TUI reads `GET /v1/interactions` once (a `resync` on
 this stream is not expected, but the handler still re-lists on one
 defensively). It reconnects after 800 ms, doubling to at most 15 s while it
 keeps failing (a backend without the route); its failures do not touch the
-status bar's connection state, which the session stream owns.
+metadata state's connection state, which the session stream owns.
 `state/format.ts` `askSessionLabel(sessionId, sessions)` renders
 `<n>. <title or id>` (or the bare id when the list does not have it).
 
@@ -2160,8 +2149,8 @@ without asking (including calls a rule denies), and a bundle mode lets an
 installed bundle's approver answer first and asks you only for what it
 leaves open. The mode lives on the backend, on the root session; see
 [Configuration — Session permission modes](configuration.md#session-permission-modes)
-for the semantics. The TUI switches it without a restart, shows it in the
-status bar, and notes every switch in the transcript.
+for the semantics. The TUI switches it without a restart, shows it in `/status` and the
+`/permissions` picker, and notes every switch in the transcript.
 
 ### Switching
 
@@ -2194,7 +2183,7 @@ status bar, and notes every switch in the transcript.
 ```
 
 **Confirming yolo.** The first switch to `yolo` in a TUI process shows one
-line above the status line and waits:
+line above the controller status state and waits:
 
 ```text
 ⚠ Enable yolo? Every tool call runs without asking · Enter confirms · Esc cancels
@@ -2217,9 +2206,7 @@ applies from the next permission check, including in a turn that is
 already running.
 
 **No session yet.** Before any session exists (a fresh directory), the
-choice is remembered — the status bar shows it and the status line reads
-`Permission mode → <mode> · applies when the session is created` — and it
-is sent right after the next session is created (the first prompt, `/new`,
+choice is remembered and sent right after the next session is created (the first prompt, `/new`,
 or a command that creates one), before the prompt is admitted. Opening an
 existing session instead shows that session's own mode.
 
@@ -2242,21 +2229,13 @@ once that mode is successfully applied to the first session.
 
 ### Display
 
-| Mode | Status bar | Color |
-| --- | --- | --- |
-| `manual` | `mode manual` | normal text (`fg`) |
-| `yolo` | `mode ⚠ yolo` | `error` (`#f07878`) |
-| bundle mode | `mode <title>` (the listing's title, else the id) | `accent` (`#73c8e8`) |
-
-The `mode` word and the rest of the status bar stay muted. Every switch —
-from this TUI or another client (a `sessionUpdated` frame with
-`permissionMode`) — adds one muted notice line to the transcript,
-`Permission mode → yolo` (a bundle mode: `Permission mode → <title>
-(<id>)`), and the status line confirms it (`Permission mode → ⚠ yolo ·
-Shift+Tab cycles · /permissions lists`). A permission prompt's hint row ends
-with the mode (`… · perm_… · mode manual`). An unknown or unavailable mode
-leaves the mode unchanged and shows `Permission mode failed: …
-invalid_argument: …`.
+`/permissions` marks the effective mode with `●`; `/status` shows it in the
+`Mode` row, and the Context pane can be assigned when persistent monitoring is
+wanted. Every switch from this TUI or another client adds one muted transcript
+notice, `Permission mode → yolo` (a bundle mode uses `Permission mode →
+<title> (<id>)`). A permission prompt's hint row also ends with the effective
+mode (`… · perm_… · mode manual`). Conversation does not print a separate
+mode or command-result status row.
 
 ### Bundle modes
 
@@ -2269,7 +2248,7 @@ its modes appear in the picker as `<title> [<bundle id>]` and in the
 Shift+Tab cycle after `yolo`. With one active, the approver decides first;
 when it defers, the TUI shows the usual permission prompt. Worked example:
 a bundle `e2e/approver` whose mode `echo-only` allows `echo …` commands —
-`/permissions`, type `echo`, Enter: the status bar reads `mode Echo only`,
+`/permissions`, type `echo`, Enter: `/status` reads `Mode        Echo only`,
 a model's `echo hi` call runs without a prompt, and its `ls` call asks.
 
 ## Undo, redo, and fork
@@ -2286,7 +2265,7 @@ copies the session into a new one, at its end or before a picked prompt.
 **Usage.**
 
 - **`/undo`** reverts the last visible prompt; `/undo` again goes one prompt
-  further back. The status line summarizes the files:
+  further back. The controller status state summarizes the files:
   `Reverted · 2 files restored · 1 deleted` (`deleted`: the turn created
   the file), then every file that could not be restored with its reason,
   `skipped big.bin (too_large)` or `failed /etc/x (permission denied)`.
@@ -2299,7 +2278,7 @@ copies the session into a new one, at its end or before a picked prompt.
 - **The input.** The reverted prompt goes into the input only when the input
   is empty, or still holds, untouched, the prompt a previous `/undo` or
   `/fork` put there (so `/undo` twice leaves the older prompt in it). Text
-  you typed is never replaced; the status line then ends with
+  you typed is never replaced; the controller status state then ends with
   `the input kept your text`.
 - **While a revert is pending** the transcript ends with a line in the
   warning color:
@@ -2348,14 +2327,9 @@ For example, after the model wrote `notes.txt` in reply to `write notes`:
 
 Thinking effort controls how hard the model reasons on each request. The TUI
 (and so the WebUI) lets you switch it at any moment — before a session
-exists, between turns, or while a turn runs — and always shows the effort in
-use right after the model name, as `<model>:<effort>`:
-
-- the header: `hya · <title> · hya-main openai/gpt-6-astra:max · <server>`;
-- the status bar, right after the mode: `mode manual · gpt-6-astra:max · …`
-  (kept at 80 columns, where the header truncates);
-- `/status`: `Thinking    max (pref)`, with the layer that chose it (`pref`,
-  `agent`, `suffix`, `model default`, `global default`).
+exists, between turns, or while a turn runs. Open `/status` to see
+`Thinking    max (pref)`, including the layer that chose it (`pref`, `agent`,
+`suffix`, `model default`, or `global default`).
 
 `:default` means no request effort: the provider's own default applies.
 `:none` is an explicit off switch. The effort is the server-resolved
@@ -2368,8 +2342,10 @@ advertised variants such as `low`, `high`, `xhigh`, `max`):
 
 ```text
 /model openai/gpt-6-astra
-/effort max        → Thinking effort → max   header: … hya-main openai/gpt-6-astra:max …
-/effort default    → Thinking effort → default   header: … openai/gpt-6-astra:default …
+/effort max
+/status             # Thinking    max (pref)
+/effort default
+/status             # Thinking    default
 ```
 
 **Where the choice is saved.** The choice is remembered by the backend
@@ -2428,7 +2404,7 @@ with no loading state.
   `/agent <name>` switches directly (`UpdateSession {agent}`).
 - **No session yet.** Before any session exists, a `/model`/`/effort`/`/agent`
   choice (picker or direct form) is remembered for the next `CreateSession`;
-  the status line says it applies when the session is created.
+  the controller status state says it applies when the session is created.
 - **`/sessions`** opens a picker with a `New session` row first, then every
   session as a tree (top-level sessions, subagent sessions nested under
   their parent and `[subagent]` tagged — see [Subagents](#subagents)),
@@ -2480,13 +2456,12 @@ a picker with no `actions` behaves exactly as before. See
 
 ### Session titles
 
-The header (`hya · <title or id> · <agent> <provider/model>:<effort> · <server>`),
-the sidebar's `Sessions` box, and the `/sessions` picker all show the
+The sidebar's `Sessions` box and the `/sessions` picker show the
 session's `title` when the backend has set one (`/rename`, the picker's F2,
 or the backend's own auto-generated title once it lands), falling back to
 the raw id. A `sessionUpdated {title}` frame (see
 [Stream frames and the transcript](#stream-frames-and-the-transcript))
-updates all three live, with no extra refresh — including a title set by
+updates both live, with no extra refresh — including a title set by
 another client or generated by the backend after the first turn.
 
 ## Provider View
@@ -2687,7 +2662,7 @@ keys.
 
 With no changes the body says `No changes`; outside a git repository (or
 when the backend directory is not one) it says `Not a git repository` — the
-same signal the status bar's git branch uses (`GetVcsStatus`), since the
+same signal the metadata state's git branch uses (`GetVcsStatus`), since the
 diff route itself does not distinguish the two.
 
 ### Diff view interfaces
@@ -2851,20 +2826,20 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/bootstrap?directory=<dir>` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
-| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
+| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the metadata state's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
 | `GET /v1/sessions?includeArchived=true&projectId=<id>` | No body | `ListSessionsResponse.sessions: SessionInfo[]`, including archived chats (`archived`, `archivedAt`, `ephemeral`, `busy`, `timeUpdated`, `parent`, `projectId`). A plain local launch uses it to choose the latest durable root session of the active Project, preferring a tree with a waiting interaction. The `/sessions` and `/resume` pickers also include archived sessions by default. The `projectId` filter is optional for the pickers. |
 | `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); plain relaunch, `--resume`, `/resume`, F4 review, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; deletes the requested session and every descendant subagent session, while unrelated sessions remain. The TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); completes `/agent <name>`. |
 | `GET /v1/permission-modes?directory=<dir>` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
-| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |
+| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the metadata state's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
 | `POST /v1/sessions/{id}/revert` | `{}` (`/undo`) or `{undo: true}` (`/redo`) (`RevertSession`) | `RevertSessionResponse {session, files}`; `SessionInfo.revert` drives the pending-revert line (see [Undo, redo, and fork](#undo-redo-and-fork)) |
 | `POST /v1/sessions/{id}/fork` | `{}` or `{messageId}` (`ForkSession`, `/fork`) | `ForkSessionResponse {session, promptText}`; `SessionInfo.forkedFrom` is shown in the sidebar and `/status` |
 | `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and to seed the sidebar's `Todos` box when a session opens; `todoUpdated` frames keep it current. |
-| `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the status bar's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
+| `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the metadata state's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string, attachments?: PromptAttachment[]}}`; `PromptAttachment {name, mime?, data, path?}`, `data` standard base64 of the file bytes — see [Attachments](#attachments) | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
@@ -2876,7 +2851,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`, `outputLimit`, `reasoning`, `reasoningVariants`, `reasoningDefault`, `source`, `imageInput`); the `/model` picker tags rows by `providerId`, and `/effort` uses the advertised variants; `contextLimit` (a uint64 string, `0`/absent = unknown) is the metadata state's `ctx N%` denominator; the [Provider View](#provider-view) lists a provider's rows with their `source`; `imageInput: false` refuses attachments locally before a turn is sent (see [Attachments](#attachments); absent means unknown and is allowed). |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` (`id`, `kind`, `baseUrl`, `keySource`, `auth`, `modelCount`): the Provider View's list. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for command-pane suggestions and completion. |
 | `PUT /v1/providers/{id}`, `POST …/refresh`, `PUT …/models`, `DELETE …/models?modelId=`, `POST …/test` | See [Provider View interfaces](#provider-view-interfaces) | `ProviderUpdate` / `TestProviderModelResponse` |
@@ -2886,19 +2861,13 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/workflow` | No body | `WorkflowState` |
 | `POST /v1/sessions/{id}/workflow` | `{select: {name: string}}` or `{run: {name: string}}` | `SubmitWorkflowCommandResponse` |
 
-The message input has no surrounding status or footer rows. This keeps the
-bottom of the conversation clear and gives its transcript more room. Layout
-results, command errors, copy notices, and other status feedback use the one-row
-`StatusLine` immediately below `Header` and `StatusBar` at the top of the
-conversation. This is a local display contract over the existing
-`AppState.status: string`, with no new server operation or configuration.
-
-For example, run `/layout show`: its `Layout · 5 panes …` result appears near
-the header, and the input stays at the bottom without the `Alt+arrows select
-pane` instruction. Press `?` on an empty input (or run `/help`) to look up keys;
-Alt+arrows still select panes, and the global command overlay keeps its own
-completion and keyboard hint. Permission prompts and live turn activity retain
-their dedicated displays.
+Conversation has no surrounding heading, metadata, status, or footer rows.
+`ConversationPane` renders the transcript, active turn/prompt controls, and
+composer. `AppState.status: string` remains internal controller state and is not
+printed there. For example, `/layout show` no longer inserts a layout status
+line into the messages. Press `?` or `/help` for keys, or `/status` to explicitly
+open metadata. These use the existing overlays rather than an always-visible
+conversation banner. No server operation or configuration field is added.
 
 ### Stream frames and the transcript
 
@@ -2920,12 +2889,12 @@ rules follow the protocol guide's
 | `partReplaced {message, part, text}` | live (plugin rewrite) or durable (end of round) | Sets the part's whole text, replacing the live deltas. |
 | `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
 | `partsAdded {message, parts}` | durable | Appends each `parts[].attachment` to the message as an `attachment` part, skipping any part id already there (a reconnect/gap-fill duplicate); triggers a projection re-read. Sent for a prompt's image attachments (see [Attachments](#attachments)), right after the user message. |
-| `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the status line. |
+| `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the controller status state. |
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id. With `includeDescendants=true` a subagent's asks arrive here too (`event.session` = the child): they change only the pending list, never the open session's transcript. Other frames of another session are ignored. |
 | `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); also for a subagent's ask. |
 | `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. |
-| `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, the header and sidebar) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
+| `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, its explicit views and sidebar) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
 | `compactionApplied {untilSeq, strategy, message, foldedCount, manual}` | durable | Appended to `state.dividers` (once per seq) and spliced into the transcript right before `message`, the summary, or right after the message that was newest at the time until the summary is read (see [Notices](#notices)). A summary message (system role, `HYA_COMPACTED_CONTEXT` first line) without such a divider — a compaction from before the session was opened — gets a derived `── context compacted ──` divider (`state/messages.ts` `withDividers`, id `compaction-<message id>`). |
 | `tokensRecorded {message, model, usage}` | durable | With a non-empty `message`: the newest round, the live source of `ctx N%` (`state.liveRound`). Any `tokensRecorded` also re-reads the open session (debounced) for `SessionInfo.usage`. |
 | `todoUpdated {items}` | durable | Replaces the sidebar's todo list with `items` (the whole list). |
@@ -2992,27 +2961,27 @@ together.
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`; transcript notices spliced in by `withDividers()`, including the dividers derived from compaction summaries in the history. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
-| `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (status bar text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
+| `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (metadata state text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
 | `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
 | `src/state/providers.ts` | The [Provider View](#provider-view)'s pure state: `initialProviderView()`, `providerViewKey()` (screens, filter, busy), the pop-up forms (`addProviderForm()`, `setKeyForm()`, `addModelForm()`, `editModelForm()`, `formKey()`, `formPaste()`, `withSecretLength()`), validation (`validateProviderId()`, `validateBaseUrl()`), row text (`providerLine()`, `modelLine()`, `providerDetailHeader()`, `tokenCount()`, `discoveryNotice()`, `testResultText()`), `providerKeyRows` (footer hint and help), and `defaultModelRef()`. |
 | `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
 | `src/state/catalog.ts` | `/model`/`/effort`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
-| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the status line. |
+| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
-| `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
+| `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the controller status state. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar visibility modes and width breakpoints, plus `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned full-screen split tree, visibility filtering, migration, focus geometry, assignment, close/resize reducers, and the recursive renderer. |
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
 | `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
-| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
+| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the metadata state (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root split-tree mount and overlays, startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `StatusLine`, `Composer` (the message `<textarea>`, history, shell mode, file list, global key routing), `CommandPane` (separate `<input>`, suggestions, completion, command history), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
+| `src/components/` | `ConversationPane` (transcript and input, with no heading/status rows), `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `Composer` (the message `<textarea>`, history, shell mode, file list, global key routing), `CommandPane` (separate `<input>`, suggestions, completion, command history), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command pane's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z, and `toggleProjectsSidebar` on Ctrl+P) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
@@ -3142,7 +3111,7 @@ covers user and assistant styling, Markdown and code highlighting, reasoning
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
 heading previews without marker or color flashes, queued prompts, and the
-turn status line (`Ready`, provider errors).
+turn controller status state (`Ready`, provider errors).
 `e2e/hya-tui-commands-menu.spec.ts` covers the `/` command pane (open,
 fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
 commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,
@@ -3166,7 +3135,7 @@ ask in the parent view (its task card and sidebar row waiting), a
 `!command` shell turn that shows no prompt, and about 80 columns.
 `e2e/hya-tui-permission-modes.spec.ts` covers permission modes: Shift+Tab
 through xterm.js, the yolo confirmation (Esc, Enter, no second ask), the
-status bar colors, the transcript notice, a bash call under `yolo` without a
+metadata state colors, the transcript notice, a bash call under `yolo` without a
 prompt and under `manual` with one, a pending ask closed by switching to
 `yolo`, the `/permissions` picker (sources, filter, Up/Down, Shift+Tab, Esc,
 focus back to the input, `/permissions <mode>`), Shift+Tab in the command

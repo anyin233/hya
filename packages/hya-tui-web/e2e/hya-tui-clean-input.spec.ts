@@ -1,15 +1,18 @@
 import { expect, hyaTui, test } from "./hya"
 
 for (const width of [1100, 700]) {
-  test(`input has no layout status or footer around it (${width}px)`, async ({ tui, backend }) => {
+  test(`conversation has no heading, metadata or status rows (${width}px)`, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
-    await term.waitForText("Connected to hya")
+    await term.waitForText("Message, !shell, or @file · / commands")
     await term.type("/layout show")
     await term.press("Enter")
-    await term.waitForText("Layout · 5 panes")
-    const status = (await term.find("Layout · 5 panes"))!
-    const header = (await term.find("hya ·"))!
-    expect(status.row).toBe(header.row + 2)
+    await expect.poll(() => term.find("Commands")).toBeNull()
+    await term.waitForText("No messages yet. Type a prompt below.")
+    const empty = (await term.find("No messages yet. Type a prompt below."))!
+    expect(empty.row).toBe(1)
+    expect(await term.find("hya ·")).toBeNull()
+    expect(await term.find("mode manual")).toBeNull()
+    expect(await term.find("Layout · 5 panes")).toBeNull()
     expect(await term.find("Alt+arrows select pane")).toBeNull()
     expect(await term.find("Enter a prompt · /new creates a session")).toBeNull()
     await term.type("clean input draft")
@@ -19,13 +22,17 @@ for (const width of [1100, 700]) {
     expect(draft.row).toBe(rows - 2)
     await term.resize(width === 1100 ? 700 : 1100, 640)
     await term.waitForText("clean input draft")
-    expect((await term.find("Layout · 5 panes"))!.row).toBe(2)
+    expect((await term.find("No messages yet. Type a prompt below."))!.row).toBeLessThanOrEqual(1)
     await term.press("Control+x")
     await term.type("/layout assign invalid")
     await term.press("Enter")
-    await term.waitForText("Usage: /layout assign")
-    expect((await term.find("Usage: /layout assign"))!.row).toBe(2)
-    await term.press("Control+c")
-    await term.waitForText("Press Ctrl+C again to quit")
+    await expect.poll(() => term.find("Commands")).toBeNull()
+    expect(await term.find("Usage: /layout assign")).toBeNull()
+    await term.attach(testInfo, "conversation-without-headings")
+    await term.press("Enter")
+    await term.waitForText("┃ clean input draft")
+    await term.waitForText("No live provider is available", 20_000)
+    expect(await term.find("hya ·")).toBeNull()
+    expect(await term.find("mode manual")).toBeNull()
   })
 }
