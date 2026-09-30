@@ -45,6 +45,7 @@ test("bash: the command, exit status, duration, and output tail", () => {
   const clean = toolCard({ tool: "bash", state: ok, inputJson: json({ command: "echo hi" }), outputJson: json({ output: "hi\n", metadata: { exit: 0 } }) })
   expect(clean.summary).toBe("echo hi")
   expect(clean.body).toEqual([{ text: "$ echo hi", tone: "fg" }, { text: "hi", tone: "muted" }])
+  expect(clean.output).toEqual([{ text: "hi", tone: "muted" }])
 })
 
 test("bash: a shell turn's command is used when the part has no input yet", () => {

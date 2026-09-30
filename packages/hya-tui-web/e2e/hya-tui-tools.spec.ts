@@ -97,6 +97,7 @@ test.describe("bash card", () => {
     await term.waitForText("│ first")
     const output = await at(term, "│ second")
     expect((await term.cell(output.row, output.col + 2))?.fg).toBe(colors.muted)
+    expect(await term.find("$ printf")).toBeNull()
     await term.waitForText("Tool calls expanded · Ctrl+G toggles")
     await term.attach(testInfo, "bash-expanded")
 
