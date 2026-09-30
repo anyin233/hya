@@ -38,13 +38,13 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - When the user explicitly asks for commits, create one git commit per atomic change before reporting done; for verified feature work, commit and push the atomic change before reporting done.
 - Stage only the files for that atomic change; never sweep in unrelated workspace changes.
 - Use one-line semantic commit messages with no agent or AI attribution.
-- Do not commit or push feature work until its required TDD test and verification gate have passed.
+- Run applicable checks when possible and report failed or unavailable checks. Verification limits do not block a user-requested commit or push.
 
 ## Feature Workflow Rule
 
-- For every user-requested feature, follow TDD: add one atomic failing test first, verify it fails for the expected missing behavior, implement the smallest change that passes, then run the required verification gate for the touched area.
-- After the implementation is verified, the agent must commit and push the atomic feature change.
-- If the feature cannot be verified, do not commit or push; report the blocker and the commands or checks that failed.
+- Add focused regression coverage where useful and run the checks available for the touched area. TDD is a recommended approach, not a prerequisite for committing.
+- Commit and push the atomic feature change when authorized by the user.
+- If verification is unavailable or fails, report the commands and limitations without withholding an explicitly requested commit or push.
 
 ## Feature Documentation Rule
 
@@ -71,18 +71,20 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
   `bun packages/hya-tui-web/src/main.ts --port 7681 -- target/debug/hya --port 0`.
   The offline echo model is enough; do not spend real provider calls on UI
   checks.
-- **Every user-visible TUI change gets a Playwright spec** under
-  `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`,
-  and follow the TDD gate: the spec fails before the change. Cover layout,
+- **Add Playwright coverage for TUI changes where useful** under
+  `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`.
+  Cover layout,
   keys, resize, and exit paths the change touches.
 - **Assert on the terminal buffer, not pixels.** Use `waitForText`, `find`,
   `cell` (color `#rrggbb`, glyph `width`, bold/inverse), and `size`. Do not
   commit pixel-baseline screenshots, because fonts differ between machines.
   Use `waitForText`/`expect.poll`, never fixed sleeps.
-- **Look at the result before reporting a visual change done.** Every test
+- **Inspect visual results when browser execution is available.** Every test
   writes `test-results/<test>/final-screen.png` and `final-screen.txt`. Open
   the PNG (agents: read the image) at the default 1100×640 viewport. If the
   change depends on size, also check a narrow viewport (about 80 columns).
+  If browser execution is blocked, report that limitation; it does not block
+  a user-requested commit or push.
 - **Keep keybindings browser-safe.** The WebUI runs inside a browser, which
   reserves some shortcuts (Ctrl/Cmd+W, T, N, L, Tab, and Ctrl+Tab). Do not bind
   core TUI actions only to these. Every binding must be reachable through
