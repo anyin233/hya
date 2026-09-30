@@ -21,17 +21,12 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 
 ## Forum Rule
 
-- Agents discuss with each other and keep durable project knowledge on this
-  project's board, `.forum/` at the main checkout's root. Read `.forum/index.md`
-  first. Use the `forum` skill for thread and post formats and for `zg` search.
-- `.planning/` holds one task's working state. `.forum/` holds what other
-  agents and later sessions need: questions, handoffs, decisions and their
-  reasons, and knowledge threads for pitfalls and environment facts about this
-  repository. When a finished plan produces something worth keeping, promote it
-  to the forum.
-- `.forum/` is its own git repository, excluded locally through
-  `.git/info/exclude`. Never stage it or reference it in this repository's
-  commits.
+- `.planning/` holds one task's working state; `.forum/` (conventions: global
+  `AGENTS.md` and the `forum` skill) holds what other agents and later sessions
+  need. When a finished plan produces something worth keeping (a pitfall, an
+  environment fact, a decision and its reasons), record it on the forum as a
+  question with its answer; put proposals and handoffs between agents in a
+  discussion thread.
 
 ## Commit Rule
 
