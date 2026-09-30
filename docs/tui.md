@@ -1226,61 +1226,46 @@ The projects sidebar and the auxiliary sessions/todos/context sidebar each use
 approximately half their previous width, leaving more room for the composer.
 
 
-Every tool call of an assistant message is a card. The header is one line:
+Every tool call of an assistant message is a transparent, outlined card. The
+header names the canonical tool and shows its state icon and duration. The
+first content row is the complete compact JSON argument object; while collapsed
+it stays to one terminal row to keep large calls from pushing the composer down.
+Expanding the card wraps the complete arguments and shows the output below a
+divider (the divider is omitted when there is no output). Errors are shown below
+the output in the error color.
 
 ```text
-✓ read  src/main.rs · lines 1-40 of 212                          3ms
-⠹ bash  cargo test -p hya-core
-◌ bash  rm -rf target · awaiting approval
-✗ read  missing.txt
-  File not found: /work/missing.txt
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ✓ read                                                                  │
+│ {"path":"src/main.rs","offset":1,"limit":40}                         │
+│ ──────────────────────────────────────────────────────────────────────── │
+│ 1  fn main() {                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **State icon.** `○` pending (the model is still streaming the
-  arguments), a spinner (`⠋⠙⠹…`, accent) while it runs, `◌` (warning color)
-  while a permission request for this call waits (its interaction's
-  `payload.callId` is the card's call id), `✓` (green) done, `✗` (error
-  color) failed.
-- **Tool name** in bold, then a **summary** (muted) that depends on the tool
-  (below), clipped to the width, and the **duration** on the right once the
-  call is done (`42ms`, `1.5s`, `12s`, `1m 5s`).
-- A failed call adds its error message on the next line in the error color,
-  collapsed or not.
+- **State icon.** `○` pending, a spinner (`⠋⠙⠹…`) while running, `◌` while a
+  permission request waits, `✓` done, and `✗` failed. Duration appears on the
+  right once a call is done.
+- **Expanding.** Cards are collapsed by default. Ctrl+G or `/tools` expands or
+  collapses all of them (`/tools on`, `/tools off`; with no argument it toggles).
+  A click toggles one card; the input keeps focus. `!command` shell turns start
+  expanded. Tool output is clipped to the existing 12-line head/tail window.
 
-**Expanding.** Cards are collapsed by default; expanded, the body shows under
-the header beside a bar. Ctrl+G or `/tools` expands or collapses all of them
-(`/tools on`, `/tools off`; with no argument it toggles) and forgets
-per-card choices, like `/thinking`. A click on one card toggles just that
-card; the input keeps the focus. The cards of a `!command` shell turn start
-expanded, so you see the output you asked for. A body longer than 12 lines
-keeps its first 5 and last 6 lines around a `… N lines hidden` row.
+The tool name and arguments are independent of the tool-specific summary, which
+is still used in activity text and narrow views:
 
-| Tool (canonical name) | Summary | Expanded body |
+| Tool (canonical name) | Summary | Expanded output |
 | --- | --- | --- |
-| `bash` (hidden alias `shell`) | The command (first line), then `· exit N` for a non-zero exit and `· timed out` | `$ <command>`, the output (muted), the exit status (error color) |
-| `read` | `<path> · lines A-B of N` (from the output's display metadata; before that, from `offset` / `limit`) | The text with line numbers |
-| `edit` | `<path> · +A -D` | The diff: the output's `metadata.diff` (unified diff), else rows derived from the arguments (`edits[].oldText`/`newText`, `lines`; compat `oldString`/`newString`) |
-| `write` | `<path> · N lines` | The content, every row an addition |
-| `apply_patch` (alias `patch`) | The files, `· +A -D` | The patch envelope: file headers, `@@` hunks, `+`/`-`/context rows |
-| `grep` | `"<pattern>" in <path> (<glob>) · N matches` | `file:line: text` per match |
-| `glob`, `find` | `<pattern> in <path> · N files` | The paths |
-| `ls` | `<path> · N entries` | The listing |
-| `lsp` | `<operation> <file>:<line>:<character>` | The output |
-| `todo__read`, `todo__update_status`, `todo__update_content` (and older `todo*`) | `N todos · D done` | The list, `☐` pending, `▸` in progress, `!` blocked, `✓` completed |
-| `webfetch` (alias `fetch`) | The URL | The output |
-| `websearch` (alias `search`) | `"<query>"` | The output |
-| `skill` | The skill name | — |
-| `ask_user` (alias `question`) | `<header>: <question>` of the first question | The answers |
-| `task` | `<subagent_type> · <description>` | A subagent card (below) |
-| anything else (MCP `server__tool`, plugin tools) | The arguments as compact JSON | The output text |
+| `bash` (hidden alias `shell`) | The command, then exit/timed-out status | Command output and exit status |
+| `read` | Path and line range | File text with line numbers |
+| `edit`, `write`, `apply_patch` | Path and change summary | Diff, new content, or patch rows |
+| `grep`, `glob`, `find`, `ls`, `lsp` | Scope and count/operation | Matching output |
+| `task` | Agent type and description | Linked subagent activity |
+| anything else (MCP/plugin tools) | Compact JSON arguments | Tool output |
 
-Diff rows are colored: `+` added (green), `-` removed (red), hunk and file
-headers blue, context muted. While a call's arguments still stream (state
-`PENDING`, `inputJson` not complete), the summary reads the main string field
-(`command`, `path`, `pattern`, `url`, `query`, …) out of the partial JSON.
-
-Cards appear and update as the stream frames arrive, before the projection
-is re-read (see [Stream frames and the transcript](#stream-frames-and-the-transcript)).
+Arguments still stream before the call is complete; the card keeps updating from
+the call's argument fragments. Cards appear before the projection is re-read (see
+[Stream frames and the transcript](#stream-frames-and-the-transcript)).
 
 ### Subagents
 

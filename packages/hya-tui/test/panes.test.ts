@@ -47,3 +47,12 @@ test("default layout uses half-width project and context sidebars", () => {
   expect(root.weight).toBe(0.1)
   expect(root.second.weight).toBe(0.88)
 })
+
+test("version 2 default layout migrates its legacy sidebar widths", () => {
+  const legacy = { ...defaultPaneLayout(), root: { type: "split" as const, axis: "vertical" as const, weight: 0.18, first: { type: "pane" as const, id: "pane-2", kind: "projects" as const }, second: { type: "split" as const, axis: "vertical" as const, weight: 0.74, first: { type: "pane" as const, id: "pane-1", kind: "conversation" as const }, second: { type: "pane" as const, id: "pane-3", kind: "sessions" as const } } } }
+  const migrated = parsePaneLayout(legacy)
+  expect(migrated?.root.type).toBe("split")
+  if (migrated?.root.type !== "split" || migrated.root.second.type !== "split") return
+  expect(migrated.root.weight).toBe(0.1)
+  expect(migrated.root.second.weight).toBe(0.88)
+})
