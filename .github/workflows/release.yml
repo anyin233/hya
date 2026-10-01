@@ -233,7 +233,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          for directory in artifacts/release-assets-*; do cp "$directory"/* dist/; done
+          for directory in artifacts/release-assets-*; do
+            for asset in "$directory"/*; do
+              if [[ -f "$asset" ]]; then cp "$asset" dist/; fi
+            done
+          done
           if [[ "$COMPONENT" == backend ]]; then
             (cd dist && shasum -a 256 ./*.tar.gz ./*.sh ./*.hyabundle > SHA256SUMS)
           else
