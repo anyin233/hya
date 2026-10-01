@@ -24,6 +24,15 @@ test("a missing file loads as no preferences, without a warning", () => {
   expect(loadPreferences(path)).toEqual({ preferences: {} })
 })
 
+test("custom command shortcuts round-trip and normalize while invalid bindings warn without discarding other preferences", () => {
+  const path = join(temp(), "tui.json")
+  savePreferences(path, { keybindings: { f6: { command: "/layout focus left", scope: "workspace" } } })
+  expect(loadPreferences(path).preferences.keybindings).toEqual({ F6: { command: "/layout focus left", scope: "workspace" } })
+  writeFileSync(path, JSON.stringify({ theme: "light", vim: true, keybindings: { "Ctrl+C": { command: "/tools", scope: "conversation" } } }))
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light", vim: true })
+  expect(loadPreferences(path).warning).toContain("already bound to quit")
+})
+
 test("a corrupt file loads as no preferences, with a warning naming the file", () => {
   const path = join(temp(), "tui.json")
   writeFileSync(path, "{ not json")
