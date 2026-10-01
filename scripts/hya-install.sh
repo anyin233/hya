@@ -10,8 +10,9 @@
 #
 # Environment (flags win over environment):
 #   HYA_REPO          GitHub owner/repo of the releases     (anyin233/hya)
-#   HYA_RELEASES_URL  release base URL; must serve latest/download/<asset>
-#                     and download/v<version>/<asset>      (https://github.com/$HYA_REPO/releases)
+#   HYA_RELEASES_URL  release base URL; must serve side/latest/download/<asset>
+#                     and side/download/v<version>/<asset> (GitHub Releases uses
+#                     backend/ for this installer)
 #   HYA_VERSION       version to install                    (latest)
 #   HYA_INSTALL_DIR   install prefix                        ($HOME/.local)
 #   HYA_TARGET        override the detected target triple
@@ -28,7 +29,7 @@ usage() {
   cat <<'USAGE'
 Usage: hya-install.sh [--version VERSION] [--prefix DIR] [--force]
 
-Install or update hya from its GitHub release.
+Install or update the hya backend from its release archive.
 
   --version VERSION  install this release (default: the latest release)
   --prefix DIR       install into DIR/bin, DIR/lib/hya, DIR/bundles
@@ -143,6 +144,26 @@ sha256_of() {
   fi
 }
 
+latest_version() {
+  api=${HYA_RELEASES_API_URL:-https://api.github.com/repos/$repo/releases?per_page=100}
+  api_file=$tmp/releases.json
+  download "$api" "$api_file" || die "could not list backend releases at $api"
+  latest=$(awk -v side="backend/" '
+    BEGIN { RS="\\}," }
+    {
+      if (index($0, "\"prerelease\": false") == 0) next
+      marker = "\"tag_name\": \"" side
+      start = index($0, marker)
+      if (start == 0) next
+      rest = substr($0, start + length(marker))
+      end = index(rest, "\"")
+      if (end > 0) { print substr(rest, 1, end - 1); exit }
+    }
+  ' "$api_file")
+  [ -n "$latest" ] || die "no published backend release found"
+  printf '%s\n' "$latest"
+}
+
 # `hya --version` prints `hya <version>`.
 installed_version() {
   "$1" --version 2>/dev/null | awk 'NR == 1 { print $NF }'
@@ -201,21 +222,35 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ -n "$version" ]; then
-  sums_url=$releases/download/v$version/SHA256SUMS
+  sums_url=$releases/download/backend/v$version/SHA256SUMS
   label=$version
+  download "$sums_url" "$tmp/SHA256SUMS" || die "no hya release $label at $sums_url"
 else
-  sums_url=$releases/latest/download/SHA256SUMS
+  sums_url=$releases/latest/download/backend/SHA256SUMS
   label=latest
+  if ! download "$sums_url" "$tmp/SHA256SUMS"; then
+    case "$releases" in
+      https://github.com/*|http://github.com/*)
+        version=$(latest_version)
+        sums_url=$releases/download/backend/v$version/SHA256SUMS
+        download "$sums_url" "$tmp/SHA256SUMS" || die "no hya release $label at $sums_url"
+        ;;
+      *)
+        sums_url=$releases/latest/download/SHA256SUMS
+        download "$sums_url" "$tmp/SHA256SUMS" || die "no hya release $label at $sums_url"
+        ;;
+    esac
+  fi
 fi
-download "$sums_url" "$tmp/SHA256SUMS" || die "no hya release $label at $sums_url"
+
 
 archive=""
 expected=""
 while read -r sum name; do
   name=${name#\*}
   case $name in
-    hya-*-"$target".tar.gz)
-      if [ -z "$version" ] || [ "$name" = "hya-$version-$target.tar.gz" ]; then
+    hya-backend-*-$target.tar.gz)
+      if [ -z "$version" ] || [ "$name" = "hya-backend-$version-$target.tar.gz" ]; then
         archive=$name
         expected=$sum
       fi
@@ -223,7 +258,7 @@ while read -r sum name; do
   esac
 done <"$tmp/SHA256SUMS"
 [ -n "$archive" ] || die "hya release $label has no archive for $target"
-release=${archive#hya-}
+release=${archive#hya-backend-}
 release=${release%-"$target".tar.gz}
 
 if [ "$force" -eq 0 ] && [ -x "$prefix/bin/hya" ] &&
@@ -232,9 +267,9 @@ if [ "$force" -eq 0 ] && [ -x "$prefix/bin/hya" ] &&
   exit 0
 fi
 
-say "Downloading hya $release for $target"
-download "$releases/download/v$release/$archive" "$tmp/$archive" ||
-  die "could not download $releases/download/v$release/$archive"
+say "Downloading hya backend $release for $target"
+download "$releases/download/backend/v$release/$archive" "$tmp/$archive" ||
+  die "could not download $releases/download/backend/v$release/$archive"
 actual=$(sha256_of "$tmp/$archive")
 [ "$actual" = "$expected" ] ||
   die "checksum mismatch for $archive: expected $expected, got $actual"
@@ -244,9 +279,12 @@ mkdir -p "$prefix/bin" "$prefix/lib/hya" "$prefix/bundles"
 stage=$prefix/.hya-install.$$
 mkdir -p "$stage/new" "$stage/old/bin" "$stage/old/lib" "$stage/old/bundles"
 tar -xzf "$tmp/$archive" -C "$stage/new"
-package_dir=$stage/new/hya-$release-$target
-[ -f "$package_dir/bin/hya" ] || die "$archive has no hya-$release-$target/bin/hya"
-(cd "$package_dir/lib/hya" && for name in *; do if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/lib.list"
+package_dir=$stage/new/hya-backend-$release-$target
+[ -f "$package_dir/bin/hya" ] || die "$archive has no hya-backend-$release-$target/bin/hya"
+[ ! -e "$package_dir/bin/bun" ] || die "$archive unexpectedly contains frontend bin/bun"
+[ ! -e "$package_dir/tui" ] || die "$archive unexpectedly contains frontend tui"
+[ ! -e "$package_dir/tui-web" ] || die "$archive unexpectedly contains frontend tui-web"
+(cd "$package_dir/lib/hya" && for name in *; do case $name in tui|tui-web) continue ;; esac; if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/lib.list"
 (cd "$package_dir/bundles" && for name in hya-*.hyabundle; do if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/bundles.list"
 
 swapping=1
@@ -274,7 +312,7 @@ placed=$(installed_version "$prefix/bin/hya" || true)
   die "the installed hya reports version '${placed:-none}', expected $release"
 swapping=0
 
-say "Installed hya $release to $prefix/bin/hya"
+say "Installed hya backend $release to $prefix/bin/hya"
 # Compare real directories: a PATH entry may reach <prefix>/bin through a
 # symlink (macOS /tmp is /private/tmp).
 real_bin=$(cd "$prefix/bin" && pwd -P)

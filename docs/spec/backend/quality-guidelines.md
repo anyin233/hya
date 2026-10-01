@@ -411,63 +411,67 @@ engine.refresh_runtime(|candidate| {
 
 ### 2. Signatures
 
-- Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya-backend` package version.
+- Release tags: `backend/<version>` for backend releases and
+  `frontend/<version>` for frontend releases. Backend version mirrors Cargo's
+  `hya-backend` package; frontend version is independent.
 - Release targets (build job matrix): `x86_64-unknown-linux-gnu`
   (`ubuntu-22.04`), `aarch64-unknown-linux-gnu` (`ubuntu-22.04-arm`),
   `aarch64-apple-darwin` (`macos-15`).
-- Cargo command per target: `cargo build --release --locked -p hya-backend --bins --target "$TARGET"`,
-  plus the five tool-family libraries.
-- Release archive per target: `hya-<version>-<target>.tar.gz`.
-- Bundle assets: `hya-<name>-<version>-<target>.hyabundle` (native tool
-  families, per target) and `hya-<name>-<version>.hyabundle` (the seven
-  platform-independent first-party bundles, once).
-- Checksum files: `SHA256SUMS-<target>` from each build job and a combined
-  `SHA256SUMS` from the release job, written with `shasum -a 256`.
+- Backend archive per target: `hya-backend-<version>-<target>.tar.gz` with
+  `bin/hya`, backend bundles, and the adapter; no TUI/WebUI.
+- Frontend archive per target: `hya-frontend-<version>-<target>.tar.gz` with
+  `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`; no `bin/hya`.
+- Installer assets: `hya-install.sh` for backend and `hya-tui-install.sh` for
+  frontend. Each side publishes its own `SHA256SUMS` and release body command.
+- Checksum files: each build job writes a side archive checksum, and the
+  release job publishes a combined `SHA256SUMS`, all with `shasum -a 256`.
 - Non-publishing rehearsal on a host of the rehearsed target (requires Bun
-  `1.4.2`, `actionlint` `1.7.12`, 7-Zip `7z`, and `shasum` on `PATH`):
+  `1.4.2`, `actionlint`, 7-Zip `7z`, and `shasum` on `PATH`):
 
 ```sh
 cargo run -p xtask -- release-rehearsal \
+  --component backend|frontend \
   --workflow .github/workflows/release.yml \
-  --version <workspace version> \
+  --version <side version> \
   --target "$(rustc -vV | sed -n 's/^host: //p')" \
   --no-publish
 ```
 
 ### 3. Contracts
 
-- `CHANGELOG_BACKEND.md` and `CHANGELOG_FRONTEND.md` each contain only the newest release notes for that side.
-- Historical side-specific changelogs live under `docs/changes/CHANGELOG_BACKEND_<version>.md` and `docs/changes/CHANGELOG_FRONTEND_<version>.md`.
-- The GitHub Release body for a backend tag is read verbatim from `CHANGELOG_BACKEND.md`.
-- Release workflow permissions are read-only by default; only the release publishing job may request `contents: write`.
-- Build provenance attestations are generated for every archive, bundle asset,
-  and checksum file.
+- `CHANGELOG_BACKEND.md` and `CHANGELOG_FRONTEND.md` each contain only the
+  newest release notes for that side; the release body appends that side's
+  pinned one-click install command.
+- Historical side-specific changelogs live under
+  `docs/changes/CHANGELOG_BACKEND_<version>.md` and
+  `docs/changes/CHANGELOG_FRONTEND_<version>.md`.
+- Release workflow permissions are read-only by default; only the release
+  publishing job may request `contents: write`.
+- Build provenance attestations are generated for every archive, checksum
+  file, and installer.
 - Third-party release actions are pinned to immutable commit SHAs.
-- The publishing job uses the `release` environment so repository settings can require manual approval.
-- Within the release archive, the payload includes the shipped `hya` binary,
-  the eleven first-party bundles under `bundles/`, the production
-  `lib/hya/bun-adapter`, and the generated member
-  `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
-- Platform-independent bundles must be byte-identical across targets; the
-  release job compares them before publishing.
-  (The legacy frontend launcher/runtime payload was removed with the legacy
-  TUI.)
-- `scripts/package-argus-example.sh` generates that member from tracked source
-  `bundles/examples/argus-example`; no root `examples/` artifact is an input.
+- The publishing job uses the `release` environment so repository settings can
+  require manual approval.
+- Backend release payload includes `bin/hya`, the eleven first-party backend
+  bundles under `bundles/`, and production `lib/hya/bun-adapter`; it excludes
+  the TUI and WebUI. The frontend release separately carries
+  `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`, and excludes
+  `bin/hya`.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
   in a temporary directory, and never creates a tag or GitHub Release.
-- `release-rehearsal` owns the pinned `actionlint` and embedded-shell checks.
-  The current CI workflow does not run `actionlint` as a separate gate.
 
 ### 4. Validation & Error Matrix
 
-- Missing `v` tag prefix -> fail before build.
+- Missing `backend/<version>` or `frontend/<version>` tag -> fail before build.
 - Tag version is not semver-shaped -> fail before build.
-- Tag version differs from `cargo metadata` package version for `hya-backend` -> fail before build.
-- Missing or empty `CHANGELOG_BACKEND.md` -> fail before publishing.
-- `CHANGELOG_BACKEND.md` first heading differs from the tag version -> fail before build.
-- Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
-- Missing release assets -> fail `softprops/action-gh-release` with `fail_on_unmatched_files: true`.
+- Backend tag version differs from `cargo metadata` package version for
+  `hya-backend` -> fail before build.
+- Missing or empty side-specific changelog, or a heading that differs from its
+  tag version -> fail before publishing.
+- Build, archive, checksum, or packaged-binary smoke failure -> skip release
+  publishing.
+- Missing release assets -> fail the release publisher with
+  `fail_on_unmatched_files: true`.
 - Missing `--no-publish` -> rehearsal rejects before validation or build.
 - `actionlint` missing or not version `1.7.12`, or Bun not version `1.4.2` ->
   rehearsal fails its pinned prerequisite check.
@@ -476,8 +480,8 @@ cargo run -p xtask -- release-rehearsal \
 - Rehearsal target outside the build matrix, a matrix that differs from the
   supported targets, or a target other than the host -> rehearsal fails before
   build.
-- Platform-independent bundle bytes differ between targets -> the release job
-  fails before publishing.
+- Backend rehearsals verify each target's platform-independent bundle contents
+  before publication.
 - Missing Bun adapter runtime, Argus package, locked production dependency,
   first-party bundle, or archive member -> package/rehearsal smoke fails
   before publication.

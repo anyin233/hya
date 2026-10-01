@@ -1,10 +1,11 @@
 # Secure self-update (0.43.4)
 
-The `hya-updater` crate is the independent update trust boundary. It does
-**not** depend on `hya-core`, plugins, MCP, bundles, app config, or session
-storage. Its command surface is `hya update …` on the unified `hya` executable
-(the standalone `hya-updater` binary was removed in 0.38.0); `hya` dispatches
-`update` before composing any runtime.
+The `hya-updater` crate is the independent signed-update trust boundary. It
+does **not** depend on `hya-core`, plugins, MCP, bundles, app config, or
+session storage. Its command surface is the signed updater subcommands under
+`hya update …`; the standalone `hya-updater` binary was removed in 0.38.0.
+The ordinary `hya update` path installs the backend release, while
+`hya update tui` installs the separately released frontend.
 
 Production activation requires an explicit capability issued by the trusted
 updater owner. The capability binds the exact candidate release sequence and
@@ -18,10 +19,11 @@ same trust domain and must be protected by host ownership/permissions.
 Network download is **outside** the TCB; download a complete package directory
 first, then verify/stage/activate.
 
-`install.sh` remains break-glass bootstrap and manual recovery. Bare
-`hya update` (no subcommand) is a different, non-TCB path: it reinstalls from
-the published GitHub release, checked against its `SHA256SUMS`
-([install.md](install.md)).
+`install.sh` remains the break-glass source bootstrap and manual recovery path;
+it is separate from the release split. Ordinary `hya update` (no subcommand)
+reinstalls the backend from its published GitHub release, while `hya update
+tui` installs the frontend release; both are checked against their side's
+`SHA256SUMS` ([install.md](install.md)).
 
 ## Rebuild and restart (source checkout)
 

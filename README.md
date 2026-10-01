@@ -25,25 +25,36 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (backend version `0.43.42`, frontend version `0.43.40`,
-`MIT OR Apache-2.0`). The frontend requires a backend at least `0.43.41`.
-The latest public binary release is `v0.43.37`; install it as described below,
-or build this checkout from source. It is not published to crates.io. APIs,
-config, and command surfaces may still change between versions.
+hya is under active development (backend version `0.44.0`, frontend version
+`0.44.0`, `MIT OR Apache-2.0`). The frontend requires a backend at least
+`0.43.41`. Backend and frontend releases are independent; release tags are
+`backend/<version>` and `frontend/<version>`, so there is no single complete
+`v<version>` package. APIs, config, and command surfaces may still change.
 
 ## Install a Release
 
-Linux (x86_64, arm64, glibc) and macOS (Apple silicon):
+The backend and frontend are installed separately. Pin a backend release with
+the release body's one-click command:
 
 ```sh
-curl -fsSL https://hya.ed-aisys.com/install.sh | sh
-hya update   # later: move to the newest release
+curl -fsSL https://github.com/anyin233/hya/releases/download/backend/<version>/hya-install.sh | sh
+hya update                         # later: update the backend
 ```
 
-The release package includes Bun, so nothing else needs to be installed. It
-installs into `~/.local` by default. The installer verifies the release's
-`SHA256SUMS` and rolls back a failed update. See [Install and update](docs/install.md)
-for options, mirrors, and hosting the script yourself.
+Then install the optional frontend from its release:
+
+```sh
+curl -fsSL https://github.com/anyin233/hya/releases/download/frontend/<version>/hya-tui-install.sh | sh
+hya update tui                     # later: update the frontend
+```
+
+Backend archives contain `bin/hya`, backend bundles, and the Bun adapter, but
+no TUI/WebUI. Frontend archives contain `lib/hya/bin/bun`, `lib/hya/tui`, and
+`lib/hya/tui-web`, but no `bin/hya`; a frontend-only install therefore cannot
+provide the `hya` command until the backend is installed. Backend-only
+commands such as `hya serve` and `hya exec` work without the frontend. See
+[Install and update](docs/install.md) for targets, options, compatibility, and
+the side-specific `latest` caveat.
 
 
 ## Build From Source
@@ -60,13 +71,13 @@ export PATH="$HOME/.local/bin:$PATH"
 hya serve
 ```
 
-The installer places `bin/hya`, the eleven first-party bundles it loads at
-startup under `bundles/`, and three Bun programs with their production
-dependencies under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions),
-`tui/` (the terminal UI bare `hya` starts), and `tui-web/` (the WebUI host).
-Bun must be on `PATH`. Release archives use the same layout and also ship
-Bun at `lib/hya/bin/bun`; each first-party bundle is also published as a
-standalone release asset (see
+The source installer places `bin/hya`, the eleven first-party backend bundles
+under `bundles/`, and the three Bun programs with their production dependencies
+under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions), `tui/` (the
+terminal UI), and `tui-web/` (the WebUI host). Bun must be on `PATH`. Release
+archives are split: the backend archive has `bin/hya`, bundles, and the
+adapter; the frontend archive has Bun and the TUI/WebUI but no `bin/hya`.
+Each first-party bundle is also published as a standalone release asset (see
 [first-party bundles](docs/bundle-runtime.md#release-assets)).
 
 
