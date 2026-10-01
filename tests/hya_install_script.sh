@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Contract tests for the side-specific curl-pipe release installers.
+# Contract tests for the curl-pipe release installer (`scripts/hya-install.sh`)
+# that installs the backend and frontend releases, together or one side alone.
 set -Eeuo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
-backend_installer="$root/scripts/hya-install.sh"
-frontend_installer="$root/scripts/hya-tui-install.sh"
+installer="$root/scripts/hya-install.sh"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/hya-install-test.XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 target=x86_64-unknown-linux-gnu
 releases="$scratch/releases"
 backend_prefix="$scratch/backend-prefix"
 frontend_prefix="$scratch/frontend-prefix"
+both_prefix="$scratch/both-prefix"
 mkdir -p "$releases"
 
 fail() { printf 'hya installer contract: %s\n' "$*" >&2; exit 1; }
@@ -70,14 +71,15 @@ publish_latest() {
   cp "$releases/download/$side/$version/SHA256SUMS" "$releases/latest/download/$side/SHA256SUMS"
 }
 
-backend_install() {
+install_into() {
+  local prefix=$1
+  shift
   env HYA_RELEASES_URL="file://$releases" HYA_TARGET="$target" HOME="$scratch/home" \
-    sh "$backend_installer" --prefix "$backend_prefix" "$@"
+    sh "$installer" --prefix "$prefix" "$@"
 }
-frontend_install() {
-  env HYA_RELEASES_URL="file://$releases" HYA_TARGET="$target" HOME="$scratch/home" \
-    sh "$frontend_installer" --prefix "$frontend_prefix" "$@"
-}
+backend_install() { install_into "$backend_prefix" --backend-only "$@"; }
+frontend_install() { install_into "$frontend_prefix" --tui-only "$@"; }
+frontend_version_of() { awk -F '"' '/frontendVersion =/ { print $2; exit }' "$1/lib/hya/tui/frontend-version.ts"; }
 
 # Backend-only install: it provides hya and backend runtime, never frontend files.
 make_backend_release 9.9.1
@@ -94,7 +96,7 @@ out="$(backend_install 2>&1)" || fail "backend install failed: $out"
 # Reinstall is a no-op; force replaces the backend payload.
 touch "$backend_prefix/lib/hya/bun-adapter/untouched"
 out="$(backend_install 2>&1)" || fail "backend repeat failed: $out"
-grep -q 'already installed' <<<"$out" || fail 'backend no-op was not reported'
+grep -q 'backend 9.9.1 is already installed' <<<"$out" || fail "backend no-op was not reported: $out"
 [[ -e "$backend_prefix/lib/hya/bun-adapter/untouched" ]] || fail 'backend no-op replaced files'
 out="$(backend_install --force 2>&1)" || fail "backend force failed: $out"
 [[ ! -e "$backend_prefix/lib/hya/bun-adapter/untouched" ]] || fail 'backend force did not replace files'
@@ -105,25 +107,72 @@ if out="$(backend_install --version 9.9.2 2>&1)"; then fail 'corrupt backend ins
 grep -qi checksum <<<"$out" || fail "backend checksum error is unclear: $out"
 [[ "$("$backend_prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'checksum failure changed backend'
 
-# Frontend-only install has no hya command; adding it beside a backend preserves bin/hya.
+# A backend that reports the wrong version is rolled back.
+make_backend_release 9.9.3 0.0.1
+if out="$(backend_install --version 9.9.3 2>&1)"; then fail 'misreporting backend installed'; fi
+grep -q 'restored the previous backend' <<<"$out" || fail "backend rollback was not reported: $out"
+[[ "$("$backend_prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'backend rollback did not restore hya'
+[[ "$(cat "$backend_prefix/bundles/hya-base-tools.hyabundle")" == 9.9.1 ]] || fail 'backend rollback did not restore bundles'
+
+# Frontend-only install has no hya command and says how to add it.
 make_frontend_release 8.8.1
 publish_latest frontend 8.8.1
 out="$(frontend_install 2>&1)" || fail "frontend install failed: $out"
+grep -q -- '--backend-only' <<<"$out" || fail "frontend-only install did not mention the missing backend: $out"
 [[ ! -e "$frontend_prefix/bin/hya" ]] || fail 'frontend-only install created hya'
 [[ -x "$frontend_prefix/lib/hya/bin/bun" ]] || fail 'frontend did not install Bun'
 [[ -f "$frontend_prefix/lib/hya/tui/src/main.ts" && -f "$frontend_prefix/lib/hya/tui-web/src/main.ts" ]] || fail 'frontend runtime missing'
+out="$(frontend_install 2>&1)" || fail "frontend repeat failed: $out"
+grep -q 'frontend 8.8.1 is already installed' <<<"$out" || fail "frontend no-op was not reported: $out"
 
+# --tui-only beside a backend adds the frontend and leaves bin/hya alone.
 cp -a "$backend_prefix" "$scratch/combined"
-env HYA_RELEASES_URL="file://$releases" HYA_TARGET="$target" HOME="$scratch/home" \
-  sh "$frontend_installer" --prefix "$scratch/combined" --version 8.8.1 >/dev/null
+install_into "$scratch/combined" --tui-only --version 8.8.1 >/dev/null
 [[ "$("$scratch/combined/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'frontend install changed backend command'
 [[ -f "$scratch/combined/lib/hya/tui/src/main.ts" ]] || fail 'frontend was not added beside backend'
 
-# Unknown versions and targets fail without changing the current component.
+# Without a side flag both latest releases are installed, each at its own version.
+out="$(install_into "$both_prefix" 2>&1)" || fail "combined install failed: $out"
+[[ "$("$both_prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'combined install missed the backend'
+[[ "$(frontend_version_of "$both_prefix")" == 8.8.1 ]] || fail 'combined install missed the frontend'
+[[ -f "$both_prefix/bundles/hya-base-tools.hyabundle" && -f "$both_prefix/lib/hya/bun-adapter/src/main.ts" ]] || fail 'combined install missed backend payload'
+
+# Updating both: a newer frontend is installed while the current backend is a no-op.
+make_frontend_release 8.8.2
+publish_latest frontend 8.8.2
+out="$(install_into "$both_prefix" 2>&1)" || fail "combined update failed: $out"
+grep -q 'backend 9.9.1 is already installed' <<<"$out" || fail "combined update reinstalled the backend: $out"
+[[ "$(frontend_version_of "$both_prefix")" == 8.8.2 ]] || fail 'combined update did not update the frontend'
+
+# A failed frontend after a successful backend keeps the new backend and the old frontend.
+make_backend_release 9.9.4
+publish_latest backend 9.9.4
+make_frontend_release 8.8.3 1
+publish_latest frontend 8.8.3
+if out="$(install_into "$both_prefix" 2>&1)"; then fail 'corrupt frontend installed'; fi
+grep -q 'backend 9.9.4' <<<"$out" || fail "partial failure did not report the installed backend: $out"
+[[ "$("$both_prefix/bin/hya" --version)" == 'hya 9.9.4' ]] || fail 'backend was not updated before the frontend failure'
+[[ "$(frontend_version_of "$both_prefix")" == 8.8.2 ]] || fail 'corrupt frontend changed the installed frontend'
+
+# --backend-only updates only the backend.
+make_frontend_release 8.8.4
+publish_latest frontend 8.8.4
+make_backend_release 9.9.5
+publish_latest backend 9.9.5
+install_into "$both_prefix" --backend-only >/dev/null
+[[ "$("$both_prefix/bin/hya" --version)" == 'hya 9.9.5' ]] || fail '--backend-only did not update the backend'
+[[ "$(frontend_version_of "$both_prefix")" == 8.8.2 ]] || fail '--backend-only changed the frontend'
+install_into "$both_prefix" --tui-only >/dev/null
+[[ "$(frontend_version_of "$both_prefix")" == 8.8.4 ]] || fail '--tui-only did not update the frontend'
+
+# Conflicting side flags, unknown versions, and unknown targets fail without changes.
+if out="$(install_into "$both_prefix" --backend-only --tui-only 2>&1)"; then fail 'conflicting side flags accepted'; fi
+grep -q 'cannot be combined' <<<"$out" || fail "side flag conflict is unclear: $out"
 if out="$(backend_install --version 1.0.0 2>&1)"; then fail 'unknown backend installed'; fi
 grep -q 1.0.0 <<<"$out" || fail 'unknown backend error omitted version'
 if out="$(env HYA_RELEASES_URL="file://$releases" HYA_TARGET=riscv64gc-unknown-linux-gnu \
-  sh "$backend_installer" --prefix "$backend_prefix" 2>&1)"; then fail 'unknown target installed'; fi
+  sh "$installer" --prefix "$backend_prefix" 2>&1)"; then fail 'unknown target installed'; fi
 grep -q riscv64gc-unknown-linux-gnu <<<"$out" || fail 'unknown target error omitted target'
+[[ "$("$backend_prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'failed installs changed the backend'
 
-printf 'side-specific hya installer contract: ok\n'
+printf 'hya installer contract: ok\n'

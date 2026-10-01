@@ -132,7 +132,6 @@ jobs:
             (cd "dist/$package_dir/lib/hya/bun-adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
             cargo run --locked -p xtask -- stage-first-party-bundles --target "$TARGET" --version "$VERSION" --library-dir "target/$TARGET/release" --package-root "dist/$package_dir" --assets dist
             scripts/package-argus-example.sh bundles/examples/argus-example "dist/$package_dir/examples/hya-argus-example.hyabundle"
-            installer=hya-install.sh
           else
             mkdir -p "dist/$package_dir/lib/hya/bin" "dist/$package_dir/lib/hya/tui/src" "dist/$package_dir/lib/hya/tui-web/src" "dist/$package_dir/lib/hya/tui-web/web"
             install -m 0755 "$HOME/.bun/bin/bun" "dist/$package_dir/lib/hya/bin/bun"
@@ -144,7 +143,6 @@ jobs:
             cp -R packages/hya-tui-web/src/. "dist/$package_dir/lib/hya/tui-web/src/"
             cp -R packages/hya-tui-web/web/. "dist/$package_dir/lib/hya/tui-web/web/"
             (cd "dist/$package_dir/lib/hya/tui-web" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
-            installer=hya-tui-install.sh
           fi
           archive="$package_dir.tar.gz"
           tar -czf "dist/$archive" -C dist "$package_dir"
@@ -153,9 +151,7 @@ jobs:
           else
             (cd dist && shasum -a 256 "$archive" > SHA256SUMS)
           fi
-          cp "scripts/$installer" "dist/$installer"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
-          echo "installer=$installer" >> "$GITHUB_OUTPUT"
       - name: Smoke test side-specific package
         if: github.ref_type == 'tag'
         shell: bash
@@ -193,7 +189,6 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/SHA256SUMS
-            dist/*.sh
             dist/*.hyabundle
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.ref_type == 'tag'
@@ -239,15 +234,15 @@ jobs:
             done
           done
           if [[ "$COMPONENT" == backend ]]; then
-            (cd dist && shasum -a 256 ./*.tar.gz ./*.sh ./*.hyabundle > SHA256SUMS)
+            (cd dist && shasum -a 256 ./*.tar.gz ./*.hyabundle > SHA256SUMS)
           else
-            (cd dist && shasum -a 256 ./*.tar.gz ./*.sh > SHA256SUMS)
+            (cd dist && shasum -a 256 ./*.tar.gz > SHA256SUMS)
           fi
           cp "CHANGELOG_${COMPONENT^^}.md" dist/RELEASE_NOTES.md
-          installer=hya-install.sh
-          [[ "$COMPONENT" == frontend ]] && installer=hya-tui-install.sh
-          printf "\n\nInstall with:\n\n\`\`\`sh\ncurl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/%s/%s | sh -s -- --version %s\n\`\`\`\n" \
-            "$COMPONENT/$VERSION" "$installer" "$VERSION" >> dist/RELEASE_NOTES.md
+          side_flag=--backend-only
+          [[ "$COMPONENT" == frontend ]] && side_flag=--tui-only
+          printf "\n\nInstall or update this release with:\n\n\`\`\`sh\ncurl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- %s --version %s\n\`\`\`\n\nWithout options the installer installs the latest backend and frontend.\n" \
+            "$side_flag" "$VERSION" >> dist/RELEASE_NOTES.md
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           body_path: dist/RELEASE_NOTES.md

@@ -1,46 +1,38 @@
 //! Bare `hya update`: reinstall the running prefix from the published GitHub
-//! release with the same installer `curl … | sh` runs.
+//! releases with the same installer `curl … | sh` runs.
 //!
 //! This path is separate from the signed-metadata TCB in the rest of this
-//! crate: it trusts HTTPS to the release host and the release's `SHA256SUMS`
+//! crate: it trusts HTTPS to the release host and each release's `SHA256SUMS`
 //! (docs/install.md).
 use clap::Args;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact backend
-/// installer the release publishes.
+/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact installer
+/// `hya.ed-aisys.com/install.sh` serves. It installs the backend and frontend
+/// releases, or one side with `--backend-only`/`--tui-only`.
 pub const RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-install.sh");
-/// Frontend installer embedded in `hya update tui`.
-pub const FRONTEND_RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-tui-install.sh");
 
 /// Options of bare `hya update`.
 #[derive(Debug, Default, Args)]
 pub struct ReleaseInstallArgs {
-    /// Install this release instead of the latest one (`0.43.23` or `v0.43.23`).
+    /// Install this release of each selected side instead of the latest one
+    /// (`0.43.23` or `v0.43.23`).
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
-    /// Reinstall even when that version is already installed.
+    /// Reinstall a side even when that version is already installed.
     #[arg(long)]
     pub force: bool,
     /// Install prefix (`<prefix>/bin/hya`); defaults to the running hya's prefix.
     #[arg(long, value_name = "DIR")]
     pub prefix: Option<PathBuf>,
-}
-
-/// Options of `hya update tui`.
-#[derive(Debug, Default, Args)]
-pub struct FrontendReleaseInstallArgs {
-    /// Install this frontend release instead of the latest one.
-    #[arg(long, value_name = "VERSION")]
-    pub version: Option<String>,
-    /// Reinstall even when that frontend version is already installed.
+    /// Update only the backend (`bin/hya`, bundles, Bun adapter).
+    #[arg(long, conflicts_with = "tui_only")]
+    pub backend_only: bool,
+    /// Update only the frontend (Bun, TUI, WebUI).
     #[arg(long)]
-    pub force: bool,
-    /// Install prefix (`<prefix>/lib/hya`); defaults to the running hya's prefix.
-    #[arg(long, value_name = "DIR")]
-    pub prefix: Option<PathBuf>,
+    pub tui_only: bool,
 }
 
 /// The install prefix of a released `hya` at `executable`: the real (symlink
@@ -62,34 +54,10 @@ pub fn install_prefix(executable: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Run the embedded backend installer with `sh`.
+/// Run the embedded installer with `sh` for the selected sides.
 pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
-    run_component_install(
-        args.version.as_deref(),
-        args.force,
-        args.prefix.as_deref(),
-        RELEASE_INSTALLER,
-    )
-}
-
-/// Run the embedded frontend installer with `sh`.
-pub fn run_frontend_release_install(args: &FrontendReleaseInstallArgs) -> Result<(), String> {
-    run_component_install(
-        args.version.as_deref(),
-        args.force,
-        args.prefix.as_deref(),
-        FRONTEND_RELEASE_INSTALLER,
-    )
-}
-
-fn run_component_install(
-    version: Option<&str>,
-    force: bool,
-    requested_prefix: Option<&Path>,
-    installer: &str,
-) -> Result<(), String> {
-    let prefix = match requested_prefix {
-        Some(prefix) => prefix.to_path_buf(),
+    let prefix = match &args.prefix {
+        Some(prefix) => prefix.clone(),
         None => {
             let executable = std::env::current_exe()
                 .map_err(|error| format!("cannot locate the running hya: {error}"))?;
@@ -98,11 +66,17 @@ fn run_component_install(
     };
     let mut command = Command::new("sh");
     command.args(["-s", "--", "--prefix"]).arg(&prefix);
-    if let Some(version) = version {
+    if let Some(version) = &args.version {
         command.args(["--version", version]);
     }
-    if force {
+    if args.force {
         command.arg("--force");
+    }
+    if args.backend_only {
+        command.arg("--backend-only");
+    }
+    if args.tui_only {
+        command.arg("--tui-only");
     }
     let mut child = command
         .stdin(Stdio::piped())
@@ -114,7 +88,7 @@ fn run_component_install(
         .ok_or_else(|| "sh has no stdin".to_string())
         .and_then(|mut stdin| {
             stdin
-                .write_all(installer.as_bytes())
+                .write_all(RELEASE_INSTALLER.as_bytes())
                 .map_err(|error| format!("cannot pass the installer to sh: {error}"))
         });
     let status = child

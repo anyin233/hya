@@ -1200,18 +1200,6 @@ async fn run(
         // The update TCB runs without composing any runtime: no config,
         // bundles, providers, plugins, MCP, or session store.
         Some(Command::Update { command, install }) => match command {
-            Some(hya_updater::cli::UpdateCommand::Tui {
-                version,
-                force,
-                prefix,
-            }) => hya_updater::release_install::run_frontend_release_install(
-                &hya_updater::release_install::FrontendReleaseInstallArgs {
-                    version,
-                    force,
-                    prefix,
-                },
-            )
-            .map_err(|error| anyhow::anyhow!("hya update tui: {error}")),
             Some(command) => {
                 let mut stdout = std::io::stdout().lock();
                 hya_updater::cli::run(command, &mut stdout)

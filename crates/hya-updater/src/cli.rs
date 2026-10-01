@@ -13,18 +13,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Subcommand)]
 /// Subcommands for the `hya update` interface.
 pub enum UpdateCommand {
-    /// Install the published frontend runtime (TUI and WebUI) beside the backend.
-    Tui {
-        /// Install this frontend release instead of the latest one.
-        #[arg(long, value_name = "VERSION")]
-        version: Option<String>,
-        /// Reinstall even when that frontend version is already installed.
-        #[arg(long)]
-        force: bool,
-        /// Install prefix; defaults to the running hya's prefix.
-        #[arg(long, value_name = "DIR")]
-        prefix: Option<PathBuf>,
-    },
     /// Print the updater protocol and package version.
     Version,
     /// Print the active selector and updater-root paths.
@@ -109,9 +97,6 @@ fn now_unix() -> i64 {
 /// Execute one update subcommand and write its human-readable output.
 pub fn run(command: UpdateCommand, out: &mut dyn Write) -> Result<(), String> {
     let lines = match command {
-        UpdateCommand::Tui { .. } => {
-            return Err("hya update tui must be dispatched by the backend".into());
-        }
         UpdateCommand::Version => vec![format!(
             "hya update {UPDATER_PACKAGE_VERSION} protocol {}",
             crate::SUPPORTED_PROTOCOL_VERSION

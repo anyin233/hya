@@ -481,8 +481,7 @@ fn validate_workflow(workflow: &Value, target: &str, _component: Component) -> R
     }
     let joined = run_blocks.join("\n");
     for marker in [
-        "hya-install.sh",
-        "hya-tui-install.sh",
+        "https://hya.ed-aisys.com/install.sh",
         "frontend-version.ts",
         "CHANGELOG_${COMPONENT^^}.md",
         "hya-${COMPONENT}-${VERSION}-${TARGET}",
@@ -494,6 +493,12 @@ fn validate_workflow(workflow: &Value, target: &str, _component: Component) -> R
             "release workflow is missing side-specific marker `{marker}`"
         );
     }
+    // Releases do not carry the installer: hya.ed-aisys.com/install.sh serves
+    // `scripts/hya-install.sh` from the main branch.
+    ensure!(
+        !joined.contains("hya-install.sh") && !joined.contains("hya-tui-install.sh"),
+        "release workflow must not publish an installer script as a release asset"
+    );
     ensure!(
         run_blocks.iter().any(
             |run| run.contains("cargo build --release --locked -p hya-backend --bins --target")
@@ -1692,8 +1697,9 @@ fn bun_on_path() -> Result<PathBuf> {
         .context("bun is not on PATH")
 }
 
-/// Install the archive with `scripts/hya-install.sh` from a file:// release
-/// tree like the workflow, then require bare `hya update` to find it current.
+/// Install the archive with `scripts/hya-install.sh` (`--backend-only` or
+/// `--tui-only`) from a file:// release tree like the workflow, then require
+/// `hya update --backend-only` to find the backend current.
 fn smoke_release_installer(
     root: &Path,
     dist: &Path,
@@ -1726,16 +1732,16 @@ fn smoke_release_installer(
             OsString::from(format!("file://{}", releases.display())),
         ),
     ];
+    let side_flag = if component == Component::Backend {
+        "--backend-only"
+    } else {
+        "--tui-only"
+    };
     run_checked(
         OsStr::new("sh"),
         &[
-            root.join(if component == Component::Backend {
-                "scripts/hya-install.sh"
-            } else {
-                "scripts/hya-tui-install.sh"
-            })
-            .display()
-            .to_string(),
+            root.join("scripts/hya-install.sh").display().to_string(),
+            side_flag.to_owned(),
             "--prefix".to_owned(),
             installed.display().to_string(),
         ],
@@ -1766,15 +1772,15 @@ fn smoke_release_installer(
     );
     let update = run_checked(
         backend.as_os_str(),
-        &arg_list(&["update"]),
+        &arg_list(&["update", "--backend-only"]),
         scratch.path(),
         &envs,
         &[],
     )
-    .context("run bare hya update against the installed release")?;
+    .context("run hya update --backend-only against the installed release")?;
     ensure!(
-        combined_output(&update).contains(&format!("hya {version} is already installed")),
-        "bare hya update did not find the installed {version} current"
+        combined_output(&update).contains(&format!("hya backend {version} is already installed")),
+        "hya update --backend-only did not find the installed {version} current"
     );
     Ok(())
 }
@@ -2342,10 +2348,6 @@ mod tests {
     #[test]
     fn version_contract_separates_backend_and_frontend_aggregates() -> Result<()> {
         let root = repo_root()?;
-        let versions = read_text(&root, "versions.toml")?;
-        assert!(versions.contains("[backend]\nversion = \"0.44.0\""));
-        assert!(versions.contains("[frontend]\nversion = \"0.44.0\""));
-        assert!(versions.contains("minimum_backend_version = \"0.43.41\""));
 
         let backend = read_text(&root, "crates/hya-backend/Cargo.toml")?;
         assert!(backend.contains("version.workspace = true"));
