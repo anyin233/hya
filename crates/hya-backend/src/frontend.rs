@@ -130,7 +130,7 @@ pub(crate) fn resolve_asset_dir(
     let dir = if let Some(dir) = override_dir {
         if !has_entry(&dir) {
             return Err(format!(
-                "{}={} has no src/main.ts: the {} frontend is unavailable; install it with `hya update tui` or set {} to a frontend directory",
+                "{}={} has no src/main.ts: the {} frontend is unavailable; install it with `hya update --tui-only` or set {} to a frontend directory",
                 asset.env,
                 dir.display(),
                 asset.label,
@@ -151,7 +151,7 @@ pub(crate) fn resolve_asset_dir(
                     .map(|dir| dir.display().to_string())
                     .collect();
                 return Err(format!(
-                    "the {} frontend is unavailable: no src/main.ts in {}; install it with `hya update tui` or set {}",
+                    "the {} frontend is unavailable: no src/main.ts in {}; install it with `hya update --tui-only` or set {}",
                     asset.label,
                     searched.join(", "),
                     asset.env
@@ -181,7 +181,7 @@ pub(crate) fn check_bun(found: Option<PathBuf>) -> Result<PathBuf, String> {
             path.display()
         )),
         None => Err(
-            "Bun is required for the TUI and the WebUI but was not found: install the frontend with `hya update tui`, or install Bun from https://bun.sh or set BUN=<path>. Other subcommands (`hya serve`, `hya exec`, …) do not need it."
+            "Bun is required for the TUI and the WebUI but was not found: install the frontend with `hya update --tui-only`, or install Bun from https://bun.sh or set BUN=<path>. Other subcommands (`hya serve`, `hya exec`, …) do not need it."
                 .to_string(),
         ),
     }
@@ -894,7 +894,7 @@ mod tests {
         assert!(error.contains("HYA_TUI_DIR"), "{error}");
         assert!(error.contains(&empty.display().to_string()), "{error}");
         assert!(error.contains("frontend is unavailable"), "{error}");
-        assert!(error.contains("hya update tui"), "{error}");
+        assert!(error.contains("hya update --tui-only"), "{error}");
     }
 
     #[test]
@@ -923,7 +923,7 @@ mod tests {
         assert!(error.contains("lib/hya/tui"), "{error}");
         assert!(error.contains("packages/hya-tui"), "{error}");
         assert!(error.contains("frontend is unavailable"), "{error}");
-        assert!(error.contains("hya update tui"), "{error}");
+        assert!(error.contains("hya update --tui-only"), "{error}");
         assert!(error.contains("HYA_TUI_DIR"), "{error}");
     }
 
@@ -937,7 +937,7 @@ mod tests {
         let error = resolve_asset_dir(&TUI_ASSET, None, &exe, &scratch.0.join("repo")).unwrap_err();
         assert!(error.contains("bun install"), "{error}");
         assert!(error.contains("TUI"), "{error}");
-        assert!(!error.contains("hya update tui"), "{error}");
+        assert!(!error.contains("hya update --tui-only"), "{error}");
     }
 
     #[test]

@@ -12,8 +12,7 @@ const TARGET: &str = "x86_64-unknown-linux-gnu";
 const WORKFLOW_CONTRACTS: &[&str] = &[
     "backend/*",
     "frontend/*",
-    "hya-install.sh",
-    "hya-tui-install.sh",
+    "https://hya.ed-aisys.com/install.sh",
     "frontend-version.ts",
     "CHANGELOG_${COMPONENT^^}.md",
     "hya-${COMPONENT}-${VERSION}-${TARGET}",

@@ -411,30 +411,35 @@ engine.refresh_runtime(|candidate| {
 
 ### 2. Signatures
 
-- Release tags: `backend/<version>` for backend releases and
-  `frontend/<version>` for frontend releases. Backend version mirrors Cargo's
-  `hya-backend` package; frontend version is independent.
+- Release tags are `backend/<version>` and `frontend/<version>`; neither tag has a `v` prefix. Backend version mirrors Cargo's `hya-backend` package; frontend version is independent.
+- Release download paths use the exact side tag, `/releases/download/backend/<version>/...` or `/releases/download/frontend/<version>/...`; `/releases/download/<side>/v<version>/...` is invalid.
 - Release targets (build job matrix): `x86_64-unknown-linux-gnu`
   (`ubuntu-22.04`), `aarch64-unknown-linux-gnu` (`ubuntu-22.04-arm`),
   `aarch64-apple-darwin` (`macos-15`).
 - Backend archive per target: `hya-backend-<version>-<target>.tar.gz` with
-  `bin/hya`, backend bundles, and the adapter; no TUI/WebUI.
+  `bin/hya`, Bun, backend bundles, and the Bun adapter; no TUI/WebUI.
 - Frontend archive per target: `hya-frontend-<version>-<target>.tar.gz` with
   `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`; no `bin/hya`.
-- Installer assets: `hya-install.sh` for backend and `hya-tui-install.sh` for
-  frontend. Each side publishes its own `SHA256SUMS` and release body command.
+- Installer: releases publish no installer script. `scripts/hya-install.sh`
+  (served at `https://hya.ed-aisys.com/install.sh` from `main`, embedded in
+  `hya update`) installs both sides or one with `--backend-only`/`--tui-only`.
+  Each side publishes its own `SHA256SUMS` and release body command.
 - Checksum files: each build job writes a side archive checksum, and the
   release job publishes a combined `SHA256SUMS`, all with `shasum -a 256`.
+- Main pushes that change manifests, `Cargo.lock`, or the workflow, the daily
+  schedule, and `workflow_dispatch` refresh dependency caches only; only the
+  side tags publish packages and GitHub Releases.
 - Non-publishing rehearsal on a host of the rehearsed target (requires Bun
   `1.4.2`, `actionlint`, 7-Zip `7z`, and `shasum` on `PATH`):
 
 ```sh
 cargo run -p xtask -- release-rehearsal \
-  --component backend|frontend \
+  --component backend \
   --workflow .github/workflows/release.yml \
-  --version <side version> \
+  --version <backend-semver> \
   --target "$(rustc -vV | sed -n 's/^host: //p')" \
   --no-publish
+# Repeat with --component frontend and --version <frontend-semver> when shipping the frontend.
 ```
 
 ### 3. Contracts
@@ -447,14 +452,14 @@ cargo run -p xtask -- release-rehearsal \
   `docs/changes/CHANGELOG_FRONTEND_<version>.md`.
 - Release workflow permissions are read-only by default; only the release
   publishing job may request `contents: write`.
-- Build provenance attestations are generated for every archive, checksum
-  file, and installer.
+- Build provenance attestations are generated for every archive, checksum file,
+  and standalone `.hyabundle` asset; the hosted installer is not a release asset.
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can
   require manual approval.
 - Backend release payload includes `bin/hya`, the eleven first-party backend
-  bundles under `bundles/`, and production `lib/hya/bun-adapter`; it excludes
-  the TUI and WebUI. The frontend release separately carries
+  bundles under `bundles/`, Bun, and production `lib/hya/bun-adapter`; it
+  excludes the TUI and WebUI. The frontend release separately carries
   `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`, and excludes
   `bin/hya`.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
@@ -463,6 +468,7 @@ cargo run -p xtask -- release-rehearsal \
 ### 4. Validation & Error Matrix
 
 - Missing `backend/<version>` or `frontend/<version>` tag -> fail before build.
+- A `v`-prefixed release tag -> fail before build; release download URLs use the exact side tag.
 - Tag version is not semver-shaped -> fail before build.
 - Backend tag version differs from `cargo metadata` package version for
   `hya-backend` -> fail before build.
@@ -494,12 +500,14 @@ cargo run -p xtask -- release-rehearsal \
 
 ### 5. Good/Base/Bad Cases
 
-- Good: `v0.1.0`, `[workspace.package].version = "0.1.0"`, `CHANGELOG_BACKEND.md` contains only `0.1.0` notes, archive and checksum pass smoke checks; the frontend changelog may carry its independent version.
+- Good: `backend/0.1.0`, `[workspace.package].version = "0.1.0"`,
+  `CHANGELOG_BACKEND.md` contains only `0.1.0` notes, archive and checksum pass
+  smoke checks; the frontend changelog may carry its independent version.
 - Base: first release has no historical side changelog; keep `docs/changes/.gitkeep` and the current side-specific files.
 - Bad: appending old release notes to either side-specific changelog; this publishes stale history or mislabels the release body.
-- Good: the no-publish rehearsal validates the real workflow, exact payload,
-  Compat adapter handshake, Argus package closure, and
-  checksum without publishing.
+- Good: the no-publish rehearsal validates the real workflow, exact side
+  payload, Bun adapter and first-party bundle closure, and checksums without
+  publishing.
 - Base: a rehearsal uses temporary package/extract roots and leaves the source
   checkout and release provider untouched.
 - Bad: validating only the binary while omitting the
@@ -513,11 +521,15 @@ cargo run -p xtask -- release-rehearsal \
   embedded shell `run` block.
 - Run the tag/version/changelog validation logic with a representative tag and
   require the explicit `--no-publish` rehearsal guard.
+- Run `bash tests/hya_install_script.sh`; assert combined, backend-only, and
+  frontend-only installation preserve side boundaries, verify checksums, and
+  roll back a failed side without damaging the other side.
 - Run the release build command for the configured target.
-- Package the `hya` binary and the production Compat adapter; verify
-  `SHA256SUMS`, extract the archive, and run
-  each binary smoke.
-- Assert the Compat adapter's locked files and initialize/shutdown handshake.
+- Package the `hya` binary and production Bun adapter for backend releases, or
+  Bun/TUI/WebUI production dependencies for frontend releases; verify
+  `SHA256SUMS`, extract the archive, and run each side's smoke checks.
+- Assert the selected side's locked production dependencies and required
+  archive members.
 - Generate `examples/hya-argus-example.hyabundle` inside the temporary package
   from `bundles/examples/argus-example`, then assert its canonical root closure.
 - Confirm third-party actions are pinned to commit SHAs and release publication
