@@ -28,8 +28,8 @@ test("maps pane navigation and transcript scrolling; optional toggles are unassi
   expect(resolveBinding(key("b"))).toBeUndefined()
   expect(resolveBinding(key("pageup"))).toBe("pageUp")
   expect(resolveBinding(key("pagedown"))).toBe("pageDown")
-  expect(resolveBinding(key("home", { ctrl: true }))).toBe("scrollTop")
-  expect(resolveBinding(key("end", { ctrl: true }))).toBe("scrollBottom")
+  expect(resolveBinding(key("home", { ctrl: true }), { composerEmpty: true })).toBeUndefined()
+  expect(resolveBinding(key("end", { ctrl: true }), { composerEmpty: true })).toBeUndefined()
 })
 
 test("plain Home and End scroll the transcript only while the composer is empty", () => {
@@ -51,14 +51,14 @@ test("every binding is documented and reachable without a browser-reserved short
   }
   const probes = [
     key("tab"), key("r", { ctrl: true }), key("b", { ctrl: true }), key("o", { ctrl: true }), key("g", { ctrl: true }),
-    key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
+    key("pageup"), key("pagedown"), key("home"), key("end"),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
     key("?", { shift: true, sequence: "?" }), key("x", { ctrl: true }), key("f4"),
     key("p", { ctrl: true }), key("/", { sequence: "/" }),
     key("left", { meta: true }), key("right", { meta: true }), key("up", { meta: true }), key("down", { meta: true }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
-    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" || probe.name === "/" })))
+    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" || probe.name === "/" || probe.name === "home" || probe.name === "end" })))
   // The second key of the Ctrl+X chord.
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))

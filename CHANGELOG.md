@@ -1,5 +1,4 @@
-# 0.43.43
+# 0.43.44
 
-- Reduce default TUI shortcuts to command/help access, pane navigation, scrolling, editing, cancellation and exit. Optional actions remain available as commands and custom keybindings.
-- Add `/pending` to review the oldest request in another session and show unassigned actions in `/keybind`.
-- Keep Shift+Tab local to lists and confirmation rather than changing permission modes globally.
+- Remove Ctrl+Home/End app defaults; retain plain Home/End transcript navigation with empty input.
+- Add `/keybind unset <shortcut>` to free a custom shortcut with completion, atomic persistence and visible feedback. Existing reset commands remain supported.

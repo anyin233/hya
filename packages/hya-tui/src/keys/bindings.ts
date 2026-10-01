@@ -133,15 +133,15 @@ export const keyBindings: readonly KeyBinding[] = [
   },
   {
     action: "scrollTop",
-    label: "Ctrl+Home",
-    description: "Jump to the top of the transcript (plain Home when the composer is empty)",
-    matches: (key, context) => key.name === "home" && (key.ctrl || (plain(key) && context.composerEmpty === true)),
+    label: "Home (empty input)",
+    description: "Jump to the top of the transcript when the composer is empty",
+    matches: (key, context) => key.name === "home" && plain(key) && context.composerEmpty === true,
   },
   {
     action: "scrollBottom",
-    label: "Ctrl+End",
-    description: "Jump to the newest line and follow it (plain End when the composer is empty)",
-    matches: (key, context) => key.name === "end" && (key.ctrl || (plain(key) && context.composerEmpty === true)),
+    label: "End (empty input)",
+    description: "Jump to the newest line and follow it when the composer is empty",
+    matches: (key, context) => key.name === "end" && plain(key) && context.composerEmpty === true,
   },
   {
     action: "help",

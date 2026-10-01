@@ -20,3 +20,7 @@ Answer: `CommandSpec.complete(position, context, registry?)` receives its owning
 ## Question: Which shortcuts are assigned by default after the essentials change?
 
 Answer: Defaults cover commands/help, pane focus, transcript scroll, cancellation and exit, plus composer editing. Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and editor/undo/redo/fork chords are unassigned. Action catalog rows remain with empty keys so scope inference and inspection continue working. `/pending` preserves the former F4 cross-session review path. Local picker, prompt, confirmation and opt-in Vim keys remain local.
+
+## Question: What is the single-shortcut removal command?
+
+Answer: `/keybind unset <shortcut>` removes a custom assignment; reset <shortcut> stays compatible, and reset all clears the custom map. Unset completes only assigned keys, normalizes modifier names and saves before applying. It cannot disable protected defaults. Ctrl+Home/End are no longer app defaults and can be assigned; plain Home/End retain transcript navigation with empty input.

@@ -222,7 +222,7 @@ test.describe("scrolling", () => {
     await term.page.mouse.move(box.x + box.width / 4, box.y + ((row.row + 0.5) / cell.rows) * box.height)
     await term.page.mouse.wheel(0, -600)
     await expect.poll(async () => (await term.text()).includes("row 90 of the long reply")).toBe(false)
-    await term.press("Control+End")
+    await term.press("End")
     await term.waitForText("row 90 of the long reply")
   })
 })
