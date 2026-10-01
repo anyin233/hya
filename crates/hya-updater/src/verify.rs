@@ -11,8 +11,9 @@ use crate::metadata::{
 /// Domain separation for release-metadata signatures.
 pub const METADATA_DOMAIN: &[u8] = b"hya.updater.release-metadata.v1";
 
-/// This package's version, used for `min_updater_version` checks.
-pub const UPDATER_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The updater's version for `min_updater_version` checks: the backend
+/// aggregate release version it ships with (component manifests stay `0.0.0`).
+pub const UPDATER_PACKAGE_VERSION: &str = hya_version::BACKEND_VERSION;
 
 #[derive(Serialize)]
 struct CanonicalMetadata<'a> {

@@ -2145,7 +2145,7 @@ mod tests {
     fn version_contract_separates_backend_and_frontend_aggregates() -> Result<()> {
         let root = repo_root()?;
         let versions = read_text(&root, "versions.toml")?;
-        assert!(versions.contains("[backend]\nversion = \"0.43.41\""));
+        assert!(versions.contains("[backend]\nversion = \"0.43.42\""));
         assert!(versions.contains("[frontend]\nversion = \"0.43.40\""));
         assert!(versions.contains("minimum_backend_version = \"0.43.41\""));
 

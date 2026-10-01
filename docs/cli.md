@@ -1371,7 +1371,7 @@ providers, plugins, MCP, or session store are loaded. Global flags such as
 
 | Command | Purpose |
 | --- | --- |
-| `hya update version` | Print the updater package version and supported metadata protocol. |
+| `hya update version` | Print the updater version (the backend release version) and supported metadata protocol. |
 | `hya update status --root DIR` | Show selector, accepted floor, and layout paths. |
 | `hya update recover --root DIR` | Recover interrupted prepare/commit journal state. |
 | `hya update apply --root DIR --metadata FILE --package DIR --platform TRIPLE [--smoke CMD] [--trust-roots FILE] [--authorization FILE]` | Verify, stage, optionally smoke, and activate only with an owner-issued capability (`--authorization`). |
