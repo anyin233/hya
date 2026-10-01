@@ -683,7 +683,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
-| `/keybindings [list [scope] \| show <action or command>]` | Browse current shortcuts, related commands and routing scopes; see [Keybinding settings](#keybinding-settings). |
+| `/keybind [list \| show \| set \| reset]` | Browse shortcuts or save bindings to full commands; see [Keybinding settings](#keybinding-settings). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
 | `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the controller status state says `Copied N chars` (see [Copy](#copy)). |
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
@@ -741,73 +741,130 @@ routes. See the [protocol guide](protocol/README.md) for those frames.
 
 ## Keybinding settings
 
-`/keybindings` is the dedicated entry point for inspecting TUI keybindings.
-It shows each action once, with all its current shortcuts, its related slash
-command when one exists, and the routing context that determines when the key
-works. It uses the existing modal picker and reads the actual shortcut table;
-opening an entry never executes the command it describes. This first version
-is an inspection surface. Binding edits and custom shortcuts are not supported
-yet, and no preference file is written by these commands.
+`/keybind` browses the built-in action shortcuts and custom command bindings.
+`set` assigns a shortcut to a **full slash command**, including its arguments;
+pressing the shortcut runs that text through the same command registry as the
+command pane. This also supports backend and skill commands. Commands with
+arguments need no extra quoting around the whole command.
 
 ### Usage
 
 | Command | Result |
 | --- | --- |
-| `/keybindings` | Open the filterable action browser. |
-| `/keybindings list` | Open the same browser. |
-| `/keybindings list workspace` | Show actions available across tiled panes. |
-| `/keybindings list conversation` | Show actions owned by conversation focus. |
-| `/keybindings list pane` | Show focused-pane scrolling actions. |
-| `/keybindings show quit` | Inspect the exit action, including its two-press guard. |
-| `/keybindings show /exit` | Inspect it by its related command instead. |
+| `/keybind` or `/keybind list` | Open the filterable binding browser. |
+| `/keybind list workspace` | Show workspace bindings. |
+| `/keybind list conversation` | Show conversation bindings. |
+| `/keybind list pane` | Show built-in focused-pane scrolling actions. |
+| `/keybind show quit` or `/keybind show /exit` | Inspect a built-in action and its contextual key behavior. |
+| `/keybind show F6` | Inspect the custom command assigned to F6. |
+| `/keybind set F6 /layout focus left` | Save a workspace shortcut to the full layout command. |
+| `/keybind set Alt+G /tools on` | Save a conversation shortcut that expands tool cards. |
+| `/keybind set F7 --scope conversation /sidebar off` | Explicitly limit this sidebar command to conversation focus. |
+| `/keybind reset F6` | Remove the custom F6 binding. |
+| `/keybind reset all` | Remove all custom bindings. |
 
-Type an action name, key or command to filter the browser. Up/Down moves the
-selection, Enter opens the selected action's details, and Esc closes the modal
-and returns focus to the previous pane. The command dropdown completes `list`
-and `show`, then scopes or action/command targets.
+Type an action, shortcut or command to filter the browser. Up/Down selects,
+Enter opens details, and Esc closes the modal and returns to the previous pane.
+Opening and closing settings preserves the message draft. `set` and `reset`
+show a result modal; a rejected assignment or failed write shows **not saved**
+with the reason. The dropdown completes operations, shortcut examples, scopes,
+command names, and nested arguments using the target command's own completer.
+The old `/keybindings` name has been replaced by `/keybind`.
 
-For example, enter `/keybindings`, type `/tools`, and press Enter. The details
-show action `toggleTools`, key `Ctrl+G`, related command `/tools`, and its
-conversation scope. Esc returns to the pane that opened the browser. A message
-draft survives opening and closing the settings.
+For example:
+
+```text
+/keybind set F6 /layout focus left
+# Esc closes the saved-binding modal. F6 now focuses the pane to the left.
+/keybind set Alt+G /tools on
+# Esc closes the modal. Alt+G expands tool cards in conversation focus.
+/keybind show Alt+G
+/keybind reset Alt+G
+```
+
+A repeated `set` for the same shortcut replaces that shortcut's command and
+scope. Several shortcuts can run the same command. Built-in keys remain
+available and cannot be reassigned by `set`; conflicts are rejected. This
+version accepts one modified key or function key per assignment, rather than
+custom sequences of keystrokes. The existing Ctrl+X chords remain available.
+Supported syntax includes Ctrl/Control, Alt/Meta/Option, optional Shift,
+letters/digits, modified arrows/Home/End/PgUp/PgDn, and F1–F12. Plain text and
+editing keys, reserved browser shortcuts such as Ctrl+W, and ambiguous
+Ctrl+Shift letters are rejected. Use a shortcut the terminal/browser forwards.
 
 ### Interfaces and routing
 
-The local command contract is:
-
 ```text
-/keybindings [list [workspace|conversation|pane] | show <action or command>]
+/keybind [list [workspace|conversation|pane] | show <action, command or shortcut>]
+/keybind set <shortcut> [--scope workspace|conversation] <command...>
+/keybind reset <shortcut|all>
 ```
 
-`show` accepts an exact, case-sensitive `KeyAction` identifier or the full
-related command (including spaces, such as `/layout focus left`). Unknown
-operations/scopes and missing targets fail with usage guidance; unknown action
-targets fail with a keybinding-specific error. All operations are local to the
-TUI and call no backend RPC.
+Everything after the shortcut and optional scope flag is stored as the command
+text; internal spaces, arguments and JSON bodies are preserved. The command
+must be a single slash command on one line. Its invocation retains the existing
+command parser and error behavior. `set` validates syntax and collisions, saves
+preferences atomically, and then applies the assignment. A failed save leaves
+active bindings unchanged. Settings operations are local; executing a bound
+command may call the same RPCs as entering that command manually.
 
-`src/keys/catalog.ts` exposes `bindingSettings(): BindingSetting[]` and
-`findBindingSetting(target: string): BindingSetting | undefined`:
+Scope defaults to the routing scope of a related built-in action when known
+(for example `/layout` and `/help` are workspace actions, `/tools` is a
+conversation action); otherwise it defaults to `conversation`. Use `--scope`
+to choose explicitly. Workspace bindings run from any tiled pane. Conversation
+bindings stay inactive while another pane owns focus. Modal views and command
+input take precedence over custom shortcuts. A custom binding to `/exit` runs
+that command immediately; it does not inherit Ctrl+C's two-press key guard.
 
-```ts
-interface BindingSetting {
-  id: KeyAction; // stable action ID from src/keys/bindings.ts
-  scope: "workspace" | "conversation" | "pane";
-  command?: string; // related command, not an assertion of identical behavior
-  keys: string[]; // all shortcut labels from the live binding table
-  description: string; // descriptions and key conditions from that table
-  context: string; // routing/precedence explanation
+Assignments are stored in the existing TUI preferences file
+(`$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
+`~/.config/hya/tui.json`) and loaded on startup:
+
+```json
+{
+  "keybindings": {
+    "F6": { "command": "/layout focus left", "scope": "workspace" },
+    "Alt+G": { "command": "/tools on", "scope": "conversation" }
+  }
 }
 ```
 
-These scopes describe the existing router; they do not add global key handlers.
-Modal views and command input take precedence. Conversation actions stay with
-conversation focus, and a sidebar retains its own typing and navigation keys.
-The Projects pane has its own navigation instead of generic scrolling. Related
-commands can behave differently from contextual shortcuts: `/exit` exits at
-once, while Ctrl+C clears/hints first and exits on a second press within two
-seconds; `/interactions` lists asks, while F4 opens the oldest ask in another
-session. `/help` continues to list editor, prompt, picker and view-specific keys
-that are outside this action catalog.
+The preference field is
+`keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" }>`.
+Shortcut labels are normalized (for example `option+g` becomes `Alt+G`). Invalid
+or conflicting saved assignments are ignored as one group, with a startup
+warning; other preferences still load. Unknown preference fields remain intact
+when settings are saved.
+
+`src/keys/custom.ts` exposes `parseShortcut`, `validateCustomKeybindings`,
+`customKeybindings`, `setCustomKeybindings`, and `resolveCommandBinding`.
+The resolver returns `{ command, scope } | undefined` for the current key;
+Composer checks focus and submits the full command with source `command`.
+`/help` includes custom assignments and `/keybind` includes them beside the
+built-in catalog.
+
+The built-in catalog remains `bindingSettings(): BindingSetting[]` and
+`findBindingSetting(target: string): BindingSetting | undefined` in
+`src/keys/catalog.ts`:
+
+```ts
+interface BindingSetting {
+  id: KeyAction;
+  scope: "workspace" | "conversation" | "pane";
+  command?: string;
+  keys: string[];
+  description: string;
+  context: string;
+}
+```
+
+`CommandSpec.complete(position, context, registry?)` receives the owning
+registry as its optional third argument, allowing `/keybind set` to reuse the
+bound command's nested completion instead of maintaining another hint tree.
+Related built-in commands can differ from contextual shortcuts: `/exit` exits
+at once, while Ctrl+C clears/hints and requires a second press; `/interactions`
+lists asks, while F4 opens the oldest ask in another session. `/help` also lists
+editor, prompt, picker and view-specific keys outside this action catalog.
 
 ## Key help
 
@@ -1140,6 +1197,7 @@ JSON object:
 
 ```ts
 interface TuiPreferences {
+  keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" }> // custom command shortcuts
   theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
@@ -1154,7 +1212,7 @@ interface TuiPreferences {
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
   wrong type is ignored.
-- A change (`/theme`'s Enter, `/vim`, or a successful permission mode switch)
+- A change (`/theme`'s Enter, `/vim`, `/keybind set|reset`, or a successful permission mode switch)
   merges the changed key into what is on disk —
   keys this TUI does not know are kept — and writes a temporary file in the
   same directory, then renames it over the file, so a crash never leaves a

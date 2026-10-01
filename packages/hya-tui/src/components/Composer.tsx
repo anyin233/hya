@@ -13,6 +13,7 @@ import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
+import { resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
 import { focusedPane, keyboardOwner } from "../state/focus"
@@ -392,6 +393,19 @@ export function Composer(props: { width: number }) {
     // its focused <input>; navigation and submission are handled there.
     if (ui.command?.active()) {
       if (ui.command.key(key)) consume()
+      return
+    }
+    // Custom shortcuts dispatch the full command through the same registry.
+    // Modal views and command input above retain ownership of their keys.
+    const commandBinding = resolveCommandBinding(key)
+    if (commandBinding) {
+      consume()
+      if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
+      chord = undefined
+      quitGuard.disarm()
+      if (commandBinding.scope === "workspace" || focusedPane(store.state)?.kind === "conversation") {
+        void controller.submit(commandBinding.command, "command")
+      }
       return
     }
     const inputEmpty = !(editor?.plainText ?? value())

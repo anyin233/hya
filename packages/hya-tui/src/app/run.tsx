@@ -46,6 +46,7 @@ import { GrpcHyaClient } from "../grpc_client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
 import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
+import { setCustomKeybindings } from "../keys/custom"
 import { setTheme } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
 import { App } from "./App"
@@ -137,6 +138,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // Preferences first, so the first frame already uses the saved theme.
   const prefsPath = preferencesPath(process.env)
   const loaded = loadPreferences(prefsPath)
+  setCustomKeybindings(loaded.preferences.keybindings ?? {})
   const warnings = loaded.warning ? [loaded.warning] : []
   if (loaded.preferences.theme && !setTheme(loaded.preferences.theme)) {
     warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using hya`)

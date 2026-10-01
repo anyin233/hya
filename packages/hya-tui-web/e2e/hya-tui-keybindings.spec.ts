@@ -1,13 +1,26 @@
 import { expect, hyaTui, test } from "./hya"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
+import type { Tui } from "./harness"
+
+async function command(term: Tui, text: string): Promise<void> {
+  await term.type(text)
+  await term.press("Enter")
+}
+
+async function closeModal(term: Tui, title: string): Promise<void> {
+  await term.press("Escape")
+  await expect.poll(() => term.find(title)).toBeNull()
+}
 
 test("keybinding settings expose nested completion and inspect exit without quitting", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend))
   await term.waitForText("Message, !shell, or @file · / commands")
-  await term.type("/keybindings ")
-  await term.waitForText("/keybindings list")
-  await term.waitForText("/keybindings show")
+  await term.type("/keybind ")
+  await term.waitForText("/keybind list")
+  await term.waitForText("/keybind show")
   await term.type("show qu")
-  await term.waitForText("/keybindings show quit")
+  await term.waitForText("/keybind show quit")
   await term.press("Tab")
   await term.press("Enter")
   await term.waitForText("Keybinding · quit")
@@ -25,7 +38,7 @@ test("the binding browser filters related commands, opens details and keeps the 
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("preserved message")
   await term.press("Control+x")
-  await term.type("/keybindings")
+  await term.type("/keybind")
   await term.press("Enter")
   await term.waitForText("Keybindings")
   await term.type("/tools")
@@ -49,7 +62,7 @@ test("keybinding settings open from Sessions and restore that pane's key ownersh
   await term.type("/layout focus pane-3")
   await term.press("Enter")
   await expect.poll(() => term.find("Commands")).toBeNull()
-  await term.type("/keybindings list workspace")
+  await term.type("/keybind list workspace")
   await term.press("Enter")
   await term.waitForText("Keybindings · workspace")
   await term.press("Escape")
@@ -66,7 +79,7 @@ test("keybinding settings open from Sessions and restore that pane's key ownersh
 test("the keybinding browser and action details fit about 80 columns", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
   await term.waitForText("Message, !shell, or @file · / commands")
-  await term.type("/keybindings list conversation")
+  await term.type("/keybind list conversation")
   await term.press("Enter")
   await term.waitForText("Keybindings · conversation")
   await term.type("toggleTools")
@@ -80,4 +93,77 @@ test("the keybinding browser and action details fit about 80 columns", async ({ 
   await term.attach(testInfo, "keybinding-narrow")
   await term.press("Escape")
   await expect.poll(() => term.find("Keybinding · toggleTools")).toBeNull()
+})
+
+test("a saved multiword command runs through the registry and survives a restarted frontend", async ({ tui, backend }, testInfo) => {
+  const prefs = join(backend.dir, "tui-settings.json")
+  const options = { viewport: { width: 1500, height: 640 }, env: { HYA_TUI_CONFIG: prefs } }
+  let term = await tui(hyaTui(backend), options)
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await term.type("draft survives")
+  await term.press("Control+x")
+  await command(term, "/keybind set F6 /layout focus pane-3")
+  await term.waitForText("Keybind saved · F6")
+  await term.waitForText("Command: /layout focus pane-3")
+  await term.attach(testInfo, "saved-command")
+  await closeModal(term, "Keybind saved · F6")
+  expect(JSON.parse(await readFile(prefs, "utf8")).keybindings).toEqual({ F6: { command: "/layout focus pane-3", scope: "workspace" } })
+  await term.press("F6")
+  let sessions = (await term.find("Sessions"))!
+  await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#73c8e8")
+  await term.press("Alt+ArrowLeft")
+  await term.type(" continues")
+  await term.waitForText("draft survives continues")
+  term = await tui(hyaTui(backend), options)
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await term.press("F6")
+  sessions = (await term.find("Sessions"))!
+  await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#73c8e8")
+})
+
+test("conversation-scoped command shortcuts stay inactive in Sessions", async ({ tui, backend }) => {
+  const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await command(term, "/keybind set F6 --scope conversation /sidebar off")
+  await term.waitForText("Keybind saved · F6")
+  await term.waitForText("Custom shortcut (conversation)")
+  await closeModal(term, "Keybind saved · F6")
+  await command(term, "/layout focus pane-3")
+  await expect.poll(() => term.find("Commands")).toBeNull()
+  await term.press("F6")
+  await term.type("/")
+  await term.waitForText("Commands")
+  expect(await term.find("Sessions")).not.toBeNull()
+  await term.press("Escape")
+  await expect.poll(() => term.find("Commands")).toBeNull()
+  await term.press("Alt+ArrowLeft")
+  await term.press("F6")
+  await expect.poll(() => term.find("Sessions")).toBeNull()
+})
+
+test("binding conflicts are visible, modals retain key ownership, and reset removes the shortcut", async ({ tui, backend }, testInfo) => {
+  const term = await tui(hyaTui(backend))
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await command(term, "/keybind set Alt+G /help")
+  await term.waitForText("Keybind saved · Alt+G")
+  await closeModal(term, "Keybind saved · Alt+G")
+  await command(term, "/keybind set Ctrl+C /tools")
+  await term.waitForText("Keybind · not saved")
+  await term.waitForText("already bound to quit")
+  await term.attach(testInfo, "conflict-error")
+  await term.press("Alt+g")
+  expect(await term.find("Help · keys and commands")).toBeNull()
+  await closeModal(term, "Keybind · not saved")
+  await term.press("Alt+g")
+  await term.waitForText("Help · keys and commands")
+  await term.type("Alt+G")
+  await term.waitForText("custom /keybind shortcut")
+  await closeModal(term, "Help · keys and commands")
+  await command(term, "/keybind reset Alt+G")
+  await term.waitForText("Keybind reset")
+  await closeModal(term, "Keybind reset")
+  await term.press("Alt+g")
+  await term.type("/")
+  await term.waitForText("Commands")
+  expect(await term.find("Help · keys and commands")).toBeNull()
 })
