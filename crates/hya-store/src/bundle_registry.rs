@@ -196,34 +196,6 @@ impl BundleRegistry {
         Ok(snapshot.into_public_snapshot())
     }
 
-    /// Install from a package inspection: public packages go through [`Self::install`]; private is rejected.
-    pub async fn install_inspection(
-        &self,
-        reserved_agent_ids: &[&str],
-        policy: NamespaceInstallPolicy,
-        inspection: hya_bundle::PackageInspection,
-        installed_at: i64,
-    ) -> Result<BundleInstallOutcome, StoreError> {
-        match inspection {
-            hya_bundle::PackageInspection::Private(_) => {
-                Err(StoreError::PrivateActivationUnsupported)
-            }
-            hya_bundle::PackageInspection::Public(public) => {
-                self.install(
-                    reserved_agent_ids,
-                    policy,
-                    BundleInstallCandidate {
-                        source_digest: public.source_digest,
-                        prepared_digest: public.prepared.digest().to_owned(),
-                        prepared_bytes: public.prepared.bytes().to_vec(),
-                        installed_at,
-                    },
-                )
-                .await
-            }
-        }
-    }
-
     /// Validate the candidate against the installed catalog, then insert or
     /// replace under an immediate lock.
     ///

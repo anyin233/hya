@@ -29,4 +29,3 @@ export function createQuitGuard({ windowMs = quitWindowMs, now = Date.now }: Qui
   }
 }
 
-export type QuitGuard = ReturnType<typeof createQuitGuard>

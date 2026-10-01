@@ -174,7 +174,6 @@ replace these.
 | I.v1_api | v1 HTTP contract | `crates/hya-server/tests/v1_api.rs` |
 | I.v1_grpc_parity | v1 HTTP/gRPC parity | `crates/hya-server/tests/v1_grpc_parity.rs` |
 | I.bundle_cli | Bundle CLI | `crates/hya-backend/tests/bundle_cli.rs` |
-| I.compact_engine | Engine compact_context | `crates/hya-core/tests/compact_context.rs` |
 
 The previous Compat-route index rows (permission/question, MCP, session
 context, compact APIs under `crates/hya-server/tests/compat_*.rs`) were removed

@@ -165,13 +165,6 @@ impl FromStr for RoomId {
     }
 }
 
-/// Derive the room id owned by an Ed25519 public key
-/// (same as [`RoomId::from_ed25519`]).
-#[must_use]
-pub fn room_id_from_ed25519(pubkey: &[u8; 32]) -> RoomId {
-    RoomId::from_ed25519(pubkey)
-}
-
 /// The transport binding hint (`t=` in the link).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Transport {
@@ -353,13 +346,6 @@ impl RelayAddress {
     #[must_use]
     pub fn base_url(&self) -> String {
         format!("{}{}", self.origin(), self.prefix)
-    }
-
-    /// Base URL of the gRPC binding; rpc paths
-    /// (`/hya.relay.v1.Relay/<Method>`) are appended below the prefix.
-    #[must_use]
-    pub fn grpc_url(&self) -> String {
-        self.base_url()
     }
 
     /// Full URL of a WebSocket binding route:

@@ -32,10 +32,6 @@ export function activeProject(state: { projects: readonly ProjectInfo[]; activeP
   return id ? state.projects.find((project) => project.id === id) : undefined
 }
 
-/** Whether a session of the Project runs a turn now (`ProjectInfo.busy`, kept live by `projectsUpdated`). */
-export function projectBusy(state: { projects: readonly ProjectInfo[] }, id: string): boolean {
-  return state.projects.find((project) => project.id === id)?.busy === true
-}
 
 /**
  * The client's directory scope in `project`: `--dir` on a local start when

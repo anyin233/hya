@@ -3,10 +3,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_bundle::{
-    BundleError, BundleSource, PackageInspection, PrivatePackageAuthentication,
-    PrivatePackageInspection, PrivatePackagePayload, SourceFile, prepare_package,
-};
+use hya_bundle::{BundleError, BundleSource, SourceFile, prepare_package};
 use hya_store::{
     BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleRegistry,
     BundleUninstallOutcome, NamespaceInstallPolicy, StoreError,
@@ -199,44 +196,6 @@ async fn bundle_registry_initializes_empty_at_generation_zero() {
         panic!("bundle registry snapshot failed: {snapshot:?}");
     };
 
-    assert_eq!(snapshot.generation, 0);
-    assert!(snapshot.bundles.is_empty());
-}
-
-#[tokio::test]
-async fn private_package_install_is_unsupported_without_registry_mutation() {
-    let path = temp_db();
-    let registry = BundleRegistry::connect(&path).await;
-    let Ok(registry) = registry else {
-        panic!("bundle registry connection failed: {registry:?}");
-    };
-    let inspection = PackageInspection::Private(PrivatePackageInspection {
-        target: "x86_64-unknown-linux-gnu".to_owned(),
-        protocol_minimum: 1,
-        protocol_maximum: 1,
-        authentication: PrivatePackageAuthentication::Unverified,
-        payload: PrivatePackagePayload::Opaque,
-        ciphertext_length: 1,
-        ciphertext_digest: [0; 32],
-    });
-
-    let install = registry
-        .install_inspection(
-            &[],
-            NamespaceInstallPolicy::DenyConflicts,
-            inspection,
-            1_725_000_009,
-        )
-        .await;
-    assert!(matches!(
-        install,
-        Err(StoreError::PrivateActivationUnsupported)
-    ));
-
-    let snapshot = registry.snapshot().await;
-    let Ok(snapshot) = snapshot else {
-        panic!("bundle registry snapshot failed: {snapshot:?}");
-    };
     assert_eq!(snapshot.generation, 0);
     assert!(snapshot.bundles.is_empty());
 }

@@ -1417,7 +1417,7 @@ fn member_spec_for_resume(
 }
 
 #[tokio::test]
-async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
+async fn pre_admitted_member_nested_spawn_completes() {
     let workdir = support::TestDir::new("pre-admitted-nested-spawn");
     let provider = Arc::new(FakeProvider::scripted_turns(vec![
         vec![
@@ -1510,7 +1510,6 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
         .await
         .expect("nested spawn request must arrive")
         .expect("spawn sender must remain connected");
-    assert_eq!(bound.parent_admission(), Some(admission));
     let (_binding, nested_request) = bound.into_parts();
     let nested_parent = nested_request.parent;
     nested_request

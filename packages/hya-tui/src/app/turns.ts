@@ -239,4 +239,3 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
   }
 }
 
-export type TurnRunner = ReturnType<typeof createTurnRunner>

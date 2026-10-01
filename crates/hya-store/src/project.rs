@@ -215,31 +215,6 @@ impl SessionStore {
         Ok(out)
     }
 
-    /// Rename a Project; bumps `updated_at`.
-    ///
-    /// # Errors
-    /// [`StoreError::ProjectNameEmpty`], [`StoreError::ProjectNotFound`], or
-    /// SQLite failures.
-    pub async fn rename_project(&self, id: ProjectId, name: &str) -> Result<Project, StoreError> {
-        self.update_project(id, Some(name), None).await
-    }
-
-    /// Replace a Project's whole root list (validated like
-    /// [`SessionStore::create_project`]); bumps `updated_at`. Running sessions
-    /// see the new roots from their next turn (ADR-0024).
-    ///
-    /// # Errors
-    /// [`StoreError::ProjectRootsEmpty`], [`StoreError::ProjectRootNotAbsolute`],
-    /// [`StoreError::ProjectRootInvalid`], [`StoreError::ProjectNotFound`], or
-    /// SQLite failures.
-    pub async fn replace_project_roots(
-        &self,
-        id: ProjectId,
-        roots: &[String],
-    ) -> Result<Project, StoreError> {
-        self.update_project(id, None, Some(roots)).await
-    }
-
     /// Rename a Project and/or replace its whole root list in one
     /// transaction: both changes apply, or neither does. Both inputs are
     /// validated before anything is written. Bumps `updated_at` when either

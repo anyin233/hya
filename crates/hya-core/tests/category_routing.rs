@@ -41,7 +41,7 @@ fn config_registry() -> CategoryRegistry {
         "writing".to_string(),
         CategoryEntry::from_candidates(&["gw/writer-model".to_string()]).unwrap(),
     );
-    CategoryRegistry::new().with_overrides(overrides)
+    CategoryRegistry::from_entries(overrides)
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn categories_resolve_to_distinct_configured_models() {
     // An unconfigured category does not resolve; the caller falls back to the
     // global default rather than a dangling placeholder ref.
     assert!(reg.resolve("nonexistent").is_none());
-    assert!(CategoryRegistry::new().is_empty());
+    assert!(CategoryRegistry::new().resolve("anything").is_none());
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn category_failover_picks_first_servable_candidate() {
         CategoryEntry::from_candidates(&["primary/opus".to_string(), "backup/sonnet".to_string()])
             .unwrap(),
     );
-    let reg = CategoryRegistry::new().with_overrides(overrides);
+    let reg = CategoryRegistry::from_entries(overrides);
 
     // Both providers configured → first candidate wins.
     let both = reg.resolve_servable("deep", |_| true).unwrap();
@@ -109,7 +109,7 @@ fn skills_and_prompt_append_are_injected_into_member_prompt() {
         "deep".to_string(),
         CategoryEntry::new("gw/deep-model", "Think deeply and thoroughly."),
     );
-    let reg = CategoryRegistry::new().with_overrides(overrides);
+    let reg = CategoryRegistry::from_entries(overrides);
     let resolved = reg.resolve("deep").unwrap();
     let agent = build_member_agent(&base, &resolved, &["use-the-foo-skill".to_string()]);
     assert_eq!(agent.model, ModelRef::new("gw/deep-model"));

@@ -12,16 +12,6 @@ use crate::error::CoreError;
 use hya_provider::COMPACT_CONTEXT_MARKER;
 
 impl SessionEngine {
-    /// Compact the session transcript when thresholds are exceeded.
-    pub async fn compact_context(
-        &self,
-        session: SessionId,
-        summary: String,
-    ) -> Result<MessageId, CoreError> {
-        self.inject_system_message(session, format!("{COMPACT_CONTEXT_MARKER}\n{summary}"))
-            .await
-    }
-
     /// Produce a summary message for the session via the summarizer.
     pub async fn summarize_session(&self, session: SessionId) -> Result<MessageId, CoreError> {
         let projection = self.store.read_projection(session).await?;

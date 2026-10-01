@@ -80,4 +80,3 @@ export function createDiffController({ store, client, ui }: DiffControllerOption
   return { open, close, key, dispose: () => { abort?.abort() } }
 }
 
-export type DiffController = ReturnType<typeof createDiffController>

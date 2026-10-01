@@ -130,14 +130,17 @@ async fn invalid_projects_are_rejected_with_typed_errors() {
 }
 
 #[tokio::test]
-async fn rename_and_replace_roots_bump_updated_at() {
+async fn update_project_bumps_updated_at() {
     let store = SessionStore::connect_memory().await.unwrap();
     let project = store
         .create_project("old", &roots(&["/a", "/b"]))
         .await
         .unwrap();
     tick().await;
-    let renamed = store.rename_project(project.id, "new").await.unwrap();
+    let renamed = store
+        .update_project(project.id, Some("new"), None)
+        .await
+        .unwrap();
     assert_eq!(renamed.name, "new");
     assert_eq!(renamed.roots, project.roots);
     assert!(renamed.updated_at_ms > project.updated_at_ms);
@@ -145,7 +148,7 @@ async fn rename_and_replace_roots_bump_updated_at() {
 
     tick().await;
     let rerooted = store
-        .replace_project_roots(project.id, &roots(&["/c", "/a"]))
+        .update_project(project.id, None, Some(&roots(&["/c", "/a"])))
         .await
         .unwrap();
     assert_eq!(rerooted.roots, roots(&["/c", "/a"]));
@@ -154,20 +157,22 @@ async fn rename_and_replace_roots_bump_updated_at() {
     assert_eq!(store.get_project(project.id).await.unwrap(), Some(rerooted));
 
     assert!(matches!(
-        store.replace_project_roots(project.id, &[]).await,
+        store.update_project(project.id, None, Some(&[])).await,
         Err(StoreError::ProjectRootsEmpty)
     ));
     assert!(matches!(
-        store.rename_project(project.id, "").await,
+        store.update_project(project.id, Some(""), None).await,
         Err(StoreError::ProjectNameEmpty)
     ));
     let missing = ProjectId::new();
     assert!(matches!(
-        store.rename_project(missing, "x").await,
+        store.update_project(missing, Some("x"), None).await,
         Err(StoreError::ProjectNotFound { project }) if project == missing
     ));
     assert!(matches!(
-        store.replace_project_roots(missing, &roots(&["/x"])).await,
+        store
+            .update_project(missing, None, Some(&roots(&["/x"])))
+            .await,
         Err(StoreError::ProjectNotFound { .. })
     ));
 }
@@ -332,7 +337,10 @@ async fn resolve_prefers_the_longest_matching_root_then_most_recent() {
     // Same root length: the most recently updated Project wins.
     assert_eq!(resolved("/work/notes").await, Some(late_outer.id));
     tick().await;
-    store.rename_project(outer.id, "outer2").await.unwrap();
+    store
+        .update_project(outer.id, Some("outer2"), None)
+        .await
+        .unwrap();
     assert_eq!(resolved("/work/notes").await, Some(outer.id));
     // A non-primary root matches too.
     assert_eq!(resolved("/other/x").await, Some(outer.id));

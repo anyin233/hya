@@ -90,9 +90,9 @@ async fn sdk_creates_prompts_and_streams_the_transcript() {
     assert_eq!(finished.state, pb::TurnState::Finished as i32);
     assert_eq!(finished.finish, pb::FinishReason::Stop as i32);
 
-    // Fold live frames into the mirror; re-seed from reads on resync.
-    let transcript = sdk.list_messages(&session_id).await.expect("messages");
-    let mut mirror = V1SessionMirror::from_messages(&transcript.messages);
+    // Fold the live stream into an empty mirror; production clients consume
+    // the same events and re-read only when the stream asks for resync.
+    let mut mirror = V1SessionMirror::default();
     let mut guard = 0;
     while guard < 200 {
         match tokio::time::timeout(Duration::from_millis(250), frames.next()).await {

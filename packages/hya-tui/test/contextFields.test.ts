@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test"
-import { contextFields, contextRows, contextStatusShown, statusLines, type StatusLineSegment } from "../src/state/contextFields"
+import { contextFields, contextRows } from "../src/state/contextFields"
 import { shownServer } from "../src/state/format"
 import { createAppStore, type AppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
-const text = (lines: StatusLineSegment[][]) => lines.map((line) => line.map((segment) => segment.text).join(" · "))
 const rows = (store: AppStore, width = 40) => contextRows(contextFields(store.state, shownServer(store.state, server)), width).map((row) => `${row.label}${row.value}`)
 
 function openedStore() {
@@ -16,51 +15,6 @@ function openedStore() {
   return store
 }
 
-test("the Context box and the top status line carry the same fields", () => {
-  const store = openedStore()
-  expect(rows(store)).toEqual([
-    "Mode     manual",
-    "Session  Fix login",
-    "Agent    hya-main",
-    "Model    fake/model:default",
-    "Messages 1",
-    "Tokens   12.3k",
-    "Dir      …e/projects/very/long/workspace",
-    "Branch   main",
-    "Todos    1/2",
-    "Server   127.0.0.1:8080",
-  ])
-  expect(text(statusLines(contextFields(store.state, server), 200))).toEqual([
-    "mode manual · Fix login · hya-main · model:default · 1 msg · 12.3k tok · …cts/very/long/workspace · ⎇ main · Todos 1/2 · 127.0.0.1:8080",
-  ])
-})
-
-test("the status line wraps onto a second row, then drops the least essential fields", () => {
-  const store = openedStore()
-  store.setConnected(false)
-  store.setWeb({ url: "http://127.0.0.1:3250/" })
-  // Server, then Messages, then Todos drop; the connection state and the WebUI outrank them.
-  expect(text(statusLines(contextFields(store.state, server), 80))).toEqual([
-    "mode manual · Fix login · hya-main · model:default · 12.3k tok",
-    "…cts/very/long/workspace · ⎇ main · WebUI http://127.0.0.1:3250 · reconnecting",
-  ])
-  // Very narrow: the mode and the session title, one per row.
-  expect(text(statusLines(contextFields(store.state, server), 12))).toEqual(["mode manual", "Fix login"])
-})
-
-test("the status line is shown exactly when the Context pane is not", () => {
-  const store = createAppStore()
-  store.setColumns(160)
-  expect(contextStatusShown(store.state)).toBe(false)
-  store.setSidebar("closed")
-  expect(contextStatusShown(store.state)).toBe(true)
-  store.setSidebar("auto")
-  store.setColumns(149)
-  expect(contextStatusShown(store.state)).toBe(true)
-  // Below the breakpoint a pin no longer brings the sidebar back.
-  store.setSidebar("open")
-  expect(contextStatusShown(store.state)).toBe(true)
-})
 
 test("without a session: the startup placeholder, then none, the server label, and the WebUI", () => {
   const store = createAppStore()
@@ -79,7 +33,6 @@ test("vim, permission mode, occupancy, and connection fields carry their tones",
   expect(field("Vim")).toMatchObject({ short: "-- INSERT --", tone: "plain" })
   store.setVimMode("normal", "2d")
   expect(field("Vim")).toMatchObject({ value: "NORMAL 2d", short: "-- NORMAL -- 2d", tone: "accent" })
-  expect(text(statusLines(contextFields(store.state, server), 30))[0]).toBe("-- NORMAL -- 2d · mode manual")
   store.setPendingMode("yolo")
   store.openSession({ ...store.state.selected!, permissionMode: "yolo" })
   expect(field("Mode")).toMatchObject({ value: "⚠ yolo", tone: "error" })

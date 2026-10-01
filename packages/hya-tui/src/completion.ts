@@ -3,8 +3,6 @@
 import { createCommandRegistry, nativeCommandSpecs } from "./commands/native"
 import { matchValues, type CommandRegistry, type Completion } from "./commands/registry"
 
-/** Names of the built-in slash commands (from the command registry). */
-export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
 
 export interface CompletionContext {
   backendCommands: string[]

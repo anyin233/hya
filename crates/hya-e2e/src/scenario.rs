@@ -393,28 +393,6 @@ impl E2eEnv {
         Ok(())
     }
 
-    /// List pending interactive question requests (v1), as an array.
-    pub async fn list_questions(&self) -> Result<Value, E2eError> {
-        let body = self
-            .get_json("/v1/interactions?type=INTERACTION_TYPE_QUESTION")
-            .await?;
-        Ok(body
-            .get("interactions")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new())))
-    }
-
-    /// Answer a pending question request; `answers` maps to the first
-    /// selected option (v1 carries one answer per interaction).
-    pub async fn reply_question(&self, request_id: &str, answers: Value) -> Result<(), E2eError> {
-        let answer = first_answer(&answers);
-        let body = serde_json::json!({ "question": { "answer": answer } });
-        let _ = self
-            .post_json(&format!("/v1/interactions/{request_id}/respond"), &body)
-            .await?;
-        Ok(())
-    }
-
     /// List sessions via the v1 surface.
     pub async fn list_sessions_compat(&self) -> Result<Value, E2eError> {
         self.get_json("/v1/sessions").await
@@ -645,18 +623,6 @@ impl E2eEnv {
             .ok_or_else(|| E2eError::Other(format!("permission id missing in {body}")))
     }
 
-    /// Wait until a question is pending; return its request id.
-    pub async fn wait_question_id(&self, timeout: Duration) -> Result<String, E2eError> {
-        wait_until("question request", timeout, || async {
-            let body = self.list_questions().await?;
-            Ok(extract_request_id(&body).is_some())
-        })
-        .await?;
-        let body = self.list_questions().await?;
-        extract_request_id(&body)
-            .ok_or_else(|| E2eError::Other(format!("question id missing in {body}")))
-    }
-
     /// Run `prompt` while auto-replying the first pending permission request.
     pub async fn prompt_with_permission_reply(
         &self,
@@ -740,29 +706,6 @@ impl E2eEnv {
             .map(Value::to_string)
             .collect::<Vec<_>>()
             .join("\n"))
-    }
-
-    /// Wait until `marker`'s route has been asked at least `count` times.
-    ///
-    /// Use this to prove a resident is actually running a turn loop rather than
-    /// merely being registered in the roster.
-    pub async fn wait_route_requests(
-        &self,
-        marker: &str,
-        count: usize,
-        timeout: Duration,
-    ) -> Result<(), E2eError> {
-        wait_until(
-            &format!("route {marker} reaches {count} requests"),
-            timeout,
-            || async {
-                Ok(self
-                    .fake
-                    .route_requests(marker)?
-                    .is_some_and(|requests| requests.len() >= count))
-            },
-        )
-        .await
     }
 
     /// Wait until `needle` appears in `marker`'s recorded request bodies.

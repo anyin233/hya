@@ -154,10 +154,9 @@ async fn harness(state: &Path) -> Harness {
         ToolRegistry::builtins(),
         hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
     ));
-    let installed = Arc::new(
-        hya_app::InstalledBundleRefresh::new(state.join("registry.db"))
-            .with_config_file(state.join("config-home/hya/config.yaml")),
-    );
+    let installed = Arc::new(hya_app::InstalledBundleRefresh::new(
+        state.join("registry.db"),
+    ));
     let refresh = Arc::new(hya_app::ProjectScopeRefresh::new(installed));
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(

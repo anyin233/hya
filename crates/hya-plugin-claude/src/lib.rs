@@ -29,16 +29,6 @@ pub const CLAUDE_PLUGIN_KIND: &str = "claude";
 /// Claude Code plugin manifest file name inside a plugin source directory.
 pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
 
-/// Claude Code marketplace manifest file name.
-pub const MARKETPLACE_MANIFEST_FILE: &str = "marketplace.json";
-
-/// Claude Code per-plugin manifest directory (`<plugin>/.claude-plugin/`).
-pub const CLAUDE_PLUGIN_METADATA_DIR: &str = ".claude-plugin";
-
-/// Adapter directory name installed next to the backend executable
-/// (`<prefix>/lib/hya/claude-adapter`).
-pub const CLAUDE_ADAPTER_INSTALL_DIR: &str = "claude-adapter";
-
 #[cfg(test)]
 mod tests {
     use super::{CLAUDE_ADAPTER_VERSION, CLAUDE_PLUGIN_KIND, PLUGIN_MANIFEST_FILE};

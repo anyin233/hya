@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use hya_proto::{Envelope, SessionId, ToolCallId, WorkspaceAdapterInfo};
+use hya_proto::{Envelope, SessionId, ToolCallId};
 use hya_tool::{Tool, ToolCtx};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
@@ -19,7 +19,7 @@ use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
     EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, PluginContributionSet,
-    ToolCallReply, ToolInfo,
+    ToolCallReply,
 };
 
 use crate::native_capability::BundleCapability;
@@ -507,36 +507,12 @@ impl PluginHost {
         self.plugins.len()
     }
 
-    /// Plugin ids in declared load order.
-    #[must_use]
-    pub fn plugin_ids(&self) -> Vec<String> {
-        self.plugins.iter().map(|conn| conn.id.clone()).collect()
-    }
-
     /// Typed contribution sets per plugin id in declared load order.
     #[must_use]
     pub fn contributions(&self) -> Vec<(&str, &PluginContributionSet)> {
         self.plugins
             .iter()
             .map(|conn| (conn.id.as_str(), &conn.contributions))
-            .collect()
-    }
-
-    /// Raw tool declarations per plugin id (before `PluginTool` filtering).
-    #[must_use]
-    pub fn declared_tools(&self) -> Vec<(&str, &[ToolInfo])> {
-        self.plugins
-            .iter()
-            .map(|conn| (conn.id.as_str(), conn.contributions.tools.as_slice()))
-            .collect()
-    }
-
-    /// Workspace adapters from every plugin's initialize contribution set, concatenated.
-    #[must_use]
-    pub fn workspace_adapters(&self) -> Vec<WorkspaceAdapterInfo> {
-        self.plugins
-            .iter()
-            .flat_map(|conn| conn.contributions.workspace_adapters.iter().cloned())
             .collect()
     }
 

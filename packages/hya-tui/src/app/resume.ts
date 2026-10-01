@@ -66,4 +66,3 @@ export function createResumer({ store, client, openSession, openPicker, refresh 
   }
 }
 
-export type Resumer = ReturnType<typeof createResumer>

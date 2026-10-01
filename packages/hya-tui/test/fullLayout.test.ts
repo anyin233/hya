@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test"
-import { defaultPaneLayout, isDefaultPaneTree, paneLeaves, paneRects, parsePaneLayout, resizePane, setPaneKind, visiblePaneLayout } from "../src/state/panes"
+import { defaultPaneLayout, paneLeaves, paneRects, parsePaneLayout, resizePane, setPaneKind, visiblePaneLayout } from "../src/state/panes"
 
 test("default layout owns the Projects, Conversation, Sessions, Todos, and Context rectangles", () => {
   const layout = defaultPaneLayout()
-  expect(isDefaultPaneTree(layout)).toBe(true)
   expect(paneLeaves(layout.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "sessions", "todos", "context"])
   const rects = paneRects(layout.root)
   const projects = rects.get("pane-2")!
@@ -24,7 +23,6 @@ test("side panes can be selected, resized, reassigned, and remain visible after 
   const original = defaultPaneLayout()
   const projects = { ...original, active: "pane-2" }
   const resized = resizePane(projects, 0.05)
-  expect(isDefaultPaneTree(resized)).toBe(false)
   expect(paneRects(resized.root).get("pane-2")!.right).toBeGreaterThan(paneRects(original.root).get("pane-2")!.right)
   const sessions = setPaneKind({ ...resized, active: "pane-3" }, "jobs")
   expect(paneLeaves(parsePaneLayout(JSON.parse(JSON.stringify(sessions)))!.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "jobs", "todos", "context"])

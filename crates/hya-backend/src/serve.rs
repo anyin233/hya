@@ -1626,7 +1626,6 @@ pub(crate) async fn prepare_server(
     let mcp_control = built.mcp_control();
     let agent_model_control = Arc::new(built.agent_model_control());
     let workflow_control = Arc::new(built.workflow_control());
-    let plugin_host = built.plugin_host();
     let provider_manager = hya_app::ProviderManager::new(Arc::clone(&engine));
     let mut state = AppState::new(Arc::clone(&engine), Arc::clone(&agent))
         .with_provider_control(Arc::new(provider_manager.clone()))
@@ -1634,7 +1633,6 @@ pub(crate) async fn prepare_server(
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
         .with_agent_model_control(agent_model_control)
-        .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_pure_guidance(pure)
         .with_auto_title(true)

@@ -521,76 +521,6 @@ impl TeamProjection {
         };
         Ok(scope::qualify_channel(unit, name))
     }
-
-    /// The roster rows `from` may see, bucketed by how each stands to it.
-    #[must_use]
-    pub fn scoped_roster(&self, from: &str) -> ScopedRoster {
-        let mut scoped = ScopedRoster {
-            self_path: from.to_string(),
-            parent: None,
-            peers: Vec::new(),
-            reports: Vec::new(),
-        };
-        for (path, entry) in &self.roster {
-            match scope::relation(from, path) {
-                Some(scope::Relation::Parent) => scoped.parent = Some(entry.clone()),
-                Some(scope::Relation::Peer) => scoped.peers.push(entry.clone()),
-                Some(scope::Relation::Report) => scoped.reports.push(entry.clone()),
-                Some(scope::Relation::Own) | None => {}
-            }
-        }
-        scoped
-    }
-
-    /// The channels `from` may see: those owned by its home unit and, when it
-    /// leads one, by the unit it leads. The reserved announce channels are
-    /// excluded — they are not joinable and are not part of the channel surface.
-    #[must_use]
-    pub fn scoped_channels(&self, from: &str) -> Vec<(&str, &ChannelProjection)> {
-        let home = scope::home_unit(from);
-        let led = self.leads_a_unit(from).then(|| scope::led_unit(from));
-        self.channels
-            .iter()
-            .filter(|(key, _)| !scope::is_announce_channel(key))
-            .filter(|(key, _)| {
-                let unit = scope::channel_unit(key);
-                unit == home || unit == led
-            })
-            .map(|(key, channel)| (key.as_str(), channel))
-            .collect()
-    }
-}
-
-/// The roster as one agent sees it: itself, its parent, its same-parent peers,
-/// and its direct reports. Nothing outside its unit appears.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ScopedRoster {
-    /// The viewing agent's own canonical path.
-    pub self_path: String,
-    /// Its parent, absent only for the team root.
-    pub parent: Option<RosterEntry>,
-    /// Agents sharing its parent.
-    pub peers: Vec<RosterEntry>,
-    /// Agents it directly leads.
-    pub reports: Vec<RosterEntry>,
-}
-
-impl ScopedRoster {
-    /// Every visible row, regardless of relation.
-    #[must_use]
-    pub fn entries(&self) -> Vec<&RosterEntry> {
-        self.parent
-            .iter()
-            .chain(self.peers.iter())
-            .chain(self.reports.iter())
-            .collect()
-    }
-
-    /// Whether the viewer can see nobody at all.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.parent.is_none() && self.peers.is_empty() && self.reports.is_empty()
-    }
 }
 
 /// One channel: its current subscribers plus the ordered log of everything posted
@@ -2400,57 +2330,6 @@ mod team_tests {
         }
     }
 
-    /// The roster one agent sees, bucketed by relation, with nothing from
-    /// another unit (AC7).
-    #[test]
-    fn scoped_roster_shows_only_the_unit() {
-        let team = two_unit_team();
-
-        let lead = team.scoped_roster("main/lead-1");
-        assert_eq!(lead.self_path, "main/lead-1");
-        assert_eq!(
-            lead.parent.as_ref().map(|e| e.handle.as_str()),
-            Some("main")
-        );
-        assert_eq!(
-            lead.peers
-                .iter()
-                .map(|e| e.handle.as_str())
-                .collect::<Vec<_>>(),
-            vec!["main/lead-2"]
-        );
-        assert_eq!(
-            lead.reports
-                .iter()
-                .map(|e| e.handle.as_str())
-                .collect::<Vec<_>>(),
-            vec!["main/lead-1/worker-1", "main/lead-1/worker-2"]
-        );
-
-        // A worker sees its leader and its one sibling — and nothing else.
-        let worker = team.scoped_roster("main/lead-1/worker-1");
-        assert_eq!(
-            worker.parent.as_ref().map(|e| e.handle.as_str()),
-            Some("main/lead-1")
-        );
-        assert_eq!(
-            worker
-                .peers
-                .iter()
-                .map(|e| e.handle.as_str())
-                .collect::<Vec<_>>(),
-            vec!["main/lead-1/worker-2"]
-        );
-        assert!(worker.reports.is_empty());
-        assert_eq!(worker.entries().len(), 2, "6 agents exist; 2 are visible");
-
-        // The root has no parent and no peers.
-        let root = team.scoped_roster("main");
-        assert!(root.parent.is_none());
-        assert!(root.peers.is_empty());
-        assert_eq!(root.reports.len(), 2);
-    }
-
     /// The reducer builds a real tree from `parent`, and the resulting paths obey
     /// the scope rule the rest of the system enforces.
     #[test]
@@ -2931,7 +2810,6 @@ mod usage_fold_tests {
             (totals.input, totals.cache_read, totals.output),
             (40, 8, 12)
         );
-        assert_eq!(totals.output_split().thinking_exact(), None);
         assert_eq!(usage.by_model.len(), 1);
     }
 
