@@ -759,7 +759,7 @@ fn check_bash_syntax(index: usize, script: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate the semver, version files, and newest-only changelog contract.
+/// Validate the semver, version files, and side-specific newest-only changelog contract.
 fn validate_release_metadata(
     root: &Path,
     version: &str,
@@ -829,19 +829,26 @@ fn validate_release_metadata(
     validate_lockfile_versions(&lockfile, version)?;
     validate_bun_lockfile(root)?;
 
-    let changelog = read_text(root, "CHANGELOG.md")?;
-    let first_heading = changelog.lines().find(|line| line.starts_with("# "));
+    let backend_changelog = read_text(root, "CHANGELOG_BACKEND.md")?;
+    validate_newest_changelog(&backend_changelog, "CHANGELOG_BACKEND.md", version)?;
+    let frontend_changelog = read_text(root, "CHANGELOG_FRONTEND.md")?;
+    validate_newest_changelog(
+        &frontend_changelog,
+        "CHANGELOG_FRONTEND.md",
+        &frontend_version,
+    )?;
+    Ok(())
+}
+
+fn validate_newest_changelog(source: &str, path: &str, version: &str) -> Result<()> {
+    let first_heading = source.lines().find(|line| line.starts_with("# "));
     let expected_heading = format!("# {version}");
     ensure!(
         first_heading == Some(expected_heading.as_str()),
-        "CHANGELOG.md first heading must be `{expected_heading}`"
+        "{path} first heading must be `{expected_heading}`"
     );
-    if let Some(heading) = changelog
-        .lines()
-        .filter(|line| line.starts_with("# "))
-        .nth(1)
-    {
-        bail!("CHANGELOG.md must be newest-only; found extra heading `{heading}`");
+    if let Some(heading) = source.lines().filter(|line| line.starts_with("# ")).nth(1) {
+        bail!("{path} must be newest-only; found extra heading `{heading}`");
     }
     Ok(())
 }

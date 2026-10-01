@@ -145,20 +145,26 @@ suite (plus the `packages/hya-tui` and adapter typecheck/test above) in the
 
 ## Version bumps
 
-The release system has independent backend and frontend aggregates in
-`versions.toml`:
+Backend and frontend release iterations are independent. `versions.toml` is the
+aggregate source of truth:
 
 - `[backend].version` is the backend release version. The root
-  `[workspace.package].version`, `Cargo.lock`, release tag, and root changelog
-  mirror it.
-- `[frontend].version` is the frontend release version and may differ from the
-  backend. `frontend-version.ts` embeds both the frontend version and
-  `minimumBackendVersion` for the packaged TUI.
+  `[workspace.package].version`, the `hya-backend` package, the backend `vX.Y.Z`
+  tag, and `CHANGELOG_BACKEND.md` mirror it. The backend changelog's first
+  heading is exactly `# <backend-version>`.
+- `[frontend].version` is the frontend release version and MAY differ from the
+  backend. `packages/hya-tui/frontend-version.ts` embeds it together with
+  `minimumBackendVersion`, and `CHANGELOG_FRONTEND.md` carries the frontend
+  notes. The frontend changelog's first heading is exactly
+  `# <frontend-version>`; a frontend-only release does not bump the backend
+  workspace or package version.
 
 The frontend compatibility contract is inclusive: it accepts a backend only
-when `backend >= frontend.minimum_backend_version`; older or malformed backend
-versions are rejected during bootstrap, server switching, and remote entry.
-The current split is frontend `0.43.40`, requiring backend `0.43.41` or newer.
+when `backend >= frontend.minimum_backend_version`; missing, malformed, or
+older backend versions are rejected during bootstrap, server switching, and
+remote entry. Raise the minimum only when a frontend change requires a newer
+backend contract. The current split is frontend `0.43.40`, requiring backend
+`0.43.41` or newer.
 
 All other Rust package manifests use the placeholder `0.0.0` plus
 `[package.metadata.hya] version-reference = "backend"`; frontend package
@@ -167,24 +173,29 @@ manifests use `version_ref: backend` and identity version `0.0.0`; preparation
 resolves that reference to the backend aggregate, so prepared and released
 bundles carry the actual backend version without editing every source manifest.
 
-When changing shipped backend behavior, bump the backend aggregate and create a
-backend changelog/release. When changing shipped frontend behavior, bump only
-the frontend aggregate unless the compatibility minimum also needs to move.
-Shipped behavior means Rust crates, `proto/`, `bundles/`, `packages/hya-tui`,
-`packages/hya-tui-web`, the Bun adapter, and anything else in the release
-archive or source install.
+When changing shipped backend behavior, bump the backend aggregate and update
+the backend changelog. When changing shipped frontend behavior, bump only the
+frontend aggregate unless the compatibility minimum also needs to move. A
+cross-contract change bumps each affected side once. Shipped behavior means
+Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`,
+the Bun adapter, and anything else in the release archive or source install.
 
-These changes do **not** bump either version or write a new root changelog:
+These changes do **not** bump either version or write a new side-specific
+changelog:
 
 - documentation only: `docs/`, `*.md` files, code comments, `AGENTS.md`,
   `.planning/`;
 - CI only: `.github/`, CI scripts and config;
 - tests only, when no shipped code changes.
 
-A mixed change follows its shipped side. `cargo test -p xtask` validates the
-aggregate/reference/minimum-backend contract, `cargo test -p hya-bundle`
-validates bundle preparation, and release rehearsal validates the backend
-release metadata, lockfile, package layout, and archive copies.
+Each side-specific changelog contains only its newest notes. When a side
+advances, archive its previous file as
+`docs/changes/CHANGELOG_BACKEND_<version>.md` or
+`docs/changes/CHANGELOG_FRONTEND_<version>.md`; never recreate the old
+`CHANGELOG.md`. `cargo test -p xtask` validates both changelog headings,
+aggregate/reference metadata, frontend minimum-backend compatibility, and
+release layout. `cargo test -p hya-bundle` validates bundle preparation, while
+release rehearsal validates the lockfile, package layout, and archive copies.
 
 ## Dev tasks (`xtask` package)
 
