@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.43.41"
+version = "0.43.42"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -1593,10 +1593,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hya-plugin-example"
-version = "0.0.0"
-
-[[package]]
 name = "hya-proto"
 version = "0.0.0"
 dependencies = [
@@ -1786,6 +1782,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "ed25519-dalek",
+ "hya-version",
  "libc",
  "serde",
  "serde_json",

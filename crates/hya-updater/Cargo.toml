@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 clap = { workspace = true }
 ed25519-dalek = { workspace = true }
+hya-version = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

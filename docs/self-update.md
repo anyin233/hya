@@ -185,7 +185,8 @@ Before signing or verifying the canonical payload
 what the operator sees:
 
 1. **`protocol_version`** — must equal the supported value (`1`).
-2. **`min_updater_version`** — compared to this crate’s version with
+2. **`min_updater_version`** — compared to the updater's version (the backend
+   release version, `[backend].version` in `versions.toml`) with
    dotted-numeric compare (`1.2.3`); if the running updater is **older** than
    the metadata requirement → `UpdaterTooOld`.
 3. **`sequence`** — must be **strictly greater** than `accepted_floor`
