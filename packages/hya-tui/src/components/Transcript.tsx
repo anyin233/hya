@@ -3,7 +3,7 @@
  * streaming updates only the message it touches), in a scrollbox that sticks
  * to the bottom while the view is at the bottom.
  *
- * Scrolling: PgUp/PgDn, Ctrl+Home/Ctrl+End (Home/End with an empty
+ * Scrolling: PgUp/PgDn, Home/End (with an empty
  * composer), and the mouse wheel. The key handler reaches the scroll actions
  * through `ui.transcript` (app/context.ts). When new content arrives below a
  * scrolled-up view, a `↓ New messages below` hint shows until the bottom is
