@@ -10,6 +10,7 @@
  */
 import type { TextareaAction } from "@opentui/core"
 import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyAction } from "../keys/bindings"
+import { customKeybindings } from "../keys/custom"
 import { agentsViewKeyRows } from "../state/agentsView"
 import { diffKeyRows } from "../state/diff"
 import { mcpKeyRows } from "../state/mcp"
@@ -185,6 +186,9 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   const rows = [
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
     ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
+    ...Object.entries(customKeybindings()).map(([keys, binding]): HelpRow => ({
+      group: "Views", keys, description: `Run ${binding.command} (${binding.scope}; custom /keybind shortcut)`,
+    })),
   ]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))

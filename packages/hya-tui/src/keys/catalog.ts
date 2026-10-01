@@ -1,4 +1,4 @@
-/** Inspectable action catalog for `/keybindings`; shortcuts stay in bindings.ts. */
+/** Inspectable action catalog for `/keybind`; shortcuts stay in bindings.ts. */
 import { keyBindings, type KeyAction } from "./bindings"
 
 export const bindingScopes = ["workspace", "conversation", "pane"] as const

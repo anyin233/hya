@@ -126,7 +126,7 @@ export interface CommandSpec {
   argumentHint?: string
   /** Not offered in a WebUI tab (`--web-tab`): hidden from the command menu, help, and completion; typing it still runs it. */
   terminalOnly?: boolean
-  complete?(position: ArgumentPosition, context: CompletionContext): Completion[]
+  complete?(position: ArgumentPosition, context: CompletionContext, registry?: CommandRegistry): Completion[]
   run(context: CommandContext, invocation: CommandInvocation): Promise<void> | void
 }
 
@@ -175,6 +175,6 @@ export class CommandRegistry {
     if (!spec?.complete) return []
     const words = input.slice(space + 1).split(" ")
     const current = words.at(-1) ?? ""
-    return spec.complete({ words, current, head: input.slice(0, input.length - current.length) }, context)
+    return spec.complete({ words, current, head: input.slice(0, input.length - current.length) }, context, this)
   }
 }

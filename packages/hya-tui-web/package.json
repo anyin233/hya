@@ -1,6 +1,6 @@
 {
   "name": "@hya/tui-web",
-  "version": "0.43.41",
+  "version": "0.43.42",
   "private": true,
   "type": "module",
   "scripts": {

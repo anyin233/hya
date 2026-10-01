@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
+import { customKeybindings, setCustomKeybindings } from "../src/keys/custom"
 import { HttpError, type HyaClient } from "../src/client"
 import type { TuiPreferences } from "../src/prefs"
 import { nativeCommands, type CompletionContext } from "../src/completion"
@@ -8,6 +9,7 @@ import { modelReference, sessionListText } from "../src/state/format"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
+afterEach(() => setCustomKeybindings({}))
 
 function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
   const store = createAppStore()
@@ -53,7 +55,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     ...client,
   } as HyaClient
   const context = { store, client: clientWithDefaults, actions }
-  return { store, calls, pickers, registry, run: (text: string) => registry.dispatch(text, context) }
+  return { store, calls, pickers, registry, actions, run: (text: string) => registry.dispatch(text, context) }
 }
 
 test("/model persists an agent model and explicit effort", async () => {
@@ -122,35 +124,68 @@ test("registers every native slash command with a description", () => {
   expect(registry.get("/login")).toBeUndefined()
 })
 
-test("/keybindings browses and inspects actions without executing them", async () => {
+test("/keybind browses and inspects actions without executing them", async () => {
   const h = harness()
-  await h.run("/keybindings")
+  await h.run("/keybind")
   expect(h.pickers[0]?.title).toBe("Keybindings")
   const quit = h.pickers[0]!.rows.find((row) => row.id === "quit")!
   expect(quit.detail).toContain("Command: /exit")
   await h.pickers[0]!.onSelect(quit)
   expect(h.pickers[1]?.title).toBe("Keybinding · quit")
   expect(h.calls).toEqual([])
-  await h.run("/keybindings show /exit")
+  await h.run("/keybind show /exit")
   expect(h.pickers.at(-1)?.rows[0]?.id).toBe("quit")
-  await h.run("/keybindings list conversation")
+  await h.run("/keybind list conversation")
   expect(h.pickers.at(-1)?.rows.every((row) => row.tag === "conversation")).toBe(true)
   expect(h.pickers.at(-1)?.rows.some((row) => row.id === "toggleTools")).toBe(true)
-  await h.run("/keybindings show /layout focus left")
+  await h.run("/keybind show /layout focus left")
   expect(h.pickers.at(-1)?.rows[0]?.id).toBe("focusPaneLeft")
   expect(h.calls).toEqual([])
 })
 
-test("/keybindings validates arguments and completes scopes and action targets", async () => {
+test("/keybind validates arguments and completes scopes and action targets", async () => {
   const h = harness()
-  for (const command of ["/keybindings edit", "/keybindings show", "/keybindings list nope", "/keybindings list pane extra"]) {
-    await expect(h.run(command)).rejects.toThrow("Usage: /keybindings")
+  for (const command of ["/keybind edit", "/keybind show", "/keybind list nope", "/keybind list pane extra"]) {
+    await expect(h.run(command)).rejects.toThrow("Usage: /keybind")
   }
-  await expect(h.run("/keybindings show missing")).rejects.toThrow("Unknown keybinding action")
-  expect(h.registry.complete("/keybindings ", h.store.completionContext())).toEqual(["/keybindings list", "/keybindings show"])
-  expect(h.registry.complete("/keybindings list p", h.store.completionContext())).toEqual(["/keybindings list pane"])
-  expect(h.registry.complete("/keybindings show qu", h.store.completionContext())).toEqual(["/keybindings show quit"])
-  expect(h.registry.complete("/keybindings show /ex", h.store.completionContext())).toEqual(["/keybindings show /exit"])
+  await expect(h.run("/keybind show missing")).rejects.toThrow("Unknown keybinding action")
+  expect(h.registry.complete("/keybind ", h.store.completionContext())).toEqual(["/keybind list", "/keybind reset", "/keybind set", "/keybind show"])
+  expect(h.registry.complete("/keybind list p", h.store.completionContext())).toEqual(["/keybind list pane"])
+  expect(h.registry.complete("/keybind show qu", h.store.completionContext())).toEqual(["/keybind show quit"])
+  expect(h.registry.complete("/keybind show /ex", h.store.completionContext())).toEqual(["/keybind show /exit"])
+})
+
+test("/keybind set preserves multiword commands and scopes; set replaces one key and reset persists", async () => {
+  const h = harness()
+  await h.run('/keybind set F6 /layout focus left')
+  expect(customKeybindings()).toEqual({ F6: { command: "/layout focus left", scope: "workspace" } })
+  expect(h.pickers.at(-1)?.title).toBe("Keybind saved · F6")
+  await h.run('/keybind set Alt+G /tools on')
+  await h.run('/keybind set F6 --scope conversation /rename a  long title')
+  expect(customKeybindings().F6).toEqual({ command: "/rename a  long title", scope: "conversation" })
+  expect(customKeybindings()["Alt+G"]?.command).toBe("/tools on")
+  await h.run("/keybind show F6")
+  expect(h.pickers.at(-1)?.rows[0]?.detail).toContain("/rename a  long title")
+  expect(h.registry.complete("/keybind set F6 /too", h.store.completionContext())).toEqual(["/keybind set F6 /tools"])
+  expect(h.registry.complete("/keybind set F6 --scope w", h.store.completionContext())).toEqual(["/keybind set F6 --scope workspace"])
+  expect(h.registry.complete("/keybind set F6 /layout focus l", h.store.completionContext())).toEqual(["/keybind set F6 /layout focus left"])
+  expect(h.registry.complete("/keybind set F6 --scope conversation /tools o", h.store.completionContext())).toEqual(["/keybind set F6 --scope conversation /tools off", "/keybind set F6 --scope conversation /tools on"])
+  await h.run("/keybind reset F6")
+  expect(customKeybindings().F6).toBeUndefined()
+  expect(h.calls.at(-1)).toBe('prefs {"keybindings":{"Alt+G":{"command":"/tools on","scope":"conversation"}}}')
+  await h.run("/keybind reset all")
+  expect(customKeybindings()).toEqual({})
+  expect(h.calls.some((call) => call.startsWith("quit"))).toBe(false)
+})
+
+test("failed keybind writes and conflicting keys leave assignments intact and show an error modal", async () => {
+  const h = harness()
+  await h.run("/keybind set F6 /tools on")
+  await expect(h.run("/keybind set Ctrl+C /tools")).rejects.toThrow("already bound")
+  expect(h.pickers.at(-1)?.title).toBe("Keybind · not saved")
+  h.actions.savePreferences = () => { throw new Error("disk full") }
+  await expect(h.run("/keybind set F7 /exit")).rejects.toThrow("disk full")
+  expect(customKeybindings()).toEqual({ F6: { command: "/tools on", scope: "conversation" } })
 })
 
 test("/effort saves the choice on the layer that decides the session's effort", async () => {
