@@ -138,7 +138,7 @@ test("/keybind browses and inspects actions without executing them", async () =>
   expect(h.pickers.at(-1)?.rows[0]?.id).toBe("quit")
   await h.run("/keybind list conversation")
   expect(h.pickers.at(-1)?.rows.every((row) => row.tag === "conversation")).toBe(true)
-  expect(h.pickers.at(-1)?.rows.some((row) => row.id === "toggleTools")).toBe(true)
+  expect(h.pickers.at(-1)?.rows.some((row) => row.id === "toggleTools")).toBe(false)
   await h.run("/keybind show /layout focus left")
   expect(h.pickers.at(-1)?.rows[0]?.id).toBe("focusPaneLeft")
   expect(h.calls).toEqual([])
@@ -774,4 +774,21 @@ test("unset completes saved keys, normalizes them and persists removal only afte
   await expect(h.run("/keybind unset F7")).rejects.toThrow("No custom binding")
   await expect(h.run("/keybind unset")).rejects.toThrow("Usage:")
   await expect(h.run("/keybind unset all")).rejects.toThrow()
+})
+
+
+test("keybind lists only assigned rows with separate shortcut cells and retains unassigned inspection", async () => {
+  const h = harness()
+  await h.run("/keybind set F6 /tools on")
+  await h.run("/keybind list")
+  const picker = h.pickers.at(-1)!
+  expect(picker.columns).toEqual({ shortcut: "Shortcut", label: "Action / command", tag: "Scope" })
+  expect(picker.rows.every((row) => row.shortcut && row.shortcut !== "unassigned")).toBe(true)
+  expect(picker.rows.find((row) => row.id === "custom:F6")).toMatchObject({ shortcut: "F6", label: "/tools on", tag: "conversation" })
+  expect(picker.rows.find((row) => row.id === "quit")).toMatchObject({ shortcut: "Ctrl+C", label: "quit" })
+  expect(picker.rows.some((row) => row.detail?.includes("Keys:"))).toBe(false)
+  await h.run("/keybind show toggleTools")
+  expect(h.pickers.at(-1)?.rows[0]?.shortcut).toBe("unassigned")
+  await h.run("/keybind show F6")
+  expect(h.pickers.at(-1)?.title).toBe("Keybinding · F6")
 })
