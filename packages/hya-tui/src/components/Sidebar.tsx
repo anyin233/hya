@@ -7,7 +7,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useApp } from "../app/context"
 import type { TodoItem } from "../client"
 import { contextFields, contextRows, type ContextTone } from "../state/contextFields"
-import { sessionListText, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
+import { sessionListEntries, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
 import { colors, toolColors } from "../theme"
 
 /** Context box value color: plain and strong values in the text color, the rest in their theme color. */
@@ -65,14 +65,18 @@ function TodoList(props: { items: readonly TodoItem[]; width: number }) {
 
 /** One of the former right-sidebar boxes, now an independent split-tree leaf. */
 export function SidebarPane(props: { kind: "sessions" | "todos" | "context"; width: number; active: boolean; scrollRef?: (value: ScrollBoxRenderable) => void }) {
-  const { store, server } = useApp()
+  const { store, server, controller } = useApp()
   const inner = () => Math.max(1, props.width - 4)
   return (
     <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
       <Show when={props.kind === "sessions"}>
         <SideBox title="Sessions" active={props.active}>
           <scrollbox ref={props.scrollRef} width="100%" flexGrow={1}>
-            <text width="100%" wrapMode="word" fg={colors.fg}>{sessionListText(store.state, inner())}</text>
+            <For each={sessionListEntries(store.state, inner())}>
+              {(entry) => entry.separator
+                ? <text width="100%" height={1} wrapMode="none" fg={colors.border}>{entry.text}</text>
+                : <text width="100%" height={1} wrapMode="none" fg={colors.fg} onMouseDown={() => entry.sessionId && controller.openRootSession(entry.sessionId)}>{entry.text}</text>}
+            </For>
           </scrollbox>
         </SideBox>
       </Show>

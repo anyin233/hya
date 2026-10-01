@@ -663,6 +663,11 @@ export function createAppStore() {
         if (row) set("selected", sessionRow(selected, row))
       })
     },
+    /** Add or replace one session without waiting for a full catalog reload. */
+    upsertSession(row: SessionInfo): void {
+      const rows = [row, ...state.sessions.filter((candidate) => candidate.id !== row.id)]
+      this.setSessions(rows)
+    },
 
     /**
      * Store a projection read; ignored (returns false) when another session is

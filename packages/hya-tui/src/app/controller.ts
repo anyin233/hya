@@ -826,7 +826,10 @@ export function createController({ client, store, directory, remote: startedRemo
     keeper.created(session.id)
     store.setPendingAgent(undefined)
     store.setPendingModel(undefined)
-    await refresh()
+    // Creation already returns the authoritative projection. Avoid the old full
+    // catalog refresh here (sessions, models, providers, and bundles); update
+    // only the session index and let the normal live stream refresh catalogs.
+    store.upsertSession(session)
     await openSession(session.id)
     status(`Created ${session.id}`)
     // A mode chosen before any session existed applies before the first prompt is admitted.
@@ -1626,6 +1629,18 @@ export function createController({ client, store, directory, remote: startedRemo
     secret.clear()
   }
 
+  /** Open a session's top-level owner; used by mouse navigation in the session tab. */
+  function openRootSession(sessionId: string): Promise<void> {
+    const byId = new Map(store.state.sessions.map((session) => [session.id, session]))
+    let session = byId.get(sessionId)
+    const seen = new Set<string>()
+    while (session?.parent && !seen.has(session.id)) {
+      seen.add(session.id)
+      session = byId.get(session.parent)
+    }
+    return openSession((session ?? byId.get(sessionId))?.id ?? sessionId)
+  }
+
   /** Merged, deduplicated suggestions for the command pane (commands/menu.ts). */
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
@@ -1635,6 +1650,7 @@ export function createController({ client, store, directory, remote: startedRemo
 
   return {
     ...actions,
+    openRootSession,
     /** Register the composer's input (components/Composer.tsx); returns the unregister function. */
     attachComposer(access: ComposerAccess): () => void {
       composer = access
