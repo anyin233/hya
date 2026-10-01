@@ -13,7 +13,8 @@ Sessions, Todos, and Context panes on the right. The full layout is editable,
 and the side panes follow terminal width unless pinned (see [Layout](#layout)).
 Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
-tool call is a card with its state, a one-line summary, and an expandable
+tool call is an outlined card with its tool name shown on the border in the
+normal foreground color, its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
 read-only (see [Messages](#messages)). When the agent or one of its subagents
 needs a permission decision or asks a question, a prompt docked above the
@@ -659,7 +660,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
-| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
+| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). Numbers use session creation order and remain stable when a session's running state or updated time changes. A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. The choice is also remembered as the active agent's default, unless `config.yaml` pins that agent's model (`agents.<id>.model`): then it changes only the current session (see [Configuration — Remembered Agent Models](configuration.md#remembered-agent-models)). |
 | `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -3231,3 +3232,7 @@ headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
 pending block with its session, then F4 opens its numbered prompt (default
 and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
 single desktop notification.
+
+### Session pane mouse navigation
+
+The `Sessions` pane is mouse-aware: clicking either line of a session row opens that session. Clicking a subagent row opens its top-level parent session, so the pane always switches the main session tab rather than entering a read-only child. Top-level session groups are separated by horizontal divider lines; these are visual separators and are not clickable.

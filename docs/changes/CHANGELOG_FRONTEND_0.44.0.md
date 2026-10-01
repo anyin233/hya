@@ -1,8 +1,4 @@
-# 0.44.1
-
-## Performance
-
-- Avoid a full catalog refresh when `/new` creates a session; use the returned session projection and open it directly.
+# 0.44.0
 
 ## Distribution
 

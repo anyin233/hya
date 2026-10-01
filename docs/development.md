@@ -148,20 +148,19 @@ aggregate source of truth:
 
 - `[backend].version` is the backend release version. The root
   `[workspace.package].version` and `hya-backend` package mirror it. Backend
-  releases use the `backend/<version>` tag and `CHANGELOG_BACKEND.md`; its
-  first heading is exactly `# <backend-version>`.
+  releases use the `backend/<version>` tag (no `v` prefix) and
+  `CHANGELOG_BACKEND.md`; its first heading is exactly `# <backend-version>`.
 - `[frontend].version` is the frontend release version and MAY differ from the
-  backend. Frontend releases use the `frontend/<version>` tag and
-  `CHANGELOG_FRONTEND.md`. `packages/hya-tui/frontend-version.ts` embeds it
-  together with `minimumBackendVersion`; a frontend-only release does not bump
-  the backend workspace or package version.
+  backend. Frontend releases use the `frontend/<version>` tag (no `v` prefix)
+  and `CHANGELOG_FRONTEND.md`. `packages/hya-tui/frontend-version.ts` embeds
+  it together with `minimumBackendVersion`; a frontend-only release does not
+  bump the backend workspace or package version.
 
 The frontend compatibility contract is inclusive: it accepts a backend only
 when `backend >= frontend.minimum_backend_version`; missing, malformed, or
 older backend versions are rejected during bootstrap, server switching, and
 remote entry. Raise the minimum only when a frontend change requires a newer
-backend contract. The current split is frontend `0.44.0`, requiring backend
-`0.43.41` or newer.
+backend contract.
 
 All other Rust package manifests use the placeholder `0.0.0` plus
 `[package.metadata.hya] version-reference = "backend"`; frontend package
@@ -189,10 +188,68 @@ Each side-specific changelog contains only its newest notes. When a side
 advances, archive its previous file as
 `docs/changes/CHANGELOG_BACKEND_<version>.md` or
 `docs/changes/CHANGELOG_FRONTEND_<version>.md`; never recreate the old
-`CHANGELOG.md`. `cargo test -p xtask` validates both changelog headings,
-aggregate/reference metadata, frontend minimum-backend compatibility, and
-release layout. `cargo test -p hya-bundle` validates bundle preparation, while
-release rehearsal validates the lockfile, package layout, and archive copies.
+`CHANGELOG.md`.
+
+## Publishing a release
+
+`.github/workflows/release.yml` publishes only when a side tag is pushed:
+
+| Side | Tag | Archive | Installer delivery | Payload |
+| --- | --- | --- | --- | --- |
+| Backend | `backend/<version>` | `hya-backend-<version>-<target>.tar.gz` | Hosted `scripts/hya-install.sh`; no installer asset | `bin/hya`, Bun, Bun adapter, first-party bundles; no TUI/WebUI |
+| Frontend | `frontend/<version>` | `hya-frontend-<version>-<target>.tar.gz` | Same hosted installer with `--tui-only`; no installer asset | Bun, TUI, WebUI; no `bin/hya` |
+
+The single installer is served at `https://hya.ed-aisys.com/install.sh` from
+`main` and embedded in `hya update`. It installs both sides by default, or one
+side with `--backend-only`/`--tui-only`, verifies each selected side against
+its `SHA256SUMS`, and rolls back a failed side. Release download paths use the
+exact side tag and version; do not use `v`-prefixed tags or
+`/releases/download/<side>/v<version>/...` URLs.
+
+The supported targets are `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. Each side publishes
+its own archive, checksums, release notes, and provenance attestations; the
+release itself never carries an installer script.
+
+Before publishing, run the checks for every side being shipped:
+
+```sh
+cargo test -p xtask -p hya-bundle
+actionlint .github/workflows/release.yml
+bash tests/hya_install_script.sh
+cargo run -p xtask -- release-rehearsal \
+  --component backend \
+  --workflow .github/workflows/release.yml \
+  --version <backend-semver> \
+  --target "$(rustc -vV | sed -n 's/^host: //p')" \
+  --no-publish
+# Repeat with --component frontend and --version <frontend-semver> when shipping the frontend.
+```
+
+Push the version/changelog commit to `main` before creating tags. Publish only
+the affected side; for a cross-contract change, create and push both tags:
+
+```sh
+git push origin main
+git tag -a backend/<backend-version> -m "release backend <backend-version>"
+git push origin backend/<backend-version>
+git tag -a frontend/<frontend-version> -m "release frontend <frontend-version>"
+git push origin frontend/<frontend-version>
+```
+
+Main-branch pushes, the scheduled workflow, and `workflow_dispatch` refresh
+dependency caches only; they do not package or publish a release. After a tag
+run, verify the matching GitHub Release assets, run the installer contract, and
+exercise the hosted installer on a supported host. See [Install and update](install.md)
+for user commands and [Quality Guidelines](spec/backend/quality-guidelines.md)
+for the workflow contract.
+
+`cargo test -p xtask` validates aggregate/reference metadata, both changelog
+headings, frontend minimum-backend compatibility, and release layout.
+`cargo test -p hya-bundle` validates bundle preparation; release rehearsal
+validates the lockfile, package layout, checksums, installer, and archive
+contents.
+
 
 ## Dev tasks (`xtask` package)
 
@@ -214,7 +271,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `stage-first-party-bundles` | Packages the eleven trusted first-party bundles into a backend package's `<package-root>/bundles/` and fails if any bundle version differs from the backend release version. With `--target` and `--assets`, it also writes versioned standalone release assets. |
-| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal for one target of one release side. Backend rehearsals cover the binary, Bun adapter, first-party bundles, checksums, installer, and headless smoke; frontend rehearsals cover Bun, TUI/WebUI assets, production dependencies, checksums, installer, and frontend smoke. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
+| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal for one target of one release side. Backend rehearsals cover the binary, Bun adapter, first-party bundles, checksums, unified installer contract, and headless smoke; frontend rehearsals cover Bun, TUI/WebUI assets, production dependencies, checksums, unified installer contract, and frontend smoke. Run it on a host of that target (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`). |
 
 ```sh
 cargo run -p xtask -- matrix-check

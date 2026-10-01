@@ -234,8 +234,8 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
         {(task) => <TaskCard block={props.block} task={task()} />}
       </Match>
       <Match when={!card().task}>
-        <box width="100%" flexDirection="column" border borderColor={colors.border} paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
-          <CardHeader status={waiting() ? "waiting" : card().status} tool={card().tool} summary={waiting() ? "awaiting approval" : ""} duration={card().duration} />
+        <box width="100%" flexDirection="column" border borderColor={colors.border} title={card().tool} titleColor={colors.fg} paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
+          <CardHeader status={waiting() ? "waiting" : card().status} summary={waiting() ? "awaiting approval" : ""} duration={card().duration} />
           <Show when={!expanded()} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{card().args || "{}"}</text>}>
             <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{card().args || "{}"}</text>
           </Show>
@@ -256,14 +256,12 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
   )
 }
 
-function CardHeader(props: { status: ToolStatus | "waiting"; tool: string; summary: string; duration?: string | undefined }) {
+function CardHeader(props: { status: ToolStatus | "waiting"; summary: string; duration?: string | undefined }) {
   return (
     <box width="100%" height={1} flexDirection="row">
       <text flexShrink={0} height={1} wrapMode="none">
         <StatusIcon status={props.status} />
         <span style={{ fg: colors.fg }}> </span>
-        <b style={{ fg: colors.fg }}>{props.tool}</b>
-        <span style={{ fg: colors.fg }}>{"  "}</span>
       </text>
       <text flexGrow={1} flexShrink={1} height={1} wrapMode="none" fg={colors.muted}>{props.summary}</text>
       <text flexShrink={0} height={1} wrapMode="none" fg={colors.muted}>{props.duration ? ` ${props.duration}` : ""}</text>
@@ -308,8 +306,8 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
     }
   }
   return (
-    <box width="100%" flexDirection="column" onMouseDown={open}>
-      <CardHeader status={props.block.card.status} tool={props.block.card.tool} summary={props.block.card.summary} duration={props.block.card.duration} />
+    <box width="100%" flexDirection="column" border borderColor={colors.border} title={props.block.card.tool} titleColor={colors.fg} onMouseDown={open}>
+      <CardHeader status={props.block.card.status} summary={props.block.card.summary} duration={props.block.card.duration} />
       <Show when={props.block.card.error}>
         <box width="100%" paddingLeft={2}>
               <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>

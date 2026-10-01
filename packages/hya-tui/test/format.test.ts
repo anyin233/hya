@@ -90,6 +90,18 @@ test("numbers only main sessions, with hierarchical child numbers", () => {
   expect(rendered).toContain("2.2 hya-task")
 })
 
+test("keeps session numbers stable when a running session updates", () => {
+  const sessions = [
+    { id: "hysec_new", agent: "hya-main", workdir: "/w", timeCreated: "2026-01-02T00:00:00Z", timeUpdated: "2026-01-03T00:00:00Z", busy: true },
+    { id: "hysec_old", agent: "hya-main", workdir: "/w", timeCreated: "2026-01-01T00:00:00Z", timeUpdated: "2026-01-01T00:00:00Z" },
+  ]
+  const before = sessionTree(sessions).map((row) => [row.session.id, row.number])
+  sessions[0].busy = false
+  sessions[0].timeUpdated = "2026-01-04T00:00:00Z"
+  const after = sessionTree([...sessions].reverse()).map((row) => [row.session.id, row.number])
+  expect(after).toEqual(before)
+})
+
 test("asks of the open session tree are prompts, not pending lines; the sidebar marks sessions that wait", () => {
   const store = createAppStore()
   const parent = { id: "hysec_p", agent: "hya-main", workdir: "/w", title: "Parent" }

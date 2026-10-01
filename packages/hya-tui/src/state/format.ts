@@ -76,9 +76,8 @@ export interface SessionRow {
 }
 
 /**
- * Sessions as a tree, in list order: each top-level session followed by its
- * subagent sessions (`SessionInfo.parent`), depth first. A child whose parent
- * is not listed counts as top-level. `/open <number>` counts in this order.
+ * Sessions as a tree in stable creation order. A running session's updates must
+ * not renumber every other session in the sidebar or `/open`.
  */
 export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
   const ids = new Set(sessions.map((session) => session.id))
@@ -88,9 +87,12 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
       children.set(session.parent, [...(children.get(session.parent) ?? []), session])
     }
   }
+  const created = (session: SessionInfo): number => Date.parse(session.timeCreated ?? "") || 0
+  const stable = (a: SessionInfo, b: SessionInfo): number => created(a) - created(b) || a.id.localeCompare(b.id)
+  for (const group of children.values()) group.sort(stable)
+  const roots = sessions.filter((session) => !(session.parent && ids.has(session.parent))).sort(stable)
   const rows: SessionRow[] = []
   const seen = new Set<string>()
-  let rootNumber = 0
   const visit = (session: SessionInfo, depth: number, number: string): void => {
     if (seen.has(session.id)) return
     seen.add(session.id)
@@ -101,18 +103,9 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
       visit(child, depth + 1, `${number}.${childNumber}`)
     }
   }
-  for (const session of sessions) {
-    if (!(session.parent && ids.has(session.parent))) {
-      rootNumber += 1
-      visit(session, 0, String(rootNumber))
-    }
-  }
-  for (const session of sessions) {
-    if (!seen.has(session.id)) {
-      rootNumber += 1
-      visit(session, 0, String(rootNumber))
-    }
-  }
+  const nextRootNumber = (): string => String(rows.filter((row) => row.depth === 0).length + 1)
+  for (const session of roots) visit(session, 0, nextRootNumber())
+  for (const session of sessions) if (!seen.has(session.id)) visit(session, 0, nextRootNumber())
   return rows
 }
 
@@ -127,6 +120,36 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
 /** `/to-background` and Ctrl+D in a WebUI tab (`--web-tab`): closing the tab already leaves the session running. */
 export const webTabBackgroundNotice = "Close the tab to leave this session running"
 
+export interface SessionListEntry {
+  text: string
+  sessionId?: string
+  separator?: boolean
+}
+
+export function sessionListEntries(state: AppState, width?: number): SessionListEntry[] {
+  if (!state.ready) return [{ text: "Loading…" }]
+  const sessions = sessionsInScope(state.sessions, state.activeProjectId, false)
+  if (!sessions.length) return [{ text: "No sessions. Type a prompt or /new." }]
+  const entries: SessionListEntry[] = []
+  let announcedTemporary = false
+  sessionTree(sessions).forEach(({ session, depth, number }) => {
+    const mark = session.id === state.selected?.id ? "▸" : " "
+    const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
+    if (depth === 0) {
+      if (session.kind === "SESSION_KIND_TEMPORARY" && !announcedTemporary) {
+        announcedTemporary = true
+        entries.push({ text: truncate("— Temporary —", width) })
+      }
+      if (entries.length) entries.push({ text: truncate("─".repeat(Math.max(1, width ?? 1)), width), separator: true })
+      entries.push({ sessionId: session.id, text: truncate(`${mark} ${number}. ${session.title || session.id}`, width) })
+      entries.push({ sessionId: session.id, text: truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width) })
+    } else {
+      entries.push({ sessionId: session.id, text: truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.agent}${running}`, width) })
+    }
+  })
+  return entries
+}
+
 export function sessionListText(state: AppState, width?: number): string {
   if (!state.ready) return "Loading…"
   const sessions = sessionsInScope(state.sessions, state.activeProjectId, false)
@@ -135,17 +158,13 @@ export function sessionListText(state: AppState, width?: number): string {
   let announcedTemporary = false
   sessionTree(sessions).forEach(({ session, depth, number }) => {
     const mark = session.id === state.selected?.id ? "▸" : " "
-    // A pending ask outranks `running`: the session is blocked on the user.
     const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
     if (depth === 0) {
       if (session.kind === "SESSION_KIND_TEMPORARY" && !announcedTemporary) {
         announcedTemporary = true
         groups.push([truncate("— Temporary —", width)])
       }
-      groups.push([
-        truncate(`${mark} ${number}. ${session.title || session.id}`, width),
-        truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width),
-      ])
+      groups.push([truncate(`${mark} ${number}. ${session.title || session.id}`, width), truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width)])
     } else {
       groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.agent}${running}`, width))
     }
