@@ -16,3 +16,7 @@ Answer: Starting the backend while its build is still running can pair the previ
 ## Question: How does nested completion work for a command being bound?
 
 Answer: `CommandSpec.complete(position, context, registry?)` receives its owning registry. `/keybind set` strips its own prefix, delegates argument completion to the target command, then restores the prefix. This preserves the target command's completion rules without another command-name list or hint tree.
+
+## Question: Which shortcuts are assigned by default after the essentials change?
+
+Answer: Defaults cover commands/help, pane focus, transcript scroll, cancellation and exit, plus composer editing. Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and editor/undo/redo/fork chords are unassigned. Action catalog rows remain with empty keys so scope inference and inspection continue working. `/pending` preserves the former F4 cross-session review path. Local picker, prompt, confirmation and opt-in Vim keys remain local.

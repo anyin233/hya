@@ -17,7 +17,7 @@ test("custom shortcuts preserve the full command and match exact modifiers, incl
 })
 
 test("validation protects editing, browser shortcuts, built-ins and canonical duplicate assignments", () => {
-  for (const label of ["a", "Enter", "Tab", "Ctrl+J", "Ctrl+W", "Ctrl+Shift+G", "Ctrl+C", "Alt+Left", "Ctrl+X", "F4"]) {
+  for (const label of ["a", "Enter", "Tab", "Ctrl+J", "Ctrl+W", "Ctrl+Shift+G", "Ctrl+C", "Alt+Left", "Ctrl+X"]) {
     expect(() => validateCustomKeybindings({ [label]: { command: "/tools", scope: "conversation" } })).toThrow()
   }
   expect(parseShortcut("option+arrowup").label).toBe("Alt+Up")
@@ -33,4 +33,11 @@ test("rejected assignments leave current bindings intact; reset clears custom re
   expect(resolveCommandBinding(key("f6"))?.command).toBe("/tools on")
   setCustomKeybindings({})
   expect(resolveCommandBinding(key("f6"))).toBeUndefined()
+})
+
+test("released defaults can be assigned to full commands", () => {
+  setCustomKeybindings({ "Ctrl+G": { command: "/tools on", scope: "conversation" }, F4: { command: "/pending", scope: "workspace" }, "Ctrl+R": { command: "/refresh", scope: "workspace" } })
+  expect(resolveCommandBinding(key("g", { ctrl: true }))?.command).toBe("/tools on")
+  expect(resolveCommandBinding(key("f4"))?.command).toBe("/pending")
+  expect(resolveCommandBinding(key("r", { ctrl: true }))?.scope).toBe("workspace")
 })

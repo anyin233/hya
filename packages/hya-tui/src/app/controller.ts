@@ -31,7 +31,7 @@
  * `applyAsk`; state/prompts.ts `askFrameRoute`). Frames sent before the
  * subscription are not replayed, so `GET /v1/interactions` is read once
  * after every (re)subscribe and after a `resync`, besides the full catalog
- * refreshes (start, Ctrl+R). `answer()` responds to a prompt
+ * refreshes (start, /refresh). `answer()` responds to a prompt
  * (app/prompts.ts).
  *
  * Asks of other sessions: from start, the global stream
@@ -775,7 +775,7 @@ export function createController({ client, store, directory, remote: startedRemo
     status(`Project ${project.name} · ${target ? "opened its latest session" : "new session"}`)
   }
 
-  /** One key while the left Projects sidebar has focus (Ctrl+P): Up/Down move the highlight, Enter switches, Esc returns focus to the composer. */
+  /** One key while the left Projects sidebar has focus: Up/Down move the highlight, Enter switches, Esc returns focus to the composer. */
   function projectsSidebarKey(pressed: KeyLike): void {
     const rows = projectSidebarRows(store.state.projects, store.state.activeProjectId)
     const highlighted = store.state.projectSidebarHighlight ?? store.state.activeProjectId
@@ -913,7 +913,7 @@ export function createController({ client, store, directory, remote: startedRemo
   let editing = false
 
   /**
-   * `/editor`, Ctrl+X Ctrl+E: the input in the external editor
+   * `/editor`: the input in the external editor
    * (composer/editor.ts). The edited text replaces the input (not sent); on
    * a failure the input keeps its text and the status line says why.
    */
@@ -964,7 +964,7 @@ export function createController({ client, store, directory, remote: startedRemo
     refresh: async () => { store.setSessions(await client.listSessions()) },
   })
 
-  /** The oldest waiting request outside the open tree: F4 opens its root session so the normal prompt can answer it. */
+  /** The oldest waiting request outside the open tree: /pending opens its root session so the normal prompt can answer it. */
   async function reviewPending(): Promise<void> {
     const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, childSessionIds(store.state.members, store.state.messages)).has(item.session))
     if (!pending?.session) { status("No pending request in another session"); return }
@@ -974,7 +974,7 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   const actions: AppActions = {
-    refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
+    reviewPending, refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
     switchProject,
     refreshProjects,

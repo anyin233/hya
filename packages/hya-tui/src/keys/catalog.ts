@@ -34,7 +34,7 @@ const actionInfo: Record<KeyAction, ActionInfo> = {
   cycleMode: { scope: "conversation", command: "/permissions" },
   refresh: { scope: "workspace", command: "/refresh" },
   toggleSidebar: { scope: "workspace", command: "/sidebar" },
-  toggleProjectsSidebar: { scope: "workspace" },
+  toggleProjectsSidebar: { scope: "workspace", command: "/projects-sidebar" },
   toggleThinking: { scope: "conversation", command: "/thinking" },
   toggleTools: { scope: "conversation", command: "/tools" },
   pageUp: { scope: "pane" },
@@ -47,7 +47,7 @@ const actionInfo: Record<KeyAction, ActionInfo> = {
   undo: { scope: "conversation", command: "/undo" },
   redo: { scope: "conversation", command: "/redo" },
   fork: { scope: "conversation", command: "/fork" },
-  reviewPending: { scope: "workspace", command: "/interactions" },
+  reviewPending: { scope: "workspace", command: "/pending" },
 }
 
 const contexts: Record<BindingScope, string> = {
@@ -56,7 +56,7 @@ const contexts: Record<BindingScope, string> = {
   pane: "Scroll the focused pane, except Projects, which owns its navigation. In conversation focus, scroll the transcript; plain Home/End require an empty message input.",
 }
 
-/** One entry per action, collecting every shortcut from the actual binding table. */
+/** One entry per action; unassigned actions retain their command and scope metadata. */
 export function bindingSettings(): BindingSetting[] {
   const entries = new Map<KeyAction, BindingSetting>()
   for (const binding of keyBindings) {
@@ -67,6 +67,11 @@ export function bindingSettings(): BindingSetting[] {
     entry.keys.push(binding.label)
     entry.description += `${entry.description ? " " : ""}${binding.description}`
     entries.set(binding.action, entry)
+  }
+  for (const [id, info] of Object.entries(actionInfo) as [KeyAction, ActionInfo][]) {
+    if (!entries.has(id)) entries.set(id, {
+      id, ...info, keys: [], description: "No default shortcut; use the command or /keybind set.", context: contexts[info.scope],
+    })
   }
   return [...entries.values()]
 }

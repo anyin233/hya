@@ -1,5 +1,5 @@
 /**
- * The left Projects sidebar (docs/tui.md "Projects"; Ctrl+P shows and
+ * The left Projects sidebar (docs/tui.md "Projects"; /projects-sidebar shows and
  * focuses it, or hides and unfocuses it; `/projects-sidebar` toggles
  * visibility alone): one row per Project, the active one marked, a busy
  * marker `●` while a session of it runs a turn, and its session count.
