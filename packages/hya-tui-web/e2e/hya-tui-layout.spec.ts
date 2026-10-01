@@ -4,7 +4,7 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
-const colors = { bg: "#272822", panel: "#34352e", accent: "#e6db74", border: "#75715e", muted: "#aaa99f" }
+const colors = { bg: "#11151b", panel: "#1c2530", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
 
 async function prompt(term: Tui, text: string): Promise<void> {

@@ -112,11 +112,11 @@ function AssistantMessage(props: { view: MessageView }) {
   return (
     <box width="100%" flexDirection="column">
       <text height={1} wrapMode="none">
-        <Show when={waitingForBody()} fallback={<span style={{ fg: colors.muted }}>● </span>}>
+        <Show when={waitingForBody()} fallback={<span style={{ fg: colors.accent }}>● </span>}>
           <RunningIcon />
           <span style={{ fg: colors.accent }}> </span>
         </Show>
-        <b style={{ fg: colors.fg }}>{name()}</b>
+        <b style={{ fg: colors.accent }}>{name()}</b>
         <span style={{ fg: colors.muted }}>{model() ? ` · ${model()}` : ""}</span>
       </text>
       <KeyedFor each={props.view.blocks}>
@@ -204,7 +204,7 @@ function StatusIcon(props: { status: ToolStatus | "waiting" }) {
 
 function RunningIcon() {
   const frame = useSpinner()
-  return <span style={{ fg: colors.activity }}>{frame()}</span>
+  return <span style={{ fg: colors.accent }}>{frame()}</span>
 }
 
 function iconGlyph(status: ToolStatus | "waiting"): string {
@@ -300,7 +300,7 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
   }
   const statusColor = () => {
     switch (status()) {
-      case "running": return colors.activity
+      case "running": return colors.accent
       case "idle": case "done": return toolColors.done
       case "failed": return colors.error
       case "cancelled": return colors.warning

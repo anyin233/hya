@@ -7,8 +7,8 @@ import type { Tui } from "./harness"
 import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep } from "./hya"
 
 const colors = {
-  bg: "#272822", panel: "#34352e", fg: "#f8f8f2", muted: "#aaa99f", accent: "#e6db74", heading: "#fd971f",
-  error: "#f92672", warning: "#fd971f", keyword: "#f92672", string: "#e6db74", inlineCode: "#a6e22e",
+  bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
+  error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#a5d6a7", inlineCode: "#f2a97a",
 }
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -41,7 +41,7 @@ test.describe("roles", () => {
 
     const header = await at(term, "hya-main · fake/model")
     expect(header.row).toBeGreaterThan(user.row)
-    expect((await term.cell(header.row, header.col))?.fg).toBe(colors.fg)
+    expect((await term.cell(header.row, header.col))?.fg).toBe(colors.accent)
     expect((await term.cell(header.row, header.col + "hya-main · ".length))?.fg).toBe(colors.muted)
     const answer = await at(term, "Plain answer from the assistant")
     expect(answer.row).toBe(header.row + 1)
@@ -80,7 +80,7 @@ test.describe("markdown", () => {
     await term.waitForIdle()
 
     const heading = await at(term, "Release plan")
-    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.heading)
+    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.accent)
     expect((await term.cell(heading.row, heading.col))?.bold).toBe(true)
     expect(await term.find("# Release plan")).toBeNull()
 
