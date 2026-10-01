@@ -149,7 +149,7 @@ test("/keybind validates arguments and completes scopes and action targets", asy
   for (const command of ["/keybind edit", "/keybind show", "/keybind list nope", "/keybind list pane extra"]) {
     await expect(h.run(command)).rejects.toThrow("Usage: /keybind")
   }
-  await expect(h.run("/keybind show missing")).rejects.toThrow("Unknown keybinding action")
+  await expect(h.run("/keybind show missing")).rejects.toThrow("No binding for")
   expect(h.registry.complete("/keybind ", h.store.completionContext())).toEqual(["/keybind list", "/keybind reset", "/keybind set", "/keybind show", "/keybind unset"])
   expect(h.registry.complete("/keybind list p", h.store.completionContext())).toEqual(["/keybind list pane"])
   expect(h.registry.complete("/keybind show qu", h.store.completionContext())).toEqual(["/keybind show quit"])
@@ -179,10 +179,10 @@ test("/keybind set preserves multiword commands and scopes; set replaces one key
   expect(h.calls.some((call) => call.startsWith("quit"))).toBe(false)
 })
 
-test("failed keybind writes and conflicting keys leave assignments intact and show an error modal", async () => {
+test("failed keybind writes and invalid commands leave assignments intact and show an error modal", async () => {
   const h = harness()
   await h.run("/keybind set F6 /tools on")
-  await expect(h.run("/keybind set Ctrl+C /tools")).rejects.toThrow("already bound")
+  await expect(h.run("/keybind set F7 invalid")).rejects.toThrow("slash command")
   expect(h.pickers.at(-1)?.title).toBe("Keybind · not saved")
   h.actions.savePreferences = () => { throw new Error("disk full") }
   await expect(h.run("/keybind set F7 /exit")).rejects.toThrow("disk full")
@@ -761,17 +761,18 @@ test("unset completes saved keys, normalizes them and persists removal only afte
   const h = harness()
   await h.run("/keybind set Ctrl+Home /tools on")
   await h.run("/keybind set F6 /refresh")
-  expect(h.registry.complete("/keybind unset Ctrl+", h.store.completionContext())).toEqual(["/keybind unset Ctrl+Home"])
+  expect(h.registry.complete("/keybind unset Ctrl+", h.store.completionContext())).toContain("/keybind unset Ctrl+Home")
   h.actions.savePreferences = () => { throw new Error("disk full") }
   await expect(h.run("/keybind unset control+home")).rejects.toThrow("disk full")
   expect(customKeybindings()["Ctrl+Home"]?.command).toBe("/tools on")
   h.actions.savePreferences = (patch) => { h.calls.push(`prefs ${JSON.stringify(patch)}`) }
   await h.run("/keybind unset control+home")
-  expect(customKeybindings()["Ctrl+Home"]).toBeUndefined()
+  expect(customKeybindings()["Ctrl+Home"]).toBeNull()
   expect(customKeybindings().F6?.command).toBe("/refresh")
   expect(h.pickers.at(-1)?.title).toBe("Keybind unset")
-  expect(h.calls.at(-1)).toBe('prefs {"keybindings":{"F6":{"command":"/refresh","scope":"workspace"}}}')
-  await expect(h.run("/keybind unset F7")).rejects.toThrow("No custom binding")
+  expect(h.calls.at(-1)).toBe('prefs {"keybindings":{"Ctrl+Home":null,"F6":{"command":"/refresh","scope":"workspace"}}}')
+  await h.run("/keybind unset F7")
+  expect(customKeybindings().F7).toBeNull()
   await expect(h.run("/keybind unset")).rejects.toThrow("Usage:")
   await expect(h.run("/keybind unset all")).rejects.toThrow()
 })
@@ -791,4 +792,23 @@ test("keybind lists only assigned rows with separate shortcut cells and retains 
   expect(h.pickers.at(-1)?.rows[0]?.shortcut).toBe("unassigned")
   await h.run("/keybind show F6")
   expect(h.pickers.at(-1)?.title).toBe("Keybinding · F6")
+})
+
+
+test("show requires a target and presents a visible error; defaults can be overridden, disabled and restored", async () => {
+  const h = harness()
+  await expect(h.run("/keybind show")).rejects.toThrow("Usage: /keybind show")
+  expect(h.pickers.at(-1)?.title).toBe("Keybind · error")
+  await h.run("/keybind set Ctrl+C /layout close")
+  expect(customKeybindings()["Ctrl+C"]?.command).toBe("/layout close")
+  await h.run("/keybind unset Ctrl+C")
+  expect(customKeybindings()["Ctrl+C"]).toBeNull()
+  await h.run("/keybind show Ctrl+C")
+  expect(h.pickers.at(-1)?.rows[0]?.label).toBe("disabled")
+  await h.run("/keybind list")
+  expect(h.pickers.at(-1)?.rows.some((row) => row.shortcut === "Ctrl+C" && !row.id.startsWith("context:Command:"))).toBe(false)
+  await h.run("/keybind reset Ctrl+C")
+  expect(Object.hasOwn(customKeybindings(), "Ctrl+C")).toBe(false)
+  await h.run("/keybind show Ctrl+W")
+  expect(h.pickers.at(-1)?.rows.some((row) => row.label === "delete-word-backward")).toBe(true)
 })

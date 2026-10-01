@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { parseShortcut, validateCustomKeybindings, customKeybindings, setCustomKeybindings, resolveCommandBinding } from "../src/keys/custom"
+import { parseShortcut, validateCustomKeybindings, customKeybindings, setCustomKeybindings, isKeyDisabled, resolveCommandBinding } from "../src/keys/custom"
 import { resolveBinding, type KeyLike } from "../src/keys/bindings"
 
 afterEach(() => setCustomKeybindings({}))
@@ -16,9 +16,9 @@ test("custom shortcuts preserve the full command and match exact modifiers, incl
   expect(customKeybindings().F6?.command).toBe("/layout focus left")
 })
 
-test("validation protects editing, browser shortcuts, built-ins and canonical duplicate assignments", () => {
-  for (const label of ["a", "Enter", "Tab", "Ctrl+J", "Ctrl+W", "Ctrl+Shift+G", "Ctrl+C", "Alt+Left", "Ctrl+X"]) {
-    expect(() => validateCustomKeybindings({ [label]: { command: "/tools", scope: "conversation" } })).toThrow()
+test("validation checks command shapes and duplicates without reserving browser/editor keys", () => {
+  for (const label of ["a", "Enter", "Tab", "Ctrl+I", "Ctrl+M", "Ctrl+J", "Ctrl+H", "Ctrl+W", "Ctrl+T", "Ctrl+N", "Ctrl+L", "Ctrl+Shift+G", "Ctrl+C", "Alt+Left", "Ctrl+X"]) {
+    expect(validateCustomKeybindings({ [label]: { command: "/tools", scope: "conversation" } })).toBeDefined()
   }
   expect(parseShortcut("option+arrowup").label).toBe("Alt+Up")
   expect(() => validateCustomKeybindings({ F6: { command: "/tools", scope: "pane" } })).toThrow("scope")
@@ -29,7 +29,7 @@ test("validation protects editing, browser shortcuts, built-ins and canonical du
 
 test("rejected assignments leave current bindings intact; reset clears custom resolution", () => {
   setCustomKeybindings({ F6: { command: "/tools on", scope: "conversation" } })
-  expect(() => setCustomKeybindings({ "Ctrl+C": { command: "/tools", scope: "conversation" } })).toThrow()
+  expect(() => setCustomKeybindings({ F7: { command: "invalid", scope: "conversation" } })).toThrow()
   expect(resolveCommandBinding(key("f6"))?.command).toBe("/tools on")
   setCustomKeybindings({})
   expect(resolveCommandBinding(key("f6"))).toBeUndefined()
@@ -40,4 +40,23 @@ test("released defaults can be assigned to full commands", () => {
   expect(resolveCommandBinding(key("g", { ctrl: true }))?.command).toBe("/tools on")
   expect(resolveCommandBinding(key("f4"))?.command).toBe("/pending")
   expect(resolveCommandBinding(key("r", { ctrl: true }))?.scope).toBe("workspace")
+})
+
+
+test("disabled keys suppress app/editor defaults and legacy aliases; reset restores defaults", () => {
+  setCustomKeybindings({ "Ctrl+C": null, "Ctrl+W": null, "Ctrl+I": null })
+  expect(resolveBinding(key("c", { ctrl: true }))).toBeUndefined()
+  expect(isKeyDisabled(key("w", { ctrl: true }))).toBe(true)
+  expect(isKeyDisabled(key("tab"))).toBe(true)
+  expect(resolveCommandBinding(key("c", { ctrl: true }))).toBeUndefined()
+  setCustomKeybindings({})
+  expect(resolveBinding(key("c", { ctrl: true }))).toBe("quit")
+})
+
+test("Ctrl control aliases can be bound explicitly and ambiguous alias maps are rejected", () => {
+  for (const [letter, name] of [["i", "tab"], ["m", "return"], ["j", "linefeed"], ["h", "backspace"]]) {
+    setCustomKeybindings({ [`Ctrl+${letter}`]: { command: "/tools on", scope: "conversation" } })
+    expect(resolveCommandBinding(key(name!))?.command).toBe("/tools on")
+  }
+  expect(() => validateCustomKeybindings({ Tab: null, "Ctrl+I": { command: "/tools", scope: "conversation" } })).toThrow("shares a terminal key")
 })

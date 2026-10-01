@@ -28,9 +28,9 @@ test("custom command shortcuts round-trip and normalize while invalid bindings w
   const path = join(temp(), "tui.json")
   savePreferences(path, { keybindings: { f6: { command: "/layout focus left", scope: "workspace" } } })
   expect(loadPreferences(path).preferences.keybindings).toEqual({ F6: { command: "/layout focus left", scope: "workspace" } })
-  writeFileSync(path, JSON.stringify({ theme: "light", vim: true, keybindings: { "Ctrl+C": { command: "/tools", scope: "conversation" } } }))
+  writeFileSync(path, JSON.stringify({ theme: "light", vim: true, keybindings: { F6: { command: "invalid", scope: "conversation" } } }))
   expect(loadPreferences(path).preferences).toEqual({ theme: "light", vim: true })
-  expect(loadPreferences(path).warning).toContain("already bound to quit")
+  expect(loadPreferences(path).warning).toContain("single slash command")
 })
 
 test("a corrupt file loads as no preferences, with a warning naming the file", () => {
@@ -122,4 +122,11 @@ test("a saved version-1 center split loads with editable outer side panes", () =
   expect(loaded.active).toBe("pane-2")
   expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
   expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')
+})
+
+
+test("disabled default bindings persist as explicit null overrides", () => {
+  const path = join(temp(), "tui.json")
+  savePreferences(path, { keybindings: { "Ctrl+C": null, "Ctrl+W": { command: "/layout close", scope: "workspace" } } })
+  expect(loadPreferences(path).preferences.keybindings).toEqual({ "Ctrl+C": null, "Ctrl+W": { command: "/layout close", scope: "workspace" } })
 })
