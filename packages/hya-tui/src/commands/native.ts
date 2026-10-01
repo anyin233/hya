@@ -16,6 +16,7 @@ import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 
 import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec, type Completion } from "./registry"
 import type { CompletionContext } from "../completion"
+import { keybindingsCommand } from "./keybindings"
 
 /**
  * Session id completions (`/open`, `/resume`): a titled session shows as
@@ -321,6 +322,7 @@ const runEffort = (context: CommandContext, { args }: CommandInvocation): Promis
   args[0] ? selectEffort(context, args[0]) : openEffortPicker(context)
 
 export const nativeCommandSpecs: CommandSpec[] = [
+  keybindingsCommand,
   {
     name: "/layout",
     description: "Edit workspace panes: split, assign, focus, resize, close, reset, or show",

@@ -1,5 +1,7 @@
-# 0.43.40
+# 0.43.41
 
 ## Frontend
 
-- Restore the previous slate and cyan default TUI palette. The Monokai implementation is retained separately on the `monokai-theme` branch for later review.
+- Add `/keybindings` as a dedicated, filterable entry point for current shortcut settings.
+- Add `list [workspace|conversation|pane]` and `show <action or command>` inspection, with nested completion, related commands and routing context.
+- Keep keybinding inspection local and preserve drafts and pane focus. This initial settings surface is read-only.
