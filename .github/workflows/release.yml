@@ -95,7 +95,7 @@ jobs:
             test "$cargo_version" = "$VERSION"
             grep -m1 -Fx "# $VERSION" CHANGELOG_BACKEND.md
           else
-            frontend_version="$(python3 -c 'import tomllib; print(tomllib.load(open("versions.toml","rb"))["frontend"]["version"])')"
+            frontend_version="$(awk -F '"' '/^\[frontend\]/{in_frontend=1; next} in_frontend && /^version/{print $2; exit}' versions.toml)"
             test "$frontend_version" = "$VERSION"
             grep -m1 -Fx "# $VERSION" CHANGELOG_FRONTEND.md
             grep -F "$VERSION" packages/hya-tui/frontend-version.ts
@@ -190,7 +190,11 @@ jobs:
         if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/*.sh
+            dist/*.hyabundle
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.ref_type == 'tag'
         with:
