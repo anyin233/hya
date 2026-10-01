@@ -74,13 +74,13 @@ test.describe("copy", () => {
     await term.page.mouse.move((start.x + end.x) / 2, end.y, { steps: 3 })
     await term.page.mouse.move(end.x, end.y, { steps: 3 })
     // While dragging, the selected cells use the hya theme's selection background.
-    await expect.poll(async () => (await term.cell(at.row, at.col + 2))?.bg).toBe("#2f4d6b")
+    await expect.poll(async () => (await term.cell(at.row, at.col + 2))?.bg).toBe("#49483e")
     await term.attach(testInfo, "selecting")
     await term.page.mouse.up()
 
     await expect.poll(() => copied(term)).toEqual(["bravo charlie"])
     // The text keeps its own color under the highlight.
-    expect((await term.cell(at.row, at.col + 2))?.fg).not.toBe("#2f4d6b")
+    expect((await term.cell(at.row, at.col + 2))?.fg).not.toBe("#49483e")
   })
 
   test("a plain click copies nothing", async ({ tui, backend }) => {

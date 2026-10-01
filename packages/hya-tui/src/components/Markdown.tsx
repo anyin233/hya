@@ -81,7 +81,7 @@ function previewStreamingHeadings(view: MarkdownRenderable, previewed: WeakMap<C
     if (block.token.type !== "heading" || !(block.renderable instanceof CodeRenderable)) continue
     const heading = block.token.text
     if (!heading) continue
-    const accent = colors.accent
+    const accent = colors.heading
     const signature = `${accent}\0${heading}`
     if (previewed.get(block.renderable) === signature) continue
     previewed.set(block.renderable, signature)

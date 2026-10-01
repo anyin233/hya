@@ -79,7 +79,7 @@ test.describe("Projects sidebar", () => {
     // Ctrl+P opens (and focuses) it even here.
     await term.press("Control+p")
     // The narrow split clips the title; its active border and selected row remain visible.
-    await expect.poll(() => term.cell(0, 0)).toMatchObject({ char: "┌", fg: "#73c8e8" })
+    await expect.poll(() => term.cell(0, 0)).toMatchObject({ char: "┌", fg: "#e6db74" })
     await term.waitForText("▸")
     await term.attach(testInfo, "sidebar-narrow-pinned")
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)

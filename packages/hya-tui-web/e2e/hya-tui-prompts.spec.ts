@@ -13,7 +13,7 @@ import type { Tui } from "./harness"
 import { createSession, expect, hangStep, headlessTurn, hyaTui, showStatusView, statusSessionId, test, textStep, toolCard, toolStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
-const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
+const colors = { fg: "#f8f8f2", muted: "#aaa99f", accent: "#e6db74", error: "#f92672", warning: "#fd971f", add: "#a6e22e", remove: "#f92672" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)

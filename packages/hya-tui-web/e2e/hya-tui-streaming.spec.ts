@@ -5,7 +5,7 @@
 import type { Tui } from "./harness"
 import { expect, hangStep, httpErrorStep, hyaTui, test, textStep } from "./hya"
 
-const muted = "#9caab9"
+const muted = "#aaa99f"
 
 function count(text: string, needle: string): number {
   return text.split(needle).length - 1
@@ -56,7 +56,7 @@ test.describe("streamed Markdown heading", () => {
       const screen = await term.text()
       if (/^\s*###(?:\s|$)/m.test(screen)) rawHeadingFrame = screen
       const heading = await term.find("Stre")
-      if (heading && (await term.cell(heading.row, heading.col))?.fg !== "#73c8e8") unstyledHeadingFrame = screen
+      if (heading && (await term.cell(heading.row, heading.col))?.fg !== "#fd971f") unstyledHeadingFrame = screen
       return screen.includes("After heading.")
     }, { intervals: [10], timeout: 20_000 }).toBe(true)
     await term.waitForIdle()

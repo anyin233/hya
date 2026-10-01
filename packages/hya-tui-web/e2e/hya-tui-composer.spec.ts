@@ -7,8 +7,8 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hangStep, hyaTui, test, textStep, toolCard, toolStep } from "./hya"
 
-const warning = "#e5c07b"
-const accent = "#73c8e8"
+const warning = "#fd971f"
+const accent = "#e6db74"
 
 /** Rows of the bordered composer box (the last box starting at column 0), inner text trimmed. */
 async function composer(term: Tui): Promise<{ top: number; rows: string[]; title: string }> {
@@ -234,7 +234,7 @@ test.describe("shell turns", () => {
     await term.type("!echo hello")
     await expect.poll(async () => (await composer(term)).title).toBe("! shell")
     const box = await composer(term)
-    expect((await term.cell(box.top, 0))?.fg).toBe("#73c8e8")
+    expect((await term.cell(box.top, 0))?.fg).toBe("#e6db74")
     await term.attach(testInfo, "shell-mode")
     await term.press("Enter")
     // The user block shows what was typed; the assistant shows the bash call with the command as its arguments.
