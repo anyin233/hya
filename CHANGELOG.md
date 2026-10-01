@@ -1,4 +1,5 @@
-# 0.43.44
+# 0.43.45
 
-- Remove Ctrl+Home/End app defaults; retain plain Home/End transcript navigation with empty input.
-- Add `/keybind unset <shortcut>` to free a custom shortcut with completion, atomic persistence and visible feedback. Existing reset commands remain supported.
+- Show assigned keybindings in dedicated Shortcut, Action / command and Scope columns, with descriptions in the detail pane.
+- Hide unassigned actions from `/keybind list` while preserving `/keybind show` inspection and custom-binding scope inference.
+- Add opt-in aligned picker columns with shortcut filtering and width-aware clipping.
