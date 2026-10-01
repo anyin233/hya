@@ -108,11 +108,6 @@ jobs:
             echo "tag version $version does not match hya version $cargo_version" >&2
             exit 1
           fi
-          frontend_version="$(python3 -c 'import tomllib; print(tomllib.load(open("versions.toml", "rb"))["frontend"]["version"])')"
-          if [[ "$frontend_version" != "$version" ]]; then
-            echo "tag version $version does not match frontend version $frontend_version" >&2
-            exit 1
-          fi
 
           if [[ ! -s CHANGELOG.md ]]; then
             echo "CHANGELOG.md must exist and contain the newest release notes" >&2

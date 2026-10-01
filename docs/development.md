@@ -145,40 +145,46 @@ suite (plus the `packages/hya-tui` and adapter typecheck/test above) in the
 
 ## Version bumps
 
-Shipped behavior uses two aggregate release versions in `versions.toml`:
-`[backend].version` for the unified Rust backend and `[frontend].version` for
-the Bun/OpenTUI frontend. The root `[workspace.package].version` mirrors the
-backend aggregate, and `packages/hya-tui/frontend-version.ts` embeds the
-frontend aggregate for the self-contained TUI package. These are the only real
-release versions.
+The release system has independent backend and frontend aggregates in
+`versions.toml`:
+
+- `[backend].version` is the backend release version. The root
+  `[workspace.package].version`, `Cargo.lock`, release tag, and root changelog
+  mirror it.
+- `[frontend].version` is the frontend release version and may differ from the
+  backend. `frontend-version.ts` embeds both the frontend version and
+  `minimumBackendVersion` for the packaged TUI.
+
+The frontend compatibility contract is inclusive: it accepts a backend only
+when `backend >= frontend.minimum_backend_version`; older or malformed backend
+versions are rejected during bootstrap, server switching, and remote entry.
+The current split is frontend `0.43.40`, requiring backend `0.43.41` or newer.
 
 All other Rust package manifests use the placeholder `0.0.0` plus
 `[package.metadata.hya] version-reference = "backend"`; frontend package
 manifests use `0.0.0` plus the equivalent `frontend` reference. Bundle source
 manifests use `version_ref: backend` and identity version `0.0.0`; preparation
 resolves that reference to the backend aggregate, so prepared and released
-bundles still carry the actual backend version without editing every source
-manifest on each bump.
+bundles carry the actual backend version without editing every source manifest.
 
-Every shipped behavior change bumps the two aggregate entries together when
-backend and frontend ship in the same release, updates the README status and
-root `CHANGELOG.md`, and moves the previous root changelog to
-`docs/changes/`. Shipped behavior means Rust crates, `proto/`, `bundles/`,
-`packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else
-in the release archive or source install.
+When changing shipped backend behavior, bump the backend aggregate and create a
+backend changelog/release. When changing shipped frontend behavior, bump only
+the frontend aggregate unless the compatibility minimum also needs to move.
+Shipped behavior means Rust crates, `proto/`, `bundles/`, `packages/hya-tui`,
+`packages/hya-tui-web`, the Bun adapter, and anything else in the release
+archive or source install.
 
-These changes do **not** bump the version or write a new root changelog:
+These changes do **not** bump either version or write a new root changelog:
 
 - documentation only: `docs/`, `*.md` files, code comments, `AGENTS.md`,
   `.planning/`;
 - CI only: `.github/`, CI scripts and config;
 - tests only, when no shipped code changes.
 
-A mixed change follows its shipped part: if any file affects shipped behavior,
-bump the aggregate version once for the whole atomic change. `cargo test -p
-xtask` validates the aggregate/reference contract, `cargo test -p hya-bundle`
-validates bundle preparation, and the release rehearsal validates the README,
-lockfile, package layout, and archive copies.
+A mixed change follows its shipped side. `cargo test -p xtask` validates the
+aggregate/reference/minimum-backend contract, `cargo test -p hya-bundle`
+validates bundle preparation, and release rehearsal validates the backend
+release metadata, lockfile, package layout, and archive copies.
 
 ## Dev tasks (`xtask` package)
 
