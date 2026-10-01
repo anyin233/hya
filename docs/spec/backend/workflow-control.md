@@ -107,9 +107,7 @@ A governed Stage failure is a successful transport response with a terminal fail
   legacy SDK/transport suites; that coverage returns with a `hya-sdk-v1`
   frontend.
 
-Run the focused gate listed in
-`docs/development-history/tasks/archive/2026-08/08-28-durable-workflow-control/implement.md`
-after a contract change.
+After a contract change, run the tests listed above for each affected crate.
 
 ### 7. Wrong vs Correct
 

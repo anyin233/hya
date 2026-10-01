@@ -1,2 +1,0 @@
-{"file": "AGENTS.md", "reason": "Verification commands and commit rules"}
-{"file": ".trellis/tasks/08-05-land-swarm-branch-to-main/findings.md", "reason": "Evidence: I.nested and I.bundle_cli were red while the registry advertised them"}

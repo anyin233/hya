@@ -15,9 +15,6 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - Before editing a layer, read its guideline index under `docs/spec/backend/`;
   consult `docs/spec/guides/index.md` for cross-layer changes and code-reuse
   decisions.
-- `docs/development-history/` preserves prior tasks and journals as historical
-  evidence, not active workflow instructions. Bring relevant unfinished work
-  into a planning directory when explicitly resumed.
 
 ## Forum Rule
 
@@ -166,7 +163,6 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-mcp` | MCP support. Implements the MCP protocol/client/manager and bridges MCP tools into `hya-tool` with namespaced `mcp__server__tool` names and permission checks. |
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
 | `crates/hya-plugin-bun` | Bun extension adapter (`kind: bun`). The Rust crate exports `BUN_ADAPTER_VERSION`; the Bun adapter under `adapter/` loads bundle JS extensions (`--bundle-extension`/`--extension`), translates hya wire hooks/tools/events, and exposes the runtime over NDJSON JSON-RPC stdio. The OpenCode compat layer is deleted. |
-| `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/hya-relay` | Secure relay (ADR-0025): the `hya.relay.v1` rendezvous protocol (`proto/hya/relay/v1`, separate from `hya.v1`; generated prost/tonic code committed, regenerate with `cargo run -p xtask -- gen-relay`), the binding-independent `RelayTransport` message stream (in-memory pair for tests), the `RelayLink` (`hya://…` link grammar, room-id derivation), relay identity keys, the Noise `NKpsk0` tunnel (`tunnel.rs`), the proxy core (`proxy/`: rooms, host registration, splicing, limits), and the gRPC + WebSocket bindings on both sides (`server/`: one listener, path prefix, TLS; `client/`: `t=auto` negotiation, heartbeat, reconnect). Must not depend on hya runtime crates; the CLI surfaces (`hya proxy`, `hya relay doctor`, `hya bridge`, `hya serve --relay`) live in `hya-backend`, the host connector in `hya-server::relay_host`. See `docs/relay.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, `release-rehearsal`, `gen-api`, and `gen-relay`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
@@ -174,7 +170,6 @@ or verifiers; workers do not decide that their own objective is done.
 | `packages/hya-tui-web` | Bun host that runs a terminal frontend on a real PTY and renders it in the browser with xterm.js (WebSocket frames reuse `hya.v1` `PtyClientFrame`/`PtyServerFrame`). Playwright harness for TUI visual/interaction tests and the WebUI host that bare `hya` starts (shipped as `lib/hya/tui-web`). See `docs/tui-web.md`. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
-| `docs/development-history` | Preserved task artifacts and developer journals for historical reference. |
 | `docs` | Project documentation: user guides, architecture, the `hya.v1` protocol references, historical Compat parity record, and testing/agent matrix under `docs/testing/`. |
 
 ## Change Guidance
