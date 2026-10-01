@@ -11,7 +11,7 @@ import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
 import { createSession, expectStatus, approverBundle, expect, hyaTui, statusSessionId, test, textStep, toolCard, toolStep, type Backend } from "./hya"
 
-const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
+const colors = { fg: "#f8f8f2", muted: "#aaa99f", accent: "#e6db74", error: "#f92672", warning: "#fd971f" }
 const narrow = { width: 690, height: 640 }
 const confirmLine = "Enable yolo? Every tool call runs without asking · Enter confirms · Esc cancels"
 

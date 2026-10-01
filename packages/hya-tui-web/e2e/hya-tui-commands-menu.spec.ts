@@ -12,7 +12,7 @@ import { join } from "node:path"
 import type { Tui } from "./harness"
 import { statusSessionId, expect, hyaTui, test, textStep, type Backend } from "./hya"
 
-const accent = "#73c8e8"
+const accent = "#e6db74"
 
 async function connected(term: Tui, backend: Backend): Promise<void> {
   await term.waitForText("Message, !shell, or @file · / commands")
@@ -276,7 +276,7 @@ test.describe("command menu", () => {
     await term.waitForText("▸ /new")
     await term.press("Enter")
     await expect.poll(() => term.find("Commands")).toBeNull()
-    await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe("#405366")
+    await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe("#75715e")
     // Before the fix the refocused sidebar swallowed these keys and they showed nowhere.
     await term.type("hello after new")
     await term.waitForText("│ hello after new")

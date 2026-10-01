@@ -8,7 +8,7 @@ for (const width of [1100, 700]) {
     await term.press("Enter")
     await term.waitForText("jobs · pane-6")
     await term.press("Alt+ArrowLeft")
-    await expect.poll(async () => (await term.cell(0, (await term.find("jobs · pane-6"))!.col - 4))?.fg !== "#73c8e8").toBe(true)
+    await expect.poll(async () => (await term.cell(0, (await term.find("jobs · pane-6"))!.col - 4))?.fg !== "#e6db74").toBe(true)
     await term.type("message draft")
     await term.press("Alt+ArrowRight")
     await term.waitForText("▸ jobs · pane-6")

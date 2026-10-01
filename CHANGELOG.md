@@ -1,11 +1,7 @@
-# 0.43.38
+# 0.43.39
 
 ## Frontend
 
-- Merge upstream session numbering, titled session completion, sidebar resizing, compact tool cards, and TUI reload supervision with the ert global command overlay and editable tiled workspace.
-- Preserve strict pane input ownership, a single highlighted focus target, twelve visible command suggestions with full-list navigation, backspace-to-close, and the conversation without metadata headings.
-- Keep argument completion labels from upstream without truncating the selectable completion list.
-
-## Compatibility
-
-- Preserve legacy OpenAI Chat reasoning replay and reasoning-only assistant messages when integrating upstream provider changes.
+- Adopt Sublime's classic Monokai as the default TUI palette: olive charcoal surfaces, warm white text, yellow focus, cyan activity, green success, orange warnings, and pink errors.
+- Separate Markdown heading and activity colors from focus, keep assistant labels neutral, and preserve streaming heading styling across parser updates.
+- Retain saved theme preferences and all four built-in themes; the default `hya` preference now appears as Monokai in `/theme`.

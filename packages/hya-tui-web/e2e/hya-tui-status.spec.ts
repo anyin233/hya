@@ -7,7 +7,7 @@ import { createSession, expect, hyaTui, initGitRepo, showStatusView, statusSessi
 import { startProxy } from "./proxy"
 
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
-const colors = { fg: "#e8edf3", muted: "#9caab9", warning: "#e5c07b", error: "#f07878" }
+const colors = { fg: "#f8f8f2", muted: "#aaa99f", warning: "#fd971f", error: "#f92672" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
