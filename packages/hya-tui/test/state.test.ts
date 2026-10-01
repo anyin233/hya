@@ -8,7 +8,7 @@ test("starts in the chat view with the startup status and no data", () => {
   const store = createAppStore()
   expect(store.state.ready).toBe(false)
   expect(store.state.view).toBe("chat")
-  expect(store.state.status).toBe("Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit")
+  expect(store.state.status).toBe("Enter prompt · /help commands · /refresh · Ctrl+C quit")
   expect(store.state.sessions).toEqual([])
   expect(store.state.selected).toBeUndefined()
   expect(store.state.cursor).toBe("0")

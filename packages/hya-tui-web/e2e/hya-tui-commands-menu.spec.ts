@@ -268,7 +268,7 @@ test.describe("command menu", () => {
   test("/new from the focused Projects sidebar leaves the composer taking typed text", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1700, height: 800 } })
     await connected(term, backend)
-    await term.press("Control+p")
+    await term.press("Alt+ArrowLeft")
     const projects = (await term.find("Projects"))!
     await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe(accent)
     // Not `createSessionViaMenu`: at this width the Projects sidebar starts every row, so `^Created` never matches.

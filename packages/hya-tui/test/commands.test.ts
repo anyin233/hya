@@ -16,6 +16,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
   const calls: string[] = []
   const pickers: PickerSpec[] = []
   const actions: AppActions = {
+    reviewPending: async () => { calls.push("pending") },
     refresh: async () => { calls.push("refresh") },
     refreshMessages: async () => { calls.push("refreshMessages") },
     openSession: async (id) => { calls.push(`open ${id}`) },
@@ -531,10 +532,10 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
   store.setColumns(160)
   await run("/sidebar")
   expect(store.state.sidebar).toBe("closed")
-  expect(store.state.status).toBe("Sidebar hidden · Ctrl+B toggles")
+  expect(store.state.status).toBe("Sidebar hidden")
   await run("/sidebar on")
   expect(store.state.sidebar).toBe("auto")
-  expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
+  expect(store.state.status).toBe("Sidebar shown")
   // Too narrow: the sidebar cannot be shown; the status line says why.
   store.setColumns(149)
   await run("/sidebar on")
@@ -544,10 +545,10 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
 
   await run("/thinking")
   expect(store.state.thinking).toBe(true)
-  expect(store.state.status).toBe("Reasoning expanded · Ctrl+O toggles")
+  expect(store.state.status).toBe("Reasoning expanded")
   await run("/thinking off")
   expect(store.state.thinking).toBe(false)
-  expect(store.state.status).toBe("Reasoning collapsed · Ctrl+O toggles")
+  expect(store.state.status).toBe("Reasoning collapsed")
   expect(registry.complete("/sidebar o", store.completionContext())).toEqual(["/sidebar off", "/sidebar on"])
 })
 
@@ -747,4 +748,10 @@ test("/reconnect finds or starts the backend now", async () => {
   expect(registry.get("/reconnect")?.description).toContain("hya serve stop")
   await run("/reconnect")
   expect(calls).toEqual(["reconnect"])
+})
+
+test("/pending opens the oldest request through the controller", async () => {
+  const h = harness()
+  await h.run("/pending")
+  expect(h.calls).toEqual(["pending"])
 })

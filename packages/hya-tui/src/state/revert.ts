@@ -46,7 +46,7 @@ export function revertSummary(files: readonly RevertedFile[] | undefined, option
 export function revertIndicator(revert: SessionRevert): string {
   const count = revert.hiddenMessages ?? 0
   const what = count > 0 ? plural(count, "message") : "messages"
-  return `↶ ${what} reverted · /redo or Ctrl+X R restores ${count === 1 ? "it" : "them"} · the next prompt makes it permanent`
+  return `↶ ${what} reverted · /redo restores ${count === 1 ? "it" : "them"} · the next prompt makes it permanent`
 }
 
 /** One line of a user view's text (whitespace collapsed). */

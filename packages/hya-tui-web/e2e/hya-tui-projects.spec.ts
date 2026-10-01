@@ -62,7 +62,10 @@ test.describe("Projects sidebar", () => {
 
     // The Projects sidebar may cut the name (`seco… (0)`).
     await term.waitForText(/seco(?:nd|…) \(0\)/)
-    await term.press("Control+p")
+    await term.type("/projects-sidebar on")
+    await term.press("Enter")
+    await term.type("/layout focus pane-2")
+    await term.press("Enter")
     await term.press("ArrowDown")
     await term.press("Enter")
     await expectStatus(term, "Directory", secondRoot)
@@ -76,8 +79,11 @@ test.describe("Projects sidebar", () => {
     expect(await term.find("Projects")).toBeNull()
     await term.attach(testInfo, "sidebar-narrow-hidden")
     await statusSessionId(term)
-    // Ctrl+P opens (and focuses) it even here.
-    await term.press("Control+p")
+    // Commands pin Projects open and select it even here.
+    await term.type("/projects-sidebar on")
+    await term.press("Enter")
+    await term.type("/layout focus pane-2")
+    await term.press("Enter")
     // The narrow split clips the title; its active border and selected row remain visible.
     await expect.poll(() => term.cell(0, 0)).toMatchObject({ char: "┌", fg: "#73c8e8" })
     await term.waitForText("▸")

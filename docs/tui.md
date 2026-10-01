@@ -19,7 +19,7 @@ read-only (see [Messages](#messages)). When the agent or one of its subagents
 needs a permission decision or asks a question, a prompt docked above the
 input shows the call and its options; press `1`, `2`, or `3` (see
 [Permission and question prompts](#permission-and-question-prompts)).
-Shift+Tab or `/permissions` switches the session's permission mode
+`/permissions` switches the session's permission mode
 (`manual`, `yolo`, or a mode an installed bundle provides); `/permissions`
 shows the mode in effect (see [Permission modes](#permission-modes)).
 Models and Workflows have dedicated views, and `/key` opens the full-screen
@@ -635,7 +635,7 @@ on the controller status state (`Switch failed: …`).
 
 A second, narrower sidebar on the left lists every Project live
 (`state/projectsSidebar.ts`, `components/ProjectsSidebar.tsx`): see
-[Layout](#layout) for its visibility threshold, Ctrl+P, and
+[Layout](#layout) for its visibility threshold, pane navigation, and
 `/projects-sidebar`.
 
 ## Commands and keys
@@ -658,14 +658,14 @@ A second, narrower sidebar on the left lists every Project live
 | `/new [agent] [model]`, `/new --temp [agent] [model]` | Create a session in the active Project (in `--dir` when it lies inside the Project, else in its primary root), using the first visible agent and its model by default; `--temp` creates a temporary one instead (no Project). Keyboard focus goes to the composer afterwards, even when the command pane was opened from the focused Projects sidebar. |
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
-| `/projects-sidebar [on\|off]` or Ctrl+P | Show/focus, or hide/unfocus, the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Ctrl+P also moves keyboard focus (see [Layout](#layout)). |
+| `/projects-sidebar [on\|off]` | Show or hide the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Alt+arrows move keyboard focus (see [Layout](#layout)). |
 | `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. The choice is also remembered as the active agent's default, unless `config.yaml` pins that agent's model (`agents.<id>.model`): then it changes only the current session (see [Configuration — Remembered Agent Models](configuration.md#remembered-agent-models)). |
 | `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
-| Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In a command suggestion list, file list, or picker it moves the highlight up instead. |
+| Shift+Tab in a list | Move the highlight up in command suggestions, file lists and pickers. It does not switch the permission mode. |
 | `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
 | `/diff` | Open the full-screen [Diff view](#diff-view): the working tree diff, split per file. |
 | `/mcp` | Open the full-screen [MCP servers](#mcp-servers) view: server status, tools, connect/disconnect, login. |
@@ -675,25 +675,25 @@ A second, narrower sidebar on the left lists every Project live
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn: the controller status state shows `Cancelling…`, then `Cancelled · Ready`. |
-| `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
+| `/refresh` | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
 | `/disconnect-remote` | Stop the relay bridge and go back to the local backend (the database's daemon, found or started), with the Project of `--dir` and a new session. |
-| `/sidebar [on\|off]` or Ctrl+B | Show or hide the right sidebar (150 columns or more; below that it is always hidden). Without an argument it toggles what is visible now. Drag its left border with the mouse to resize it (29 columns at least). |
+| `/sidebar [on\|off]` | Show or hide the right sidebar (150 columns or more; below that it is always hidden). Without an argument it toggles what is visible now. Drag its left border with the mouse to resize it (29 columns at least). |
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
-| `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
-| `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
+| `/thinking [on\|off]` | Expand or collapse every reasoning (`Thinking`) block. |
+| `/tools [on\|off]` | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
 | `/keybind [list \| show \| set \| reset]` | Browse shortcuts or save bindings to full commands; see [Keybinding settings](#keybinding-settings). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
 | `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the controller status state says `Copied N chars` (see [Copy](#copy)). |
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
-| `/editor`, Ctrl+X Ctrl+E | Edit the input in `$VISUAL` / `$EDITOR` (fallback `vi`); the edited text comes back into the input, unsent (see [External editor](#external-editor)). |
+| `/editor` | Edit the input in `$VISUAL` / `$EDITOR` (fallback `vi`); the edited text comes back into the input, unsent (see [External editor](#external-editor)). |
 | `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the metadata state (see [Vim mode](#vim-mode)). |
 | `/notifications [on\|off]` | Turn desktop notifications on or off, saved in the preferences file (see [Desktop notifications](#desktop-notifications)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the controller status state shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/undo` | Revert the last prompt: it and every later message leave the transcript, the files its tools changed are restored, and the prompt goes back into an empty input. Again = one prompt further back (see [Undo, redo, and fork](#undo-redo-and-fork)). |
-| `/redo`, Ctrl+X R | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Ctrl+X U is `/undo` and Ctrl+X F is `/fork`; the chord works whatever the input holds. |
+| `/redo` | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Use `/undo` and `/fork` for the other session operations. |
 | `/fork` | Pick where to fork the session (the latest message, or before one of its prompts); Enter creates the fork, switches to it, and puts the picked prompt in the input. |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
 | `/status` | Show the server URL, backend version, directory, session (and `Forked from <title>` for a fork), agent, model, permission mode, and the backend daemon (`daemon · pid <pid> · db <db> · started <N>m ago`, or `via --backend/--server` for a fixed URL); under bare `hya` also the WebUI address or why it is unavailable. Like `/models`, `/todos`, `/workflows`, and `/api`, it replaces the transcript in the main panel until a prompt or `!shell` command is sent, which brings the transcript back with its reply. |
@@ -720,7 +720,7 @@ frontend. The command pane's suggestions and Tab completion also use that catalo
 Argument completion covers agents, sessions, models, Workflows, pending
 interaction IDs, permission modes, and HTTP operations from the
 generated OpenAPI catalog. Suggestions are refreshed with `/refresh` or
-Ctrl+R, and whenever the session or directory changes.
+`/refresh`, and whenever the session or directory changes.
 
 The API command accepts `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`; the optional
 body must be JSON. `GET` has no body. Include query parameters directly in the
@@ -786,7 +786,7 @@ A repeated `set` for the same shortcut replaces that shortcut's command and
 scope. Several shortcuts can run the same command. Built-in keys remain
 available and cannot be reassigned by `set`; conflicts are rejected. This
 version accepts one modified key or function key per assignment, rather than
-custom sequences of keystrokes. The existing Ctrl+X chords remain available.
+custom sequences of keystrokes. Ctrl+X then `/` remains the command entry prefix.
 Supported syntax includes Ctrl/Control, Alt/Meta/Option, optional Shift,
 letters/digits, modified arrows/Home/End/PgUp/PgDn, and F1–F12. Plain text and
 editing keys, reserved browser shortcuts such as Ctrl+W, and ambiguous
@@ -863,7 +863,7 @@ registry as its optional third argument, allowing `/keybind set` to reuse the
 bound command's nested completion instead of maintaining another hint tree.
 Related built-in commands can differ from contextual shortcuts: `/exit` exits
 at once, while Ctrl+C clears/hints and requires a second press; `/interactions`
-lists asks, while F4 opens the oldest ask in another session. `/help` also lists
+lists asks, while `/pending` opens the oldest ask in another session. `/help` also lists
 editor, prompt, picker and view-specific keys outside this action catalog.
 
 ## Key help
@@ -891,6 +891,40 @@ from Enter. Ctrl+J and Alt+Enter remain newline alternatives.
 
 When the TUI cannot reach its backend, the main panel shows the same key
 list as plain text instead.
+
+## Essential default shortcuts
+
+The default app shortcuts cover command/help access, focus, scrolling, cancellation
+and exit. Optional session operations and view toggles use slash commands so they
+leave more keys available for editing and personal bindings.
+
+- `/` on empty input, or Ctrl+X then `/` while drafting: open commands.
+- `?` on empty input: help. Alt+arrows: select a tiled pane.
+- Tab: completion. PgUp/PgDn and Ctrl+Home/End: scroll the focused pane.
+- Esc: close/cancel/clear according to context. Ctrl+C twice within two seconds:
+  exit and archive. Ctrl+D on empty input: exit and leave the session running.
+- Enter submits; Ctrl+J, Shift+Enter and Alt+Enter insert newlines. Text editing
+  and view-local picker/prompt controls remain available.
+
+Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and the editor/undo/redo/fork
+Ctrl+X chords are unassigned. Use `/refresh`, `/sidebar`, `/projects-sidebar`,
+`/thinking`, `/tools`, `/permissions`, `/editor`, `/undo`, `/redo`, `/fork` and
+`/pending` instead. For example:
+
+```text
+/keybind set Ctrl+G /tools on
+/keybind set Ctrl+R /refresh
+/keybind set F4 /pending
+```
+
+**Interfaces.** `keyBindings: readonly KeyBinding[]` contains only active defaults.
+`bindingSettings(): BindingSetting[]` also includes unassigned actions with
+`keys: []`, shown as `Keys: unassigned`; command scope metadata remains available
+for `/keybind set` inference. Saved custom bindings keep their existing contract.
+`/pending` has no arguments and calls `AppActions.reviewPending(): Promise<void>`:
+it opens/unarchives the oldest waiting request outside the current session tree
+using existing `GetSession` and session resume/update RPCs. If none exists, its
+status is `No pending request in another session`. No wire contract changes.
 
 ## Layout
 
@@ -950,7 +984,7 @@ keyboard ownership and highlighted composer.
   context occupancy, tokens, directory, branch, server, and connection).
   These are independent panes in the editable layout tree. The right sidebar
   needs 150 columns and is always hidden below that width. At 150 columns or
-  more, Ctrl+B or `/sidebar [on|off]` toggles its visibility. It is never
+  more, `/sidebar [on|off]` toggles its visibility. It is never
   narrower than 29 columns; drag its left border to resize it, and the saved
   split weight persists across launches. Hiding Context does not add metadata
   rows to Conversation. Its `Sessions`
@@ -963,11 +997,10 @@ keyboard ownership and highlighted composer.
   `●` while a session of it runs a turn, and its session count. It needs
   both sidebars and the chat column to fit, so it follows a threshold no
   lower than the right sidebar's (150 columns; an 80-column or even a
-  149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
-  hidden — Up/Down move the highlight, Enter switches (`switchProject`),
-  Esc (or Ctrl+P again) returns focus to the composer without closing it;
-  `/projects-sidebar [on|off]` toggles visibility alone (and, unlike the
-  right sidebar, can pin it open at any width). See [Projects](#projects).
+  149-column terminal keeps it hidden). `/projects-sidebar on` pins it open
+  at any width; Alt+arrows or `/layout focus <pane-id>` selects it.
+  Up/Down move the highlight, Enter switches (`switchProject`), and Esc returns
+  focus to Conversation without closing it. `/projects-sidebar off` hides it.
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
   above the message input; see
@@ -976,19 +1009,12 @@ keyboard ownership and highlighted composer.
   *other* sessions wait (sessions not in the open session's tree), a
   `Pending (N)` box appears above the prompt with up to three of them
   (`! <title> · <n>. <session>` for a listed chat, or `saved session` when
-  archived). Press **F4** to reopen the oldest request's conversation; its
+  archived). Run **`/pending`** to reopen the oldest request's conversation; its
   normal prompt then shows numbered answer choices. They arrive live — see
   [Asks of other sessions](#asks-of-other-sessions). `/interactions` lists
   every detail. It disappears when nothing else is pending.
-- **Keys and the browser.** Ctrl+B, Ctrl+O, Ctrl+G, and Ctrl+P are not
-  reserved by browsers, so they also work in the WebUI
-  (`packages/hya-tui-web`). Ctrl+B is tmux's default prefix; inside tmux
-  press it twice (tmux passes the second one through) or use `/sidebar`.
-  Ctrl+B would otherwise move the input cursor left; the Left arrow still
-  does. (Alt/Option+letter combos are not used for any binding here: macOS
-  keyboard layouts often remap them to accented or symbol characters instead
-  of delivering a plain modified keypress, in a browser and in a native
-  terminal alike.)
+- **Keys and the browser.** Essential app actions use browser-safe keys.
+  Optional actions use slash commands; `/keybind set` can assign your own shortcuts.
 - **Focus.** Ordinary typing, editing, paste, and Enter belong exclusively
   to the focused pane. An auxiliary pane ignores unsupported keys without
   forwarding them to Conversation. Alt+arrows move focus between visible
@@ -1048,9 +1074,9 @@ never edit or submit the conversation draft, answer a permission request, or
 cancel a turn. Projects keeps its Up/Down/Enter selection and Esc return behavior.
 For example, draft a message, select Sessions with Alt+Right, inspect it, then
 return with Alt+Left to continue the same draft. `/` and `?`, Alt+arrows, Ctrl+X
-then `/`, Ctrl+B/P, Ctrl+R, F4, and the exit shortcuts remain global workspace
+then `/`, and the exit shortcuts remain global workspace
 actions. Ctrl+C from an auxiliary pane uses the usual two-press exit guard without
-clearing the conversation draft. Ctrl+P or Esc leaving Projects selects Conversation.
+clearing the conversation draft. Esc leaving Projects selects Conversation.
 This is client-side keyboard ownership based on `paneLayout.active` and the
 Projects focus flag; it adds no RPC or configuration fields.
 
@@ -1085,9 +1111,8 @@ The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
 Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
 Projects is hidden unless `/projects-sidebar on` pins it open. Below 150
 columns, Sessions, Todos, and Context are always hidden; at 150 or more,
-`/sidebar off` (or Ctrl+B) hides them. These modes filter the matching pane
-jobs in any layout; the saved tree remains intact. `Ctrl+P` opens and
-selects a Projects pane; `Ctrl+B` toggles panes assigned Sessions, Todos,
+`/sidebar off`  hides them. These modes filter the matching pane
+jobs in any layout; the saved tree remains intact. `/projects-sidebar on` opens Projects; `/sidebar` toggles panes assigned Sessions, Todos,
 and Context, wherever they are placed. Conversation stays free of metadata
 headings when Context is hidden.
 Resizing the terminal or toggling a sidebar keeps unsent message and command
@@ -1408,7 +1433,7 @@ textDelta}` on the session event stream extends an assistant `text` part,
 finalizes the Markdown. A `###` line inside a fenced code block remains code.
 
 **Reasoning.** Reasoning parts arrive as `reasoning` parts (durable deltas;
-see the protocol guide). They are collapsed by default. Ctrl+O or `/thinking`
+see the protocol guide). They are collapsed by default. `/thinking`
 expands or collapses all of them (and forgets per-block choices); a click on
 one `Thinking` line toggles just that block. The word count is the reasoning
 text split on white space. Only provider routes that stream reasoning produce
@@ -1447,7 +1472,7 @@ the output in the error color.
 - **State icon.** `○` pending, a spinner (`⠋⠙⠹…`) while running, `◌` while a
   permission request waits, `✓` done, and `✗` failed. Duration appears on the
   right once a call is done.
-- **Expanding.** Cards are collapsed by default. Ctrl+G or `/tools` expands or
+- **Expanding.** Cards are collapsed by default. `/tools` expands or
   collapses all of them (`/tools on`, `/tools off`; with no argument it toggles).
   A click toggles one card; the input keeps focus. `!command` shell turns start
   expanded. Tool output is clipped to the existing 12-line head/tail window.
@@ -1857,7 +1882,7 @@ Local and backend (command or skill) names are merged and deduplicated by
 name; a local name always wins a clash with a backend name (the registry
 looks up local commands before falling back to the backend, so a local
 command is what actually runs either way). The list refreshes with
-`/refresh`/Ctrl+R and whenever the session or directory changes, the same as
+`/refresh` and whenever the session or directory changes, the same as
 Tab completion. The command pane uses the same registry and `GET /v1/commands`
 catalog as before. A backend command or skill still creates a `CommandTurn`
 through `POST /v1/sessions/{id}/turns` with
@@ -1923,17 +1948,10 @@ see [tui-web.md](tui-web.md#page-test-hook-windowhyaterm)).
 
 For long prompts, the input can be edited in your own editor.
 
-**Usage.** Ctrl+X then Ctrl+E (or Ctrl+X then E; the readline/zsh chord,
-browser-safe), or `/editor`. After Ctrl+X the controller status state shows
-`Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork`
-(see [Undo, redo, and fork](#undo-redo-and-fork)); any other next key drops the
-chord and is handled as usual. The TUI writes the input to a temporary file
-(`$TMPDIR/hya-prompt-XXXXXX/prompt.md`), suspends its renderer (the editor
-gets the whole terminal; the TUI's screen comes back afterwards), and runs
-the editor on it. When the editor exits with status 0 the file's text
-replaces the input — it is **not** sent; press Enter to send it — and the
-controller status state says `Edited in the external editor · Enter sends`. One trailing
-newline the editor adds is dropped. The temporary directory is removed.
+**Usage.** Run `/editor`. While a draft is nonempty, press Ctrl+X then `/`,
+enter `editor`, and press Enter. The draft stays intact while the command
+opens the editor. There is no default editor shortcut; for example,
+`/keybind set F6 /editor` assigns one.
 
 ```sh
 EDITOR="code -w" hya          # VS Code; -w waits for the tab to close
@@ -1961,8 +1979,8 @@ file path is appended as the last argument (`code -w /tmp/…/prompt.md`).
 returns `{ ok: true, text }` or `{ ok: false, error }`; the controller's
 `openEditor()` (`AppActions.openEditor`) runs it with
 `CliRenderer.suspend()` / `resume()` and the composer's registered input
-(`controller.attachComposer`). The key is the `externalEditor` binding (the
-second key of the `chord` binding Ctrl+X) in `keys/bindings.ts`.
+(`controller.attachComposer`). `/editor` dispatches through
+`AppActions.openEditor()` in `commands/native.ts`.
 
 ### Vim mode
 
@@ -2185,7 +2203,7 @@ Key order, first match wins:
    highlighted option; Esc declines. With text in the input, a question takes
    Enter as its answer.
 4. The composer: history, sending, Esc's other meanings (return from a
-   subagent view, cancel the turn, clear the input), and Shift+Tab (switch
+   subagent view, cancel the turn, clear the input), and the permission commands (switch
    the permission mode, also while a prompt is shown).
 
 **Esc declines, it never approves.** On a permission prompt Esc is Deny
@@ -2218,7 +2236,7 @@ a subagent's `permissionRequested` / `questionRequested` /
 session) arrive on it the moment they are raised — there is no polling
 delay. Frames sent before the subscription are not replayed, so the TUI
 reads `GET /v1/interactions` once after every (re)subscribe and after a
-`resync`; other listings happen only with a full refresh (start, Ctrl+R).
+`resync`; other listings happen only with a full refresh (start, `/refresh`).
 The open session's prompt queue holds the asks of the open session and of
 every session below it (children by `SessionInfo.parent`, and the open session's
 members and `task` outputs before the session list knows them), so a
@@ -2243,13 +2261,13 @@ its prompt only appears once you open that session.
 - the [pending block](#layout) lists it as `! <title> · <n>. <session>`
   (`?` for a question). For an archived or otherwise unlisted chat it says
   `saved session`, keeping raw IDs out of the narrow box;
-- the controller status state says `Permission needed in <n>. <session> · F4 to review`
+- the controller status state says `Permission needed in <n>. <session> · `/pending` to review`
   (`Question in …` for a question);
 - while the terminal is unfocused, a [desktop
   notification](#desktop-notifications) says `Permission needed: <title> ·
   in <n>. <session>`.
 
-**F4** opens and unarchives the oldest waiting request's root session,
+**`/pending`** opens and unarchives the oldest waiting request's root session,
 including one archived by `/exit`; the complete transcript and prompt appear
 there. Press `1` to allow a permission once, `2` to save an allow rule, or
 `3` to deny. Esc also denies; with text in the input, clear it before using
@@ -2265,9 +2283,9 @@ a command:
 ```text
 ╭Pending (1)──────────────────────────────────────────────────────────╮
 │ ! bash echo hi · 2. Fix the build                                   │
-│ F4 review request · /sessions past chats · /interactions details   │
+│ `/pending` review request · /sessions past chats · /interactions details   │
 ╰─────────────────────────────────────────────────────────────────────╯
-Permission needed in 2. Fix the build · F4 to review
+Permission needed in 2. Fix the build · `/pending` to review
 ```
 
 **Interfaces.** From start, the TUI keeps one subscription to
@@ -2337,13 +2355,9 @@ for the semantics. The TUI switches it without a restart, shows it in `/status` 
 
 ### Switching
 
-- **Shift+Tab** switches to the next mode: `manual` → `yolo` → the bundle
-  modes in the backend's listing order → `manual`. The listing is read with
-  the other catalogs at start and on `/refresh`; without it (an older
-  backend) the cycle is `manual` ↔ `yolo`. Shift+Tab also works while a
-  permission prompt is shown. In command suggestions, the `@file` list, or a
-  picker it moves the highlight up instead and the mode
-  does not change.
+Shift+Tab has no app-wide permission shortcut. It still navigates lists and
+can skip the target in the local yolo confirmation.
+
 - **`/permissions`** opens a picker with every mode from
   `GET /v1/permission-modes`: its title, `[source]` (`builtin`, or the id
   of the bundle that declares it), and description; `●` marks the mode in
@@ -2428,7 +2442,7 @@ A bundle declares modes with `permission_modes:` and answers them with a
 Installed (for example `hya bundle install --project -y approver.hyabundle`,
 or a source directory under `.hya/bundles/<dir>/` where `hya serve` runs),
 its modes appear in the picker as `<title> [<bundle id>]` and in the
-Shift+Tab cycle after `yolo`. With one active, the approver decides first;
+permission-mode picker after `yolo`. With one active, the approver decides first;
 when it defers, the TUI shows the usual permission prompt. Worked example:
 a bundle `e2e/approver` whose mode `echo-only` allows `echo …` commands —
 `/permissions`, type `echo`, Enter: `/status` reads `Mode        Echo only`,
@@ -2453,11 +2467,9 @@ copies the session into a new one, at its end or before a picked prompt.
   the file), then every file that could not be restored with its reason,
   `skipped big.bin (too_large)` or `failed /etc/x (permission denied)`.
   Paths inside the session's directory are shown relative to it.
-- **Keys.** Ctrl+X U undoes, Ctrl+X R redoes, and Ctrl+X F opens the fork
-  picker (Ctrl+X Ctrl+U / Ctrl+R / Ctrl+F work too). They act whatever the
-  input holds — after `/undo` it holds the reverted prompt, so typing
-  `/redo` would first need it cleared, while Ctrl+X R does not. The help
-  overlay lists them in the `Turns` group.
+- **Commands with a draft.** Press Ctrl+X then `/` and enter `/undo`, `/redo`,
+  or `/fork` in the command pane. The message draft stays intact; optional custom
+  shortcuts can be assigned with `/keybind set`.
 - **The input.** The reverted prompt goes into the input only when the input
   is empty, or still holds, untouched, the prompt a previous `/undo` or
   `/fork` put there (so `/undo` twice leaves the older prompt in it). Text
@@ -2465,7 +2477,7 @@ copies the session into a new one, at its end or before a picked prompt.
   `the input kept your text`.
 - **While a revert is pending** the transcript ends with a line in the
   warning color:
-  `↶ 2 messages reverted · /redo or Ctrl+X R restores them · the next prompt makes it permanent`.
+  `↶ 2 messages reverted · /redo restores them · the next prompt makes it permanent`.
   It follows the session live: a revert or redo from another client (a
   `sessionReverted` frame) updates it, and the next prompt or `!command`
   (its `messageStarted`) removes it.
@@ -2571,7 +2583,7 @@ press.
 `/model`, `/effort`, and `/sessions` (with no argument) open the same
 reusable modal picker `/permissions` uses (see [Permission modes — Switching](#switching)
 for the shared filter/move/select keys). Rows are loaded from the catalog already
-held by the TUI (`refresh()` at start and `/refresh`/Ctrl+R), so a picker opens
+held by the TUI (`refresh()` at start and `/refresh`), so a picker opens
 with no loading state.
 
 - **`/model`** lists every model from `GET /v1/models`, `[tag]`ged with its
@@ -2609,7 +2621,7 @@ with no loading state.
 ### Row actions
 
 The `/sessions` picker's highlighted row also takes keys the plain
-filter never sees (never Ctrl+R, which means refresh):
+filter never sees (independent of the message editor):
 
 - **F2** renames it: the picker switches to a one-line editable field seeded
   with the row's current label (`New title <text>▏`); type to edit, Enter
@@ -3011,11 +3023,11 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the metadata state's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
 | `GET /v1/sessions?includeArchived=true&projectId=<id>` | No body | `ListSessionsResponse.sessions: SessionInfo[]`, including archived chats (`archived`, `archivedAt`, `ephemeral`, `busy`, `timeUpdated`, `parent`, `projectId`). A plain local launch uses it to choose the latest durable root session of the active Project, preferring a tree with a waiting interaction. The `/sessions` and `/resume` pickers also include archived sessions by default. The `projectId` filter is optional for the pickers. |
-| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); plain relaunch, `--resume`, `/resume`, F4 review, and opening an archived `/sessions` row unarchive (`false`). |
+| `PATCH /v1/sessions/{id}` | `{archived: bool}` | `SessionInfo`: a graceful exit archives the open session's root (`true`); plain relaunch, `--resume`, `/resume`, `/pending` review, and opening an archived `/sessions` row unarchive (`false`). |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; deletes the requested session and every descendant subagent session, while unrelated sessions remain. The TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents?directory=<dir>` | No body (`ListAgents`; read with the catalogs) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); completes `/agent <name>`. |
-| `GET /v1/permission-modes?directory=<dir>` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
+| `GET /v1/permission-modes?directory=<dir>` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the picker rows, and bundle mode titles. |
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the metadata state's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. `parts[].attachment` is an `AttachmentPart {name, mime?, path?, size?}` (never the bytes) — see [Attachments](#attachments). |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
@@ -3144,13 +3156,13 @@ together.
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`; transcript notices spliced in by `withDividers()`, including the dividers derived from compaction summaries in the history. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
-| `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (metadata state text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
+| `src/state/modes.ts` | Permission modes: `modeCycle()` (local confirmation order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (metadata state text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
 | `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
 | `src/state/providers.ts` | The [Provider View](#provider-view)'s pure state: `initialProviderView()`, `providerViewKey()` (screens, filter, busy), the pop-up forms (`addProviderForm()`, `setKeyForm()`, `addModelForm()`, `editModelForm()`, `formKey()`, `formPaste()`, `withSecretLength()`), validation (`validateProviderId()`, `validateBaseUrl()`), row text (`providerLine()`, `modelLine()`, `providerDetailHeader()`, `tokenCount()`, `discoveryNotice()`, `testResultText()`), `providerKeyRows` (footer hint and help), and `defaultModelRef()`. |
 | `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
 | `src/state/catalog.ts` | `/model`/`/effort`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
-| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
+| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (internal mode navigation), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the controller status state. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
@@ -3167,7 +3179,7 @@ together.
 | `src/components/` | `ConversationPane` (transcript and input, with no heading/status rows), `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar` (right: Sessions/Todos/Context), `ProjectsSidebar` (left: every Project, live), `ProjectView` (the full-screen [Project view](#project-view)), `Composer` (the message `<textarea>`, history, shell mode, file list, global key routing), `CommandPane` (separate `<input>`, suggestions, completion, command history), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command pane's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
-| `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z, and `toggleProjectsSidebar` on Ctrl+P) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
+| `src/keys/bindings.ts` | The global key binding table (`keyBindings`, essential defaults only) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry` (the Provider View's key fields), the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
@@ -3289,9 +3301,9 @@ for the specs covering your change; CI runs the whole suite; see
 `e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
 entry, narrow widths, and Ctrl+C. `e2e/hya-tui-layout.spec.ts` covers the
 main column and sidebar at the default viewport and at about 80 columns
-(Ctrl+B, `/sidebar`), the prompt dock, and the pending block of another session's ask. `e2e/hya-tui-messages.spec.ts`
+(`/sidebar`), the prompt dock, and the pending block of another session's ask. `e2e/hya-tui-messages.spec.ts`
 covers user and assistant styling, Markdown and code highlighting, reasoning
-(Ctrl+O, `/thinking`, click), error, length, and cancel notices, and
+(`/thinking`, click), error, length, and cancel notices, and
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
 heading previews without marker or color flashes, queued prompts, and the
@@ -3300,7 +3312,7 @@ turn controller status state (`Ready`, provider errors).
 fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
 commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,
 `/rename`, and `/status`. `e2e/hya-tui-tools.spec.ts` covers tool cards (read, bash, edit/write diff
-colors, a failed call, the running spinner, Ctrl+G, `/tools`, a click) and a
+colors, a failed call, the running spinner, `/tools`, a click) and a
 `task` subagent card (child status and activity, sidebar nesting, the
 read-only child view, Esc back, `/open`), also at about 80 columns.
 `e2e/hya-tui-composer.spec.ts` covers the composer:
@@ -3317,7 +3329,7 @@ without asking), Deny (`3`) and Esc, an edit ask's diff, two queued asks
 (`1 of 2`), `ask_user` options, a free-text answer, and Reject, a subagent's
 ask in the parent view (its task card and sidebar row waiting), a
 `!command` shell turn that shows no prompt, and about 80 columns.
-`e2e/hya-tui-permission-modes.spec.ts` covers permission modes: Shift+Tab
+`e2e/hya-tui-permission-modes.spec.ts` covers permission modes: command
 through xterm.js, the yolo confirmation (Esc, Enter, no second ask), the
 metadata state colors, the transcript notice, a bash call under `yolo` without a
 prompt and under `manual` with one, a pending ask closed by switching to
@@ -3357,6 +3369,6 @@ columns); `e2e/hya-tui-prompts.spec.ts`
 checks that a subagent's ask arrives on the `includeDescendants` stream
 with no interactions listing in between, and that an ask of a session run
 headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
-pending block with its session, then F4 opens its numbered prompt (default
+pending block with its session, then `/pending` opens its numbered prompt (default
 and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
 single desktop notification.

@@ -111,7 +111,7 @@ test.describe("reasoning", () => {
     },
   })
 
-  test("reasoning is a collapsed Thinking line that Ctrl+O and /thinking expand", async ({ tui, backend }) => {
+  test("reasoning is a collapsed Thinking line that /thinking expand", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "think about it")
@@ -123,13 +123,17 @@ test.describe("reasoning", () => {
     expect(await term.find("private chain of thought")).toBeNull()
     expect(label.row).toBeLessThan((await at(term, "The final answer is 7.")).row)
 
-    await term.press("Control+o")
+    await term.press("Control+x")
+    await term.type("/thinking")
+    await term.press("Enter")
     await term.waitForText("▾ Thinking · 6 words")
     const body = await at(term, "private chain of thought about apples")
     expect((await term.cell(body.row, body.col))?.fg).toBe(colors.muted)
     expect((await term.cell(body.row, body.col))?.italic).toBe(true)
 
-    await term.press("Control+o")
+    await term.press("Control+x")
+    await term.type("/thinking")
+    await term.press("Enter")
     await term.waitForText("▸ Thinking · 6 words")
     expect(await term.find("private chain of thought")).toBeNull()
 

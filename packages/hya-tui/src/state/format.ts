@@ -186,12 +186,12 @@ export function askSessionLabel(sessionId: string, sessions: readonly SessionInf
   return number === undefined ? session.title || session.id : `${number}. ${session.title || session.id}`
 }
 
-/** Status line when an ask arrives for another session: F4 opens its normal prompt. */
+/** Status line when an ask arrives for another session: /pending opens its normal prompt. */
 export function otherAskNotice(interaction: Interaction, sessions: readonly SessionInfo[], activeProjectId: string | undefined): string {
   const sessionId = interaction.session ?? ""
   const kind = interaction.type?.includes("QUESTION") ? "Question" : "Permission needed"
   const label = askSessionLabel(sessionId, sessions, activeProjectId)
-  return `${kind} in ${label === sessionId ? "a saved session" : label} · F4 to review`
+  return `${kind} in ${label === sessionId ? "a saved session" : label} · /pending to review`
 }
 
 /** `WebUI http://127.0.0.1:3250` (status line), or `WebUI unavailable`; `undefined` without a WebUI. */

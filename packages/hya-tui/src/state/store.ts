@@ -123,7 +123,7 @@ export interface AppState {
   readonly sidebar: SidebarMode
   /** Terminal width in columns, kept current by the root layout. */
   readonly columns: number
-  /** Global reasoning switch (`/thinking`, Ctrl+O): expand every reasoning block. */
+  /** Global reasoning switch (`/thinking`): expand every reasoning block. */
   readonly thinking: boolean
   /** Vim mode in the composer (`/vim`, the `vim` preference; composer/vim.ts). */
   readonly vim: boolean
@@ -137,7 +137,7 @@ export interface AppState {
   readonly focused: boolean
   /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
   readonly reasoningToggles: ReadonlyMap<string, boolean>
-  /** Global tool-card switch (`/tools`, Ctrl+G); `undefined` = the defaults (collapsed, shell turns expanded). */
+  /** Global tool-card switch (`/tools`); `undefined` = the defaults (collapsed, shell turns expanded). */
   readonly tools: boolean | undefined
   /** Per-card expansion that overrides `tools` (a click on the card header), by part id. */
   readonly toolToggles: ReadonlyMap<string, boolean>
@@ -291,7 +291,7 @@ export interface Catalog {
   projects?: ProjectInfo[]
 }
 
-export const startupStatus = "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit"
+export const startupStatus = "Enter prompt · /help commands · /refresh · Ctrl+C quit"
 
 function initialState(): { [K in keyof AppState]: AppState[K] } {
 

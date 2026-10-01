@@ -1,5 +1,5 @@
 // Tool call cards and subagent visibility (docs/tui.md "Tool calls" and
-// "Subagents"): state icons, per-tool summaries, collapse/expand (Ctrl+G,
+// "Subagents"): state icons, per-tool summaries, collapse/expand (
 // /tools, a click on the header), diff colors, failures, the running
 // spinner, and a `task` card whose child session opens read-only, driven by
 // the fake model.
@@ -82,7 +82,7 @@ test.describe("bash card", () => {
     },
   })
 
-  test("the command is the summary; Ctrl+G and /tools expand and collapse the output", async ({ tui, backend }, testInfo) => {
+  test("the command is the summary; /tools expand and collapse the output", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run printf")
@@ -91,14 +91,18 @@ test.describe("bash card", () => {
     await term.waitForText('{"command":"printf \'first\\\\nsecond\\\\n\'"}')
     expect(await term.find("$ printf")).toBeNull()
 
-    await term.press("Control+g")
+    await term.press("Control+x")
+    await term.type("/tools")
+    await term.press("Enter")
     await term.waitForText("first")
     await term.waitForText("│ first")
     const output = await at(term, "│ second")
     expect((await term.cell(output.row, output.col + 2))?.fg).toBe(colors.muted)
     await term.attach(testInfo, "bash-expanded")
 
-    await term.press("Control+g")
+    await term.press("Control+x")
+    await term.type("/tools")
+    await term.press("Enter")
     await expect.poll(() => term.find("$ printf")).toBeNull()
     await prompt(term, "/tools on")
     await term.waitForText("first")

@@ -15,7 +15,7 @@ import { currentPrompt, type PromptView } from "../state/prompts"
 import { colors } from "../theme"
 import { toneColor } from "./MessageView"
 
-/** The hint row; a permission prompt's ends with the permission mode (Shift+Tab switches it), after the id so a narrow box clips the mode, not the id. */
+/** The hint row; a permission prompt's ends with the permission mode, after the id so a narrow box clips the mode, not the id. */
 function hint(view: PromptView, draft: boolean, mode: string): string {
   const count = view.options.length
   if (draft) {

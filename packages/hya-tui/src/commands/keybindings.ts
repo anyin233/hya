@@ -12,7 +12,7 @@ function settingRow(setting: BindingSetting): PickerRow {
     id: setting.id,
     label: setting.id,
     tag: setting.scope,
-    detail: `Keys: ${setting.keys.join(" / ")}. ${setting.command ? `Command: ${setting.command}. ` : ""}${setting.context} ${setting.description}`,
+    detail: `Keys: ${setting.keys.join(" / ") || "unassigned"}. ${setting.command ? `Command: ${setting.command}. ` : ""}${setting.context} ${setting.description}`,
   }
 }
 

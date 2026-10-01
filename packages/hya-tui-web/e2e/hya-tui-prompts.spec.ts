@@ -348,7 +348,7 @@ test.describe("asks of other sessions", () => {
   test.use({ model: { steps: [toolStep("bash", { command: "echo from-elsewhere" }), textStep("Elsewhere done.")] } })
 
   for (const [name, viewport] of [["default", undefined], ["about 80 columns", { width: 690, height: 480 }]] as const) {
-    test(`an ask raised in another session shows live; F4 opens its numbered prompt (${name})`, async ({ tui, backend }, testInfo) => {
+    test(`an ask raised in another session shows live; /pending opens its numbered prompt (${name})`, async ({ tui, backend }, testInfo) => {
       const proxy = await startProxy(backend.url)
       const term = await tui(hyaTui({ ...backend, url: proxy.url }), viewport ? { viewport } : {})
       await term.waitForText("Message, !shell, or @file · / commands")
@@ -362,15 +362,17 @@ test.describe("asks of other sessions", () => {
       await term.waitForText(/Pending \(1\)/, 20_000)
       const shown = Date.now()
       await term.waitForText(new RegExp(`! bash echo from-elsewhere · \\d+\\. ${other.slice(0, 12)}`))
-      await term.waitForText("F4 review request")
+      await term.waitForText("/pending review request")
       // Pushed, not polled: no interactions listing between the other turn and the ask showing up.
       expect(proxy.log.filter((entry) => entry.at >= started && entry.at <= shown && entry.path.startsWith("/v1/interactions"))).toEqual([])
       // The open session's own prompt dock does not take another session's ask.
       expect(await term.find("asked by hya-main")).toBeNull()
       await term.attach(testInfo, "other-session-ask")
 
-      // F4 opens the request's session: its normal numbered prompt answers it.
-      await term.press("F4")
+      // /pending opens the request's session: its normal numbered prompt answers it.
+      await term.press("Control+x")
+      await term.type("/pending")
+      await term.press("Enter")
       await term.waitForText("asked by hya-main", 20_000)
       await term.waitForText("│ $ echo from-elsewhere")
       if (!viewport) await showStatusView(term)

@@ -49,13 +49,13 @@ test("help rows are grouped in the fixed group order", () => {
   const rows = helpRows(entries)
   const order = rows.map((row) => helpGroups.indexOf(row.group))
   expect(order).toEqual([...order].sort((a, b) => a - b))
-  expect(new Set(rows.map((row) => row.group)).size).toBe(helpGroups.length)
+  expect([...new Set(rows.map((row) => row.group))]).toEqual(helpGroups.filter((group) => group !== "Modes"))
 })
 
 test("picker rows tag keys by group and commands by source; ids are unique", () => {
   const rows = helpPickerRows(entries)
   expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length)
-  expect(rows.find((row) => row.label === "Ctrl+B")?.tag).toBe("views")
+  expect(rows.find((row) => row.label === "Alt+Left")?.tag).toBe("views")
   expect(rows.find((row) => row.label.startsWith("/review"))?.tag).toBe("server")
 })
 
@@ -72,10 +72,10 @@ test("the key help text (connection-failure view) is generated from the same row
   expect(text).toContain("Shift+Enter")
 })
 
-test("help lists the external editor chord, mouse copy, and the vim normal-mode keys", () => {
+test("help omits removed app chords and retains mouse copy and Vim editing", () => {
   const rows = helpRows(entries)
-  expect(rows.find((row) => row.keys === "Ctrl+X Ctrl+E")?.group).toBe("Composer")
-  for (const keys of ["Ctrl+X U", "Ctrl+X R", "Ctrl+X F"]) expect(rows.find((row) => row.keys === keys)?.group, keys).toBe("Turns")
+  expect(rows.find((row) => row.keys === "Ctrl+X Ctrl+E")?.group).toBeUndefined()
+  for (const keys of ["Ctrl+X U", "Ctrl+X R", "Ctrl+X F"]) expect(rows.find((row) => row.keys === keys)?.group, keys).toBeUndefined()
   expect(rows.some((row) => row.group === "Transcript" && row.keys.startsWith("Mouse drag") && row.description.includes("clipboard"))).toBe(true)
   const vim = rows.filter((row) => row.group === "Vim")
   for (const keys of ["h j k l", "w b e", "0 ^ $", "gg / G", "i a I A o O", "x / dd / D", "u / Ctrl+R", "Enter", "Esc"]) {

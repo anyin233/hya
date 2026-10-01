@@ -29,9 +29,9 @@ test("revertSummary counts restored and deleted files and names skipped and fail
 })
 
 test("revertIndicator says how many messages are hidden and how to get them back", () => {
-  expect(revertIndicator({ messageId: "m", hiddenMessages: 2 })).toBe("↶ 2 messages reverted · /redo or Ctrl+X R restores them · the next prompt makes it permanent")
-  expect(revertIndicator({ messageId: "m", hiddenMessages: 1 })).toBe("↶ 1 message reverted · /redo or Ctrl+X R restores it · the next prompt makes it permanent")
-  expect(revertIndicator({ messageId: "m" })).toBe("↶ messages reverted · /redo or Ctrl+X R restores them · the next prompt makes it permanent")
+  expect(revertIndicator({ messageId: "m", hiddenMessages: 2 })).toBe("↶ 2 messages reverted · /redo restores them · the next prompt makes it permanent")
+  expect(revertIndicator({ messageId: "m", hiddenMessages: 1 })).toBe("↶ 1 message reverted · /redo restores it · the next prompt makes it permanent")
+  expect(revertIndicator({ messageId: "m" })).toBe("↶ messages reverted · /redo restores them · the next prompt makes it permanent")
 })
 
 test("forkRows: the head first, then the user prompts newest first", () => {

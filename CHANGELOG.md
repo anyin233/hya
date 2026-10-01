@@ -1,7 +1,5 @@
-# 0.43.42
+# 0.43.43
 
-## Frontend
-
-- Shorten `/keybindings` to `/keybind` and add persistent `set` and `reset` commands.
-- Bind shortcuts to full slash commands, including multiple arguments, through the existing registry; reuse nested command completion.
-- Keep workspace/conversation scopes explicit, retain modal input ownership and built-in shortcuts, and show save/conflict errors in a modal.
+- Reduce default TUI shortcuts to command/help access, pane navigation, scrolling, editing, cancellation and exit. Optional actions remain available as commands and custom keybindings.
+- Add `/pending` to review the oldest request in another session and show unassigned actions in `/keybind`.
+- Keep Shift+Tab local to lists and confirmation rather than changing permission modes globally.

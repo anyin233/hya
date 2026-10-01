@@ -28,7 +28,7 @@ test.describe("layout", () => {
     const initialSessions = (await term.find("Sessions"))!
     await term.press("Alt+ArrowLeft")
     await term.waitForText("Projects")
-    await term.press("Control+p")
+    await term.press("Alt+ArrowRight")
     await term.type("/layout focus pane-1")
     await term.press("Enter")
     await prompt(term, "/layout focus pane-2")
@@ -40,7 +40,7 @@ test.describe("layout", () => {
     await expect.poll(() => term.find("Sessions")).toBeNull()
     await prompt(term, "/layout focus pane-2")
     await prompt(term, "/layout assign jobs")
-    await term.press("Control+p")
+    await prompt(term, "/projects-sidebar off")
     await expect.poll(() => term.find("Projects")).toBeNull()
   })
 
@@ -114,7 +114,9 @@ test.describe("layout", () => {
     expect(text).not.toContain("Pending")
 
     // Ctrl+B hides the sidebar and gives the transcript the full width; /sidebar brings it back.
-    await term.press("Control+b")
+    await term.press("Control+x")
+    await term.type("/sidebar")
+    await term.press("Enter")
     await expect.poll(() => sidebarShown(term)).toBe(false)
     await term.waitForText("layout reply marker l1")
     await prompt(term, "/sidebar")
@@ -135,7 +137,9 @@ test.describe("layout", () => {
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-closed")
 
-    await term.press("Control+b")
+    await term.press("Control+x")
+    await term.type("/sidebar")
+    await term.press("Enter")
     expect(await term.find("mode manual")).toBeNull()
     expect(await term.find("Sessions")).toBeNull()
 
@@ -182,7 +186,7 @@ test.describe("pending interactions", () => {
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)
-    await term.waitForText("F4 review request")
+    await term.waitForText("/pending review request")
     expect(await term.find("asked by hya-main")).toBeNull()
   })
 })

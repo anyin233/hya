@@ -27,7 +27,7 @@ export const composerMaxRows = 8
 const mentionDebounceMs = 120
 export const quitHint = "Press Ctrl+C again to quit"
 /** Status while the Ctrl+X chord waits for its second key. */
-export const chordHint = "Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork · / commands"
+export const chordHint = "Ctrl+X · / opens commands"
 
 interface FileMenu {
   token: MentionToken
@@ -44,7 +44,7 @@ interface FileMenu {
  * Key order: the modal picker (every key but Ctrl+C), a full-screen view,
  * the command pane, the Projects sidebar, the one-line yolo confirmation,
  * the file list, the prompt dock, and the key bindings
- * (Shift+Tab cycles the permission mode; docs/tui.md "Permission modes").
+ * (docs/tui.md "Essential default shortcuts").
  *
  * Permission/question prompts (components/PromptDock.tsx): after the lists,
  * a shown prompt takes digits, Up/Down, Enter, and Esc while the input is
@@ -63,10 +63,8 @@ interface FileMenu {
  * arrows, Tab, Esc with nothing pending) keep their usual meaning. Edits go
  * through `replaceText`, so `u` / Ctrl+R use the textarea's undo history.
  *
- * Ctrl+X arms a chord for one key: Ctrl+E (or E) then opens the external
- * editor (`controller.openEditor`, composer/editor.ts); U, R, F (or with
- * Ctrl) run `/undo`, `/redo`, `/fork`, and `/` focuses the command pane
- * (app/revert.ts); any other key drops the chord and is handled as usual.
+ * Ctrl+X arms a prefix for one key: `/` focuses the command pane without
+ * altering the draft; any other key drops it and is handled as usual.
  *
  * While the Provider View (`/key`, components/ProviderView.tsx) — or the
  * Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`), or Agents
@@ -321,7 +319,7 @@ export function Composer(props: { width: number }) {
   function toggleProjectsFocus(): void {
     if (store.state.projectsSidebarFocus) {
       store.setProjectsSidebarFocus(false)
-      store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
+      store.setStatus("Projects sidebar unfocused · Alt+Arrow focuses panes")
     } else {
       const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
       if (!projects) {
@@ -332,7 +330,7 @@ export function Composer(props: { width: number }) {
       if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
       store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
       store.setProjectsSidebarFocus(true)
-      store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
+      store.setStatus("Projects sidebar shown, focused")
     }
     return
   }
@@ -426,7 +424,7 @@ export function Composer(props: { width: number }) {
       store.setStatus(chordHint)
       return
     }
-    // The left Projects sidebar has focus (Ctrl+P): Up/Down/Enter/Esc go to it.
+    // The left Projects sidebar has focus: Up/Down/Enter/Esc go to it.
     if (commandPaneFocus?.kind !== "conversation"
       && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar"
       && commandShortcut !== "refresh" && commandShortcut !== "help" && commandShortcut !== "reviewPending"
@@ -469,28 +467,10 @@ export function Composer(props: { width: number }) {
       quitGuard.disarm()
       return
     }
-    // The second key of a Ctrl+X chord: Ctrl+E / E opens the external editor; anything else drops the chord.
-    const armed = chord
+    // Slash was handled above; every other key drops the command prefix.
+    if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
     chord = undefined
-    if (armed) {
-      if (store.state.status === chordHint) store.setStatus(beforeChord)
-      const action = resolveBinding(key, { chord: armed })
-      if (action === "externalEditor") {
-        consume()
-        quitGuard.disarm()
-        controller.openEditor()
-        return
-      }
-      // Undo / redo / fork act on the session, whatever the input holds (the input may hold the reverted prompt).
-      if (action === "undo" || action === "redo" || action === "fork") {
-        consume()
-        quitGuard.disarm()
-        if (action === "fork") controller.fork()
-        else void controller[action]()
-        return
-      }
-    }
-    // Shift+Tab in the file list moves its highlight up instead of cycling the permission mode.
+    // Shift+Tab in the file list moves its highlight up.
     if (isShiftTab(key) && menu()) {
       consume()
       const files = menu()!
@@ -617,13 +597,13 @@ export function Composer(props: { width: number }) {
       case "toggleThinking":
         consume()
         store.setThinking(!store.state.thinking)
-        store.setStatus(`Reasoning ${store.state.thinking ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+        store.setStatus(`Reasoning ${store.state.thinking ? "expanded" : "collapsed"}`)
         return
       case "toggleTools": {
         consume()
         const expanded = !(store.state.tools ?? false)
         store.setTools(expanded)
-        store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
+        store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"}`)
         return
       }
       case "pageUp":
