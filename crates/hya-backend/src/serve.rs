@@ -2061,13 +2061,25 @@ mod listener_tests {
     /// ownership is taken. The old path adopted an invalid descriptor with
     /// `from_raw_fd` and aborted the whole process (`IO Safety violation`)
     /// when dropping it closed the bad FD.
+    ///
+    /// The number is the soft `RLIMIT_NOFILE` (or `i32::MAX` when unlimited):
+    /// the kernel never allocates it, so a parallel test cannot reuse it the
+    /// way it could reuse a just-closed descriptor.
     #[test]
     fn rejects_closed_fd_with_normal_error() {
-        let socket = std::net::TcpListener::bind("127.0.0.1:0").expect("bind scratch socket");
-        let fd = socket.into_raw_fd();
-        drop(unsafe { OwnedFd::from_raw_fd(fd) }); // close it: the number names nothing now
-        let error = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
-            .expect_err("a closed FD must be rejected");
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            0
+        );
+        let fd = u32::try_from(limit.rlim_cur)
+            .ok()
+            .filter(|fd| i32::try_from(*fd).is_ok())
+            .unwrap_or(i32::MAX as u32);
+        let error = inherited_std_listener(fd).expect_err("a closed FD must be rejected");
         assert!(error.to_string().contains("not open"), "{error:#}");
     }
 
