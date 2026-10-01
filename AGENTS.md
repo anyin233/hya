@@ -94,16 +94,16 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 
 ## Release & Changelog Rule
 
-- Before publishing a backend release, `versions.toml` `[backend].version`, `[workspace.package].version`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` must describe the same backend version. `[frontend].version` is independent and may differ.
-- Every fix or feature change that ships code updates the aggregate for the side it changes. Only backend and frontend aggregate values are real versions; component manifests use `0.0.0` with explicit `version-reference` metadata.
-- Bump the version only for changes to shipped behavior: Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else that lands in the release archive or source install.
-- Do not bump the version for documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`) or CI-only changes (`.github/`, CI scripts and config). The same holds for test-only changes that leave shipped code untouched.
-- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the relevant aggregate once for the whole atomic change.
-- Bundle source manifests use identity version `0.0.0` plus `version_ref: backend`; preparation resolves the backend aggregate, and release tests reject unresolved or mismatched identities. Frontend package manifests use `0.0.0` plus `version-reference = "frontend"`; the packaged TUI carries its frontend version and rejects backends below its declared minimum.
-- Version bumps: `cargo test -p xtask` checks aggregate/reference metadata, frontend minimum-backend compatibility, and release layout; `cargo test -p hya-bundle` checks bundle preparation and resolved identities; `README.md` and `Cargo.lock` are checked by release rehearsal.
-- Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
-- When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
-- Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.
+- Backend and frontend release iterations are independent. `versions.toml` is the aggregate source: `[backend].version` is the backend release version and `[frontend].version` is the frontend release version; they MAY differ.
+- A backend release updates `[backend].version`, `[workspace.package].version`, the `hya-backend` package version, the `vX.Y.Z` backend tag, and `CHANGELOG_BACKEND.md`. Its first heading MUST be exactly `# <backend-version>`.
+- A frontend release updates `[frontend].version`, `packages/hya-tui/frontend-version.ts`, and `CHANGELOG_FRONTEND.md`. Its first heading MUST be exactly `# <frontend-version>`; it MUST NOT require a backend workspace/package version bump.
+- The packaged frontend declares `minimum_backend_version` in `versions.toml` and `minimumBackendVersion` in `packages/hya-tui/frontend-version.ts`. It accepts only backend versions greater than or equal to that minimum; missing, malformed, or older backend versions MUST be rejected during bootstrap, backend switching, and remote entry. Raise the minimum only when the frontend requires a newer backend contract.
+- Every shipped behavior change updates the aggregate for each shipped side it changes. Shipped behavior includes Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else in the release archive or source install.
+- Documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and config), and test-only changes that leave shipped code untouched MUST NOT bump either aggregate or write a new changelog.
+- A mixed change bumps each affected shipped side once. A frontend-only change bumps only the frontend aggregate; a backend-only change bumps only the backend aggregate; a cross-contract change MAY require both and MUST keep the frontend minimum compatible.
+- Only aggregate versions are real release versions. Other Rust package manifests use `0.0.0` plus `[package.metadata.hya] version-reference = "backend"`; frontend package manifests use `0.0.0` plus the equivalent `frontend` reference. Bundle source manifests use identity version `0.0.0` plus `version_ref: backend`; preparation resolves the backend aggregate.
+- `CHANGELOG_BACKEND.md` and `CHANGELOG_FRONTEND.md` each contain only the newest notes for that side. When a side advances, archive its previous file under `docs/changes/CHANGELOG_BACKEND_<version>.md` or `docs/changes/CHANGELOG_FRONTEND_<version>.md`; do not merge the two streams or recreate `CHANGELOG.md`.
+- Version checks: `cargo test -p xtask` validates aggregate/reference metadata, both side-specific changelog headings, frontend minimum-backend compatibility, and release layout; `cargo test -p hya-bundle` validates bundle preparation and resolved identities; release rehearsal validates `README.md`, `Cargo.lock`, and packaged assets.
 
 ## Project Overview
 

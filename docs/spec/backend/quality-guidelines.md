@@ -407,7 +407,7 @@ engine.refresh_runtime(|candidate| {
 ### 1. Scope / Trigger
 
 - Trigger: any change that publishes release binaries, creates GitHub Releases, or modifies the release changelog process.
-- Applies to `.github/workflows/release.yml`, root `CHANGELOG.md`, `docs/changes/`, root `AGENTS.md` release rules, and release-related task artifacts.
+- Applies to `.github/workflows/release.yml`, `CHANGELOG_BACKEND.md`, `CHANGELOG_FRONTEND.md`, `docs/changes/`, root `AGENTS.md` release rules, and release-related task artifacts.
 
 ### 2. Signatures
 
@@ -436,9 +436,9 @@ cargo run -p xtask -- release-rehearsal \
 
 ### 3. Contracts
 
-- Root `CHANGELOG.md` contains only the newest version's release notes.
-- Historical changelogs live under `docs/changes/CHANGELOG_<version>.md`.
-- The GitHub Release body is read verbatim from root `CHANGELOG.md`.
+- `CHANGELOG_BACKEND.md` and `CHANGELOG_FRONTEND.md` each contain only the newest release notes for that side.
+- Historical side-specific changelogs live under `docs/changes/CHANGELOG_BACKEND_<version>.md` and `docs/changes/CHANGELOG_FRONTEND_<version>.md`.
+- The GitHub Release body for a backend tag is read verbatim from `CHANGELOG_BACKEND.md`.
 - Release workflow permissions are read-only by default; only the release publishing job may request `contents: write`.
 - Build provenance attestations are generated for every archive, bundle asset,
   and checksum file.
@@ -464,8 +464,8 @@ cargo run -p xtask -- release-rehearsal \
 - Missing `v` tag prefix -> fail before build.
 - Tag version is not semver-shaped -> fail before build.
 - Tag version differs from `cargo metadata` package version for `hya-backend` -> fail before build.
-- Missing or empty `CHANGELOG.md` -> fail before publishing.
-- `CHANGELOG.md` first heading differs from the tag version -> fail before build.
+- Missing or empty `CHANGELOG_BACKEND.md` -> fail before publishing.
+- `CHANGELOG_BACKEND.md` first heading differs from the tag version -> fail before build.
 - Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
 - Missing release assets -> fail `softprops/action-gh-release` with `fail_on_unmatched_files: true`.
 - Missing `--no-publish` -> rehearsal rejects before validation or build.
@@ -490,9 +490,9 @@ cargo run -p xtask -- release-rehearsal \
 
 ### 5. Good/Base/Bad Cases
 
-- Good: `v0.1.0`, `[workspace.package].version = "0.1.0"`, root `CHANGELOG.md` contains only `0.1.0` notes, archive and checksum pass smoke checks.
-- Base: first release has no historical changelog; keep `docs/changes/.gitkeep` and root `CHANGELOG.md` for the current version.
-- Bad: appending old release notes to root `CHANGELOG.md`; this publishes stale history as the GitHub Release body.
+- Good: `v0.1.0`, `[workspace.package].version = "0.1.0"`, `CHANGELOG_BACKEND.md` contains only `0.1.0` notes, archive and checksum pass smoke checks; the frontend changelog may carry its independent version.
+- Base: first release has no historical side changelog; keep `docs/changes/.gitkeep` and the current side-specific files.
+- Bad: appending old release notes to either side-specific changelog; this publishes stale history or mislabels the release body.
 - Good: the no-publish rehearsal validates the real workflow, exact payload,
   Compat adapter handshake, Argus package closure, and
   checksum without publishing.
@@ -822,9 +822,8 @@ const lifecycle = resolveLifecyclePresentation(node)
 - Not a trigger: documentation-only changes (`docs/`, `*.md`, code comments,
   `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and
   config), and test-only changes that leave shipped code untouched. These
-  neither bump the version nor write a new root `CHANGELOG.md`.
-- Mixed change: if any file affects shipped behavior, bump once for the whole
-  atomic change.
+  neither bump an aggregate nor write a new side-specific changelog.
+- Mixed change: bump each affected shipped side once.
 
 ### 2. Contracts
 
@@ -833,19 +832,23 @@ Bumping a release updates the aggregate for the shipped side:
 | File | What to change |
 | --- | --- |
 | `versions.toml` | backend release updates `[backend].version`; frontend release updates `[frontend].version` and its `minimum_backend_version` when required |
-| `Cargo.toml` | `[workspace.package].version` mirrors the backend aggregate |
+| `Cargo.toml` | `[workspace.package].version` and `hya-backend` mirror the backend aggregate; frontend-only releases leave them unchanged |
 | `Cargo.lock` | `hya-backend` carries the backend version; other `hya` packages remain `0.0.0` |
 | Rust `Cargo.toml` manifests | non-backend packages stay at `0.0.0` with `version-reference = "backend"` |
 | `bundles/**/bundle.yaml` | source identity stays `0.0.0` with `version_ref: backend`; preparation resolves the backend version |
 | frontend package manifests | stay at `0.0.0` with `version-reference = "frontend"` |
 | `packages/hya-tui/frontend-version.ts` | embedded frontend version and minimum backend version |
 | `README.md` | independently reported backend/frontend versions and frontend compatibility minimum |
-| `CHANGELOG.md` | backend release heading, exactly `# X.Y.Z` |
-| `docs/changes/CHANGELOG_<prev>.md` | move the previous root changelog here first |
+| `CHANGELOG_BACKEND.md` | backend release heading, exactly `# <backend-version>` |
+| `CHANGELOG_FRONTEND.md` | frontend release heading, exactly `# <frontend-version>` |
 
 The frontend accepts only a backend version greater than or equal to its
-declared `minimum_backend_version`; malformed and older versions fail during
-TUI bootstrap or server switching. Backend and frontend versions may differ.
+declared `minimum_backend_version`; missing, malformed, and older versions fail
+during TUI bootstrap, server switching, and remote entry. Backend and frontend
+versions MAY differ. Each side-specific changelog contains only its newest
+notes; archive prior side notes under the matching
+`docs/changes/CHANGELOG_BACKEND_<version>.md` or
+`docs/changes/CHANGELOG_FRONTEND_<version>.md` path.
 Component placeholders prevent a bump from requiring mass edits; explicit
 metadata references and release checks make the intended aggregate relationship
 visible and fail closed.
@@ -858,8 +861,8 @@ visible and fail closed.
   hya-bundle` and `stage-first-party-bundles` fail.
 - Stale README, lockfile, package layout, or archive copy -> release
   metadata/rehearsal checks fail.
-- Root `CHANGELOG.md` retaining old releases -> stale history is published
-  verbatim as the GitHub Release body.
+- A stale or extra heading in either side-specific changelog -> release
+  metadata/rehearsal checks fail.
 
 ### 4. Good/Base/Bad Cases
 
