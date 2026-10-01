@@ -14,6 +14,8 @@ import type { AppStore } from "../state/store"
 
 /** Controller actions a command handler may call. */
 export interface AppActions {
+  /** Open the oldest pending request outside the current session tree. */
+  reviewPending(): Promise<void>
   refresh(): Promise<void>
   refreshMessages(): Promise<void>
   openSession(sessionId: string): Promise<void>

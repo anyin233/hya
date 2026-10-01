@@ -1,6 +1,6 @@
 /**
  * External editor for the composer (docs/tui.md "External editor"): `/editor`
- * or Ctrl+X Ctrl+E writes the input to a temporary file, suspends the
+ * writes the input to a temporary file, suspends the
  * renderer (the editor gets the terminal), runs `$VISUAL`, else `$EDITOR`,
  * else `vi` on it, resumes, and returns the edited text. The caller puts it
  * back in the input (it is not sent). A non-zero exit or a missing binary is

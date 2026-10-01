@@ -31,8 +31,8 @@ function matchSessions({ head, current }: ArgumentPosition, sessions: Completion
 }
 
 /**
- * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never
- * Ctrl+R — that key means refresh), Ctrl+A shows or hides archived sessions,
+ * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes,
+ * Ctrl+A shows or hides archived sessions,
  * F3 toggles showing every Project's sessions.
  */
 export const sessionPickerActions: readonly PickerAction[] = [
@@ -647,7 +647,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ store }, { args }) => {
       const visible = projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)
       store.setProjectsSidebar(parseSwitch(args[0], visible, "Usage: /projects-sidebar [on|off]") ? "open" : "closed")
-      store.setStatus(`Projects sidebar ${projectsSidebarVisible(store.state.projectsSidebar, store.state.columns) ? "shown" : "hidden"} · Ctrl+P toggles`)
+      store.setStatus(`Projects sidebar ${projectsSidebarVisible(store.state.projectsSidebar, store.state.columns) ? "shown" : "hidden"}`)
     },
   },
   {
@@ -680,6 +680,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
       store.setView("workflows")
       store.setStatus(`Workflow ${action} submitted`)
     },
+  },
+  {
+    name: "/pending",
+    description: "Open the oldest pending request in another session",
+    run: async ({ actions }) => actions.reviewPending(),
   },
   {
     name: "/interactions",
@@ -745,7 +750,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/sidebar",
-    description: "Show or hide the sidebar (Ctrl+B)",
+    description: "Show or hide the sidebar",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
@@ -755,29 +760,29 @@ export const nativeCommandSpecs: CommandSpec[] = [
         return
       }
       store.setSidebar(shown ? "auto" : "closed")
-      store.setStatus(`Sidebar ${shown ? "shown" : "hidden"} · Ctrl+B toggles`)
+      store.setStatus(`Sidebar ${shown ? "shown" : "hidden"}`)
     },
   },
   {
     name: "/thinking",
-    description: "Expand or collapse reasoning blocks (Ctrl+O)",
+    description: "Expand or collapse reasoning blocks",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
       const expanded = parseSwitch(args[0], store.state.thinking, "Usage: /thinking [on|off]")
       store.setThinking(expanded)
-      store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+      store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"}`)
     },
   },
   {
     name: "/tools",
-    description: "Expand or collapse tool call cards (Ctrl+G)",
+    description: "Expand or collapse tool call cards",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
       const expanded = parseSwitch(args[0], store.state.tools ?? false, "Usage: /tools [on|off]")
       store.setTools(expanded)
-      store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
+      store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"}`)
     },
   },
   {
@@ -799,7 +804,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/editor",
-    description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the text comes back into the input (Ctrl+X Ctrl+E)",
+    description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the text comes back into the input",
     run: ({ actions }) => { actions.openEditor() },
   },
   {

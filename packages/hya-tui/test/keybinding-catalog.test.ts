@@ -4,7 +4,7 @@ import { bindingSettings, findBindingSetting } from "../src/keys/catalog"
 
 test("the settings catalog groups every active shortcut once by stable action", () => {
   const entries = bindingSettings()
-  expect(entries.map((entry) => entry.id).sort()).toEqual([...new Set(keyBindings.map((binding) => binding.action))].sort())
+  expect(entries.filter((entry) => entry.keys.length).map((entry) => entry.id).sort()).toEqual([...new Set(keyBindings.map((binding) => binding.action))].sort())
   for (const entry of entries) {
     const bindings = keyBindings.filter((binding) => binding.action === entry.id)
     expect(entry.keys).toEqual(bindings.map((binding) => binding.label))
@@ -24,4 +24,10 @@ test("command lookup retains quit guards and exposes pane routing context", () =
   const before = keyBindings.map((binding) => binding.label)
   findBindingSetting("chord")
   expect(keyBindings.map((binding) => binding.label)).toEqual(before)
+})
+
+test("unassigned commands preserve their scope for custom bindings", () => {
+  expect(findBindingSetting("/refresh")).toMatchObject({ keys: [], scope: "workspace" })
+  expect(findBindingSetting("/tools")).toMatchObject({ keys: [], scope: "conversation" })
+  expect(findBindingSetting("/pending")).toMatchObject({ keys: [], scope: "workspace" })
 })
