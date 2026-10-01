@@ -149,7 +149,8 @@ export function CommandPane() {
       return true
     }
     if (!event.ctrl && !event.meta && !event.shift && (event.name === "return" || event.name === "kpenter")) {
-      if (shown) acceptEntry(true)
+      if (/^\/keybind\s+show\s*$/.test(editor?.plainText ?? "")) submit()
+      else if (shown) acceptEntry(true)
       else submit()
       return true
     }

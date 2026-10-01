@@ -28,3 +28,7 @@ Answer: `/keybind unset <shortcut>` removes a custom assignment; reset <shortcut
 ## Question: How should keybinding lists distinguish keys from descriptions?
 
 Answer: List only assigned defaults and custom bindings. Render Shortcut, Action / command and Scope as opt-in picker columns, and reserve the detail pane for descriptions/full commands. Keep unassigned action metadata for `/keybind show` and scope inference. `PickerRow.shortcut` is searchable; `PickerSpec.columns` supplies headings without changing other pickers.
+
+## Question: What is the minimal visible override mechanism as of 0.43.46?
+
+Answer: `keybindings` entries are command/scope objects (assigned) or null (disabled); absent entries use defaults. Set replaces defaults, unset consumes that physical key before app/editor/context handling, reset restores defaults. Browser and Ctrl+I/M/J/H/Ctrl+Shift bans are gone. Legacy control aliases match their physical Tab/Enter/linefeed/Backspace representations; explicit alias overrides replace each other. Command input keeps its administrative keys and is shown as an explicit context in the inventory. Show without a target surfaces a usage error, and list/show include inherited OpenTUI editor and contextual keys.

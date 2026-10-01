@@ -1,4 +1,5 @@
 /** Inspectable action catalog for `/keybind`; shortcuts stay in bindings.ts. */
+import { isKeyOverridden } from "./custom"
 import { keyBindings, type KeyAction } from "./bindings"
 
 export const bindingScopes = ["workspace", "conversation", "pane"] as const
@@ -64,7 +65,7 @@ export function bindingSettings(): BindingSetting[] {
     const entry = entries.get(binding.action) ?? {
       id: binding.action, ...info, keys: [], description: "", context: contexts[info.scope],
     }
-    entry.keys.push(binding.label)
+    if (!isKeyOverridden(binding.label)) entry.keys.push(binding.label)
     entry.description += `${entry.description ? " " : ""}${binding.description}`
     entries.set(binding.action, entry)
   }
