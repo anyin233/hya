@@ -28,9 +28,7 @@ For multi-step work, use planning-with-files under
 - Update the plan after each phase and when resuming work after a pause or context
   reset. Small tasks may use a lightweight plan, or no plan when no durable
   context is needed.
-- This workflow has no Trellis runtime dependency. `docs/development-history/tasks/`
-  and `docs/development-history/workspace/` retain historical task artifacts and
-  journals as evidence; they are not live workflow instructions.
+- This workflow has no Trellis runtime dependency.
 
 ## Build and Quality Gate
 

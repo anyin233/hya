@@ -44,7 +44,6 @@ hya / hya-server
 | `hya-mcp` | [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs) | MCP stdio client/manager, resource discovery, and tool bridge. |
 | `hya-plugin` | [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs) | Stdio JSON-RPC plugin host, manifest/config merge, hook dispatch, tool and permission bridge. |
 | `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | Bundled Bun extension adapter (`kind: bun`) for JS bundle sidecars and process extensions. |
-| `hya-plugin-example` | [`../crates/hya-plugin-example/src/main.rs`](../crates/hya-plugin-example/src/main.rs) | Placeholder stub (`fn main() {}`); does **not** speak the plugin protocol. Future native-plugin QA fixture. Real ABI: [plugin-protocol.md](plugin-protocol.md). |
 | `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
 | `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, durable Workflow execution/replay, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
 | `hya-workflow` | [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs) | Workflow source compilation, validation, immutable normalized plans, revisions, model assignments, and rendering inputs. |
