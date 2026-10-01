@@ -1705,7 +1705,7 @@ fn smoke_release_installer(
 ) -> Result<()> {
     let releases = scratch.path().join("releases");
     let sums = dist.join("SHA256SUMS");
-    let tag_dir = releases.join(format!("download/{}/v{version}", component.as_str()));
+    let tag_dir = releases.join(format!("download/{}/{version}", component.as_str()));
     copy_file(&sums, &tag_dir.join("SHA256SUMS"))?;
     copy_file(
         &sums,

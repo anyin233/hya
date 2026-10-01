@@ -109,7 +109,7 @@ on_exit() {
 trap 'on_exit $?' EXIT
 trap 'exit 130' INT; trap 'exit 143' TERM
 if [ -n "$version" ]; then
-  sums_url=$releases/download/frontend/v$version/SHA256SUMS; label=$version
+  sums_url=$releases/download/frontend/$version/SHA256SUMS; label=$version
   download "$sums_url" "$tmp/SHA256SUMS" || die "no hya frontend release $label at $sums_url"
 else
   sums_url=$releases/latest/download/frontend/SHA256SUMS; label=latest
@@ -117,7 +117,7 @@ else
     case "$releases" in
       https://github.com/*|http://github.com/*)
         version=$(latest_version)
-        sums_url=$releases/download/frontend/v$version/SHA256SUMS
+        sums_url=$releases/download/frontend/$version/SHA256SUMS
         download "$sums_url" "$tmp/SHA256SUMS" || die "no hya frontend release $label at $sums_url"
         ;;
       *)
@@ -130,6 +130,7 @@ fi
 archive=; expected=
 while read -r sum name; do
   name=${name#\*}
+  name=${name#./}
   case $name in
     hya-frontend-*-$target.tar.gz)
       if [ -z "$version" ] || [ "$name" = "hya-frontend-$version-$target.tar.gz" ]; then archive=$name; expected=$sum; fi ;;
@@ -141,7 +142,7 @@ if [ "$force" -eq 0 ] && [ -f "$prefix/lib/hya/tui/frontend-version.ts" ] && [ "
   say "hya frontend $release is already installed in $prefix (pass --force to reinstall)"; exit 0
 fi
 say "Downloading hya frontend $release for $target"
-download "$releases/download/frontend/v$release/$archive" "$tmp/$archive" || die "could not download $releases/download/frontend/v$release/$archive"
+download "$releases/download/frontend/$release/$archive" "$tmp/$archive" || die "could not download $releases/download/frontend/$release/$archive"
 actual=$(sha256_of "$tmp/$archive"); [ "$actual" = "$expected" ] || die "checksum mismatch for $archive: expected $expected, got $actual"
 mkdir -p "$prefix/lib/hya"; stage=$prefix/.hya-tui-install.$$; mkdir -p "$stage/new" "$stage/old"
 tar -xzf "$tmp/$archive" -C "$stage/new"; package_dir=$stage/new/hya-frontend-$release-$target
