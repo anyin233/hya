@@ -122,6 +122,37 @@ test("registers every native slash command with a description", () => {
   expect(registry.get("/login")).toBeUndefined()
 })
 
+test("/keybindings browses and inspects actions without executing them", async () => {
+  const h = harness()
+  await h.run("/keybindings")
+  expect(h.pickers[0]?.title).toBe("Keybindings")
+  const quit = h.pickers[0]!.rows.find((row) => row.id === "quit")!
+  expect(quit.detail).toContain("Command: /exit")
+  await h.pickers[0]!.onSelect(quit)
+  expect(h.pickers[1]?.title).toBe("Keybinding · quit")
+  expect(h.calls).toEqual([])
+  await h.run("/keybindings show /exit")
+  expect(h.pickers.at(-1)?.rows[0]?.id).toBe("quit")
+  await h.run("/keybindings list conversation")
+  expect(h.pickers.at(-1)?.rows.every((row) => row.tag === "conversation")).toBe(true)
+  expect(h.pickers.at(-1)?.rows.some((row) => row.id === "toggleTools")).toBe(true)
+  await h.run("/keybindings show /layout focus left")
+  expect(h.pickers.at(-1)?.rows[0]?.id).toBe("focusPaneLeft")
+  expect(h.calls).toEqual([])
+})
+
+test("/keybindings validates arguments and completes scopes and action targets", async () => {
+  const h = harness()
+  for (const command of ["/keybindings edit", "/keybindings show", "/keybindings list nope", "/keybindings list pane extra"]) {
+    await expect(h.run(command)).rejects.toThrow("Usage: /keybindings")
+  }
+  await expect(h.run("/keybindings show missing")).rejects.toThrow("Unknown keybinding action")
+  expect(h.registry.complete("/keybindings ", h.store.completionContext())).toEqual(["/keybindings list", "/keybindings show"])
+  expect(h.registry.complete("/keybindings list p", h.store.completionContext())).toEqual(["/keybindings list pane"])
+  expect(h.registry.complete("/keybindings show qu", h.store.completionContext())).toEqual(["/keybindings show quit"])
+  expect(h.registry.complete("/keybindings show /ex", h.store.completionContext())).toEqual(["/keybindings show /exit"])
+})
+
 test("/effort saves the choice on the layer that decides the session's effort", async () => {
   const writes: string[] = []
   const session = { id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "openai", modelId: "gpt-6-astra" } }

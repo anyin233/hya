@@ -683,6 +683,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
+| `/keybindings [list [scope] \| show <action or command>]` | Browse current shortcuts, related commands and routing scopes; see [Keybinding settings](#keybinding-settings). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
 | `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the controller status state says `Copied N chars` (see [Copy](#copy)). |
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
@@ -737,6 +738,76 @@ client to another origin. The catalog marks server-streaming operations with
 SSE is connected automatically when a session is open. PTY WebSocket sessions
 need a WebSocket client; the command view can still call their JSON setup
 routes. See the [protocol guide](protocol/README.md) for those frames.
+
+## Keybinding settings
+
+`/keybindings` is the dedicated entry point for inspecting TUI keybindings.
+It shows each action once, with all its current shortcuts, its related slash
+command when one exists, and the routing context that determines when the key
+works. It uses the existing modal picker and reads the actual shortcut table;
+opening an entry never executes the command it describes. This first version
+is an inspection surface. Binding edits and custom shortcuts are not supported
+yet, and no preference file is written by these commands.
+
+### Usage
+
+| Command | Result |
+| --- | --- |
+| `/keybindings` | Open the filterable action browser. |
+| `/keybindings list` | Open the same browser. |
+| `/keybindings list workspace` | Show actions available across tiled panes. |
+| `/keybindings list conversation` | Show actions owned by conversation focus. |
+| `/keybindings list pane` | Show focused-pane scrolling actions. |
+| `/keybindings show quit` | Inspect the exit action, including its two-press guard. |
+| `/keybindings show /exit` | Inspect it by its related command instead. |
+
+Type an action name, key or command to filter the browser. Up/Down moves the
+selection, Enter opens the selected action's details, and Esc closes the modal
+and returns focus to the previous pane. The command dropdown completes `list`
+and `show`, then scopes or action/command targets.
+
+For example, enter `/keybindings`, type `/tools`, and press Enter. The details
+show action `toggleTools`, key `Ctrl+G`, related command `/tools`, and its
+conversation scope. Esc returns to the pane that opened the browser. A message
+draft survives opening and closing the settings.
+
+### Interfaces and routing
+
+The local command contract is:
+
+```text
+/keybindings [list [workspace|conversation|pane] | show <action or command>]
+```
+
+`show` accepts an exact, case-sensitive `KeyAction` identifier or the full
+related command (including spaces, such as `/layout focus left`). Unknown
+operations/scopes and missing targets fail with usage guidance; unknown action
+targets fail with a keybinding-specific error. All operations are local to the
+TUI and call no backend RPC.
+
+`src/keys/catalog.ts` exposes `bindingSettings(): BindingSetting[]` and
+`findBindingSetting(target: string): BindingSetting | undefined`:
+
+```ts
+interface BindingSetting {
+  id: KeyAction; // stable action ID from src/keys/bindings.ts
+  scope: "workspace" | "conversation" | "pane";
+  command?: string; // related command, not an assertion of identical behavior
+  keys: string[]; // all shortcut labels from the live binding table
+  description: string; // descriptions and key conditions from that table
+  context: string; // routing/precedence explanation
+}
+```
+
+These scopes describe the existing router; they do not add global key handlers.
+Modal views and command input take precedence. Conversation actions stay with
+conversation focus, and a sidebar retains its own typing and navigation keys.
+The Projects pane has its own navigation instead of generic scrolling. Related
+commands can behave differently from contextual shortcuts: `/exit` exits at
+once, while Ctrl+C clears/hints first and exits on a second press within two
+seconds; `/interactions` lists asks, while F4 opens the oldest ask in another
+session. `/help` continues to list editor, prompt, picker and view-specific keys
+that are outside this action catalog.
 
 ## Key help
 
