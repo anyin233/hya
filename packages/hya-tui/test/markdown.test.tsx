@@ -53,7 +53,7 @@ function frame(): string[] {
 
 test("renders headings, emphasis, inline code, and links with the palette", async () => {
   await render(() => "# Release notes\n\nSome **bold**, *soft*, and `npm test` via [docs](https://example.test/docs).\n\n> quoted line", undefined, 90)
-  await until(() => hex(span("Release notes")?.fg) === colors.heading, "Monokai heading")
+  await until(() => hex(span("Release notes")?.fg) === colors.accent, "accent heading")
   const lines = frame()
   expect(lines).toContain("Release notes")
   // Blocks keep their blank line between them.
@@ -165,10 +165,10 @@ test("a reply whose stream ends with the last delta re-parses: an unclosed fence
 test("switching the theme re-renders rendered Markdown: headings, highlighted code, and the code panel", async () => {
   await render(() => "# Title\n\n```ts\nconst answer = 1\n```\n\nAfter")
   await until(() => hex(span("const")?.fg) === themes.hya.syntaxColors.keyword, "hya keyword")
-  await until(() => hex(span("Title")?.fg) === themes.hya.colors.heading, "hya heading")
+  await until(() => hex(span("Title")?.fg) === themes.hya.colors.accent, "hya heading")
   setTheme("light")
   await until(() => hex(span("const")?.fg) === themes.light.syntaxColors.keyword, "light keyword")
-  await until(() => hex(span("Title")?.fg) === themes.light.colors.heading, "light heading")
+  await until(() => hex(span("Title")?.fg) === themes.light.colors.accent, "light heading")
   await until(() => hex(span("After")?.fg) === themes.light.colors.fg, "light paragraph")
   expect(hex(span("const")?.bg)).toBe(themes.light.colors.panel)
 })

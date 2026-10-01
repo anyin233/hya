@@ -11,7 +11,7 @@ import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep } from "./hya"
 
 // Palettes of packages/hya-tui/src/theme.ts.
-const hya = { bg: "#272822", fg: "#f8f8f2", muted: "#aaa99f", accent: "#e6db74" }
+const hya = { bg: "#11151b", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8" }
 const light = { bg: "#f7f9fb", fg: "#1f2933", muted: "#5b6b7b", accent: "#0b6f94", panel: "#e6ecf2", keyword: "#8839c9" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -44,7 +44,7 @@ test.describe("/theme", () => {
 
     await prompt(term, "/theme")
     await term.waitForText("Theme")
-    await term.waitForText(/▸ ● Monokai\s+\[dark\]/)
+    await term.waitForText(/▸ ● hya\s+\[dark\]/)
     await term.waitForText(/ {3}Light\s+\[light\]/)
     await term.waitForText(/High contrast\s+\[dark\]/)
     await term.waitForText(/Ember\s+\[dark\]/)
@@ -61,7 +61,7 @@ test.describe("/theme", () => {
 
     // Enter keeps the highlighted theme and writes the preferences file.
     await prompt(term, "/theme")
-    await term.waitForText(/▸ ● Monokai/)
+    await term.waitForText(/▸ ● hya/)
     await term.press("ArrowDown")
     await term.press("Enter")
     await expect.poll(() => term.find("Theme ·")).toBeNull()
@@ -101,30 +101,7 @@ test.describe("/theme", () => {
 })
 
 test.describe("/theme over a transcript", () => {
-  test.use({ model: { steps: [textStep("### Monokai preview\n\nHere is **bold** code:\n\n```ts\nconst answer = 42\n```\n\nDone.")] } })
-
-  test("Monokai renders headings, code and the focused composer at about 80 columns", async ({ tui, backend }, testInfo) => {
-    const prefs = join(prefsDir, "tui.json")
-    const term = await tui(hyaTui(backend), {
-      env: { HYA_TUI_CONFIG: prefs }, viewport: { width: 690, height: 640 },
-    })
-    await term.waitForText("Message, !shell, or @file · / commands")
-    await prompt(term, "show me code")
-    await term.waitForText("Done.", 20_000)
-    expect((await term.size()).cols).toBeLessThanOrEqual(84)
-    expect(await screenColors(term)).toEqual({ bg: hya.bg, focus: hya.accent })
-    const heading = (await term.find("Monokai preview"))!
-    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe("#fd971f")
-    const code = (await term.find("const answer"))!
-    await expect.poll(async () => (await term.cell(code.row, code.col))?.fg).toBe("#f92672")
-    await term.attach(testInfo, "monokai-narrow-transcript")
-    await prompt(term, "/theme")
-    await term.waitForText(/▸ ● Monokai/)
-    await term.type("mono")
-    await term.press("Enter")
-    await expect.poll(() => term.find("Theme ·")).toBeNull()
-    expect(JSON.parse(await readFile(prefs, "utf8"))).toMatchObject({ theme: "hya" })
-  })
+  test.use({ model: { steps: [textStep("Here is **bold** code:\n\n```ts\nconst answer = 42\n```\n\nDone.")] } })
 
   test("switching repaints existing messages: the user block, Markdown text, and highlighted code", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: join(prefsDir, "tui.json") } })

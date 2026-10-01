@@ -11,12 +11,12 @@ test.describe("hya TUI commands and look", () => {
 
     const sessions = (await term.find("Sessions"))!
     const corner = await term.cell(sessions.row, sessions.col - 1)
-    expect(corner?.fg).toBe("#75715e")
-    expect((await term.cell(sessions.row + 1, sessions.col))?.bg).toBe("#34352e")
+    expect(corner?.fg).toBe("#405366")
+    expect((await term.cell(sessions.row + 1, sessions.col))?.bg).toBe("#1c2530")
 
     // The transcript (no box since the single-column layout) sits on the base background.
     const transcript = (await term.find("No messages yet"))!
-    expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#272822")
+    expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
     expect(await term.find("mode manual")).toBeNull()
     const composer = (await term.find("Message, !shell, or @file · / commands"))!
     expect(composer.row).toBeGreaterThan(transcript.row)

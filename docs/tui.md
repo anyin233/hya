@@ -999,33 +999,29 @@ right sidebar starts at its 29-column minimum; dragging its left border 25
 columns to the left makes it 54 columns wide, and a new TUI opens with the
 same width.
 
-The default palette (`src/theme.ts`) is Sublime's classic Monokai: olive
-charcoal surfaces, warm white text, and distinct colors for focus and activity.
-Neutral assistant labels keep ordinary transcript content calm; semantic color
-is reserved for selection, headings, live work, warnings, errors and results.
+The colors come from the theme in effect (see [Themes](#themes)). The
+default `hya` theme:
 
 | Name | Value | Used for |
 | --- | --- | --- |
-| `bg` | `#272822` | Screen and transcript background. |
-| `panel` | `#34352e` | Panes, user message blocks, code blocks and inputs. |
-| `fg` | `#f8f8f2` | Body text and assistant names. |
-| `muted` | `#aaa99f` | Secondary UI text, model names and queued prompts. |
-| `accent` | `#e6db74` | The focused box, selected rows, user message bar and links. |
-| `heading` | `#fd971f` | Markdown headings, including provisional streaming headings. |
-| `activity` | `#66d9ef` | Model/tool spinners and running subagent state. |
-| `border` | `#75715e` | Inactive box borders and titles. |
-| `error` | `#f92672` | Error notices and failed tool calls. |
-| `warning` | `#fd971f` | Permission prompts, length-limit and cancel notices. |
-| `selection` | `#49483e` | Mouse-selected text background. |
+| `bg` | `#11151b` | Screen and transcript background. |
+| `panel` | `#1c2530` | Boxes, user message blocks, code blocks, the input. |
+| `fg` | `#e8edf3` | Text. |
+| `muted` | `#9caab9` | Controller status state, instructions, `Thinking` lines, model names, queued prompts. |
+| `accent` | `#73c8e8` | Header, user message bar, assistant name, headings, list markers. |
+| `border` | `#405366` | Box borders and titles. |
+| `error` | `#f07878` | Error notices and failed tool calls. |
+| `warning` | `#e5c07b` | Length-limit and cancel notices. |
 
-Tool cards use `toolColors.done` `#a6e22e` for success. Diff colors are
-`add: #a6e22e`, `remove: #f92672`, `hunk: #66d9ef`, and
-`context: #aaa99f`. Pending tools use `muted`; permission waits use `warning`.
+Tool cards add `toolColors.done` `#a5d6a7` (the ✓ of a finished call and an
+idle or done subagent) and `diffColors`: added rows `#a5d6a7`, removed rows
+`#f07878`, hunk and file headers `#82aaff`, context rows `#9caab9` (muted).
+A running spinner uses `accent`, a failed call `error`, a call waiting for a
+permission answer `warning`, a pending one `muted`.
 
-Code tokens follow classic Monokai: keywords/operators `#f92672`, strings
-`#e6db74`, numbers `#ae81ff`, comments `#75715e`, functions `#a6e22e`,
-types `#66d9ef`, and inline code `#a6e22e`. Secondary UI text is brighter
-than syntax comments to keep instructions readable on both dark surfaces.
+Code block tokens use `syntaxColors` (keyword `#c792ea`, string `#a5d6a7`,
+number `#f78c6c`, comment `#7a8a9c`, function `#82aaff`, type `#ffcb6b`,
+operator `#89ddff`) and inline code `#f2a97a`.
 
 ## Themes
 
@@ -1037,7 +1033,7 @@ file when it starts.
 
 | Name | Kind | Look |
 | --- | --- | --- |
-| `hya` | dark | Monokai (default): Sublime olive charcoal, yellow focus and cyan activity (the palette in [Layout](#layout)). |
+| `hya` | dark | The default: slate background, cyan accent (the palette in [Layout](#layout)). |
 | `light` | light | Light background (`#f7f9fb`) with dark text (`#1f2933`), for bright terminals. |
 | `contrast` | dark | Black background, white text, saturated accents. |
 | `ember` | dark | Warm dark theme: brown background, amber accent. |
@@ -1047,7 +1043,7 @@ row per theme, `[dark]`/`[light]` tagged; `●` marks the theme in effect.
 Moving the highlight (Up/Down, Tab/Shift+Tab, typing a filter) repaints the
 whole screen in the highlighted theme at once — the transcript, Markdown,
 highlighted code, tool cards, boxes, and the controller status state. Enter keeps it,
-writes it to the preferences file; Esc (or
+writes it to the preferences file, and shows `Theme → <label>`; Esc (or
 Ctrl+C) closes the picker and restores the theme in effect when it opened,
 writing nothing. If the file cannot be written, the theme still applies for
 this run and the controller status state says `Theme → <label> · not saved: <reason>`.
@@ -1059,15 +1055,6 @@ cat ~/.config/hya/tui.json
   "theme": "light"
 }
 ```
-
-To use Monokai, open `/theme`, type `mono` to filter to **Monokai**, and press
-Enter. This saves `{ "theme": "hya" }`: the stable default theme ID remains
-`hya`, so existing saved defaults also receive the new palette. Fresh installs
-use Monokai automatically. Light, High contrast and Ember remain available.
-The new `heading: string` and `activity: string` fields are required in every
-`ThemeDefinition.colors`; all color fields are `#rrggbb` strings. `accent`
-continues to control focus and selection, while Markdown reads `heading` and
-running indicators read `activity` through the same reactive theme store.
 
 ### Preferences file
 
@@ -1104,7 +1091,7 @@ interface TuiPreferences {
 
 **Interfaces for components.** `src/theme.ts` exports the palette of the
 theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
-`accent`, `heading`, `activity`, `border`, `error`, `warning`, `selection` — the mouse-selection
+`accent`, `border`, `error`, `warning`, `selection` — the mouse-selection
 background), `toolColors` (`done`), `diffColors`
 (`add`, `remove`, `hunk`, `context`), and `syntaxColors` (`keyword`,
 `string`, `number`, `comment`, `function`, `type`, `operator`,
