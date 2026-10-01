@@ -222,7 +222,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ -n "$version" ]; then
-  sums_url=$releases/download/backend/v$version/SHA256SUMS
+  sums_url=$releases/download/backend/$version/SHA256SUMS
   label=$version
   download "$sums_url" "$tmp/SHA256SUMS" || die "no hya release $label at $sums_url"
 else
@@ -232,7 +232,7 @@ else
     case "$releases" in
       https://github.com/*|http://github.com/*)
         version=$(latest_version)
-        sums_url=$releases/download/backend/v$version/SHA256SUMS
+        sums_url=$releases/download/backend/$version/SHA256SUMS
         download "$sums_url" "$tmp/SHA256SUMS" || die "no hya release $label at $sums_url"
         ;;
       *)
@@ -248,6 +248,7 @@ archive=""
 expected=""
 while read -r sum name; do
   name=${name#\*}
+  name=${name#./}
   case $name in
     hya-backend-*-$target.tar.gz)
       if [ -z "$version" ] || [ "$name" = "hya-backend-$version-$target.tar.gz" ]; then
@@ -268,8 +269,8 @@ if [ "$force" -eq 0 ] && [ -x "$prefix/bin/hya" ] &&
 fi
 
 say "Downloading hya backend $release for $target"
-download "$releases/download/backend/v$release/$archive" "$tmp/$archive" ||
-  die "could not download $releases/download/backend/v$release/$archive"
+download "$releases/download/backend/$release/$archive" "$tmp/$archive" ||
+  die "could not download $releases/download/backend/$release/$archive"
 actual=$(sha256_of "$tmp/$archive")
 [ "$actual" = "$expected" ] ||
   die "checksum mismatch for $archive: expected $expected, got $actual"

@@ -35,10 +35,10 @@ EOF
   printf '%s\n' backend >"$scratch/$package/lib/hya/bun-adapter/src/main.ts"
   printf '%s\n' "$version" >"$scratch/$package/bundles/hya-base-tools.hyabundle"
   tar -czf "$archive" -C "$scratch" "$package"
-  mkdir -p "$releases/download/backend/v$version"
-  cp "$archive" "$releases/download/backend/v$version/"
-  (cd "$releases/download/backend/v$version" && sha256 "$(basename "$archive")" > SHA256SUMS)
-  if [[ "$corrupt" == 1 ]]; then printf '%s\n' corrupt >>"$releases/download/backend/v$version/$(basename "$archive")"; fi
+  mkdir -p "$releases/download/backend/$version"
+  cp "$archive" "$releases/download/backend/$version/"
+  (cd "$releases/download/backend/$version" && sha256 "./$(basename "$archive")" > SHA256SUMS)
+  if [[ "$corrupt" == 1 ]]; then printf '%s\n' corrupt >>"$releases/download/backend/$version/$(basename "$archive")"; fi
 }
 
 make_frontend_release() {
@@ -58,16 +58,16 @@ EOF
   printf '%s\n' web >"$scratch/$package/lib/hya/tui-web/src/main.ts"
   printf '%s\n' '<html></html>' >"$scratch/$package/lib/hya/tui-web/web/index.html"
   tar -czf "$archive" -C "$scratch" "$package"
-  mkdir -p "$releases/download/frontend/v$version"
-  cp "$archive" "$releases/download/frontend/v$version/"
-  (cd "$releases/download/frontend/v$version" && sha256 "$(basename "$archive")" > SHA256SUMS)
-  if [[ "$corrupt" == 1 ]]; then printf '%s\n' corrupt >>"$releases/download/frontend/v$version/$(basename "$archive")"; fi
+  mkdir -p "$releases/download/frontend/$version"
+  cp "$archive" "$releases/download/frontend/$version/"
+  (cd "$releases/download/frontend/$version" && sha256 "./$(basename "$archive")" > SHA256SUMS)
+  if [[ "$corrupt" == 1 ]]; then printf '%s\n' corrupt >>"$releases/download/frontend/$version/$(basename "$archive")"; fi
 }
 
 publish_latest() {
   local side=$1 version=$2
   mkdir -p "$releases/latest/download/$side"
-  cp "$releases/download/$side/v$version/SHA256SUMS" "$releases/latest/download/$side/SHA256SUMS"
+  cp "$releases/download/$side/$version/SHA256SUMS" "$releases/latest/download/$side/SHA256SUMS"
 }
 
 backend_install() {
