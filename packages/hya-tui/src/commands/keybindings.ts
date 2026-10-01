@@ -4,7 +4,7 @@ import { customKeybindings, parseShortcut, setCustomKeybindings, validateCustomK
 import type { PickerRow } from "../state/picker"
 import { matchValues, type CommandContext, type CommandSpec } from "./registry"
 
-const usage = "Usage: /keybind [list [scope] | show <action, command or shortcut> | set <shortcut> [--scope workspace|conversation] <command...> | reset <shortcut|all>]"
+const usage = "Usage: /keybind [list [scope] | show <action, command or shortcut> | set <shortcut> [--scope workspace|conversation] <command...> | unset <shortcut> | reset <shortcut|all>]"
 const hint = "↑↓ select · type to filter · Enter details · Esc closes"
 
 function settingRow(setting: BindingSetting): PickerRow {
@@ -38,7 +38,7 @@ function openCustom(context: CommandContext, row: PickerRow, saved = false): voi
   context.actions.openPicker({
     title: saved ? `Keybind saved · ${row.label}` : `Keybinding · ${row.label}`,
     rows: [row], detailPane: true, maxRows: 1,
-    hint: "Esc closes · /keybind reset removes a custom shortcut", onSelect: () => undefined,
+    hint: "Esc closes · /keybind unset removes a custom shortcut", onSelect: () => undefined,
   })
 }
 
@@ -52,14 +52,15 @@ function saveBindings(context: CommandContext, next: CustomKeybindings): void {
 export const keybindingsCommand: CommandSpec = {
   name: "/keybind",
   description: "Browse keybindings or save shortcuts for full commands with arguments",
-  argumentHint: "[list | show <target> | set <key> <command...> | reset <key|all>]",
+  argumentHint: "[list | show <target> | set <key> <command...> | unset <key> | reset <key|all>]",
   complete: ({ words, current, head }, context, registry) => {
-    if (words.length === 1) return matchValues(head, current, ["list", "reset", "set", "show"])
+    if (words.length === 1) return matchValues(head, current, ["list", "reset", "set", "show", "unset"])
     if (words.length === 2 && words[0] === "list") return matchValues(head, current, [...bindingScopes])
     if (words.length === 2 && words[0] === "show") {
       return matchValues(head, current, [...Object.keys(customKeybindings()), ...bindingSettings().flatMap((setting) => [setting.id, ...(setting.command ? [setting.command] : [])])])
     }
     if (words.length === 2 && words[0] === "reset") return matchValues(head, current, ["all", ...Object.keys(customKeybindings())])
+    if (words.length === 2 && words[0] === "unset") return matchValues(head, current, Object.keys(customKeybindings()))
     if (words[0] === "set") {
       if (words.length === 2) return matchValues(head, current, ["F5", "F6", "F7", "F8", "F9", "F10", "Alt+G", "Alt+K"])
       if (words.length === 3) return matchValues(head, current, ["--scope", ...(registry?.names() ?? []), ...context.backendCommands.map((name) => `/${name}`)])
@@ -75,19 +76,19 @@ export const keybindingsCommand: CommandSpec = {
     return []
   },
   run: (context, { args, argumentsText }) => {
-    if (args[0] === "set" || args[0] === "reset") {
+    if (args[0] === "set" || args[0] === "reset" || args[0] === "unset") {
       try {
         const next = customKeybindings()
-        if (args[0] === "reset") {
+        if (args[0] === "reset" || args[0] === "unset") {
           if (args.length !== 2) throw new Error(usage)
-          if (args[1] === "all") saveBindings(context, {})
+          if (args[0] === "reset" && args[1] === "all") saveBindings(context, {})
           else {
             const key = parseShortcut(args[1]!).label
             if (!next[key]) throw new Error(`No custom binding for ${key}`)
             delete next[key]
             saveBindings(context, next)
           }
-          context.actions.openPicker({ title: "Keybind reset", rows: [{ id: "reset", label: args[1]!, detail: "Custom assignment removed. Built-in shortcuts remain available." }], detailPane: true, onSelect: () => undefined })
+          context.actions.openPicker({ title: args[0] === "unset" ? "Keybind unset" : "Keybind reset", rows: [{ id: "removed", label: args[1]!, detail: "Custom assignment removed. Built-in shortcuts remain available." }], detailPane: true, onSelect: () => undefined })
           return
         }
         const parsed = /^set\s+(\S+)\s+(?:--scope\s+(\S+)\s+)?([\s\S]+)$/.exec(argumentsText)

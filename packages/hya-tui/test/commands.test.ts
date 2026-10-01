@@ -150,7 +150,7 @@ test("/keybind validates arguments and completes scopes and action targets", asy
     await expect(h.run(command)).rejects.toThrow("Usage: /keybind")
   }
   await expect(h.run("/keybind show missing")).rejects.toThrow("Unknown keybinding action")
-  expect(h.registry.complete("/keybind ", h.store.completionContext())).toEqual(["/keybind list", "/keybind reset", "/keybind set", "/keybind show"])
+  expect(h.registry.complete("/keybind ", h.store.completionContext())).toEqual(["/keybind list", "/keybind reset", "/keybind set", "/keybind show", "/keybind unset"])
   expect(h.registry.complete("/keybind list p", h.store.completionContext())).toEqual(["/keybind list pane"])
   expect(h.registry.complete("/keybind show qu", h.store.completionContext())).toEqual(["/keybind show quit"])
   expect(h.registry.complete("/keybind show /ex", h.store.completionContext())).toEqual(["/keybind show /exit"])
@@ -754,4 +754,24 @@ test("/pending opens the oldest request through the controller", async () => {
   const h = harness()
   await h.run("/pending")
   expect(h.calls).toEqual(["pending"])
+})
+
+
+test("unset completes saved keys, normalizes them and persists removal only after a successful write", async () => {
+  const h = harness()
+  await h.run("/keybind set Ctrl+Home /tools on")
+  await h.run("/keybind set F6 /refresh")
+  expect(h.registry.complete("/keybind unset Ctrl+", h.store.completionContext())).toEqual(["/keybind unset Ctrl+Home"])
+  h.actions.savePreferences = () => { throw new Error("disk full") }
+  await expect(h.run("/keybind unset control+home")).rejects.toThrow("disk full")
+  expect(customKeybindings()["Ctrl+Home"]?.command).toBe("/tools on")
+  h.actions.savePreferences = (patch) => { h.calls.push(`prefs ${JSON.stringify(patch)}`) }
+  await h.run("/keybind unset control+home")
+  expect(customKeybindings()["Ctrl+Home"]).toBeUndefined()
+  expect(customKeybindings().F6?.command).toBe("/refresh")
+  expect(h.pickers.at(-1)?.title).toBe("Keybind unset")
+  expect(h.calls.at(-1)).toBe('prefs {"keybindings":{"F6":{"command":"/refresh","scope":"workspace"}}}')
+  await expect(h.run("/keybind unset F7")).rejects.toThrow("No custom binding")
+  await expect(h.run("/keybind unset")).rejects.toThrow("Usage:")
+  await expect(h.run("/keybind unset all")).rejects.toThrow()
 })

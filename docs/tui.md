@@ -683,7 +683,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/layout …`, Alt+arrows | Split, assign, resize, focus, or close [tiled workspace panes](#tiled-workspace). |
 | `/thinking [on\|off]` | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
-| `/keybind [list \| show \| set \| reset]` | Browse shortcuts or save bindings to full commands; see [Keybinding settings](#keybinding-settings). |
+| `/keybind [list \| show \| set \| unset \| reset]` | Browse shortcuts or save bindings to full commands; see [Keybinding settings](#keybinding-settings). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
 | `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the controller status state says `Copied N chars` (see [Copy](#copy)). |
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
@@ -704,7 +704,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/help`, `?` | Open the key and command help overlay (`?` only on an empty input; with text it types `?`). See [Key help](#key-help). |
 | Tab | In the command pane, complete the highlighted command name or a supported argument; repeat to cycle argument matches. In a file list, insert the highlighted reference. |
 | PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
-| Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
+| Home / End with empty input | Jump to the top of the transcript / to the newest line, which the view then follows again. With text in the input they move the cursor. Ctrl+Home/End have no app default. |
 | Mouse wheel | Scroll the transcript. |
 | Click on a `Thinking` line | Expand or collapse that one reasoning block. |
 | Click on a tool card | Expand or collapse that one card; on a `task` card, open the subagent's session read-only. |
@@ -760,12 +760,13 @@ arguments need no extra quoting around the whole command.
 | `/keybind set F6 /layout focus left` | Save a workspace shortcut to the full layout command. |
 | `/keybind set Alt+G /tools on` | Save a conversation shortcut that expands tool cards. |
 | `/keybind set F7 --scope conversation /sidebar off` | Explicitly limit this sidebar command to conversation focus. |
-| `/keybind reset F6` | Remove the custom F6 binding. |
+| `/keybind unset F6` | Remove the custom F6 binding and free the shortcut. |
+| `/keybind reset F6` | Compatibility spelling for `unset F6`. |
 | `/keybind reset all` | Remove all custom bindings. |
 
 Type an action, shortcut or command to filter the browser. Up/Down selects,
 Enter opens details, and Esc closes the modal and returns to the previous pane.
-Opening and closing settings preserves the message draft. `set` and `reset`
+Opening and closing settings preserves the message draft. `set`, `unset`, and `reset`
 show a result modal; a rejected assignment or failed write shows **not saved**
 with the reason. The dropdown completes operations, shortcut examples, scopes,
 command names, and nested arguments using the target command's own completer.
@@ -779,8 +780,19 @@ For example:
 /keybind set Alt+G /tools on
 # Esc closes the modal. Alt+G expands tool cards in conversation focus.
 /keybind show Alt+G
-/keybind reset Alt+G
+/keybind unset Alt+G
 ```
+
+`unset <shortcut>` is the single-shortcut removal operation: it normalizes the
+shortcut spelling, removes its custom assignment, saves preferences, then applies
+the change. For example, `/keybind unset control+home` removes a custom
+`Ctrl+Home` binding. It completes currently assigned custom shortcuts. Missing
+assignments and invalid arguments report an error; a failed write leaves the
+binding active. The result modal is `Keybind unset`. It does not remove protected
+defaults or interpret `all`; use `/keybind reset all` to clear all custom bindings.
+`reset <shortcut>` remains compatible with earlier usage. The persisted
+`keybindings` object simply omits the removed shortcut; no new config fields or
+RPCs are introduced.
 
 A repeated `set` for the same shortcut replaces that shortcut's command and
 scope. Several shortcuts can run the same command. Built-in keys remain
@@ -797,6 +809,7 @@ Ctrl+Shift letters are rejected. Use a shortcut the terminal/browser forwards.
 ```text
 /keybind [list [workspace|conversation|pane] | show <action, command or shortcut>]
 /keybind set <shortcut> [--scope workspace|conversation] <command...>
+/keybind unset <shortcut>
 /keybind reset <shortcut|all>
 ```
 
@@ -900,13 +913,13 @@ leave more keys available for editing and personal bindings.
 
 - `/` on empty input, or Ctrl+X then `/` while drafting: open commands.
 - `?` on empty input: help. Alt+arrows: select a tiled pane.
-- Tab: completion. PgUp/PgDn and Ctrl+Home/End: scroll the focused pane.
+- Tab: completion. PgUp/PgDn: scroll the focused pane. Home/End scroll the transcript with empty input.
 - Esc: close/cancel/clear according to context. Ctrl+C twice within two seconds:
   exit and archive. Ctrl+D on empty input: exit and leave the session running.
 - Enter submits; Ctrl+J, Shift+Enter and Alt+Enter insert newlines. Text editing
   and view-local picker/prompt controls remain available.
 
-Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and the editor/undo/redo/fork
+Ctrl+Home/End, Ctrl+R/B/P/O/G, F4, global Shift+Tab mode cycling and the editor/undo/redo/fork
 Ctrl+X chords are unassigned. Use `/refresh`, `/sidebar`, `/projects-sidebar`,
 `/thinking`, `/tools`, `/permissions`, `/editor`, `/undo`, `/redo`, `/fork` and
 `/pending` instead. For example:
@@ -1066,7 +1079,7 @@ or server API.
 
 Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
 also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
-`/layout focus <direction>`. PgUp/PgDn and Ctrl+Home/Ctrl+End scroll the selected
+`/layout focus <direction>`. PgUp/PgDn scroll the selected
 pane. Up/Down scroll read-only panes one line. Ordinary typing, paste, Enter,
 Backspace, Esc, input history, Vim edits, and conversation shortcuts belong only
 to the focused pane; unsupported keys in an auxiliary pane are ignored. They
@@ -1237,7 +1250,7 @@ interface TuiPreferences {
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
   wrong type is ignored.
-- A change (`/theme`'s Enter, `/vim`, `/keybind set|reset`, or a successful permission mode switch)
+- A change (`/theme`'s Enter, `/vim`, `/keybind set|unset|reset`, or a successful permission mode switch)
   merges the changed key into what is on disk —
   keys this TUI does not know are kept — and writes a temporary file in the
   same directory, then renames it over the file, so a crash never leaves a
@@ -1441,9 +1454,9 @@ these parts (for example `openai-response`; the `openai-compatible` decoder
 ignores reasoning).
 
 **Scrolling.** The transcript follows the newest line while you are at the
-bottom. Scroll up (PgUp, the mouse wheel, Ctrl+Home) and it stays where you
+bottom. Scroll up (PgUp, the mouse wheel, Home with empty input) and it stays where you
 left it; when more content arrives below, a `↓ New messages below · End
-jumps` hint appears at the bottom right. End (with an empty input), Ctrl+End,
+jumps` hint appears at the bottom right. End (with an empty input)
 or scrolling back to the bottom clears the hint and resumes following.
 Submitting a prompt jumps to the bottom. Opening a session starts at its
 bottom. The transcript shows the newest 200 messages.
@@ -3304,7 +3317,7 @@ main column and sidebar at the default viewport and at about 80 columns
 (`/sidebar`), the prompt dock, and the pending block of another session's ask. `e2e/hya-tui-messages.spec.ts`
 covers user and assistant styling, Markdown and code highlighting, reasoning
 (`/thinking`, click), error, length, and cancel notices, and
-scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
+scrolling (PgUp/PgDn, End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
 heading previews without marker or color flashes, queued prompts, and the
 turn controller status state (`Ready`, provider errors).
