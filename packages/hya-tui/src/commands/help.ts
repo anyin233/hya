@@ -10,7 +10,7 @@
  */
 import type { TextareaAction } from "@opentui/core"
 import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyAction } from "../keys/bindings"
-import { customKeybindings } from "../keys/custom"
+import { customKeybindings, isKeyOverridden } from "../keys/custom"
 import { agentsViewKeyRows } from "../state/agentsView"
 import { diffKeyRows } from "../state/diff"
 import { mcpKeyRows } from "../state/mcp"
@@ -88,6 +88,7 @@ const editingText: Partial<Record<TextareaAction, string>> = {
 function composerRows(): HelpRow[] {
   const groups = new Map<string, { labels: string[]; description: string }>()
   for (const binding of composerKeyBindings) {
+    if (isKeyOverridden(composerKeyLabel(binding))) continue
     const key = binding.action
     const base = editingText[binding.action] ?? binding.action
     const description = binding.action === "newline"
@@ -169,7 +170,7 @@ const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = 
 
 /** Every key (grouped, in `helpGroups` order) and every command of `commands` (the merged `/` menu list). */
 export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
-  const bindingRows: HelpRow[] = keyBindings.map((binding) => ({ group: actionGroups[binding.action], keys: binding.label, description: binding.description }))
+  const bindingRows: HelpRow[] = keyBindings.filter((binding) => !isKeyOverridden(binding.label)).map((binding) => ({ group: actionGroups[binding.action], keys: binding.label, description: binding.description }))
   const commandRows: HelpRow[] = commands.map((entry) => ({
     group: "Commands",
     keys: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}`,
@@ -186,7 +187,7 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   const rows = [
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
     ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
-    ...Object.entries(customKeybindings()).map(([keys, binding]): HelpRow => ({
+    ...Object.entries(customKeybindings()).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== null).map(([keys, binding]): HelpRow => ({
       group: "Views", keys, description: `Run ${binding.command} (${binding.scope}; custom /keybind shortcut)`,
     })),
   ]

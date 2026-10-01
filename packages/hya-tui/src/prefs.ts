@@ -22,7 +22,7 @@ import { validateCustomKeybindings, type CustomKeybindings } from "./keys/custom
 
 /** The known preference keys. Every key is optional; unset means the built-in default. */
 export interface TuiPreferences {
-  /** Custom shortcut labels mapped to full slash commands and routing scopes. */
+  /** Shortcut overrides: command/scope assigns a command; null disables the physical key. */
   keybindings?: CustomKeybindings
   /** Built-in theme name (`hya`, `light`, `contrast`, `ember`); default `hya`. */
   theme?: string

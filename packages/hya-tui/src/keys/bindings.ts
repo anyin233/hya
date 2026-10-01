@@ -10,6 +10,7 @@
  * browser). The renderer runs with `exitOnCtrlC: false`; Ctrl+C is the
  * `quit` action here.
  */
+import { isKeyDisabled } from "./custom"
 import type { TextareaAction } from "@opentui/core"
 
 export type KeyAction =
@@ -45,6 +46,7 @@ export interface KeyLike {
   name: string
   ctrl: boolean
   meta: boolean
+  super?: boolean
   /** Kitty's Option modifier; traditional terminals report Alt as `meta`. */
   option?: boolean
   shift: boolean
@@ -67,7 +69,7 @@ export interface KeyBinding {
   matches(key: KeyLike, context: KeyContext): boolean
 }
 
-const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.shift
+const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.option && !key.super && !key.shift
 
 export const keyBindings: readonly KeyBinding[] = [
   ...(["left", "right", "up", "down"] as const).map((direction) => ({
@@ -152,6 +154,7 @@ export const keyBindings: readonly KeyBinding[] = [
 ]
 
 export function resolveBinding(key: KeyLike, context: KeyContext = {}, bindings: readonly KeyBinding[] = keyBindings): KeyAction | undefined {
+  if (isKeyDisabled(key)) return undefined
   return bindings.find((binding) => binding.matches(key, context))?.action
 }
 

@@ -1,5 +1,6 @@
-# 0.43.45
+# 0.43.46
 
-- Show assigned keybindings in dedicated Shortcut, Action / command and Scope columns, with descriptions in the detail pane.
-- Hide unassigned actions from `/keybind list` while preserving `/keybind show` inspection and custom-binding scope inference.
-- Add opt-in aligned picker columns with shortcut filtering and width-aware clipping.
+- Make keybinding overrides explicit: set replaces defaults, unset disables keys, reset restores defaults, with persisted null overrides.
+- Remove blanket browser, Ctrl+I/M/J/H and Ctrl+Shift assignment bans; match legacy terminal aliases.
+- Expose inherited editor and contextual keys in the binding list and shortcut inspection.
+- Show a visible usage error when `/keybind show` has no target.

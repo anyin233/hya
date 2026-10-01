@@ -13,7 +13,7 @@ import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
-import { resolveCommandBinding } from "../keys/custom"
+import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
 import { focusedPane, keyboardOwner } from "../state/focus"
@@ -340,6 +340,9 @@ export function Composer(props: { width: number }) {
       key.preventDefault()
       key.stopPropagation()
     }
+    // The command editor owns settings input; disabled physical keys suppress
+    // every other handler, including inherited textarea and modal actions.
+    if (!ui.command?.active() && isKeyDisabled(key)) { consume(); return }
     // The concealed `/connect-remote` entry takes every key; Ctrl+C cancels it.
     if (store.state.secretEntry) {
       consume()

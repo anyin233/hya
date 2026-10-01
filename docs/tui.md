@@ -741,7 +741,7 @@ routes. See the [protocol guide](protocol/README.md) for those frames.
 
 ## Keybinding settings
 
-`/keybind` lists assigned built-in shortcuts and custom command bindings in
+`/keybind` lists active app, inherited editor, contextual and custom command bindings in
 aligned **Shortcut**, **Action / command**, and **Scope** columns. Unassigned
 actions are omitted from the list; `/keybind show <action>` can still inspect them.
 Descriptions and full commands appear in the detail area beneath the rows.
@@ -763,9 +763,9 @@ arguments need no extra quoting around the whole command.
 | `/keybind set F6 /layout focus left` | Save a workspace shortcut to the full layout command. |
 | `/keybind set Alt+G /tools on` | Save a conversation shortcut that expands tool cards. |
 | `/keybind set F7 --scope conversation /sidebar off` | Explicitly limit this sidebar command to conversation focus. |
-| `/keybind unset F6` | Remove the custom F6 binding and free the shortcut. |
-| `/keybind reset F6` | Compatibility spelling for `unset F6`. |
-| `/keybind reset all` | Remove all custom bindings. |
+| `/keybind unset F6` | Disable F6, removing its custom command and suppressing defaults. |
+| `/keybind reset F6` | Remove the F6 override and restore its default. |
+| `/keybind reset all` | Remove all overrides and restore defaults. |
 
 Type an action, shortcut or command to filter the browser. Up/Down selects,
 Enter opens details, and Esc closes the modal and returns to the previous pane.
@@ -786,26 +786,49 @@ For example:
 /keybind unset Alt+G
 ```
 
-`unset <shortcut>` is the single-shortcut removal operation: it normalizes the
-shortcut spelling, removes its custom assignment, saves preferences, then applies
-the change. For example, `/keybind unset control+home` removes a custom
-`Ctrl+Home` binding. It completes currently assigned custom shortcuts. Missing
-assignments and invalid arguments report an error; a failed write leaves the
-binding active. The result modal is `Keybind unset`. It does not remove protected
-defaults or interpret `all`; use `/keybind reset all` to clear all custom bindings.
-`reset <shortcut>` remains compatible with earlier usage. The persisted
-`keybindings` object simply omits the removed shortcut; no new config fields or
-RPCs are introduced.
+The override mechanism has three operations:
 
-A repeated `set` for the same shortcut replaces that shortcut's command and
-scope. Several shortcuts can run the same command. Built-in keys remain
-available and cannot be reassigned by `set`; conflicts are rejected. This
-version accepts one modified key or function key per assignment, rather than
-custom sequences of keystrokes. Ctrl+X then `/` remains the command entry prefix.
-Supported syntax includes Ctrl/Control, Alt/Meta/Option, optional Shift,
-letters/digits, modified arrows/Home/End/PgUp/PgDn, and F1–F12. Plain text and
-editing keys, reserved browser shortcuts such as Ctrl+W, and ambiguous
-Ctrl+Shift letters are rejected. Use a shortcut the terminal/browser forwards.
+- `set <shortcut> <command...>` assigns the full command, replacing any app or
+  editor default for that shortcut. Browser-reserved combinations, Ctrl+I/M/J/H,
+  plain keys, named editing keys and Ctrl+Shift combinations are accepted.
+- `unset <shortcut>` saves a disabled override. The physical key is consumed
+  before app defaults, inherited editor behavior, modal/picker actions and Vim.
+  Disabled keys disappear from the active list; `show <shortcut>` reports
+  `disabled`. This applies to plain keys too: disabling `n` also suppresses typing
+  it outside command input. `unset` can disable an existing default without first
+  assigning a command.
+- `reset <shortcut>` removes the override, restoring defaults. `reset all`
+  restores all defaults. A failed save leaves runtime settings unchanged.
+
+**Command input owns its administrative keys.** While the command pane is open,
+its editing/completion/submit keys remain usable to repair settings. Modal and
+full-screen views otherwise retain input ownership before custom command
+execution; disabled overrides suppress their keys. An assigned conversation
+shortcut is inactive outside Conversation, while workspace assignments can run
+from any tiled pane.
+
+`show` requires a target; `/keybind show` presents a visible `Keybind · error`
+modal with `Usage: /keybind show <shortcut, action or command>`. It never chooses
+an arbitrary suggestion on Enter. The list includes inherited editor and local
+view bindings with their context in the description; `show Ctrl+W` inspects its
+editor behavior, and `show Ctrl+C` inspects the app action or your override.
+
+```text
+/keybind set Ctrl+W /layout close
+/keybind unset Ctrl+C
+/keybind show Ctrl+C       # disabled
+/keybind reset Ctrl+C      # restore exit handling
+```
+
+Shortcut syntax accepts Ctrl/Control, Alt/Meta/Option, Shift, Super/Cmd/Command,
+printable single keys, named navigation/editing keys (Enter, Tab, Esc, Backspace,
+Delete, Home/End, PgUp/PgDn), and F1–F12. Two-key custom chords remain unsupported.
+There are no browser reservations. A browser or terminal can intercept a key
+before it reaches the TUI; the parser accepts it without pretending that every
+host delivers it. Traditional terminal aliases Ctrl+I → Tab, Ctrl+M → Enter,
+Ctrl+J → line feed and Ctrl+H → Backspace are matched together. Set/unset replaces
+an equivalent alias override; conflicting equivalent aliases in a preferences
+file are rejected visibly. Ctrl+Shift works when the terminal reports Shift.
 
 ### Interfaces and routing
 
@@ -816,10 +839,19 @@ Ctrl+Shift letters are rejected. Use a shortcut the terminal/browser forwards.
 /keybind reset <shortcut|all>
 ```
 
+`TuiPreferences.keybindings?: Record<string, CommandKeybinding | null>` stores
+all overrides. `CommandKeybinding = { command: string; scope: "workspace" |
+"conversation" }`; `null` disables that shortcut, and an absent key uses the
+default. `isKeyDisabled(KeyLike): boolean` is checked before non-command input
+handlers; `resolveCommandBinding(KeyLike)` returns only command assignments.
+`inheritedBindingRows()` exposes the merged OpenTUI/composer editor map and
+existing contextual help tables; the active list omits overridden defaults.
+No HTTP/RPC contracts change.
+
 Everything after the shortcut and optional scope flag is stored as the command
 text; internal spaces, arguments and JSON bodies are preserved. The command
 must be a single slash command on one line. Its invocation retains the existing
-command parser and error behavior. `set` validates syntax and collisions, saves
+command parser and error behavior. `set` validates syntax, saves
 preferences atomically, and then applies the assignment. A failed save leaves
 active bindings unchanged. Settings operations are local; executing a bound
 command may call the same RPCs as entering that command manually.
@@ -840,20 +872,22 @@ Assignments are stored in the existing TUI preferences file
 {
   "keybindings": {
     "F6": { "command": "/layout focus left", "scope": "workspace" },
-    "Alt+G": { "command": "/tools on", "scope": "conversation" }
+    "Alt+G": { "command": "/tools on", "scope": "conversation" },
+    "Ctrl+C": null
   }
 }
 ```
 
 The preference field is
-`keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" }>`.
+`keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" } | null>`.
 Shortcut labels are normalized (for example `option+g` becomes `Alt+G`). Invalid
 or conflicting saved assignments are ignored as one group, with a startup
 warning; other preferences still load. Unknown preference fields remain intact
 when settings are saved.
 
 `src/keys/custom.ts` exposes `parseShortcut`, `validateCustomKeybindings`,
-`customKeybindings`, `setCustomKeybindings`, and `resolveCommandBinding`.
+`customKeybindings`, `setCustomKeybindings`, `isKeyDisabled`, `isKeyOverridden`,
+`sameShortcut`, and `resolveCommandBinding`.
 The resolver returns `{ command, scope } | undefined` for the current key;
 Composer checks focus and submits the full command with source `command`.
 `/help` includes custom assignments and `/keybind` includes them beside the
@@ -1247,7 +1281,7 @@ JSON object:
 
 ```ts
 interface TuiPreferences {
-  keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" }> // custom command shortcuts
+  keybindings?: Record<string, { command: string; scope: "workspace" | "conversation" } | null> // command overrides; null disables a key
   theme?: string          // a built-in theme name: "hya" (default), "light", "contrast", "ember"
   vim?: boolean           // vim mode in the input (/vim); default false
   notifications?: boolean // desktop notifications (/notifications); default true
