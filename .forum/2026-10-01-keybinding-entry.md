@@ -24,3 +24,7 @@ Answer: Defaults cover commands/help, pane focus, transcript scroll, cancellatio
 ## Question: What is the single-shortcut removal command?
 
 Answer: `/keybind unset <shortcut>` removes a custom assignment; reset <shortcut> stays compatible, and reset all clears the custom map. Unset completes only assigned keys, normalizes modifier names and saves before applying. It cannot disable protected defaults. Ctrl+Home/End are no longer app defaults and can be assigned; plain Home/End retain transcript navigation with empty input.
+
+## Question: How should keybinding lists distinguish keys from descriptions?
+
+Answer: List only assigned defaults and custom bindings. Render Shortcut, Action / command and Scope as opt-in picker columns, and reserve the detail pane for descriptions/full commands. Keep unassigned action metadata for `/keybind show` and scope inference. `PickerRow.shortcut` is searchable; `PickerSpec.columns` supplies headings without changing other pickers.

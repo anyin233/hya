@@ -5,6 +5,7 @@ import type { PickerRow } from "../state/picker"
 import { matchValues, type CommandContext, type CommandSpec } from "./registry"
 
 const usage = "Usage: /keybind [list [scope] | show <action, command or shortcut> | set <shortcut> [--scope workspace|conversation] <command...> | unset <shortcut> | reset <shortcut|all>]"
+const columns = { shortcut: "Shortcut", label: "Action / command", tag: "Scope" }
 const hint = "↑↓ select · type to filter · Enter details · Esc closes"
 
 function settingRow(setting: BindingSetting): PickerRow {
@@ -12,7 +13,8 @@ function settingRow(setting: BindingSetting): PickerRow {
     id: setting.id,
     label: setting.id,
     tag: setting.scope,
-    detail: `Keys: ${setting.keys.join(" / ") || "unassigned"}. ${setting.command ? `Command: ${setting.command}. ` : ""}${setting.context} ${setting.description}`,
+    shortcut: setting.keys.join(" / ") || "unassigned",
+    detail: `${setting.command ? `Command: ${setting.command}. ` : ""}${setting.context} ${setting.description}`,
   }
 }
 
@@ -20,7 +22,7 @@ function openDetails(context: CommandContext, setting: BindingSetting): void {
   context.actions.openPicker({
     title: `Keybinding · ${setting.id}`,
     rows: [settingRow(setting)],
-    detailPane: true,
+    detailPane: true, columns,
     maxRows: 1,
     hint: "Inspection only · Esc closes",
     onSelect: () => undefined,
@@ -29,15 +31,15 @@ function openDetails(context: CommandContext, setting: BindingSetting): void {
 
 function customRows(): PickerRow[] {
   return Object.entries(customKeybindings()).map(([key, binding]) => ({
-    id: `custom:${key}`, label: key, tag: binding.scope,
+    id: `custom:${key}`, label: binding.command, shortcut: key, tag: binding.scope,
     detail: `Command: ${binding.command}. Custom shortcut (${binding.scope}); modals and command input take precedence.`,
   }))
 }
 
 function openCustom(context: CommandContext, row: PickerRow, saved = false): void {
   context.actions.openPicker({
-    title: saved ? `Keybind saved · ${row.label}` : `Keybinding · ${row.label}`,
-    rows: [row], detailPane: true, maxRows: 1,
+    title: saved ? `Keybind saved · ${row.shortcut}` : `Keybinding · ${row.shortcut}`,
+    rows: [row], detailPane: true, columns, maxRows: 1,
     hint: "Esc closes · /keybind unset removes a custom shortcut", onSelect: () => undefined,
   })
 }
@@ -99,7 +101,7 @@ export const keybindingsCommand: CommandSpec = {
         if (scope !== "workspace" && scope !== "conversation") throw new Error("Custom binding scope must be workspace or conversation")
         next[key] = { command, scope: scope as CommandBindingScope }
         saveBindings(context, next)
-        openCustom(context, customRows().find((row) => row.label === key)!, true)
+        openCustom(context, customRows().find((row) => row.shortcut === key)!, true)
       } catch (error) {
         context.actions.openPicker({ title: "Keybind · not saved", rows: [{ id: "error", label: "Not saved", detail: error instanceof Error ? error.message : String(error) }], detailPane: true, onSelect: () => undefined })
         throw error
@@ -111,7 +113,7 @@ export const keybindingsCommand: CommandSpec = {
       const target = args.slice(1).join(" ")
       let shortcut = target
       try { shortcut = parseShortcut(target).label } catch { /* Action IDs and commands are not shortcut labels. */ }
-      const custom = customRows().find((row) => row.label === shortcut || row.detail?.startsWith(`Command: ${target}.`))
+      const custom = customRows().find((row) => row.shortcut === shortcut || row.detail?.startsWith(`Command: ${target}.`))
       if (custom) { openCustom(context, custom); return }
       const setting = findBindingSetting(target)
       if (!setting) throw new Error(`Unknown keybinding action: ${target}. Use /keybind to browse current actions.`)
@@ -123,8 +125,8 @@ export const keybindingsCommand: CommandSpec = {
     const scope = args[1]
     context.actions.openPicker({
       title: `Keybindings${scope ? ` · ${scope}` : ""}`,
-      rows: [...customRows(), ...bindingSettings().map(settingRow)].filter((row) => !scope || row.tag === scope),
-      detailPane: true,
+      rows: [...customRows(), ...bindingSettings().filter((setting) => setting.keys.length > 0).map(settingRow)].filter((row) => !scope || row.tag === scope),
+      detailPane: true, columns,
       maxRows: 8,
       hint,
       onSelect: (row) => {

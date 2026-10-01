@@ -33,7 +33,7 @@ export function Picker() {
       {(open: () => ActivePicker) => {
         const rows = () => pickerRows(open())
         // Box chrome: 2 border rows, the filter and hint rows, and the 2-row top offset, plus the composer below.
-        const visibleRows = () => Math.max(3, Math.min(open().maxRows ?? pickerMaxRows, size().height - (open().detailPane ? 14 : 10)))
+        const visibleRows = () => Math.max(3, Math.min(open().maxRows ?? pickerMaxRows, size().height - (open().detailPane ? 14 : 10) - (open().columns ? 1 : 0)))
         const highlighted = () => rows()[open().index]
         const shown = () => {
           const window = pickerWindow(rows().length, open().index, visibleRows())
@@ -46,6 +46,23 @@ export function Picker() {
         const padTag = (tag: string | undefined) => {
           const text = tag ? `[${tag}]` : ""
           return text + " ".repeat(Math.max(0, tagWidth() - Bun.stringWidth(text)))
+        }
+        // Column mode is opt-in; keep traditional picker rows unchanged.
+        const shortcutWidth = () => Math.min(26, Math.max(8, ...open().rows.map((row) => Bun.stringWidth(row.shortcut ?? ""))))
+        const scopeWidth = () => Math.min(14, Math.max(5, ...open().rows.map((row) => Bun.stringWidth(row.tag ?? ""))))
+        // Reserve 4 columns for borders/padding, 4 for selection markers and 4 for gaps.
+        const actionWidth = () => Math.max(8, width() - 12 - shortcutWidth() - scopeWidth())
+        const column = (text: string, width: number) => {
+          let clipped = text
+          if (Bun.stringWidth(clipped) > width) {
+            clipped = ""
+            for (const char of text) {
+              if (Bun.stringWidth(clipped + char) > width - 1) break
+              clipped += char
+            }
+            clipped += "…"
+          }
+          return clipped + " ".repeat(Math.max(0, width - Bun.stringWidth(clipped)))
         }
         return (
           <box
@@ -85,6 +102,11 @@ export function Picker() {
                 <span style={{ fg: colors.accent }}>▏</span>
                 <span style={{ fg: colors.muted }}>{`  ${rows().length} of ${open().rows.length}`}</span>
               </text>
+              <Show when={open().columns}>
+                <text height={1} wrapMode="none" fg={colors.muted}>
+                  {`    ${column(open().columns!.shortcut, shortcutWidth())}  ${column(open().columns!.label, actionWidth())}  ${column(open().columns!.tag, scopeWidth())}`}
+                </text>
+              </Show>
               <For each={shown()}>
                 {(item) => {
                   const highlighted = () => item.at === open().index
@@ -92,9 +114,17 @@ export function Picker() {
                     <text height={1} wrapMode="none" onMouseDown={() => controller.choosePickerRow(item.row)}>
                       <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
                       <span style={{ fg: colors.accent }}>{item.row.current ? "● " : "  "}</span>
-                      <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{pad(item.row.label)}</span>
-                      <span style={{ fg: colors.muted }}>{tagWidth() ? `  ${padTag(item.row.tag)}` : ""}</span>
-                      <span style={{ fg: colors.muted }}>{item.row.detail ? `  ${item.row.detail}` : ""}</span>
+                      <Show when={open().columns} fallback={
+                        <>
+                          <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{pad(item.row.label)}</span>
+                          <span style={{ fg: colors.muted }}>{tagWidth() ? `  ${padTag(item.row.tag)}` : ""}</span>
+                          <span style={{ fg: colors.muted }}>{item.row.detail ? `  ${item.row.detail}` : ""}</span>
+                        </>
+                      }>
+                        <span style={{ fg: colors.accent }}>{column(item.row.shortcut ?? "", shortcutWidth())}</span>
+                        <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`  ${column(item.row.label, actionWidth())}`}</span>
+                        <span style={{ fg: colors.muted }}>{`  ${column(item.row.tag ?? "", scopeWidth())}`}</span>
+                      </Show>
                     </text>
                   )
                 }}

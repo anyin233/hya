@@ -741,7 +741,10 @@ routes. See the [protocol guide](protocol/README.md) for those frames.
 
 ## Keybinding settings
 
-`/keybind` browses the built-in action shortcuts and custom command bindings.
+`/keybind` lists assigned built-in shortcuts and custom command bindings in
+aligned **Shortcut**, **Action / command**, and **Scope** columns. Unassigned
+actions are omitted from the list; `/keybind show <action>` can still inspect them.
+Descriptions and full commands appear in the detail area beneath the rows.
 `set` assigns a shortcut to a **full slash command**, including its arguments;
 pressing the shortcut runs that text through the same command registry as the
 command pane. This also supports backend and skill commands. Commands with
@@ -856,6 +859,14 @@ Composer checks focus and submits the full command with source `command`.
 `/help` includes custom assignments and `/keybind` includes them beside the
 built-in catalog.
 
+The keybinding picker opts into `PickerColumns { shortcut: string; label: string;
+tag: string }` heading labels via `PickerSpec.columns?`, copied to
+`PickerState.columns?` by `createPicker`. `PickerRow.shortcut?: string` holds
+the shortcut separately from `label` and `detail`, and participates in filtering.
+Column widths stay aligned while filtering; long cells clip with an ellipsis,
+while the detail pane retains the full text. Other pickers omit `columns` and
+keep their existing layout. No backend routes or preference fields change.
+
 The built-in catalog remains `bindingSettings(): BindingSetting[]` and
 `findBindingSetting(target: string): BindingSetting | undefined` in
 `src/keys/catalog.ts`:
@@ -932,7 +943,8 @@ Ctrl+X chords are unassigned. Use `/refresh`, `/sidebar`, `/projects-sidebar`,
 
 **Interfaces.** `keyBindings: readonly KeyBinding[]` contains only active defaults.
 `bindingSettings(): BindingSetting[]` also includes unassigned actions with
-`keys: []`, shown as `Keys: unassigned`; command scope metadata remains available
+`keys: []`, omitted from `/keybind list` and shown as `unassigned` only in
+explicit `/keybind show` inspection; command scope metadata remains available
 for `/keybind set` inference. Saved custom bindings keep their existing contract.
 `/pending` has no arguments and calls `AppActions.reviewPending(): Promise<void>`:
 it opens/unarchives the oldest waiting request outside the current session tree
@@ -3210,8 +3222,11 @@ use it). Open one from a command handler with `actions.openPicker(spec)`
 (or `controller.openPicker`):
 
 ```ts
+interface PickerColumns { shortcut: string; label: string; tag: string }
+
 interface PickerRow {
   id: string          // value handed to onSelect (a mode id, model id, session id, …)
+  shortcut?: string                           // optional, searchable shortcut cell
   label: string       // main text
   detail?: string     // muted text after the tag (a description)
   tag?: string        // shown as [tag] (a source, a provider, a kind)
@@ -3228,6 +3243,7 @@ interface PickerAction {
 interface PickerSpec {
   title: string       // box title
   rows: PickerRow[]
+  columns?: PickerColumns  // opt-in shortcut / label / tag headings
   hint?: string       // bottom row; default "↑↓ select · Enter chooses · Esc closes · type to filter"
   actions?: PickerAction[]   // row actions on the highlighted row (S9: /sessions F2/Ctrl+D)
   onSelect(row: PickerRow): void | Promise<void>   // runs after the picker closed; a throw shows "Error: …"

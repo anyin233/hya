@@ -1,7 +1,7 @@
 kind: AgentSetBundle
 identity:
   id: hya-extra/scout
-  version: 0.43.44
+  version: 0.43.45
   publisher: hya-extra
 resources:
   mcp:
