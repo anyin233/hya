@@ -1,6 +1,10 @@
-# 0.43.40
+# 0.44.0
 
-## Version management
+## Distribution
 
-- Frontend release iterations are independent from backend releases and are tracked by the frontend aggregate and `CHANGELOG_FRONTEND.md`.
-- This frontend requires backend `0.43.41` or newer through `minimumBackendVersion`.
+- Frontend releases are independently published under `frontend/<version>` tags
+  as `hya-frontend-<version>-<target>.tar.gz` archives.
+- The frontend archive contains Bun, the TUI, and the WebUI, but never installs
+  `bin/hya`; use the backend release for the command and headless server.
+- `hya update tui` installs or updates the frontend beside an existing backend.
+- This frontend remains compatible with backend `0.43.41` and newer.

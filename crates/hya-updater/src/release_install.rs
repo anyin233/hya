@@ -9,9 +9,11 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact script
-/// the release publishes as `hya-install.sh`.
+/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact backend
+/// installer the release publishes.
 pub const RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-install.sh");
+/// Frontend installer embedded in `hya update tui`.
+pub const FRONTEND_RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-tui-install.sh");
 
 /// Options of bare `hya update`.
 #[derive(Debug, Default, Args)]
@@ -23,6 +25,20 @@ pub struct ReleaseInstallArgs {
     #[arg(long)]
     pub force: bool,
     /// Install prefix (`<prefix>/bin/hya`); defaults to the running hya's prefix.
+    #[arg(long, value_name = "DIR")]
+    pub prefix: Option<PathBuf>,
+}
+
+/// Options of `hya update tui`.
+#[derive(Debug, Default, Args)]
+pub struct FrontendReleaseInstallArgs {
+    /// Install this frontend release instead of the latest one.
+    #[arg(long, value_name = "VERSION")]
+    pub version: Option<String>,
+    /// Reinstall even when that frontend version is already installed.
+    #[arg(long)]
+    pub force: bool,
+    /// Install prefix (`<prefix>/lib/hya`); defaults to the running hya's prefix.
     #[arg(long, value_name = "DIR")]
     pub prefix: Option<PathBuf>,
 }
@@ -46,11 +62,34 @@ pub fn install_prefix(executable: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Run the embedded installer with `sh` for the running hya's prefix (or
-/// `--prefix`). Its output goes straight to the terminal.
+/// Run the embedded backend installer with `sh`.
 pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
-    let prefix = match &args.prefix {
-        Some(prefix) => prefix.clone(),
+    run_component_install(
+        args.version.as_deref(),
+        args.force,
+        args.prefix.as_deref(),
+        RELEASE_INSTALLER,
+    )
+}
+
+/// Run the embedded frontend installer with `sh`.
+pub fn run_frontend_release_install(args: &FrontendReleaseInstallArgs) -> Result<(), String> {
+    run_component_install(
+        args.version.as_deref(),
+        args.force,
+        args.prefix.as_deref(),
+        FRONTEND_RELEASE_INSTALLER,
+    )
+}
+
+fn run_component_install(
+    version: Option<&str>,
+    force: bool,
+    requested_prefix: Option<&Path>,
+    installer: &str,
+) -> Result<(), String> {
+    let prefix = match requested_prefix {
+        Some(prefix) => prefix.to_path_buf(),
         None => {
             let executable = std::env::current_exe()
                 .map_err(|error| format!("cannot locate the running hya: {error}"))?;
@@ -59,10 +98,10 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
     };
     let mut command = Command::new("sh");
     command.args(["-s", "--", "--prefix"]).arg(&prefix);
-    if let Some(version) = &args.version {
+    if let Some(version) = version {
         command.args(["--version", version]);
     }
-    if args.force {
+    if force {
         command.arg("--force");
     }
     let mut child = command
@@ -75,7 +114,7 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
         .ok_or_else(|| "sh has no stdin".to_string())
         .and_then(|mut stdin| {
             stdin
-                .write_all(RELEASE_INSTALLER.as_bytes())
+                .write_all(installer.as_bytes())
                 .map_err(|error| format!("cannot pass the installer to sh: {error}"))
         });
     let status = child

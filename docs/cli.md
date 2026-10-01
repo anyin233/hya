@@ -1,20 +1,20 @@
 # CLI Reference
 
-`hya` is the single terminal entry point: one executable (built from the
-`hya-backend` package, [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs))
-whose subcommands select the area being controlled. Since 0.38.0 there are no
+`hya` is the backend executable and the backend-only command entry point. Its
+subcommands select the area being controlled; the optional frontend package
+adds the TUI and WebUI that bare `hya` launches. Since 0.38.0 there are no
 other user-facing executables — the former `hya-backend` binary name and the
 standalone `hya-updater` binary are gone.
 
 | Area | Subcommands |
 | --- | --- |
-| Interactive TUI and WebUI | bare `hya` on a terminal (see [Bare `hya`](#bare-hya)) |
+| Interactive TUI and WebUI | bare `hya` when the separately installed frontend is present (see [Bare `hya`](#bare-hya)) |
 | Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
 | Server and wire protocols | `serve` (and `serve start`/`status`/`stop`/`restart` for the backend daemon), `rpc` |
 | Sessions | `sessions`, `tail-session` |
 | Providers and auth | `provider` (alias `providers`: `add`, `list`, `remove`, `logout`), `login`, `oauth`, `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
-| Update | bare `update` (reinstall from the latest release, [`docs/install.md`](install.md)); self-update TCB `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
+| Update | `update` for the backend; `update tui` for the frontend (both accept `--version`, `--prefix`, `--force`; see [`docs/install.md`](install.md)); self-update TCB commands remain separate |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
@@ -548,14 +548,16 @@ its command first and falls back to the database's daemon (found or started)
 when it does not answer.
 
 **Requirements.** Bare `hya` starts the frontends only when both stdin and
-stdout are terminals. It needs [Bun](https://bun.sh) (`$BUN`, else `bun` on
-`PATH`) and the two Bun packages, which a release archive or `install.sh`
-places next to the binary. Without a terminal it prints a guidance banner and
-exits **0**, starting nothing:
+stdout are terminals. It needs the separately installed frontend package,
+including Bun (`$BUN`, else `bun` on `PATH`) and the TUI/WebUI directories. A
+backend-only install therefore prints a guidance banner telling the user to
+install the frontend with `hya update tui`; `hya serve`, `hya exec`, and other
+headless commands do not need it. Without a terminal it prints the same
+guidance banner and exits **0**, starting nothing:
 
 ```text
 hya <version> — a multi-agent coding agent
-Run `hya` in a terminal to start the TUI and the WebUI (http://127.0.0.1:3250; needs Bun). Without a terminal, try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
+Run `hya` in a terminal to start the TUI and the WebUI (needs the optional frontend package). Without a terminal, try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
 ```
 
 Scripts that run `hya` with no arguments and no terminal get this banner and
@@ -1355,9 +1357,12 @@ filters such as `head` and `grep -q` can close stdout without causing a panic.
 
 ## `hya update`
 
-Bare `hya update [--version VERSION] [--force] [--prefix DIR]` reinstalls
-the running hya's prefix from the latest (or the given) GitHub release with
-the same installer as `curl … | sh`; see [Install and update](install.md).
+`hya update [--version VERSION] [--force] [--prefix DIR]` installs or
+reinstalls the backend release. `hya update tui [--version VERSION] [--force]
+[--prefix DIR]` installs or reinstalls the frontend release in the same prefix;
+it never installs a `bin/hya` executable. A backend-only installation can run
+headless commands without the frontend, while bare `hya` tells the user to run
+`hya update tui` when the frontend is missing. See [Install and update](install.md).
 
 The subcommands below are the self-update TCB. They verify signed release
 metadata, stage immutable generations,
@@ -1375,9 +1380,9 @@ providers, plugins, MCP, or session store are loaded. Global flags such as
 | `hya update status --root DIR` | Show selector, accepted floor, and layout paths. |
 | `hya update recover --root DIR` | Recover interrupted prepare/commit journal state. |
 | `hya update apply --root DIR --metadata FILE --package DIR --platform TRIPLE [--smoke CMD] [--trust-roots FILE] [--authorization FILE]` | Verify, stage, optionally smoke, and activate only with an owner-issued capability (`--authorization`). |
-| `hya update authorize --root DIR --sequence N --out FILE [--yes]` | Owner only: bind release `N` to the active generation and write the capability `apply --authorization` needs. Asks `Authorize activating release sequence N over generation G …? [y/N]` at a terminal; without a terminal it refuses unless `--yes`. Prints `authorized sequence=N generation=G capability=FILE`. |
+| `hya update authorize --root DIR --sequence N --out FILE [--yes]` | Owner only: bind release `N` to the active generation and write the capability `apply --authorization` needs. |
 | `hya update discard --root DIR --sequence N` | Discard a staged-but-not-accepted candidate. |
-| `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json` (operator only). |
+| `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json`. |
 
 ```sh
 hya update version
@@ -1389,11 +1394,8 @@ hya update apply \
   --package ./package-dir \
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh
-# activation only with an owner-issued capability (see self-update.md):
 hya update authorize --root /var/lib/hya/updater --sequence 42 --out ./activation.authorization.json
 hya update apply ... --authorization ./activation.authorization.json
-# optional trust-roots override (default: <root>/trust_roots.json):
-hya update apply ... --trust-roots /secure/media/trust_roots.json
 hya update discard --root /var/lib/hya/updater --sequence 42
 hya update init-roots \
   --path /var/lib/hya/updater/trust_roots.json \
