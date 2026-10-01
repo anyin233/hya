@@ -325,12 +325,6 @@ impl SessionEngine {
         self.scope_cache.set_config(config);
     }
 
-    /// The current scope cache limits.
-    #[must_use]
-    pub fn catalog_scope_cache_config(&self) -> CatalogScopeCacheConfig {
-        self.scope_cache.config()
-    }
-
     /// Evict idle and over-capacity scope overlays now (binds do this too;
     /// the app may call it periodically so an idle process releases
     /// Project processes).

@@ -40,7 +40,7 @@ export type PermissionModel = "default" | "allow" | "danger"
 export type BundleFiles = Record<string, string>
 
 /** The Bun adapter entry (`crates/hya-plugin-bun/adapter`) that hosts a bundle's JS extension. */
-export const bunAdapterMain = join(repoRoot, "crates/hya-plugin-bun/adapter/src/main.ts")
+const bunAdapterMain = join(repoRoot, "crates/hya-plugin-bun/adapter/src/main.ts")
 
 /**
  * A `kind: Plugin` bundle that declares `permission_modes:` and answers
@@ -423,7 +423,7 @@ export async function showStatusView(term: Tui): Promise<void> {
 }
 
 /** Read one field from /status without assuming a permanent conversation heading. */
-export async function statusField(term: Tui, field: string): Promise<string> {
+async function statusField(term: Tui, field: string): Promise<string> {
   await showStatusView(term)
   const row = (await term.lines()).find((line) => new RegExp(`${field}\\s{2,}`).test(line))
   if (!row) throw new Error(`/status has no ${field} field`)
@@ -431,7 +431,7 @@ export async function statusField(term: Tui, field: string): Promise<string> {
 }
 
 /** Return to the transcript without changing the split tree or message draft. */
-export async function showConversation(term: Tui): Promise<void> {
+async function showConversation(term: Tui): Promise<void> {
   await term.type("/layout show")
   await term.press("Enter")
   await expect.poll(() => term.find("─Status")).toBeNull()

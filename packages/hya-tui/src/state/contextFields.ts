@@ -8,7 +8,6 @@
 import { contextUsage, formatTokens, modelEffortLabel, sessionTokens, todoStatusText, truncate, truncateStart, webLabel } from "./format"
 import { mergeTranscript } from "./overlay"
 import { effectiveMode, modeDisplay } from "./modes"
-import { paneLeaves, visiblePaneRoot } from "./panes"
 import { forkSourceText } from "./revert"
 import type { AppState } from "./store"
 
@@ -37,11 +36,6 @@ export interface ContextRow {
   /** The label padded to the value column. */
   label: string
   value: string
-  tone: ContextTone
-}
-
-export interface StatusLineSegment {
-  text: string
   tone: ContextTone
 }
 
@@ -116,48 +110,3 @@ export function contextRows(fields: readonly ContextField[], width: number): Con
   }))
 }
 
-/** Greedy packing into at most `rows` lines of `width` columns; `undefined` when the fields do not fit. */
-function pack(fields: readonly ContextField[], width: number, rows: number): StatusLineSegment[][] | undefined {
-  const lines: StatusLineSegment[][] = [[]]
-  let used = 0
-  for (const field of fields) {
-    const text = truncate(field.short, width)
-    const line = lines[lines.length - 1]!
-    const cost = (line.length ? 3 : 0) + text.length
-    if (used + cost <= width) {
-      line.push({ text, tone: field.tone })
-      used += cost
-      continue
-    }
-    if (lines.length === rows) return undefined
-    lines.push([{ text, tone: field.tone }])
-    used = text.length
-  }
-  return lines
-}
-
-/**
- * The top status line: the fields in order, packed onto at most `rows` lines
- * of `width` columns. While they do not fit, the field with the highest
- * `priority` (the last one among equals) is dropped; priority-0 fields stay
- * and are cut to `width` instead.
- */
-export function statusLines(fields: readonly ContextField[], width: number, rows = 2): StatusLineSegment[][] {
-  const shown = [...fields]
-  for (;;) {
-    const lines = pack(shown, width, rows)
-    if (lines) return lines
-    let drop = -1
-    shown.forEach((field, index) => {
-      if (field.priority > 0 && (drop < 0 || field.priority >= shown[drop]!.priority)) drop = index
-    })
-    if (drop < 0) return shown.slice(0, rows).map((field) => [{ text: truncate(field.short, width), tone: field.tone }])
-    shown.splice(drop, 1)
-  }
-}
-
-/** The top status line is shown exactly when no `context` pane is on screen (width, `/sidebar`, `/layout`). */
-export function contextStatusShown(state: Pick<AppState, "paneLayout" | "columns" | "sidebar" | "projectsSidebar">): boolean {
-  const root = visiblePaneRoot(state.paneLayout.root, state.columns, state.sidebar, state.projectsSidebar)
-  return !paneLeaves(root).some((pane) => pane.kind === "context")
-}

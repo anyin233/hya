@@ -27,20 +27,4 @@ impl Info {
             .map_or_else(|| "worktree".to_string(), ToString::to_string);
         Self::new(name, branch, directory)
     }
-
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub(crate) fn branch(&self) -> Option<&str> {
-        self.branch.as_deref()
-    }
-
-    pub(crate) fn directory(&self) -> &str {
-        &self.directory
-    }
-
-    pub(crate) fn into_directory(self) -> String {
-        self.directory
-    }
 }

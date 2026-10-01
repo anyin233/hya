@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_core::{AgentSpec, SessionEngine};
-use hya_proto::WorkspaceAdapterInfo;
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
@@ -37,7 +36,6 @@ pub struct AppState {
     agent_model_control: Arc<dyn AgentModelControl>,
     provider_control: Arc<dyn ProviderControl>,
     workflow_control: Arc<dyn WorkflowControl>,
-    workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
@@ -79,7 +77,6 @@ impl AppState {
             agent_model_control: Arc::new(EmptyAgentModelControl),
             provider_control: Arc::new(EmptyProviderControl),
             workflow_control: Arc::new(EmptyWorkflowControl),
-            workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
             default_agent: None,
             catalog_updates,
@@ -289,20 +286,6 @@ impl AppState {
         self.reconfigured()
     }
 
-    /// Register plugin workspace adapters for experimental workspace routes.
-    #[must_use]
-    pub fn with_workspace_adapters(mut self, adapters: Vec<WorkspaceAdapterInfo>) -> Self {
-        self.workspace_adapters = adapters;
-        self.reconfigured()
-    }
-
-    /// Publish formatter status rows for Compat formatter endpoints.
-    #[must_use]
-    pub fn with_formatter_status(mut self, status: Vec<FormatterStatus>) -> Self {
-        self.formatter_status = status;
-        self.reconfigured()
-    }
-
     /// Publish a provider-catalog change: every v1 event stream (global and
     /// session, SSE and gRPC) delivers it as a live `catalogUpdated` frame
     /// with an empty `projectId`.
@@ -333,7 +316,6 @@ impl AppState {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub(crate) struct ServerState {
     pub(crate) engine: Arc<SessionEngine>,
     pub(crate) agent: Arc<AgentSpec>,
@@ -346,7 +328,6 @@ pub(crate) struct ServerState {
     pub(crate) provider_control: Arc<dyn ProviderControl>,
     pub(crate) workflow_control: Arc<dyn WorkflowControl>,
     pub(crate) pty: support::pty_state::PtyState,
-    pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
     pub(crate) catalog_updates: broadcast::Sender<Value>,
@@ -376,7 +357,6 @@ impl ServerState {
             provider_control: app.provider_control,
             workflow_control: app.workflow_control,
             pty: support::pty_state::PtyState::new(),
-            workspace_adapters: app.workspace_adapters,
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
             catalog_updates: app.catalog_updates,

@@ -110,7 +110,7 @@ pub fn test_runtime(
         for target in *can_spawn {
             assert_yaml_safe_id(target);
         }
-        if hya_core::is_builtin_id(stable_id) {
+        if hya_core::builtin_agent(stable_id).is_some() {
             continue;
         }
         let role = match role {

@@ -39,11 +39,6 @@ impl<W: std::io::Write> JsonStreamPrinter<W> {
     }
 
     /// Number of durable envelopes printed so far.
-    #[cfg(test)]
-    pub(crate) fn printed_count(&self) -> usize {
-        self.printed.len()
-    }
-
     /// Print `envelope` when eligible and not yet printed. Returns whether
     /// the envelope was printed.
     pub(crate) fn print(
@@ -160,7 +155,6 @@ mod tests {
         assert!(!printer.print(&envelope(0, session), session).unwrap());
         assert!(!printer.print(&envelope(1, other), session).unwrap());
         assert!(printer.print(&envelope(1, session), session).unwrap());
-        assert_eq!(printer.printed_count(), 1);
         // Duplicates are dropped regardless of arrival order.
         assert!(!printer.print(&envelope(1, session), session).unwrap());
         assert!(printer.print(&envelope(3, session), session).unwrap());

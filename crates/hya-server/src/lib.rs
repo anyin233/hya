@@ -295,8 +295,7 @@ fn cors() -> CorsLayer {
 
 /// HTTP error returned by `/v1` handlers as `(status, message)`.
 ///
-/// Constructed via private helpers (`bad_request`, `not_found`, `conflict`,
-/// `service_unavailable`, `internal`). `CoreError` / `StoreError` map to 500.
+/// `CoreError` / `StoreError` map to 500.
 pub struct ApiError {
     status: StatusCode,
     message: String,
@@ -304,14 +303,6 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn with_status(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            message: message.into(),
-            code: None,
-        }
-    }
-
     pub(crate) fn structured(
         status: StatusCode,
         code: impl Into<String>,
@@ -337,27 +328,12 @@ impl ApiError {
         &self.message
     }
 
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::BAD_REQUEST, message)
-    }
-
-    #[allow(dead_code)]
-    fn not_found(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::NOT_FOUND, message)
-    }
-
     fn internal(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
-    }
-
-    #[allow(dead_code)]
-    fn conflict(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::CONFLICT, message)
-    }
-
-    #[allow(dead_code)]
-    fn service_unavailable(message: impl Into<String>) -> Self {
-        Self::with_status(StatusCode::SERVICE_UNAVAILABLE, message)
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+            code: None,
+        }
     }
 }
 

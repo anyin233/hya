@@ -636,7 +636,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
     let bundles = agents
         .iter()
         // Built-in ids are compiled in; a fixture asking for one just gets it.
-        .filter(|agent| !hya_core::is_builtin_id(&agent.stable_id))
+        .filter(|agent| hya_core::builtin_agent(&agent.stable_id).is_none())
         .map(|agent| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,

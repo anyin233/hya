@@ -15,8 +15,6 @@ import { ProjectView } from "../components/ProjectView"
 import { colors } from "../theme"
 import { useApp } from "./context"
 
-export { layoutBreakpoints } from "../state/layout"
-
 /**
  * Root layout: one editable split tree owns Projects, Conversation, Sessions,
  * Todos, and Context. The full-screen

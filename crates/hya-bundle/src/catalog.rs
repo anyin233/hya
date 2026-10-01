@@ -45,7 +45,6 @@ pub struct BundleCatalog {
     resources: BTreeMap<(ExportKind, String), (usize, usize)>,
     local_resources: BTreeMap<(String, ExportKind, String), String>,
     semantic_identity_v1: Option<Vec<u8>>,
-    verified_catalog_records: Option<Vec<Vec<u8>>>,
 }
 
 impl BundleCatalog {
@@ -62,7 +61,6 @@ impl BundleCatalog {
             resources: BTreeMap::new(),
             local_resources: BTreeMap::new(),
             semantic_identity_v1: None,
-            verified_catalog_records: None,
         };
         let mut bundle_ids = BTreeSet::new();
         let mut stable_agent_ids = BTreeSet::new();
@@ -165,42 +163,7 @@ impl BundleCatalog {
         let mut catalog = Self::from_prepared(&bundles)?;
         let records = encode_verified_catalog_records(catalogs)?;
         catalog.semantic_identity_v1 = Some(encode_semantic_identity_v1(&records)?);
-        catalog.verified_catalog_records = Some(records);
         Ok(catalog)
-    }
-
-    /// Merge additional verified catalogs while preserving prior provenance.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BundleError::PreparedEncode`] when this catalog lacks verified
-    /// provenance or when the merged semantic identity cannot be encoded.
-    pub fn with_verified_catalogs(
-        &self,
-        catalogs: &[&PreparedCatalog],
-    ) -> Result<Self, BundleError> {
-        let Some(existing_records) = self.verified_catalog_records.as_ref() else {
-            return Err(BundleError::PreparedEncode {
-                detail: "verified catalog provenance unavailable".to_string(),
-            });
-        };
-        let bundles = self
-            .bundles
-            .iter()
-            .cloned()
-            .chain(
-                catalogs
-                    .iter()
-                    .flat_map(|catalog| catalog.bundles.iter().cloned()),
-            )
-            .collect::<Vec<_>>();
-        let mut merged = Self::from_prepared(&bundles)?;
-        let mut records = existing_records.clone();
-        records.extend(encode_verified_catalog_records(catalogs)?);
-        records.sort();
-        merged.semantic_identity_v1 = Some(encode_semantic_identity_v1(&records)?);
-        merged.verified_catalog_records = Some(records);
-        Ok(merged)
     }
 
     /// Domain-separated semantic identity bytes when built from verified catalogs.
@@ -239,18 +202,6 @@ impl BundleCatalog {
             .iter()
             .find(|bundle| bundle.identity().id == bundle_id)
             .map_or(&[], PreparedInstallableBundle::channels)
-    }
-
-    /// Resolve one bundle-local channel template id.
-    #[must_use]
-    pub fn resolve_channel_template(
-        &self,
-        bundle_id: &str,
-        template_id: &str,
-    ) -> Option<&PreparedChannelTemplate> {
-        self.channels_for_bundle(bundle_id)
-            .iter()
-            .find(|template| template.id == template_id)
     }
 
     /// Resolve a Workflow by its exact qualified id or an unambiguous bare id.

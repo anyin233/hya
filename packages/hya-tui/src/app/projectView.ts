@@ -153,4 +153,3 @@ export function createProjectViewController({ store, client, switchProject, newT
   return { open, close, key }
 }
 
-export type ProjectViewController = ReturnType<typeof createProjectViewController>

@@ -93,4 +93,3 @@ export function createRulesController({ store, client }: RulesControllerOptions)
   return { open, close, key, dispose: () => { abort?.abort() } }
 }
 
-export type RulesController = ReturnType<typeof createRulesController>

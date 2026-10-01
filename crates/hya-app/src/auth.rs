@@ -351,12 +351,6 @@ pub fn save_token(provider: &str, token: &str) -> std::io::Result<()> {
     save_token_in(&dir, provider, token)
 }
 
-/// Save a full credential for `provider` in the user auth directory.
-pub fn save_credential(provider: &str, credential: &AuthCredential) -> std::io::Result<()> {
-    let dir = auth_dir().ok_or_else(|| std::io::Error::other("no config directory"))?;
-    save_credential_in(&dir, provider, credential)
-}
-
 /// List provider ids with saved credentials in the user auth directory.
 pub fn list_tokens() -> std::io::Result<Vec<String>> {
     let dir = auth_dir().ok_or_else(|| std::io::Error::other("no config directory"))?;
@@ -367,12 +361,6 @@ pub fn list_tokens() -> std::io::Result<Vec<String>> {
 pub fn remove_token(provider: &str) -> std::io::Result<bool> {
     let dir = auth_dir().ok_or_else(|| std::io::Error::other("no config directory"))?;
     remove_token_in(&dir, provider)
-}
-
-/// Load the bearer access token for `provider` from the user auth directory.
-#[must_use]
-pub fn load_token(provider: &str) -> Option<String> {
-    load_token_in(&auth_dir()?, provider)
 }
 
 /// Load the full credential for `provider` from the user auth directory.

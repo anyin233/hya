@@ -9,7 +9,7 @@
 //! and rebuilds it when the base generation moves.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{ModelRef, ProjectId};
@@ -129,19 +129,5 @@ impl ScopeOverlay {
             project_bundle_dirs: BTreeMap::new(),
             fingerprint: [0; 32],
         }
-    }
-
-    /// Whether `bundle_id` is a scope bundle (it has a source directory).
-    #[must_use]
-    pub fn is_project_bundle(&self, bundle_id: &str) -> bool {
-        self.project_bundle_dirs.contains_key(bundle_id)
-    }
-
-    /// The source directory of scope bundle `bundle_id`.
-    #[must_use]
-    pub fn project_bundle_dir(&self, bundle_id: &str) -> Option<&Path> {
-        self.project_bundle_dirs
-            .get(bundle_id)
-            .map(PathBuf::as_path)
     }
 }

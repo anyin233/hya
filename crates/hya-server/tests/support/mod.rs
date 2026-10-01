@@ -125,7 +125,7 @@ pub fn test_agents() -> Vec<AgentFixture> {
 fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
     agents
         .iter()
-        .filter(|agent| !hya_core::is_builtin_id(agent.stable_id))
+        .filter(|agent| hya_core::builtin_agent(agent.stable_id).is_none())
         .map(|agent| PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
             check: None,
             format_version: 2,

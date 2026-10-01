@@ -5,8 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{MessageId, SessionId};
-use crate::message::FinishReason;
+use crate::ids::SessionId;
 use crate::model::ModelRef;
 
 /// Body for `POST` create-session: who runs, where, and optional parent link.
@@ -28,13 +27,6 @@ pub struct CreateSessionRequest {
 pub struct CreateSessionResponse {
     /// Newly minted (or resumed) session id.
     pub session: SessionId,
-}
-
-/// Body for admitting a plain user prompt into a session.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PromptRequest {
-    /// User text to record as the next user message and run a turn on.
-    pub text: String,
 }
 
 /// Body for admitting a slash-command as a user message (compat/native command path).
@@ -113,21 +105,4 @@ impl ShellRequest {
         }
         Some(ModelRef::new(format!("{provider}/{model_id}")))
     }
-}
-
-/// Result of a completed prompt or command turn (native API).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PromptResponse {
-    /// Assistant message id that finished (or was force-finished).
-    pub message: MessageId,
-    /// Terminal finish reason for that assistant message.
-    pub finish: FinishReason,
-}
-
-/// Query parameters for replaying or streaming events after a sequence watermark.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct EventsQuery {
-    /// When set, return only envelopes with `seq` strictly greater than this value.
-    #[serde(default)]
-    pub since_seq: Option<u64>,
 }

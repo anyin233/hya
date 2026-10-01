@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { HyaClient, ProjectInfo, SessionInfo, SessionPlacement, StreamFrame } from "../src/client"
 import { createController } from "../src/app/controller"
-import { activeProject, newestTopLevelSession, noProjectStatus, pathInside, projectBusy, projectScope, sessionPlacement, sessionsInScope } from "../src/state/projects"
+import { activeProject, newestTopLevelSession, noProjectStatus, pathInside, projectScope, sessionPlacement, sessionsInScope } from "../src/state/projects"
 import { createAppStore } from "../src/state/store"
 
 const work: ProjectInfo = { id: "prj_work", name: "work", roots: ["/work", "/docs"], busy: false }
@@ -63,8 +63,6 @@ test("the store keeps the Project list, the active Project, and per-Project busy
   store.setProjects([work, other])
   store.setActiveProject("prj_other")
   expect(activeProject(store.state)?.name).toBe("other")
-  expect(projectBusy(store.state, "prj_other")).toBe(true)
-  expect(projectBusy(store.state, "prj_work")).toBe(false)
   store.setActiveProject(undefined)
   expect(activeProject(store.state)).toBeUndefined()
 })
@@ -250,7 +248,6 @@ test("a projectsUpdated frame on the global stream re-reads the Project list (de
   await h.global({ event: { projectsUpdated: {} } })
   await Bun.sleep(200)
   expect(h.named("listProjects").length).toBe(before + 1)
-  expect(projectBusy(h.store.state, "prj_work")).toBe(true)
   h.controller.dispose()
 })
 

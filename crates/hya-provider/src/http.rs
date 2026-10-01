@@ -1453,7 +1453,15 @@ mod tests {
     #[test]
     fn configured_provider_identity_covers_routes_without_secrets_or_live_state() {
         fn configured_identities(router: &ProviderRouter) -> Option<Vec<Vec<u8>>> {
-            router.configured_identities_v1()
+            router
+                .providers()
+                .iter()
+                .map(|provider| {
+                    provider
+                        .configured_identity_v1()
+                        .filter(|identity| !identity.is_empty())
+                })
+                .collect()
         }
 
         let route = |id: &str, kind: ProviderKind, base: &str, key: &str, models: &[&str]| {

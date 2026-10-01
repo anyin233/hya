@@ -1,9 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use hya_proto::SessionId;
-use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -46,15 +45,7 @@ pub(crate) struct RunGuard {
     quiet: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[allow(dead_code)]
-pub(crate) struct RunStatus {
-    #[serde(rename = "type")]
-    status_type: &'static str,
-}
-
 impl RunRegistry {
-    #[allow(dead_code)]
     pub(crate) fn start(&self, session: SessionId) -> Option<RunGuard> {
         self.start_with(session, false)
     }
@@ -92,7 +83,6 @@ impl RunRegistry {
         })
     }
 
-    #[allow(dead_code)]
     pub(crate) fn cancel(&self, session: SessionId) -> bool {
         let token = {
             let runs = self.lock_runs();
@@ -111,24 +101,8 @@ impl RunRegistry {
         self.inner.changes.subscribe()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn is_busy(&self, session: SessionId) -> bool {
         self.lock_runs().contains_key(&session)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn statuses(&self) -> BTreeMap<String, RunStatus> {
-        self.lock_runs()
-            .keys()
-            .map(|session| {
-                (
-                    session.to_string(),
-                    RunStatus {
-                        status_type: "busy",
-                    },
-                )
-            })
-            .collect()
     }
 
     fn lock_runs(&self) -> MutexGuard<'_, HashMap<SessionId, ActiveRun>> {
@@ -140,7 +114,6 @@ impl RunRegistry {
 }
 
 impl RunGuard {
-    #[allow(dead_code)]
     pub(crate) fn token(&self) -> CancellationToken {
         self.token.clone()
     }

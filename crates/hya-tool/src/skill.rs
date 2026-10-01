@@ -36,7 +36,6 @@ impl SkillPlane {
             roots: SkillRoots::ExplicitDirs(Arc::new(dirs)),
         }
     }
-
     /// Build a plane over the exact immutable catalog captured by a turn.
     #[must_use]
     pub fn from_snapshot(skills: Arc<Vec<crate::SkillCatalogEntry>>) -> Self {

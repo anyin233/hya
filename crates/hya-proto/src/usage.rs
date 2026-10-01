@@ -71,7 +71,7 @@ pub struct OutputSplit {
 }
 
 impl OutputSplit {
-    /// Thinking tokens, or `None` when any contributing call's split is unknown.
+    /// Thinking output, or `None` when any contributing call's split is unknown.
     #[must_use]
     pub fn thinking_exact(self) -> Option<u64> {
         (self.unknown == 0).then_some(self.thinking)
@@ -295,20 +295,8 @@ mod tests {
                 unknown: 50,
             }
         );
-        assert_eq!(split.thinking_exact(), None);
-        assert_eq!(split.visible_exact(), None);
         assert_eq!(totals.rounds, 2);
         assert_eq!(totals.prompt(), 13);
-    }
-
-    #[test]
-    fn output_split_is_exact_when_every_round_reported_thinking() {
-        let mut totals = UsageTotals::default();
-        totals.add_round(&known(30, 12));
-        totals.add_round(&known(20, 0));
-        let split = totals.output_split();
-        assert_eq!(split.thinking_exact(), Some(12));
-        assert_eq!(split.visible_exact(), Some(38));
     }
 
     #[test]

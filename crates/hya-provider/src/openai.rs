@@ -22,7 +22,6 @@ pub use responses::{
 
 /// Marker written by older chat decoders; historical sessions still replay it.
 pub(crate) const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";
-
 /// OpenAI Chat Completions request encoder + SSE decoder factory.
 pub struct OpenAiChatProtocol;
 

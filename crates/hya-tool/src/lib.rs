@@ -86,10 +86,7 @@ pub use mailbox::{
     ArchivedAgentRow, ChannelInfo, ChannelPolicySnapshot, ChannelRow, MailReceipt, MailboxError,
     MailboxPlane, MailboxRequest, MemberStatusRow,
 };
-pub use namespace::{
-    InvalidNamespacedName, NAMESPACE_SEPARATOR, NamespacedRegisterError, namespace_of,
-    namespaced_name,
-};
+pub use namespace::{InvalidNamespacedName, NAMESPACE_SEPARATOR, namespace_of, namespaced_name};
 pub use output_cap::{
     MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_spilling, cap_tool_output_with_policy,
 };

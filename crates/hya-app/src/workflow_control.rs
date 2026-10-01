@@ -93,21 +93,6 @@ impl WorkflowCatalogRoots {
             user: workflow_user_dir(),
         }
     }
-
-    /// Roots for a listing that names no directory: user tier only.
-    ///
-    /// `hya serve` has no working directory of its own (ADR-0024), so an
-    /// unscoped `ListWorkflows` must not read any project-relative path.
-    /// The project root list is empty (discovery finds nothing there); only
-    /// the user-level Workflow directory is scanned, alongside the bound
-    /// runtime's installed/first-party bundles.
-    #[must_use]
-    pub fn user_only() -> Self {
-        Self {
-            project: Vec::new(),
-            user: workflow_user_dir(),
-        }
-    }
 }
 
 /// One immutable Workflow plus its exact identity and source owner.

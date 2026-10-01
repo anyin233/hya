@@ -8,6 +8,7 @@
 //! agent definition merge and no external config reading.
 
 use std::path::Path;
+const BARE_PROVIDER: &str = "hya";
 
 use axum::http::StatusCode;
 use hya_bundle::BundleError;
@@ -22,8 +23,6 @@ pub(crate) struct BoundAgentRow {
     pub(crate) description: Option<String>,
     pub(crate) mode: String,
     pub(crate) hidden: bool,
-    pub(crate) color: Option<String>,
-    pub(crate) prompt: Option<String>,
     pub(crate) model: Option<String>,
 }
 
@@ -114,9 +113,7 @@ async fn resolve_session_model(
                 )
             })?;
         let identity = state.effective.model;
-        let model = if identity.provider_id == crate::support::model_ref::BARE_PROVIDER
-            && identity.model_id != "offline"
-        {
+        let model = if identity.provider_id == BARE_PROVIDER && identity.model_id != "offline" {
             identity.model_id
         } else {
             format!("{}/{}", identity.provider_id, identity.model_id)
@@ -156,8 +153,6 @@ pub(crate) async fn list(
                 description: agent.description.map(str::to_string),
                 mode,
                 hidden,
-                color: agent.color.map(str::to_string),
-                prompt: agent.prompt.map(str::to_string),
                 model: agent.model_policy.model.clone(),
             }
         })

@@ -260,25 +260,6 @@ impl SessionEngine {
         Ok(())
     }
 
-    /// Abort operations recovered after resident restart.
-    pub async fn abort_recovered_actor_operations(
-        &self,
-        recovered: &RecoveredActorClaim,
-    ) -> Result<usize, CoreError> {
-        let records = self
-            .store
-            .abort_recovered_actor_admissions(recovered, "resident actor takeover")
-            .await?;
-        if let Some(governor) = &self.governor {
-            for record in &records {
-                if record.logical_released {
-                    governor.release_operation(record.operation_id);
-                }
-            }
-        }
-        Ok(records.len())
-    }
-
     pub(crate) async fn recover_resident_actor_durable(
         &self,
         recovered: &RecoveredActorClaim,

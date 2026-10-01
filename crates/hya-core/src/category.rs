@@ -254,21 +254,6 @@ impl CategoryRegistry {
         Self { entries }
     }
 
-    /// Overlay additional/replacement entries.
-    #[must_use]
-    pub fn with_overrides(mut self, overrides: HashMap<String, CategoryEntry>) -> Self {
-        for (k, v) in overrides {
-            self.entries.insert(k, v);
-        }
-        self
-    }
-
-    /// Whether no categories are registered.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// Return each category's exact ordered model candidates in canonical key
     /// order. Prompt and token shaping are intentionally excluded because the
     /// spawn resolver currently discards those fields.

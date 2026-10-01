@@ -244,4 +244,3 @@ export function createReconnector({
   }
 }
 
-export type Reconnector = ReturnType<typeof createReconnector>

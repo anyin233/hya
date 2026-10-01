@@ -218,12 +218,6 @@ impl TokenUsage {
             .saturating_add(self.cache_write)
     }
 
-    /// Visible (non-thinking) output, or `None` when the thinking split is unknown.
-    #[must_use]
-    pub fn visible_output(self) -> Option<u64> {
-        (!self.reasoning_unknown).then(|| self.output.saturating_sub(self.reasoning))
-    }
-
     /// Fold another sample by taking the maximum of each counter (not a sum).
     ///
     /// The thinking split stays unknown once any sample reported it unknown.

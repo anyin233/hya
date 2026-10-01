@@ -58,12 +58,6 @@ fn channel_only_agent_set_prepares_and_round_trips_canonically() {
         .expect("prepared channel policy round-trip");
     let catalog = BundleCatalog::from_prepared(decoded.bundles()).expect("catalog");
     assert_eq!(catalog.channels_for_bundle("hya/agent-channels").len(), 2);
-    assert_eq!(
-        catalog
-            .resolve_channel_template("hya/agent-channels", "unit-default")
-            .map(|row| row.kind),
-        Some(ChannelTemplateKind::Unit)
-    );
 }
 
 #[test]

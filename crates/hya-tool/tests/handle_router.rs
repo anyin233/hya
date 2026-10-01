@@ -115,7 +115,7 @@ fn spilled_output_resolves_through_its_handle() {
     assert_eq!(meta.bytes as usize, body.len());
     assert!(meta.handle().starts_with("artifact://"));
 
-    let resolved = router.resolve_str(&meta.handle()).unwrap();
+    let resolved = router.resolve(&meta.handle().parse().unwrap()).unwrap();
     assert_eq!(resolved.body, body, "retrieval must be byte-exact");
     assert_eq!(resolved.media_type, "text/plain");
 }
@@ -135,7 +135,10 @@ fn hooks_chain_in_registration_order() {
 
     assert_eq!(router.artifacts().hook_names(), vec!["first", "second"]);
     assert_eq!(
-        router.resolve_str(&meta.handle()).unwrap().body,
+        router
+            .resolve(&meta.handle().parse().unwrap())
+            .unwrap()
+            .body,
         "body<first><second>",
         "each hook transforms the previous hook's output"
     );
@@ -158,11 +161,17 @@ fn a_hook_can_select_the_artifacts_it_cares_about() {
         .unwrap();
 
     assert_eq!(
-        router.resolve_str(&matched.handle()).unwrap().body,
+        router
+            .resolve(&matched.handle().parse().unwrap())
+            .unwrap()
+            .body,
         "REPLACED"
     );
     assert_eq!(
-        router.resolve_str(&skipped.handle()).unwrap().body,
+        router
+            .resolve(&skipped.handle().parse().unwrap())
+            .unwrap()
+            .body,
         "stdout",
         "a hook that does not apply must leave the body alone"
     );
@@ -179,7 +188,10 @@ fn declining_a_hook_passes_the_body_through_unchanged() {
         .unwrap();
 
     assert_eq!(
-        router.resolve_str(&meta.handle()).unwrap().body,
+        router
+            .resolve(&meta.handle().parse().unwrap())
+            .unwrap()
+            .body,
         "untouched"
     );
 }
@@ -197,7 +209,7 @@ fn a_failing_hook_is_reported_and_leaves_the_stored_bytes_intact() {
         .store("bash", "text/plain", b"precious output")
         .unwrap();
 
-    let error = router.resolve_str(&meta.handle()).unwrap_err();
+    let error = router.resolve(&meta.handle().parse().unwrap()).unwrap_err();
     assert!(
         error.to_string().contains("broken"),
         "the failure must name the hook: {error}"
@@ -222,20 +234,28 @@ fn projections_slice_the_resolved_body() {
         .unwrap();
     let handle = meta.handle();
 
-    let head = router.resolve_str(&format!("{handle}?head=2")).unwrap();
+    let head = router
+        .resolve(&format!("{handle}?head=2").parse().unwrap())
+        .unwrap();
     assert_eq!(head.body, "line 1\nline 2\n");
 
-    let tail = router.resolve_str(&format!("{handle}?tail=2")).unwrap();
+    let tail = router
+        .resolve(&format!("{handle}?tail=2").parse().unwrap())
+        .unwrap();
     assert_eq!(tail.body, "line 9\nline 10\n");
 
-    let range = router.resolve_str(&format!("{handle}?lines=3-4")).unwrap();
+    let range = router
+        .resolve(&format!("{handle}?lines=3-4").parse().unwrap())
+        .unwrap();
     assert_eq!(range.body, "line 3\nline 4\n");
 
-    let open = router.resolve_str(&format!("{handle}?lines=9")).unwrap();
+    let open = router
+        .resolve(&format!("{handle}?lines=9").parse().unwrap())
+        .unwrap();
     assert_eq!(open.body, "line 9\nline 10\n");
 
     let grep = router
-        .resolve_str(&format!("{handle}?grep=line 1$"))
+        .resolve(&format!("{handle}?grep=line 1$").parse().unwrap())
         .unwrap();
     assert_eq!(grep.body, "line 1\n");
 }
@@ -258,14 +278,14 @@ fn json_projection_selects_a_field() {
 
     assert_eq!(
         router
-            .resolve_str(&format!("{handle}?q=.usage.input"))
+            .resolve(&format!("{handle}?q=.usage.input").parse().unwrap())
             .unwrap()
             .body,
         "1234"
     );
     assert_eq!(
         router
-            .resolve_str(&format!("{handle}?q=.items.1"))
+            .resolve(&format!("{handle}?q=.items.1").parse().unwrap())
             .unwrap()
             .body,
         "beta",
@@ -273,7 +293,7 @@ fn json_projection_selects_a_field() {
     );
     assert_eq!(
         router
-            .resolve_str(&format!("{handle}?q=.stdout"))
+            .resolve(&format!("{handle}?q=.stdout").parse().unwrap())
             .unwrap()
             .body,
         "raw text\nwith newlines",
@@ -289,7 +309,9 @@ fn local_scheme_reads_agent_scratch() {
     std::fs::write(local.join("plan.md"), "# plan\nstep one\n").unwrap();
 
     let router = HandleRouter::new(&dir);
-    let content = router.resolve_str("local://notes/plan.md").unwrap();
+    let content = router
+        .resolve(&"local://notes/plan.md".parse().unwrap())
+        .unwrap();
     assert_eq!(content.body, "# plan\nstep one\n");
 }
 
@@ -317,7 +339,10 @@ fn write_target_resolves_a_local_payload_path() {
     std::fs::create_dir_all(target.parent().unwrap()).unwrap();
     std::fs::write(&target, "# plan\n").unwrap();
     assert_eq!(
-        router.resolve_str("local://notes/plan.md").unwrap().body,
+        router
+            .resolve(&"local://notes/plan.md".parse().unwrap())
+            .unwrap()
+            .body,
         "# plan\n"
     );
 }
@@ -385,7 +410,9 @@ fn skill_scheme_resolves_a_catalog_body() {
     .unwrap();
 
     let router = HandleRouter::new(&dir).with_skills(SkillPlane::new(vec![dir.join("skills")]));
-    let content = router.resolve_str("skill://code-review").unwrap();
+    let content = router
+        .resolve(&"skill://code-review".parse().unwrap())
+        .unwrap();
     assert!(
         content.body.contains("unhandled errors"),
         "skill body must resolve: {}",
@@ -398,13 +425,19 @@ fn a_missing_resource_is_a_not_found_error() {
     let dir = tempdir("missing");
     let router = HandleRouter::new(&dir);
 
-    let error = router.resolve_str("artifact://0-0-0").unwrap_err();
+    let error = router
+        .resolve(&"artifact://0-0-0".parse().unwrap())
+        .unwrap_err();
     assert!(error.to_string().contains("not found"), "{error}");
 
-    let error = router.resolve_str("local://nope.md").unwrap_err();
+    let error = router
+        .resolve(&"local://nope.md".parse().unwrap())
+        .unwrap_err();
     assert!(error.to_string().contains("not found"), "{error}");
 
-    let error = router.resolve_str("skill://nope").unwrap_err();
+    let error = router
+        .resolve(&"skill://nope".parse().unwrap())
+        .unwrap_err();
     assert!(error.to_string().contains("not found"), "{error}");
 }
 
@@ -429,7 +462,10 @@ fn a_plain_path_is_reported_as_not_a_handle() {
     let dir = tempdir("plain");
     let router = HandleRouter::new(&dir);
 
-    let error = router.resolve_str("src/main.rs").unwrap_err();
+    let error = match "src/main.rs".parse::<HandleRef>() {
+        Err(error) => error,
+        Ok(reference) => router.resolve(&reference).unwrap_err(),
+    };
     assert!(
         matches!(error, hya_tool::handle::HandleError::NotAHandle(_)),
         "{error}"

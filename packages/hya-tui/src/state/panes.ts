@@ -43,10 +43,6 @@ export function defaultPaneLayout(): PaneLayout {
   } }
 }
 
-/** The familiar startup arrangement, independent of which pane is selected. */
-export function isDefaultPaneTree(layout: PaneLayout): boolean {
-  return JSON.stringify(layout.root) === JSON.stringify(defaultPaneLayout().root)
-}
 
 /** Filter pane jobs by viewport without depending on the currently focused pane. */
 export function visiblePaneRoot(root: PaneNode, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneNode {

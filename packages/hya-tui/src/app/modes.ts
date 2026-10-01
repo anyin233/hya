@@ -153,4 +153,3 @@ export function createModeSwitcher({ store, client, preferredMode, saveMode }: M
   }
 }
 
-export type ModeSwitcher = ReturnType<typeof createModeSwitcher>
