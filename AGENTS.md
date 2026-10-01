@@ -94,13 +94,13 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 
 ## Release & Changelog Rule
 
-- Before publishing, `versions.toml` `[backend].version` and `[frontend].version`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` must describe the same release version; `[workspace.package].version` mirrors the backend aggregate.
-- Every fix or feature change that ships code must update the aggregate version contract when it changes release behavior. Only backend and frontend aggregate values are real versions; component manifests use `0.0.0` with explicit `version-reference` metadata.
+- Before publishing a backend release, `versions.toml` `[backend].version`, `[workspace.package].version`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` must describe the same backend version. `[frontend].version` is independent and may differ.
+- Every fix or feature change that ships code updates the aggregate for the side it changes. Only backend and frontend aggregate values are real versions; component manifests use `0.0.0` with explicit `version-reference` metadata.
 - Bump the version only for changes to shipped behavior: Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else that lands in the release archive or source install.
 - Do not bump the version for documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`) or CI-only changes (`.github/`, CI scripts and config). The same holds for test-only changes that leave shipped code untouched.
-- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the aggregate version once for the whole atomic change.
-- Bundle source manifests use identity version `0.0.0` plus `version_ref: backend`; preparation resolves the backend aggregate, and release tests reject unresolved or mismatched identities. Frontend package manifests use `0.0.0` plus `version-reference = "frontend"`; the packaged TUI carries `packages/hya-tui/frontend-version.ts`.
-- Version bumps: `cargo test -p xtask` checks aggregate/reference metadata and release layout; `cargo test -p hya-bundle` checks bundle preparation and resolved identities; `README.md` and `Cargo.lock` are checked by release rehearsal.
+- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the relevant aggregate once for the whole atomic change.
+- Bundle source manifests use identity version `0.0.0` plus `version_ref: backend`; preparation resolves the backend aggregate, and release tests reject unresolved or mismatched identities. Frontend package manifests use `0.0.0` plus `version-reference = "frontend"`; the packaged TUI carries its frontend version and rejects backends below its declared minimum.
+- Version bumps: `cargo test -p xtask` checks aggregate/reference metadata, frontend minimum-backend compatibility, and release layout; `cargo test -p hya-bundle` checks bundle preparation and resolved identities; `README.md` and `Cargo.lock` are checked by release rehearsal.
 - Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
 - When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
 - Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.

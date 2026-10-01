@@ -5,17 +5,22 @@ fn main() {
     let versions_path = manifest_dir.join("../../versions.toml");
     println!("cargo:rerun-if-changed={}", versions_path.display());
     let source = fs::read_to_string(&versions_path).expect("read versions.toml");
-    for (section, env_name) in [
-        ("backend", "HYA_BACKEND_VERSION"),
-        ("frontend", "HYA_FRONTEND_VERSION"),
+    for (section, key, env_name) in [
+        ("backend", "version", "HYA_BACKEND_VERSION"),
+        ("frontend", "version", "HYA_FRONTEND_VERSION"),
+        (
+            "frontend",
+            "minimum_backend_version",
+            "HYA_MINIMUM_BACKEND_VERSION",
+        ),
     ] {
-        let version = section_version(&source, section)
-            .unwrap_or_else(|| panic!("versions.toml is missing [{section}].version"));
-        println!("cargo:rustc-env={env_name}={version}");
+        let value = section_value(&source, section, key)
+            .unwrap_or_else(|| panic!("versions.toml is missing [{section}].{key}"));
+        println!("cargo:rustc-env={env_name}={value}");
     }
 }
 
-fn section_version<'a>(source: &'a str, section: &str) -> Option<&'a str> {
+fn section_value<'a>(source: &'a str, section: &str, key: &str) -> Option<&'a str> {
     let header = format!("[{section}]");
     let mut in_section = false;
     for line in source.lines() {
@@ -25,8 +30,8 @@ fn section_version<'a>(source: &'a str, section: &str) -> Option<&'a str> {
             continue;
         }
         if in_section {
-            let (key, value) = line.split_once('=')?;
-            if key.trim() == "version" {
+            let (candidate, value) = line.split_once('=')?;
+            if candidate.trim() == key {
                 return value.trim().strip_prefix('"')?.strip_suffix('"');
             }
         }

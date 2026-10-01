@@ -2,6 +2,7 @@
 
 use hya_bundle::{BundleSource, SourceFile, prepare_package};
 
+use hya_version::BACKEND_VERSION;
 #[test]
 fn resolves_backend_version_reference_in_bundle_source() {
     let source = BundleSource::new(
@@ -12,5 +13,5 @@ fn resolves_backend_version_reference_in_bundle_source() {
         )],
     );
     let prepared = prepare_package(source).expect("backend version reference should resolve");
-    assert_eq!(prepared.bundles()[0].identity().version, "0.43.40");
+    assert_eq!(prepared.bundles()[0].identity().version, BACKEND_VERSION);
 }

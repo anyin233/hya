@@ -25,10 +25,11 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (backend version `0.43.40`, frontend version `0.43.40`,
-`MIT OR Apache-2.0`). The latest public binary release is `v0.43.37`; install it
-as described below, or build this checkout from source. It is not published to
-crates.io. APIs, config, and command surfaces may still change between versions.
+hya is under active development (backend version `0.43.41`, frontend version `0.43.40`,
+`MIT OR Apache-2.0`). The frontend requires a backend at least `0.43.41`.
+The latest public binary release is `v0.43.37`; install it as described below,
+or build this checkout from source. It is not published to crates.io. APIs,
+config, and command surfaces may still change between versions.
 
 ## Install a Release
 

@@ -797,15 +797,23 @@ fn validate_release_metadata(
         "Cargo.toml workspace version `{workspace_version}` does not match `{version}`"
     );
 
-    let (backend_version, frontend_version) = aggregate_versions(root)?;
+    let (backend_version, frontend_version, minimum_backend_version) = aggregate_versions(root)?;
     ensure!(
         backend_version == version,
         "versions.toml backend version `{backend_version}` does not match `{version}`"
+    );
+    ensure!(
+        release_version_at_least(&backend_version, &minimum_backend_version)?,
+        "backend version `{backend_version}` is below frontend minimum `{minimum_backend_version}`"
     );
     let frontend_source = read_text(root, "packages/hya-tui/frontend-version.ts")?;
     ensure!(
         frontend_source.contains(&format!("= \"{frontend_version}\"")),
         "packages/hya-tui/frontend-version.ts does not carry frontend version {frontend_version}"
+    );
+    ensure!(
+        frontend_source.contains(&format!("= \"{minimum_backend_version}\"")),
+        "packages/hya-tui/frontend-version.ts does not carry minimum backend version {minimum_backend_version}"
     );
     let readme = read_text(root, "README.md")?;
     ensure!(
@@ -921,18 +929,38 @@ fn read_text(root: &Path, relative: &str) -> Result<String> {
     fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
 }
 
-fn aggregate_versions(root: &Path) -> Result<(String, String)> {
+fn aggregate_versions(root: &Path) -> Result<(String, String, String)> {
     let source = read_text(root, "versions.toml")?;
     let manifest: toml::Value = toml::from_str(&source).context("parse versions.toml")?;
-    let version = |component: &str| {
+    let value = |section: &str, key: &str| {
         manifest
-            .get(component)
-            .and_then(|section| section.get("version"))
+            .get(section)
+            .and_then(|section| section.get(key))
             .and_then(toml::Value::as_str)
             .map(str::to_owned)
-            .with_context(|| format!("versions.toml [{component}].version is missing"))
+            .with_context(|| format!("versions.toml [{section}].{key} is missing"))
     };
-    Ok((version("backend")?, version("frontend")?))
+    Ok((
+        value("backend", "version")?,
+        value("frontend", "version")?,
+        value("frontend", "minimum_backend_version")?,
+    ))
+}
+
+fn release_version_at_least(actual: &str, minimum: &str) -> Result<bool> {
+    let parse = |version: &str| -> Result<[u64; 3]> {
+        let without_build = version.split_once('+').map_or(version, |(core, _)| core);
+        let core = without_build
+            .split_once('-')
+            .map_or(without_build, |(core, _)| core);
+        let parts = core
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ensure!(parts.len() == 3, "version `{version}` is not semver-shaped");
+        Ok([parts[0], parts[1], parts[2]])
+    };
+    Ok(parse(actual)? >= parse(minimum)?)
 }
 
 /// Read one field from a Cargo.lock package block.
@@ -2110,8 +2138,9 @@ mod tests {
     fn version_contract_separates_backend_and_frontend_aggregates() -> Result<()> {
         let root = repo_root()?;
         let versions = read_text(&root, "versions.toml")?;
-        assert!(versions.contains("[backend]\nversion = \"0.43.40\""));
+        assert!(versions.contains("[backend]\nversion = \"0.43.41\""));
         assert!(versions.contains("[frontend]\nversion = \"0.43.40\""));
+        assert!(versions.contains("minimum_backend_version = \"0.43.41\""));
 
         let backend = read_text(&root, "crates/hya-backend/Cargo.toml")?;
         assert!(backend.contains("version.workspace = true"));
@@ -2134,11 +2163,15 @@ mod tests {
     #[test]
     fn packaged_frontend_versions_use_aggregate_reference() -> Result<()> {
         let root = repo_root()?;
-        let (_, frontend_version) = aggregate_versions(&root)?;
+        let (_, frontend_version, minimum_backend_version) = aggregate_versions(&root)?;
         let source = read_text(&root, "packages/hya-tui/frontend-version.ts")?;
         ensure!(
             source.contains(&format!("= \"{frontend_version}\"")),
             "packages/hya-tui/frontend-version.ts does not carry frontend version {frontend_version}"
+        );
+        ensure!(
+            source.contains(&format!("= \"{minimum_backend_version}\"")),
+            "packages/hya-tui/frontend-version.ts does not carry minimum backend version {minimum_backend_version}"
         );
         for path in [
             "packages/hya-tui/package.json",

@@ -1,5 +1,5 @@
-# 0.43.40
+# 0.43.41
 
 ## Version management
 
-- Track backend and frontend release versions as aggregates; component manifests use placeholder versions with explicit aggregate references.
+- Separate backend and frontend release iterations; the frontend now rejects backends older than `0.43.41`.

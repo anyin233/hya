@@ -121,7 +121,7 @@ import { createReconnector, type ServerSwitch } from "./reconnect"
 import { createSessionKeeper, type ExitMode } from "./sessionKeeper"
 import { createResumer } from "./resume"
 import { probeHealth } from "../launch"
-import { tuiVersion } from "../version"
+import { backendVersionError, tuiVersion } from "../version"
 import { containsRelayLink, parseConnectRemote, redactRelayLinks, type Bridge, type BridgeFlags } from "../bridge"
 import { stripTerminalControls } from "../sanitize"
 import { SecretEntry } from "../completion"
@@ -141,6 +141,11 @@ const globalRetryMaxMs = 15_000
 /** Longest wait on exit for archiving the open session (a graceful exit of a used session only). */
 const archiveOnExitMs = 2_000
 
+
+function requireCompatibleBackend(version: string | undefined): void {
+  const error = backendVersionError(version ?? "")
+  if (error) throw new Error(error)
+}
 export interface ControllerOptions {
   client: HyaClient
   store: AppStore
@@ -1227,6 +1232,7 @@ export function createController({ client, store, directory, remote: startedRemo
       // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
       if (remote) client.setDirectory("")
       const bootstrap = await client.bootstrap()
+      requireCompatibleBackend(bootstrap.location?.version)
       store.applyBootstrap(bootstrap)
       store.setRemote(remote)
       let missing = ""
@@ -1271,7 +1277,8 @@ export function createController({ client, store, directory, remote: startedRemo
       // (unless `--resume` already shows its picker).
       if (remote && !store.state.activeProjectId && !startup.resume) projectView.open()
       const version = bootstrap.location?.version ?? ""
-      const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion} · hya serve restart` : ""
+      const compatibilityError = backendVersionError(version)
+      const mismatch = compatibilityError ? ` · ${compatibilityError}` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
       // Reopening any session already said `Resumed …`; keep it unless something needs saying.
       const resumed = !missing && !mismatch && store.state.status.startsWith("Resumed ")
@@ -1297,9 +1304,12 @@ export function createController({ client, store, directory, remote: startedRemo
       })
     }
     try {
-      store.applyBootstrap(await client.bootstrap())
-    } catch {
-      // The catalog refresh below reports a server that does not answer.
+      const bootstrap = await client.bootstrap()
+      requireCompatibleBackend(bootstrap.location?.version)
+      store.applyBootstrap(bootstrap)
+    } catch (error) {
+      status(`Connection failed: ${String(error)}`)
+      return
     }
     await refresh().catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
     startGlobalStream()
@@ -1357,7 +1367,9 @@ export function createController({ client, store, directory, remote: startedRemo
     let detail = ""
     let ok = true
     try {
-      store.applyBootstrap(await client.bootstrap())
+      const bootstrap = await client.bootstrap()
+      requireCompatibleBackend(bootstrap.location?.version)
+      store.applyBootstrap(bootstrap)
       let ensured: ProjectInfo | undefined
       if (!remote) {
         ensured = await client.ensureProjectForPath(directory).then((result) => result.project, (error: unknown) => {
@@ -1372,7 +1384,7 @@ export function createController({ client, store, directory, remote: startedRemo
       catalogStale = true
       detail += ` · ${String(error)}`
     }
-    startGlobalStream()
+    if (ok) startGlobalStream()
     if (remote) {
       if (!store.state.activeProjectId) projectView.open()
     } else if (ok) {

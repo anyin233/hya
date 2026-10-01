@@ -86,7 +86,7 @@ function harness() {
     bootstrap: async () => {
       calls.push(["bootstrap"])
       return {
-        location: { version: restarted ? "next" : "old", pid: restarted ? nextPid : oldPid },
+        location: { version: "0.43.41", pid: restarted ? nextPid : oldPid },
         agents: [{ name: "hya-main" }],
         models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }],
       }
@@ -174,7 +174,7 @@ function harness() {
         { seq: "15", session: open.id, partAppended: { message: "m_b", part: "p_b", textDelta: "still going" } },
         { seq: "16", session: open.id, messageFinished: { message: "m_b", finish: "FINISH_REASON_STOP" } },
       )
-      return { url, pid: nextPid, started: false, version: "next", startedAt: 5 }
+      return { url, pid: nextPid, started: false, version: "0.43.41", startedAt: 5 }
     },
   })
 
@@ -204,7 +204,7 @@ test("after `serverStopping {restart}` the TUI attaches to the successor at the 
   expect(successor.since).toBe("12")
   expect(h.store.state.serverUrl).toBe(url)
   expect(h.store.state.serverPid).toBe(4242)
-  expect(h.store.state.serverVersion).toBe("next")
+  expect(h.store.state.serverVersion).toBe("0.43.41")
   // Its projection renders the turn that is durable on the successor.
   expect(h.store.state.messages.map((message) => message.id)).toEqual(["m_u", "m_a"])
   // The stale turn is not running: the TUI does not wait on a turn the old server took with it.

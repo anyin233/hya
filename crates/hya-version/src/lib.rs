@@ -4,3 +4,6 @@
 pub const BACKEND_VERSION: &str = env!("HYA_BACKEND_VERSION");
 /// The release version of the shipped Bun/OpenTUI frontend.
 pub const FRONTEND_VERSION: &str = env!("HYA_FRONTEND_VERSION");
+
+/// The minimum backend version required by the current frontend.
+pub const MINIMUM_BACKEND_VERSION: &str = env!("HYA_MINIMUM_BACKEND_VERSION");
