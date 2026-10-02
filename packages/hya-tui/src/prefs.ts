@@ -1,7 +1,7 @@
 /**
  * TUI preferences (docs/tui.md "Preferences file"): a small JSON object in
  * `$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
- * `~/.config/hya/tui.json`. The TUI reads it once at start and writes it
+ * `~/.config/hya/tui.json`. The TUI reads it at start and `/layout reload`, and writes it
  * when a preference changes (`/theme`, `/vim`, `/permissions`, `/keybind`).
  *
  * - Missing file: no preferences, no warning.
@@ -103,6 +103,17 @@ export function loadPreferences(path: string): LoadedPreferences {
     } else if (key in raw && valid(raw[key])) preferences[key] = raw[key]
   }
   return { preferences: preferences as TuiPreferences, ...(warning ? { warning } : {}) }
+}
+
+/** Strictly read just the saved layout for explicit reload; never falls back or writes. */
+export function loadPaneLayout(path: string): PaneLayout {
+  const raw = readRaw(path)
+  if (raw === undefined) throw new Error(`TUI preferences file not found: ${path}; save a layout first with /layout reset`)
+  if (raw === null) throw new Error(`Cannot read TUI preferences JSON object: ${path}`)
+  if (!("paneLayout" in raw)) throw new Error(`No paneLayout in ${path}; save a layout first with /layout reset`)
+  const layout = parsePaneLayout(raw.paneLayout)
+  if (!layout) throw new Error(`Invalid paneLayout in ${path}; see docs/tui.md#tiled-workspace`)
+  return layout
 }
 
 let writes = 0
