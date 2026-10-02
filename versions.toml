@@ -1,6 +1,6 @@
 [backend]
-version = "0.45.0"
+version = "0.45.1"
 
 [frontend]
-version = "0.44.1"
+version = "0.44.2"
 minimum_backend_version = "0.43.41"

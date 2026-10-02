@@ -8,6 +8,7 @@ import { boundaryWeight, paneLeaves, renderedWeight, setSplitWeight, visiblePane
 import { pageStep } from "../state/scroll"
 import { keyboardOwner } from "../state/focus"
 import { colors } from "../theme"
+import { tuiVersion } from "../version"
 import { ConversationPane } from "./ConversationPane"
 import { ProjectsSidebar } from "./ProjectsSidebar"
 import { SidebarPane } from "./Sidebar"
@@ -35,7 +36,7 @@ function paneText(state: AppState, kind: PaneKind, server: string): string {
     case "jobs": return jobsText(state)
     case "status": return [
       `Server      ${shownServer(state, server)}`,
-      `Version     ${state.serverVersion || "unknown"}`,
+      `Version     ${tuiVersion}/${state.serverVersion || "unknown"}`,
       `Connection  ${state.connected ? "connected" : "disconnected"}`,
       `Session     ${state.selected?.title || state.selected?.id || "none"}`,
       `Agent       ${state.selected?.agent || "none"}`,

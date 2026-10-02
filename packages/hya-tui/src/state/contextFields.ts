@@ -10,6 +10,7 @@ import { mergeTranscript } from "./overlay"
 import { effectiveMode, modeDisplay } from "./modes"
 import { forkSourceText } from "./revert"
 import type { AppState } from "./store"
+import { tuiVersion } from "../version"
 
 /**
  * How a field is colored: `plain` is the box's text color and the status
@@ -51,7 +52,7 @@ const hostOf = (url: string): string => url.replace(/^https?:\/\//, "").replace(
 
 /**
  * The ordered fields: Vim (when on), Mode, Session, Forked, Agent, Model,
- * Messages, Context, Tokens, Dir, Branch, Todos, Server, WebUI, Backend.
+ * Messages, Context, Tokens, Dir, Branch, Todos, Server, WebUI, Version, Backend.
  * Fields with no data are omitted.
  */
 export function contextFields(state: AppState, server: string): ContextField[] {
@@ -95,6 +96,8 @@ export function contextFields(state: AppState, server: string): ContextField[] {
   if (state.web) {
     add({ label: "WebUI", value: state.web.url ? hostOf(state.web.url) : "unavailable", short: webLabel(state.web)!, tone: state.web.url ? "plain" : "warning", priority: 4 })
   }
+  const version = `${tuiVersion}/${state.serverVersion || "unknown"}`
+  add({ label: "Version", value: version, short: version, priority: 1 })
   if (state.backendStopped) add({ label: "Backend", value: "stopped", short: "backend stopped", tone: "error", priority: 2 })
   else if (!state.connected) add({ label: "Backend", value: "reconnecting", short: "reconnecting", tone: "warning", priority: 2 })
   return fields
@@ -110,3 +113,17 @@ export function contextRows(fields: readonly ContextField[], width: number): Con
   }))
 }
 
+
+/** Compact Context metadata for the top status line when the sidebar is hidden. */
+export function contextStatus(fields: readonly ContextField[], width: number): string {
+  const visible = fields.slice().sort((left, right) => left.priority - right.priority)
+  const kept: string[] = []
+  let room = Math.max(1, width)
+  for (const field of visible) {
+    const separator = kept.length ? 3 : 0
+    if (field.priority > 0 && field.short.length + separator > room) continue
+    kept.push(field.short)
+    room -= field.short.length + separator
+  }
+  return kept.join(" · ")
+}

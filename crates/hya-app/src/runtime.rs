@@ -24,6 +24,7 @@ use hya_core::{
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
+use futures::future::join_all;
 pub use hya_core::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
 use hya_plugin::client::{ChildGuard, PluginClient};
@@ -2096,37 +2097,43 @@ fn spawn_team_supervisor_with_environment(
                         });
                     }
                 } else {
-                    for resolved in resolved {
-                        let ResolvedSpawnMember {
-                            request: member,
-                            authorized_target,
-                            agent,
-                            binding,
-                            agents,
-                            resources,
-                            guidance,
-                            sidecar_factory,
-                            ..
-                        } = resolved;
-                        let model = agent.model.to_string();
-                        // The handle prefix is the resolved agent id the
-                        // call named (not an inline overlay's name).
-                        match resident_supervisor
-                            .spawn_resident_typed(
-                                parent,
+                    // Register members concurrently: one slow child must not delay the
+                    // other residents in the same task batch.
+                    let spawn_futures = resolved.into_iter().map(|resolved| {
+                        let resident_supervisor = resident_supervisor.clone();
+                        async move {
+                            let ResolvedSpawnMember {
+                                request: member,
+                                authorized_target,
                                 agent,
-                                (binding, agents, resources, sidecar_factory),
-                                member.prompt,
-                                TaskSpawnOrigin {
-                                    subagent_type: authorized_target.as_str().to_string(),
-                                    description: member.description,
-                                    tool_call: Some(source_tool_call),
-                                },
-                                actor_claim.as_ref(),
+                                binding,
+                                agents,
+                                resources,
                                 guidance,
-                            )
-                            .await
-                        {
+                                sidecar_factory,
+                                ..
+                            } = resolved;
+                            let model = agent.model.to_string();
+                            let result = resident_supervisor
+                                .spawn_resident_typed(
+                                    parent,
+                                    agent,
+                                    (binding, agents, resources, sidecar_factory),
+                                    member.prompt,
+                                    TaskSpawnOrigin {
+                                        subagent_type: authorized_target.as_str().to_string(),
+                                        description: member.description,
+                                        tool_call: Some(source_tool_call),
+                                    },
+                                    actor_claim.as_ref(),
+                                    guidance,
+                                )
+                                .await;
+                            (result, model)
+                        }
+                    });
+                    for (result, model) in join_all(spawn_futures).await {
+                        match result {
                             Ok((session, handle)) => outcomes.push(MemberOutcome {
                                 member: handle.clone(),
                                 session: session.to_string(),

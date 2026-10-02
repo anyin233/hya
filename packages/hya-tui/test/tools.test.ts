@@ -37,7 +37,7 @@ test("bash: the command, exit status, duration, and output tail", () => {
     inputJson: json({ command: "make test" }),
     outputJson: json({ title: "make test", output: `${Array.from({ length: 20 }, (_, i) => `out ${i + 1}`).join("\n")}\n`, metadata: { exit: 2 } }),
   })
-  expect(card).toMatchObject({ status: "done", tool: "bash", summary: "make test · exit 2", duration: "1.5s" })
+  expect(card).toMatchObject({ status: "done", tool: "bash", summary: "make test · exit 2", displayArgs: "make test · exit 2", duration: "1.5s" })
   expect(card.body[0]).toEqual({ text: "$ make test", tone: "fg" })
   expect(card.body.at(-1)).toEqual({ text: "exit 2", tone: "error" })
   expect(texts(card.body)).toContain("out 20")
@@ -190,4 +190,9 @@ test("tool cards retain complete arguments and separate expandable output", () =
   })
   expect(card.args).toBe('{"repo":"a/b","query":"bug","page":2}')
   expect(card.output).toEqual([{ text: "3 issues", tone: "muted" }])
+})
+
+test("display arguments use semantic builtins and pretty generic JSON", () => {
+  expect(toolCard({ tool: "read", state: ok, inputJson: json({ path: "src/a.ts", offset: 2 }) }).displayArgs).toBe("src/a.ts · from line 2")
+  expect(toolCard({ tool: "mcp__server__inspect", state: ok, inputJson: json({ path: "a", nested: { enabled: true } }) }).displayArgs).toBe('{\n  "path": "a",\n  "nested": {\n    "enabled": true\n  }\n}')
 })
