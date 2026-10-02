@@ -1134,8 +1134,8 @@ For example, open commands using `/` (Ctrl+X then `/` while drafting):
 /layout focus pane-3              # Sessions owns input
 /layout focus next                # rotate to Projects on a wide screen
 /layout focus pane-1              # Message editor owns input
-/layout split vertical jobs       # new selectable Jobs pane gets focus
-/layout split horizontal status   # add passive Status; focus stays on Jobs
+/layout split left jobs           # new selectable Jobs pane gets focus
+/layout split up status           # add passive Status; focus stays on Jobs
 /layout focus previous            # rotate through selectable panes only
 /layout close todos               # remove a passive pane without selecting it
 /layout close pane-5              # target an exact id (Context in the default)
@@ -1143,7 +1143,8 @@ For example, open commands using `/` (Ctrl+X then `/` while drafting):
 /layout reset                     # restore the seven-pane default
 ```
 
-`vertical` divides left/right; `horizontal` divides top/bottom. A new
+`left` inserts the new pane to the left of the selected pane; `up` inserts
+it above. Both divide the selected rectangle equally. A new
 selectable pane gets focus; adding a passive pane preserves focus. The viewer
 and editor are singletons and cannot be duplicated or closed. Assigning either
 kind swaps it with the existing instance; if the target becomes passive,
@@ -1159,7 +1160,7 @@ closable ids and unambiguous names, updating after each layout edit.
 | Command | Effect |
 | --- | --- |
 | `/layout` or `/layout show` | Show count and focused pane in status; return the viewer to chat. |
-| `/layout split <horizontal\|vertical> [job]` | Split the focused pane equally; default job `jobs`; maximum 32 panes. |
+| `/layout split <up\|left> [job]` | Split the focused pane equally; default job `jobs`; maximum 32 panes. |
 | `/layout assign <job>` | Assign the focused rectangle; viewer/editor assignment swaps singleton instances. |
 | `/layout focus <left\|right\|up\|down\|next\|previous\|pane-id>` | Focus a visible selectable pane; passive/hidden/unknown ids are refused. |
 | `/layout resize <+N\|-N>` | Resize the focused pane against its nearest sibling, within 10–90%. |
@@ -1181,7 +1182,7 @@ adjacent to the transcript rather than reserving an empty percentage of the
 screen. This also applies after resizing the terminal. Existing generated
 80%/20% viewer/activity/editor arrangements upgrade automatically; custom
 split ratios remain weighted. No reset or new shortcut is needed. An explicit
-`/layout resize +10` or `/layout split vertical jobs` changes the edited branch
+`/layout resize +10` or `/layout split left jobs` changes the edited branch
 back to weighted sizing, so manually sized or subdivided layouts remain
 proportional.
 
@@ -1231,6 +1232,13 @@ An omitted target means `layout.active`; an explicit target matches the exact
 unknown/ambiguous targets and the viewer/editor, and normalizes focus only if
 necessary. Command completion receives `CompletionContext.panes?: {id: string;
 kind: string}[]` from the full saved layout. No backend RPC is added.
+
+The split command accepts only `up` and `left`; old `horizontal`/`vertical`
+command arguments are replaced. Saved JSON retains `axis: "horizontal"` for
+`up` and `axis: "vertical"` for `left`, with the new leaf in `first` and the
+selected leaf in `second`. The helper contract is
+`splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", before: boolean = false): PaneLayout`;
+the command passes `before: true`.
 
 The preferences contract is `paneLayout: {version: 3, root: PaneNode,
 active: string}`. `PaneNode` is either `{type: "pane", id: "pane-N",
@@ -1985,8 +1993,8 @@ added.
 After the command name, the same menu shows argument choices at every depth
 that the command can complete. This makes subcommands and their next values
 visible while typing. For example, `/layout ` lists actions including `split`
-and `assign`; `/layout split ` lists `horizontal` and `vertical`; and
-`/layout split vertical ` lists pane jobs such as `jobs` and `todos`.
+and `assign`; `/layout split ` lists `up` and `left`; and
+`/layout split left ` lists pane jobs such as `jobs` and `todos`.
 `conversation` is offered for `/layout assign`, but not for a split because a
 split cannot create a second conversation pane. `/api ` similarly lists HTTP
 methods, then `/api GET /v1/hea` suggests `/api GET /v1/health`. At most eight

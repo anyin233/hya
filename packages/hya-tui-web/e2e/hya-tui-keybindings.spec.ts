@@ -259,7 +259,7 @@ test("show without a target displays a usage error rather than choosing a bindin
 test("Ctrl+W can close an auxiliary pane without a browser reservation", async ({ tui, backend }) => {
   const term = await tui(hyaTui(backend))
   await term.waitForText("Message, !shell, or @file · / commands")
-  await command(term, "/layout split vertical jobs")
+  await command(term, "/layout split left jobs")
   await term.waitForText("No active")
   await command(term, "/keybind set Ctrl+W /layout close")
   await term.waitForText("Keybind saved · Ctrl+W")

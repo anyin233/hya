@@ -1,4 +1,4 @@
-# 0.43.51
+# 0.43.52
 
-- Add `/layout reload` to apply an agent-edited `paneLayout` from the frontend preferences file without restarting, rewriting the file, or loading unrelated settings.
-- Reject missing or invalid saved layouts without changing the active layout; document the edit-and-reload workflow.
+- Replace `/layout split horizontal|vertical` with `/layout split up|left`, inserting the new pane above or to the left of the selected pane.
+- Update command completion, hints and examples while preserving saved split-axis compatibility.

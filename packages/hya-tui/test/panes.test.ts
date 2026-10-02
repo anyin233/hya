@@ -120,3 +120,14 @@ test("duplicate pane names require an id; unnamed close still uses selection", (
   expect(closePane(jobs).active).toBe("pane-1")
   expect(paneLeaves(closePane(jobs).root).some((pane) => pane.id === jobs.active)).toBe(false)
 })
+
+
+test("splits can prepend the new leaf and retain passive focus and persistence", () => {
+  for (const axis of ["horizontal", "vertical"] as const) {
+    const layout = splitPane(defaultPaneLayout(), axis, "status", true)
+    const leaves = paneLeaves(layout.root)
+    expect(leaves.findIndex((pane) => pane.id === "pane-8")).toBeLessThan(leaves.findIndex((pane) => pane.id === "pane-1"))
+    expect(layout.active).toBe("pane-1")
+    expect(parsePaneLayout(layout)).toEqual(layout)
+  }
+})

@@ -6,7 +6,7 @@ import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference, sessionListText } from "../src/state/format"
-import { defaultPaneLayout, closePane } from "../src/state/panes"
+import { defaultPaneLayout, closePane, paneRects } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
@@ -828,12 +828,12 @@ test("/layout close accepts passive names and ids, persists, and completes live 
   await expect(h.run("/layout close context")).rejects.toThrow("Unknown pane")
   await expect(h.run("/layout close todos context")).rejects.toThrow("Usage:")
   await expect(h.run("/layout close conversation")).rejects.toThrow("Cannot close")
-  await h.run("/layout split vertical todos")
-  await h.run("/layout split horizontal todos")
+  await h.run("/layout split left todos")
+  await h.run("/layout split up todos")
   await expect(h.run("/layout close todos")).rejects.toThrow("ambiguous")
   expect(h.registry.complete("/layout close tod", h.store.completionContext())).toEqual([])
   expect(h.registry.complete("/layout close pane-", h.store.completionContext()).length).toBeGreaterThan(0)
-  await h.run("/layout split vertical jobs")
+  await h.run("/layout split left jobs")
   await h.run("/layout close")
   expect(h.store.state.paneLayout.active).toBe("pane-1")
 })
@@ -857,4 +857,23 @@ test("/layout reload applies only the read layout, preserves drafts and never sa
   await expect(h.run("/layout reload")).rejects.toThrow("Invalid paneLayout")
   expect(h.store.state.paneLayout).toEqual(layout)
   expect(h.calls).toEqual([])
+})
+
+
+test("/layout split up/left inserts on the named side and rejects axis keywords", async () => {
+  for (const direction of ["up", "left"]) {
+    const h = harness()
+    expect(h.registry.complete("/layout split ", h.store.completionContext()).sort()).toEqual(["/layout split left", "/layout split up"])
+    await h.run(`/layout split ${direction} jobs`)
+    const layout = h.store.state.paneLayout
+    expect(layout.active).toBe("pane-8")
+    const rects = paneRects(layout.root)
+    const added = rects.get("pane-8")!
+    const editor = rects.get("pane-1")!
+    if (direction === "up") expect(added.bottom).toBeLessThanOrEqual(editor.top)
+    else expect(added.right).toBeLessThanOrEqual(editor.left)
+    expect(h.calls.at(-1)).toStartWith("prefs ")
+    for (const token of ["horizontal", "vertical", "right", "down"]) await expect(h.run(`/layout split ${token}`)).rejects.toThrow("Usage: /layout split <up|left>")
+    await expect(h.run("/layout split up jobs extra")).rejects.toThrow("Usage:")
+  }
 })
