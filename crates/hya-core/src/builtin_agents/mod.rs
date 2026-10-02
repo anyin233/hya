@@ -292,19 +292,6 @@ pub fn builtin_agent(id: &str) -> Option<&'static BuiltinAgent> {
         .map(|index| &roster[index])
 }
 
-/// Every ordinary (non-reserved) built-in, in roster order.
-pub fn ordinary_builtins() -> impl Iterator<Item = &'static BuiltinAgent> {
-    builtin_agents()
-        .iter()
-        .filter(|agent| !agent.system_reserved)
-}
-
-/// Whether `id` names a built-in agent that installed bundles must not shadow.
-#[must_use]
-pub fn is_builtin_id(id: &str) -> bool {
-    builtin_agent(id).is_some()
-}
-
 /// SHA-256 digest bytes of the loaded prepared preset.
 #[must_use]
 pub fn builtin_digest() -> &'static [u8; 32] {

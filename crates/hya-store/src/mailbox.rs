@@ -175,48 +175,6 @@ impl SessionStore {
         Ok((envelope, recipients))
     }
 
-    /// Append one **announcement** to the unit `from` leads.
-    ///
-    /// Announce is one-way and one level deep (task 08-07, R6): it reaches the
-    /// sender's direct reports and stops there. That falls out of the reserved
-    /// `{unit}#announce` channel, whose membership is exactly the unit's direct
-    /// children because every agent auto-joins its parent's announce channel at
-    /// registration.
-    ///
-    /// Rejected when the sender leads nobody — there is no unit to address.
-    pub async fn append_announce_mail(
-        &self,
-        root: SessionId,
-        from: String,
-        body: String,
-        actor_claim: Option<&ActorClaim>,
-    ) -> Result<(Envelope, usize), StoreError> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if let Some(claim) = actor_claim {
-            fence_actor_claim(&mut tx, claim).await?;
-        }
-
-        let projection = replay_projection(&self.projections, &mut tx, root).await?;
-        if !projection.team.leads_a_unit(&from) {
-            return Err(StoreError::MailboxRejected(
-                "you lead no agents, so there is no one to announce to".to_string(),
-            ));
-        }
-        let key = scope::announce_channel_of(&from);
-        let (envelope, recipients) = append_resolved_channel_mail(
-            &mut tx,
-            root,
-            from,
-            key,
-            MailKind::Announcement,
-            body,
-            &projection,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok((envelope, recipients))
-    }
-
     /// Atomically recover one resident actor after its claim has been fenced.
     ///
     /// The writer transaction covers admission aborts, actor terminal effects,

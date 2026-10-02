@@ -7,7 +7,7 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { useApp } from "../app/context"
 import type { TodoItem } from "../client"
 import { contextFields, contextRows, type ContextTone } from "../state/contextFields"
-import { sessionListText, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
+import { sessionListEntries, shownServer, todoGlyphs, todoStatusText, truncate } from "../state/format"
 import { PaneFrame } from "./PaneFrame"
 import { paneDefinitions } from "../state/panes"
 import { colors, toolColors } from "../theme"
@@ -48,14 +48,18 @@ function TodoList(props: { items: readonly TodoItem[]; width: number }) {
 
 /** One right-side section; only selectable kinds receive an enclosing pane frame. */
 export function SidebarPane(props: { kind: "sessions" | "todos" | "context"; width: number; active: boolean; scrollRef?: (value: ScrollBoxRenderable) => void }) {
-  const { store, server } = useApp()
+  const { store, server, controller } = useApp()
   const inner = () => Math.max(1, props.width - (paneDefinitions[props.kind].selectable ? 4 : 2))
   return (
     <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
       <Show when={props.kind === "sessions"}>
         <PaneFrame kind="sessions" title="Sessions" focused={props.active}>
           <scrollbox ref={props.scrollRef} width="100%" flexGrow={1}>
-            <text width="100%" wrapMode="word" fg={colors.fg}>{sessionListText(store.state, inner())}</text>
+            <For each={sessionListEntries(store.state, inner())}>
+              {(entry) => entry.separator
+                ? <text width="100%" height={1} wrapMode="none" fg={colors.border}>{entry.text}</text>
+                : <text width="100%" height={1} wrapMode="none" fg={colors.fg} onMouseDown={(event) => { if (event.button === 2) { if (entry.sessionId) controller.openSessionContext(entry.sessionId, { x: event.x, y: event.y }); return } if (event.button === 0 && entry.sessionId) void controller.openRootSession(entry.sessionId) }}>{entry.text}</text>}
+            </For>
           </scrollbox>
         </PaneFrame>
       </Show>

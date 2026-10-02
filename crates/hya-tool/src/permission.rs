@@ -695,12 +695,6 @@ impl PermissionPlane {
         (plane, rx)
     }
 
-    /// Clone of the immutable snapshot rules for this plane.
-    #[must_use]
-    pub fn snapshot_rules(&self) -> PermissionRules {
-        self.snapshot.as_ref().clone()
-    }
-
     /// Stable identity for immutable permission policy semantics (rules + policy + interceptor).
     #[must_use]
     pub fn semantic_identity_v1(&self) -> Option<[u8; 32]> {

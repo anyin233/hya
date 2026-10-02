@@ -30,6 +30,26 @@ export function projectSidebarRows(projects: readonly ProjectInfo[], activeId: s
   }))
 }
 
+/** One rendered line of the sidebar: a Project row, or the rule drawn between Projects. */
+export interface ProjectSidebarEntry {
+  row?: ProjectSidebarRow
+  separator?: boolean
+}
+
+/**
+ * The sidebar's Project list with separators, the same shape as the Sessions
+ * list (state/format.ts `sessionListEntries`): one row per Project with a
+ * rule between Projects; none before the first or after the last.
+ */
+export function projectSidebarEntries(projects: readonly ProjectInfo[], activeId: string | undefined): ProjectSidebarEntry[] {
+  const entries: ProjectSidebarEntry[] = []
+  for (const row of projectSidebarRows(projects, activeId)) {
+    if (entries.length) entries.push({ separator: true })
+    entries.push({ row })
+  }
+  return entries
+}
+
 export type ProjectsSidebarOutcome =
   | { type: "none" }
   | { type: "move"; id: string }

@@ -707,31 +707,25 @@ fn restart_replaces_the_daemon() -> TestResult {
     let url = first["url"].as_str().ok_or("no url")?.to_string();
     let stream = open_events(&url)?;
 
-    // The default restart answers as soon as the old generation queued the
-    // handoff; the successor takes over while the caller has moved on.
+    // Restart blocks until the successor is healthy and reports its new generation.
     let restarted = run(&root, &db, &["restart", "--json"])?;
     assert!(
         restarted.status.success(),
         "{}",
         String::from_utf8_lossy(&restarted.stderr)
     );
-    let queued = json(&restarted)?;
-    assert_eq!(queued["queued"], serde_json::json!(true), "{queued}");
-    assert_eq!(queued["started"], serde_json::json!(false), "{queued}");
-    assert_eq!(
-        pid_of(&queued)?,
+    let ready = json(&restarted)?;
+    assert_eq!(ready["restarted"], serde_json::json!(true), "{ready}");
+    assert_ne!(
+        pid_of(&ready)?,
         first_pid,
-        "the old generation acknowledged the handoff: {queued}"
+        "restart must return the successor"
     );
+    assert_eq!(ready["url"].as_str(), Some(url.as_str()), "{ready}");
     assert_eq!(
-        queued["url"].as_str(),
-        Some(url.as_str()),
-        "restart must retain the listener: {queued}"
-    );
-    assert_eq!(
-        queued["db"].as_str(),
+        ready["db"].as_str(),
         Some(db.to_string_lossy().as_ref()),
-        "{queued}"
+        "{ready}"
     );
 
     // Clients are told why their stream ends, then reconnect to the same URL.
@@ -761,12 +755,9 @@ fn restart_replaces_the_daemon() -> TestResult {
     Ok(())
 }
 
-/// `hya serve restart` must hand off to a successor through the recorded
-/// journal stages (`requested -> queued -> released -> ready -> transferred`)
-/// instead of releasing the listener. The default response acknowledges the
-/// queued handoff (`pid` is the old generation; `requested` names the restart
-/// CLI), and the test then polls the successor in: same URL and status
-/// timestamp, new pid, health, with the journal naming who wrote each stage.
+/// `hya serve restart` hands off through the recorded journal stages
+/// (`requested -> queued -> released -> ready -> transferred`) and returns
+/// only after the successor is ready on the same URL with a new pid.
 #[test]
 fn restart_hands_off_through_the_recorded_journal_stages() -> TestResult {
     let root = scratch("hya-daemon-journal")?;
@@ -784,18 +775,10 @@ fn restart_hands_off_through_the_recorded_journal_stages() -> TestResult {
         "{}",
         String::from_utf8_lossy(&restarted.stderr)
     );
-    let queued = json(&restarted)?;
-    assert_eq!(queued["queued"], serde_json::json!(true), "{queued}");
-    assert_eq!(
-        pid_of(&queued)?,
-        first_pid,
-        "the old generation queued the handoff: {queued}"
-    );
-    assert_eq!(
-        queued["url"].as_str(),
-        Some(url.as_str()),
-        "handoff keeps the listener: {queued}"
-    );
+    let ready = json(&restarted)?;
+    assert_eq!(ready["restarted"], serde_json::json!(true), "{ready}");
+    assert_ne!(pid_of(&ready)?, first_pid, "restart must return successor");
+    assert_eq!(ready["url"].as_str(), Some(url.as_str()), "{ready}");
 
     let second = wait_for_successor(&root, &db, first_pid, &url)?;
     let second_pid = pid_of(&second)?;

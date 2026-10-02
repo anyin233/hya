@@ -12,11 +12,11 @@ use hya_proto::{
 };
 use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
-use hya_tool::handle::{ArtifactHook, ArtifactPlane};
+use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
     AgentDef, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane,
-    PermissionPlane, PermissionRules, ResolvedTool, SpawnRequest, SpawnRequestSendError,
-    SpawnRequestSink, SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
+    PermissionPlane, ResolvedTool, SpawnRequest, SpawnRequestSendError, SpawnRequestSink,
+    SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
 };
 use serde_json::Value;
 
@@ -72,7 +72,6 @@ mod revert;
 mod roots;
 mod scope_binding;
 pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
-mod session_cleanup;
 mod session_hooks;
 mod session_state;
 mod session_title;
@@ -203,13 +202,6 @@ where
     CURRENT_ADMISSION_MEMBER.scope(admission, future).await
 }
 
-pub(crate) fn current_admission_member() -> Option<AdmissionMemberIdentity> {
-    CURRENT_ADMISSION_MEMBER
-        .try_with(|admission| *admission)
-        .ok()
-        .flatten()
-}
-
 #[cfg(test)]
 pub(crate) struct DirectMailPreAppendGate {
     entered: Arc<Notify>,
@@ -267,16 +259,9 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
 pub struct BoundSpawnRequest {
     binding: TurnBinding,
     request: SpawnRequest,
-    admission: Option<AdmissionMemberIdentity>,
 }
 
 impl BoundSpawnRequest {
-    /// Return the process-local identity of the admitted parent member, if any.
-    #[must_use]
-    pub fn parent_admission(&self) -> Option<AdmissionMemberIdentity> {
-        self.admission
-    }
-
     /// Consume into the retained turn binding and the raw tool-plane spawn request.
     #[must_use]
     pub fn into_parts(self) -> (TurnBinding, SpawnRequest) {
@@ -328,7 +313,6 @@ impl SpawnRequestSink for BoundSpawnRequestSink {
             .try_send(BoundSpawnRequest {
                 binding: self.binding.clone(),
                 request,
-                admission: current_admission_member(),
             })
             .map_err(|error| match error {
                 tokio::sync::mpsc::error::TrySendError::Full(_) => SpawnRequestSendError::Full,
@@ -979,14 +963,6 @@ impl SessionEngine {
         self.handle_namer.mint(root, prefix, taken)
     }
 
-    /// Install the archive-revival seam (ADR-0015). Without it, mail to an
-    /// archived handle stays an ordinary rejection.
-    #[must_use]
-    pub fn with_reviver(self, reviver: Arc<dyn ArchiveReviver>) -> Self {
-        self.set_reviver(reviver);
-        self
-    }
-
     /// Wire the archive-revival seam on a shared engine. Idempotent; the
     /// resident supervisor calls this from its own start.
     pub fn set_reviver(&self, reviver: Arc<dyn ArchiveReviver>) {
@@ -1080,19 +1056,6 @@ impl SessionEngine {
         self
     }
 
-    /// Register the `artifact://` post-processing chain.
-    ///
-    /// Hooks run when an artifact is *retrieved*, never when it is written, so
-    /// the captured bytes stay authoritative and a hook that turns out to be
-    /// wrong has not already destroyed the output it was summarizing. They are
-    /// applied in the order given, which is what lets "strip build noise" and
-    /// "extract the failing assertion" compose into one retrieval.
-    #[must_use]
-    pub fn with_artifact_hooks(mut self, hooks: Vec<Arc<dyn ArtifactHook>>) -> Self {
-        self.artifacts = ArtifactPlane::new(hooks);
-        self
-    }
-
     /// Enable compaction with a summarizer implementation and thresholds.
     #[must_use]
     pub fn with_compaction(
@@ -1101,18 +1064,6 @@ impl SessionEngine {
         config: CompactionConfig,
     ) -> Self {
         self.summarizer = Some(summarizer);
-        self.compaction = config;
-        self
-    }
-
-    /// Set compaction thresholds without wiring a summarizer.
-    ///
-    /// Legitimate since the model-free rungs landed: a ladder ordered onto
-    /// `shake`/`snapcompact` folds with no model call at all, so an engine can
-    /// compact without a summarizer and the summarizer-backed rungs simply
-    /// advance past.
-    #[must_use]
-    pub fn with_compaction_config(mut self, config: CompactionConfig) -> Self {
         self.compaction = config;
         self
     }
@@ -1155,12 +1106,6 @@ impl SessionEngine {
     #[must_use]
     pub fn lsp(&self) -> &LspPlane {
         &self.lsp
-    }
-
-    /// Snapshot of resource permission rules currently active on the plane.
-    #[must_use]
-    pub fn permission_rules(&self) -> PermissionRules {
-        self.permission.snapshot_rules()
     }
 
     /// Process permission plane. Remembered grants installed on it are shared

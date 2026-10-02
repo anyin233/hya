@@ -1,11 +1,14 @@
 [package]
 name = "hya-e2e"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Process-level agent E2E harness: real hya + scripted FakeLlm"
 publish = false
+
+[package.metadata.hya]
+version-reference = "backend"
 
 [lints]
 workspace = true

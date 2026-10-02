@@ -474,16 +474,6 @@ impl RuntimeRegistry {
         self.bind_scoped(&CatalogScope::Directory(workdir.to_path_buf()), workdir)
     }
 
-    /// Capture a view with no project: user skills and builtins only.
-    ///
-    /// For catalog listings whose request names no directory (`hya serve`
-    /// has no working directory, ADR-0024). The binding's workdir is the
-    /// empty path; it keys the project-less skill set and is never a turn's
-    /// workdir. Same as [`Self::bind_scoped`] with [`CatalogScope::Global`].
-    pub fn bind_global(&self) -> Result<TurnBinding, RuntimeRefreshError> {
-        self.bind_scoped(&CatalogScope::Global, Path::new(""))
-    }
-
     /// Capture the view of `scope` for one turn in `workdir`.
     ///
     /// Skills are discovered for `workdir` (user skills only when `workdir`
@@ -2299,42 +2289,6 @@ impl TurnBinding {
         &self.snapshot.masks
     }
 
-    /// Every claimant of `bare` ordered by the masking total order: built-ins
-    /// first, then contributed sources by ascending source id, with the active
-    /// provider last. Each entry is `(owner source label, canonical name)`.
-    /// Uncontested names yield zero or one claim.
-    #[must_use]
-    pub fn mask_chain(&self, bare: &str) -> Vec<(String, String)> {
-        let rank = |label: &str| (u8::from(label != "built-in"), label.to_string());
-        let mut claims: Vec<(String, String)> = Vec::new();
-        for source in self.snapshot.sources.values() {
-            let label = source.id.to_string();
-            for export in &source.exports {
-                let canonical_claim = export.canonical_name.as_str() == bare;
-                let alias_claim = export.aliases.iter().any(|alias| alias == bare);
-                if canonical_claim || alias_claim {
-                    let entry = (label.clone(), export.canonical_name.clone());
-                    if !claims.contains(&entry) {
-                        claims.push(entry);
-                    }
-                }
-            }
-        }
-        let source_canonical = claims.iter().any(|(_, canonical)| canonical == bare);
-        if !source_canonical
-            && self
-                .snapshot
-                .tools
-                .canonical_tools()
-                .iter()
-                .any(|(name, _)| name == bare)
-        {
-            claims.push(("built-in".to_string(), bare.to_string()));
-        }
-        claims.sort_by_key(|(label, _)| rank(label));
-        claims
-    }
-
     #[must_use]
     /// Published scheme table: registered external URI scheme → the binding of
     /// the winning source. Mirrors [`TurnBinding::masks`]. View compilation
@@ -2368,19 +2322,6 @@ impl TurnBinding {
             .resolve(stable_id)
             .map(|definition| self.overlay_agent_model(definition))
     }
-
-    /// Resolve a user/model agent request against the catalog.
-    pub fn resolve_requested_agent(
-        &self,
-        requested: Option<&str>,
-    ) -> Result<AgentDefinition<'_>, BundleError> {
-        let definition = self
-            .snapshot
-            .catalog
-            .require(requested.unwrap_or(crate::TASK_AGENT_ID))?;
-        Ok(self.overlay_agent_model(definition))
-    }
-
     /// Resolve whether `caller` may spawn `target`.
     pub fn resolve_spawn(
         &self,
@@ -3064,11 +3005,6 @@ impl CompiledResourceView {
 
     pub(crate) fn resolve_tool(&self, name: &str) -> Option<ResolvedTool> {
         self.tools.get(name).cloned()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn public_tool_names(&self) -> BTreeSet<String> {
-        self.tools.keys().cloned().collect()
     }
 
     pub(crate) fn skills(&self) -> &[SkillCatalogEntry] {
@@ -5128,8 +5064,8 @@ agent:
             "retained TurnBinding must not observe later registry publication"
         );
         assert_eq!(
-            before.public_tool_names(),
-            after.public_tool_names(),
+            before.tools.keys().collect::<BTreeSet<_>>(),
+            after.tools.keys().collect::<BTreeSet<_>>(),
             "pinned binding must compile an identical public tool set"
         );
     }
@@ -5255,22 +5191,12 @@ agent:
             Some("mask__fast"),
             "the contributed alias must win the bare name from the built-in"
         );
-        let chain = binding.mask_chain("bash");
-        assert_eq!(
-            chain.first().map(|(owner, _)| owner.as_str()),
-            Some("built-in")
-        );
-        assert_eq!(
-            chain.last(),
-            Some(&("plugin:mask-src".to_string(), "mask__fast".to_string())),
-            "the mask chain must end at the winning source claim"
-        );
 
         let policy = binding
             .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
             .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
-        let names = compiled.public_tool_names();
+        let names = compiled.tools.keys().cloned().collect::<BTreeSet<String>>();
         assert!(
             names.contains("bash") && !names.contains("harness:tool/bash"),
             "the masked built-in must be excluded while the bare name stays: {names:?}"
@@ -5314,7 +5240,7 @@ agent:
             .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
             .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
-        let names = compiled.public_tool_names();
+        let names = compiled.tools.keys().cloned().collect::<BTreeSet<String>>();
         assert!(
             names.contains("harness:tool/bash"),
             "the built-in must be resolvable again after the masking source is removed: {names:?}"
@@ -5402,7 +5328,7 @@ agent:
             .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
             .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
-        let names = compiled.public_tool_names();
+        let names = compiled.tools.keys().cloned().collect::<BTreeSet<String>>();
         assert!(
             names.contains("lookup"),
             "the contested bare name must resolve in the view: {names:?}"
@@ -7223,7 +7149,11 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert!(schema_names.is_subset(&compiled.public_tool_names()));
+        assert!(
+            schema_names
+                .iter()
+                .all(|name| compiled.resolve_tool(name).is_some())
+        );
         assert!(schema_names.contains("applier"));
         assert!(!schema_names.contains("harness:tool/apply_patch"));
         assert!(!schema_names.contains("apply_patch"));
@@ -7436,7 +7366,11 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert!(schema_names.is_subset(&compiled.public_tool_names()));
+        assert!(
+            schema_names
+                .iter()
+                .all(|name| compiled.resolve_tool(name).is_some())
+        );
         assert!(schema_names.contains("mcp__fixture__ping"));
         assert!(!schema_names.contains("pingy"));
         assert!(!schema_names.contains("harness:mcp/mcp__fixture__ping"));
@@ -8522,7 +8456,10 @@ agent:
     fn domain_tool_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
         let mail_only_read = has_mail_only_read(compiled);
         compiled
-            .public_tool_names()
+            .tools
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<String>>()
             .into_iter()
             .filter(|name| !is_coordination_spelling(name) && !(mail_only_read && name == "read"))
             .collect()

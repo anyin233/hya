@@ -331,7 +331,7 @@ async fn roots_are_read_fresh_on_the_next_turn() {
     harness
         .engine
         .store()
-        .replace_project_roots(project.id, &[text(&a), text(&c)])
+        .update_project(project.id, None, Some(&[text(&a), text(&c)]))
         .await
         .unwrap();
 

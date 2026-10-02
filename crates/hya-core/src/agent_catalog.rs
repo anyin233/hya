@@ -34,21 +34,6 @@ impl AgentOrigin<'_> {
         matches!(self, Self::Builtin)
     }
 
-    /// Whether this definition comes from a trusted immutable preset.
-    #[must_use]
-    pub const fn is_preset(&self) -> bool {
-        matches!(self, Self::Builtin)
-    }
-
-    /// Trusted preset identity, when this is a built-in definition.
-    #[must_use]
-    pub const fn preset_bundle_id(&self) -> Option<&'static str> {
-        match self {
-            Self::Builtin => Some(crate::builtin_agents::CORE_AGENTS_PRESET_ID),
-            Self::Bundle { .. } => None,
-        }
-    }
-
     /// Owning bundle id, or `None` for a built-in.
     #[must_use]
     pub const fn bundle_id(&self) -> Option<&str> {

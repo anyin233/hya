@@ -27,7 +27,7 @@ pub async fn fetch_oauth_models(
             base_url,
             hya_provider::CatalogAuth::grok(
                 Some(access_token.to_owned()),
-                env!("CARGO_PKG_VERSION"),
+                hya_version::BACKEND_VERSION,
                 "grok-cli",
             ),
         ),

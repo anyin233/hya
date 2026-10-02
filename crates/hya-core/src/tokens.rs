@@ -238,12 +238,6 @@ impl TokenAccounting {
         }
     }
 
-    /// Accounting in `mode` backed by an explicit tokenizer.
-    #[must_use]
-    pub fn with_tokenizer(mode: TokenAccountingMode, tokenizer: Arc<dyn Tokenizer>) -> Self {
-        Self { mode, tokenizer }
-    }
-
     /// Configured mode.
     #[must_use]
     pub const fn mode(&self) -> TokenAccountingMode {

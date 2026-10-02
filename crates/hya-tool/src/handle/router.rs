@@ -87,16 +87,6 @@ impl HandleRouter {
         &self.artifacts
     }
 
-    /// Parse `text` as a handle and resolve it.
-    ///
-    /// # Errors
-    /// Returns [`HandleError::NotAHandle`] when `text` carries no `scheme://`
-    /// prefix, so a caller can fall back to treating it as a filesystem path.
-    /// Otherwise propagates the errors of [`HandleRouter::resolve`].
-    pub fn resolve_str(&self, text: &str) -> Result<HandleContent, HandleError> {
-        self.resolve(&text.parse::<HandleRef>()?)
-    }
-
     /// Resolve a parsed handle to its body.
     ///
     /// # Errors

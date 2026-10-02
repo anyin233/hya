@@ -10,14 +10,6 @@ struct Entry {
     branch: Option<String>,
 }
 
-pub(crate) async fn list(source: &Path) -> Result<Vec<String>, String> {
-    Ok(infos(source)
-        .await?
-        .into_iter()
-        .map(Info::into_directory)
-        .collect())
-}
-
 pub(crate) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
     if !is_git_source(source).await {
         return Ok(Vec::new());

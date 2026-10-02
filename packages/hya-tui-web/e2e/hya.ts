@@ -40,7 +40,7 @@ export type PermissionModel = "default" | "allow" | "danger"
 export type BundleFiles = Record<string, string>
 
 /** The Bun adapter entry (`crates/hya-plugin-bun/adapter`) that hosts a bundle's JS extension. */
-export const bunAdapterMain = join(repoRoot, "crates/hya-plugin-bun/adapter/src/main.ts")
+const bunAdapterMain = join(repoRoot, "crates/hya-plugin-bun/adapter/src/main.ts")
 
 /**
  * A `kind: Plugin` bundle that declares `permission_modes:` and answers
@@ -414,16 +414,18 @@ export const wideViewport = { width: 1500, height: 640 }
 /** Open the explicit metadata view; startup can finish after the first frame. */
 export async function showStatusView(term: Tui): Promise<void> {
   await expect.poll(async () => {
-    if (!/Version\s+\d+\./.test(await term.text())) {
+    // The persistent Context pane also shows Version, but uses two spaces.
+    // Wait for the explicit /status view's aligned field before reading it.
+    if (!/Version {5}\d+\./.test(await term.text())) {
       await term.type("/status")
       await term.press("Enter")
     }
-    return /Version\s+\d+\./.test(await term.text())
+    return /Version {5}\d+\./.test(await term.text())
   }, { timeout: 30_000 }).toBe(true)
 }
 
 /** Read one field from /status without assuming a permanent conversation heading. */
-export async function statusField(term: Tui, field: string): Promise<string> {
+async function statusField(term: Tui, field: string): Promise<string> {
   await showStatusView(term)
   const row = (await term.lines()).find((line) => new RegExp(`${field}\\s{2,}`).test(line))
   if (!row) throw new Error(`/status has no ${field} field`)
@@ -431,7 +433,7 @@ export async function statusField(term: Tui, field: string): Promise<string> {
 }
 
 /** Return to the transcript without changing the split tree or message draft. */
-export async function showConversation(term: Tui): Promise<void> {
+async function showConversation(term: Tui): Promise<void> {
   await term.type("/layout show")
   await term.press("Enter")
   await expect.poll(() => term.find("Version     ")).toBeNull()

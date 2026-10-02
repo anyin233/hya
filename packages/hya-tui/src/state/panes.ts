@@ -86,7 +86,6 @@ export function defaultPaneLayout(): PaneLayout {
     weighted({ type: "split", id: "group-3", direction: "column", children: [weighted(leaf(3, "sessions"), .62), weighted(leaf(4, "todos"), .1368), weighted(leaf(5, "context"), .2432)] }, .108),
   ] } }
 }
-export function isDefaultPaneTree(layout: PaneLayout): boolean { return JSON.stringify(layout.root) === JSON.stringify(defaultPaneLayout().root) }
 export function visiblePaneRoot(root: PaneNode, columns: number, sidebar: SidebarMode, projectsSidebar: SidebarMode): PaneNode {
   const right = sidebarVisible(sidebar, columns), left = projectsSidebarVisible(projectsSidebar, columns)
   const keep = (node: PaneNode): PaneNode | undefined => {

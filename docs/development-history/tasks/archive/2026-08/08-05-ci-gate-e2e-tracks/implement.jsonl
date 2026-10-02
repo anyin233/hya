@@ -1,3 +1,0 @@
-{"file": "AGENTS.md", "reason": "Commit/push rules and verification commands the CI gate must encode"}
-{"file": ".trellis/tasks/08-05-land-swarm-branch-to-main/findings.md", "reason": "Evidence for the cascade defect: what fmt and the PTY flake each hid"}
-{"file": ".trellis/tasks/08-05-e2e-suite-hardening/prd.md", "reason": "Parent PRD: gap 1 and decision D2 (edit ci.yml directly)"}

@@ -37,7 +37,7 @@ async fn health(State(st): State<ServerState>) -> Result<Json<pb::GetHealthRespo
     }
     Ok(Json(pb::GetHealthResponse {
         ok: true,
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: hya_version::BACKEND_VERSION.to_owned(),
     }))
 }
 
@@ -58,7 +58,7 @@ fn location_info(scope: Option<&std::path::Path>) -> pb::LocationInfo {
             .unwrap_or_default(),
         hostname: hostname(),
         pid: std::process::id(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: hya_version::BACKEND_VERSION.to_owned(),
     }
 }
 

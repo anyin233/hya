@@ -11,8 +11,7 @@ mod scenario;
 
 pub use backend::{
     BackendProcess, BackendSpec, MCP_ECHO_SCRIPT_REL, McpFixture, default_backend_bin,
-    materialize_public_bundle, mcp_echo_command, mcp_echo_script, public_bundle_fixture,
-    public_bundle_source,
+    materialize_public_bundle, mcp_echo_command, mcp_echo_script, public_bundle_source,
 };
 pub use error::E2eError;
 pub use fake_llm::{

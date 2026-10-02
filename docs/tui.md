@@ -13,7 +13,8 @@ Sessions, Todos, and Context panes on the right. The full layout is editable,
 and the side panes follow terminal width unless pinned (see [Layout](#layout)).
 Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
-tool call is a card with its state, a one-line summary, and an expandable
+tool call is an outlined card with its tool name shown on the border in the
+normal foreground color, its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
 read-only (see [Messages](#messages)). When the agent or one of its subagents
 needs a permission decision or asks a question, a prompt docked above the
@@ -659,7 +660,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/sessions` | Open the sessions picker, scoped to the active Project (temporary sessions in their own group): a `New session` row, then saved and archived sessions (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation, Ctrl+A hides or shows archived sessions, F3 shows every Project's sessions instead (see [Pickers](#pickers)). |
 | `/project`, `/projects` | Open the full-screen [Project view](#project-view): list, open/switch, create, edit roots, rename, delete, or start a temporary session. |
 | `/projects-sidebar [on\|off]` | Show or hide the [left Projects sidebar](#left-projects-sidebar). Without an argument the command toggles what is visible now; Alt+arrows move keyboard focus (see [Layout](#layout)). |
-| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
+| `/open <id or number>` | Switch sessions directly. Numbers are the ones the sidebar and `/sessions` show, counted over the sidebar's list of the active Project's sessions (plus temporary ones): top-level sessions count `1`, `2`, …; a subagent's session carries its parent's number plus its own place under it (`2.1`, `2.1.3`). Numbers use session creation order and remain stable when running state or updated time changes. A session the sidebar does not list (another Project's, shown by the picker's F3; an archived one, shown by its Ctrl+A) has no number; open it by id. In the command pane, a titled session's argument row shows as `title (id)` (for example `/open Fix login (hysec_1)`) and matches by its title as well as its id; choosing it inserts the id. `/resume` completes the same way. Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog, or open the model picker; `/model <provider/model>` switches directly. Model choices are sent without a client-side effort cache. The choice is also remembered as the active agent's default, unless `config.yaml` pins that agent's model (`agents.<id>.model`): then it changes only the current session (see [Configuration — Remembered Agent Models](configuration.md#remembered-agent-models)). |
 | `/effort [level]` | Pick or set the server-persisted thinking effort (`default`, `none`, or catalog variants); `/think` is an alias. |
 | `/agent [name]` | Open the full-screen [Agents view](#agents-view): primary agents, subagents, and system agents, each agent's model and effort (Enter selects, `m` model, `t` effort). `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
@@ -687,6 +688,7 @@ A second, narrower sidebar on the left lists every Project live
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
 | `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the controller status state says `Copied N chars` (see [Copy](#copy)). |
 | Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
+| Right-click a session or Project | Open a compact context menu at the pointer, in the sidebars or full Projects view. Esc closes it. |
 | `/editor` | Edit the input in `$VISUAL` / `$EDITOR` (fallback `vi`); the edited text comes back into the input, unsent (see [External editor](#external-editor)). |
 | `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the metadata state (see [Vim mode](#vim-mode)). |
 | `/notifications [on\|off]` | Turn desktop notifications on or off, saved in the preferences file (see [Desktop notifications](#desktop-notifications)). |
@@ -1044,7 +1046,8 @@ keyboard ownership and highlighted composer.
   live todo list — see
   [Working indicator, metadata state, and todo panel](#working-indicator-metadata-state-and-todo-panel)),
   and `Context` (permission mode, session, agent, model, message count,
-  context occupancy, tokens, directory, branch, server, and connection).
+  context occupancy, tokens, directory, branch, server, frontend/backend
+  versions as `<frontend>/<backend>`, and connection).
   These are independent panes in the editable layout tree. The right sidebar
   needs 150 columns and is always hidden below that width. At 150 columns or
   more, `/sidebar [on|off]` toggles its visibility. It is never
@@ -1056,9 +1059,15 @@ keyboard ownership and highlighted composer.
   [Projects](#projects) and [Pickers](#pickers)).
 - **Left Projects sidebar.** A narrower titled pane on
   the left: one row per Project (`ListProjects`, live via `projectsUpdated`
-  the same as the Project view), the active one marked `▸`, a busy marker
-  `●` while a session of it runs a turn, and its session count. It needs
-  both sidebars and the chat column to fit, so it follows a threshold no
+  the same as the Project view), with a separator between rows, the active one marked `▸`, a busy marker
+  `●` while a session of it runs a turn, and its session count. Clicking a
+  Project row switches to it just like clicking a session row opens that
+  session. Right-clicking a Project opens Open and Delete actions;
+  right-clicking a Sessions row opens Open, Archive (unless already archived),
+  and Delete actions. Clicking an action executes it directly; Esc closes the
+  menu. Rename and confirmation flows remain available in the Project view
+  and `/sessions` picker. These use the same v1 Project and Session
+  update/delete contracts as the Project view and session picker. It needs both sidebars and the chat column to fit, so it follows a threshold no
   lower than the right sidebar's (150 columns; an 80-column or even a
   149-column terminal keeps it hidden). `/projects-sidebar on` pins it open
   at any width; Alt+arrows or `/layout focus <pane-id>` selects it.
@@ -1771,16 +1780,15 @@ bottom. The transcript shows the newest 200 messages.
 
 Every tool call of an assistant message is a transparent, outlined card. The
 header names the canonical tool and shows its state icon and duration. The
-first content row is the complete compact JSON argument object; while collapsed
-it stays to one terminal row to keep large calls from pushing the composer down.
-Expanding the card wraps the complete arguments and shows the output below a
-divider (the divider is omitted when there is no output). Errors are shown below
-the output in the error color.
+first content row is a display-ready argument block: builtin tools use their
+semantic summary (for example `src/main.rs · lines 1-40`) rather than raw JSON;
+generic namespaced/MCP tools use pretty-printed JSON. The raw argument JSON is
+still retained for compatibility and expanded output is shown below a divider.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ ✓ read                                                                  │
-│ {"path":"src/main.rs","offset":1,"limit":40}                         │
+│ src/main.rs · lines 1-40                                              │
 │ ──────────────────────────────────────────────────────────────────────── │
 │ 1  fn main() {                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -3693,3 +3701,7 @@ headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
 pending block with its session, then `/pending` opens its numbered prompt (default
 and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
 single desktop notification.
+
+### Session pane mouse navigation
+
+The `Sessions` pane is mouse-aware: clicking either line of a session row opens that session. Clicking a subagent row opens its top-level parent session, so the pane always switches the main session tab rather than entering a read-only child. Top-level session groups are separated by horizontal divider lines; these are visual separators and are not clickable.

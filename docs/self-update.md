@@ -1,10 +1,12 @@
-# Secure self-update (0.43.4)
+# Secure self-update
 
-The `hya-updater` crate is the independent update trust boundary. It does
-**not** depend on `hya-core`, plugins, MCP, bundles, app config, or session
-storage. Its command surface is `hya update …` on the unified `hya` executable
-(the standalone `hya-updater` binary was removed in 0.38.0); `hya` dispatches
-`update` before composing any runtime.
+The `hya-updater` crate is the independent signed-update trust boundary. It
+does **not** depend on `hya-core`, plugins, MCP, bundles, app config, or
+session storage. Its command surface is the signed updater subcommands under
+`hya update …`; the standalone `hya-updater` binary was removed in 0.38.0.
+The ordinary `hya update` path runs the unified release installer and installs
+the latest backend and frontend releases. `--backend-only` and `--tui-only`
+select one side; see [install.md](install.md).
 
 Production activation requires an explicit capability issued by the trusted
 updater owner. The capability binds the exact candidate release sequence and
@@ -18,10 +20,11 @@ same trust domain and must be protected by host ownership/permissions.
 Network download is **outside** the TCB; download a complete package directory
 first, then verify/stage/activate.
 
-`install.sh` remains break-glass bootstrap and manual recovery. Bare
-`hya update` (no subcommand) is a different, non-TCB path: it reinstalls from
-the published GitHub release, checked against its `SHA256SUMS`
-([install.md](install.md)).
+`install.sh` remains the break-glass source bootstrap and manual recovery path;
+it is separate from the release split. The hosted installer at
+`https://hya.ed-aisys.com/install.sh` and the embedded copy used by ordinary
+`hya update` verify each selected side against its `SHA256SUMS`. Signed updater
+subcommands remain separate from this archive installer.
 
 ## Rebuild and restart (source checkout)
 
@@ -185,7 +188,8 @@ Before signing or verifying the canonical payload
 what the operator sees:
 
 1. **`protocol_version`** — must equal the supported value (`1`).
-2. **`min_updater_version`** — compared to this crate’s version with
+2. **`min_updater_version`** — compared to the updater's version (the backend
+   release version, `[backend].version` in `versions.toml`) with
    dotted-numeric compare (`1.2.3`); if the running updater is **older** than
    the metadata requirement → `UpdaterTooOld`.
 3. **`sequence`** — must be **strictly greater** than `accepted_floor`

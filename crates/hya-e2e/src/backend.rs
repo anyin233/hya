@@ -718,12 +718,6 @@ pub fn materialize_public_bundle(dest_dir: &Path) -> Result<PathBuf, E2eError> {
     std::fs::copy(public_bundle_source(), &dest)?;
     Ok(dest)
 }
-
-/// Absolute path helper kept for callers that only need the source archive.
-pub fn public_bundle_fixture() -> PathBuf {
-    public_bundle_source()
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

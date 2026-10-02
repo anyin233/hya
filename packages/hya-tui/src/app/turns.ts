@@ -238,5 +238,3 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
     idle(): Promise<void> { return draining },
   }
 }
-
-export type TurnRunner = ReturnType<typeof createTurnRunner>

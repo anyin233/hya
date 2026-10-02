@@ -82,7 +82,7 @@ pub mod title;
 pub mod tokens;
 /// User-authored workflow DAGs over the governed team primitives.
 pub mod workflow;
-/// Git worktree and tmux helpers for isolated workers.
+/// Tmux helpers for isolated workers.
 pub mod workspace;
 
 #[cfg(test)]
@@ -91,7 +91,7 @@ mod test_support;
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{
     BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope,
-    TASK_AGENT_ID, builtin_agent, builtin_agents, core_agents_preset, is_builtin_id,
+    TASK_AGENT_ID, builtin_agent, builtin_agents, core_agents_preset,
 };
 pub use bundle_apis::{
     ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,
@@ -177,4 +177,4 @@ pub use workflow::{
     prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir, workflow_project_dir,
     workflow_user_dir,
 };
-pub use workspace::{TmuxPaneManager, WorktreeManager};
+pub use workspace::TmuxPaneManager;

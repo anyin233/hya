@@ -97,17 +97,20 @@ const BUILD_JOB: &str = "build";
 const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
 const WORKFLOW_BUN_SOURCE_COPY: &str =
-    "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"";
-const WORKFLOW_TUI_SOURCE_COPY: &str = "cp -R packages/hya-tui/src/. \"$tui/src/\"";
-const WORKFLOW_TUI_INSTALL: &str =
-    "(cd \"$tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
-const WORKFLOW_TUI_WEB_SOURCE_COPY: &str = "cp -R packages/hya-tui-web/src/. \"$tui_web/src/\"";
-const WORKFLOW_TUI_WEB_PAGE_COPY: &str = "cp -R packages/hya-tui-web/web/. \"$tui_web/web/\"";
-const WORKFLOW_TUI_WEB_INSTALL: &str =
-    "(cd \"$tui_web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
-const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
+    "cp -R crates/hya-plugin-bun/adapter/src/. \"dist/$package_dir/lib/hya/bun-adapter/src/\"";
+const WORKFLOW_TUI_SOURCE_COPY: &str =
+    "cp -R packages/hya-tui/src/. \"dist/$package_dir/lib/hya/tui/src/\"";
+const WORKFLOW_TUI_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
+const WORKFLOW_TUI_WEB_SOURCE_COPY: &str =
+    "cp -R packages/hya-tui-web/src/. \"dist/$package_dir/lib/hya/tui-web/src/\"";
+const WORKFLOW_FRONTEND_VERSION_COPY: &str =
+    "cp packages/hya-tui/frontend-version.ts \"dist/$package_dir/lib/hya/tui/frontend-version.ts\"";
+const WORKFLOW_TUI_WEB_PAGE_COPY: &str =
+    "cp -R packages/hya-tui-web/web/. \"dist/$package_dir/lib/hya/tui-web/web/\"";
+const WORKFLOW_TUI_WEB_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui-web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
+const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$VERSION\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
 const WORKFLOW_CHECKSUMS: &str =
-    "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")";
+    "(cd dist && shasum -a 256 \"$archive\" ./*.hyabundle > SHA256SUMS)";
 /// The pinned Bun ships inside the archive, so an installed `hya` needs no
 /// separately installed Bun.
 const WORKFLOW_BUN_RUNTIME_COPY: &str =
@@ -139,7 +142,13 @@ const BUN_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
 const TUI_RUNTIME: BunRuntime = BunRuntime {
     source: "packages/hya-tui",
     destination: "lib/hya/tui",
-    files: &["package.json", "bun.lock", "bunfig.toml", "tsconfig.json"],
+    files: &[
+        "package.json",
+        "bun.lock",
+        "bunfig.toml",
+        "tsconfig.json",
+        "frontend-version.ts",
+    ],
     directories: &["src"],
 };
 
@@ -167,7 +176,6 @@ const TUI_WEB_DEV_ONLY: [&str; 4] = [
     "bun-types",
     "typescript",
 ];
-/// Files the staged programs load at runtime beyond their copied sources.
 const TUI_RUNTIME_FILES: [&str; 1] = ["src/main.ts"];
 const TUI_WEB_RUNTIME_FILES: [&str; 6] = [
     "src/main.ts",
@@ -190,6 +198,21 @@ fn opentui_native_package(target: &str) -> Result<&'static str> {
         _ => bail!("no OpenTUI native package is known for release target `{target}`"),
     }
 }
+/// Release side selected by the rehearsal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Component {
+    Backend,
+    Frontend,
+}
+
+impl Component {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Backend => "backend",
+            Self::Frontend => "frontend",
+        }
+    }
+}
 
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
@@ -197,6 +220,7 @@ struct Options {
     workflow: PathBuf,
     version: String,
     target: String,
+    component: Component,
 }
 
 /// Temporary workspace used for the archive and its extraction smoke tests.
@@ -268,20 +292,28 @@ pub fn run(args: Vec<String>) -> Result<()> {
         .with_context(|| format!("read release workflow {}", workflow_path.display()))?;
     let workflow: Value = serde_norway::from_str(&workflow_source)
         .with_context(|| format!("parse release workflow {} as YAML", workflow_path.display()))?;
-    let run_blocks = validate_workflow(&workflow, &options.target)?;
-    validate_release_metadata(&root, &options.version, &options.target, &workflow)?;
+    let run_blocks = validate_workflow(&workflow, &options.target, options.component)?;
+    validate_release_metadata(
+        &root,
+        &options.version,
+        &options.target,
+        options.component,
+        &workflow,
+    )?;
     require_host_target(&options.target, &host_target(&root)?)?;
 
     run_actionlint(&workflow_path, &root)?;
     for (index, script) in run_blocks.iter().enumerate() {
         check_bash_syntax(index + 1, script)?;
     }
-    prepare_and_build(&root, &options.target)?;
-    rehearse_package(&root, &options.version, &options.target)?;
+    prepare_and_build(&root, &options.target, options.component)?;
+    rehearse_package(&root, &options.version, &options.target, options.component)?;
 
     println!(
-        "release-rehearsal: ok — version {}, target {}, no publish",
-        options.version, options.target
+        "release-rehearsal: ok — component {}, version {}, target {}, no publish",
+        options.component.as_str(),
+        options.version,
+        options.target
     );
     Ok(())
 }
@@ -290,7 +322,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 fn print_usage() {
     println!(
         "usage: cargo xtask release-rehearsal --workflow <path> \
-         --version <semver> --target <target> --no-publish"
+         --version <semver> --target <target> [--component backend|frontend] --no-publish"
     );
 }
 
@@ -300,6 +332,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
     let mut version = None;
     let mut target = None;
     let mut no_publish = false;
+    let mut component = Component::Backend;
     let mut index = 0;
 
     while index < args.len() {
@@ -312,6 +345,14 @@ fn parse_args(args: &[String]) -> Result<Options> {
             }
             "--target" => {
                 target = Some(next_argument(args, &mut index, "--target")?);
+            }
+            "--component" => {
+                let value = next_argument(args, &mut index, "--component")?;
+                component = match value.as_str() {
+                    "backend" => Component::Backend,
+                    "frontend" => Component::Frontend,
+                    _ => bail!("--component must be `backend` or `frontend`, found `{value}`"),
+                };
             }
             "--no-publish" => {
                 ensure!(!no_publish, "duplicate --no-publish flag");
@@ -332,6 +373,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
         workflow: PathBuf::from(workflow),
         version,
         target,
+        component,
     })
 }
 
@@ -368,7 +410,7 @@ fn repo_root() -> Result<PathBuf> {
 }
 
 /// Validate the typed workflow shape and return every embedded `run` block.
-fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
+fn validate_workflow(workflow: &Value, target: &str, _component: Component) -> Result<Vec<String>> {
     let root = mapping(workflow, "workflow root")?;
     let jobs = mapping(
         field(root, "jobs").context("release workflow must contain jobs")?,
@@ -416,9 +458,47 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         "release",
         "release job environment",
     )?;
-
     let mut run_blocks = Vec::new();
     collect_step_contracts(workflow, "workflow", &mut run_blocks)?;
+    let on = mapping(
+        field(root, "on").context("workflow on trigger")?,
+        "workflow on trigger",
+    )?;
+    let push = mapping(
+        field(on, "push").context("workflow on.push trigger")?,
+        "workflow on.push trigger",
+    )?;
+    let tags = sequence(
+        field(push, "tags").context("workflow on.push.tags")?,
+        "workflow on.push.tags",
+    )?;
+    for required in ["backend/*", "frontend/*"] {
+        ensure!(
+            tags.iter()
+                .any(|tag| string_value(tag, "workflow tag").ok() == Some(required)),
+            "release workflow on.push.tags is missing tag trigger `{required}`"
+        );
+    }
+    let joined = run_blocks.join("\n");
+    for marker in [
+        "https://hya.ed-aisys.com/install.sh",
+        "frontend-version.ts",
+        "CHANGELOG_${COMPONENT^^}.md",
+        "hya-${COMPONENT}-${VERSION}-${TARGET}",
+        "if grep -q -- \"$package_dir/bin/hya\" \"$listing\"; then",
+        "if grep -q -- \"$package_dir/bundles/\" \"$listing\"; then",
+    ] {
+        ensure!(
+            joined.contains(marker),
+            "release workflow is missing side-specific marker `{marker}`"
+        );
+    }
+    // Releases do not carry the installer: hya.ed-aisys.com/install.sh serves
+    // `scripts/hya-install.sh` from the main branch.
+    ensure!(
+        !joined.contains("hya-install.sh") && !joined.contains("hya-tui-install.sh"),
+        "release workflow must not publish an installer script as a release asset"
+    );
     ensure!(
         run_blocks.iter().any(
             |run| run.contains("cargo build --release --locked -p hya-backend --bins --target")
@@ -444,6 +524,10 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         (
             WORKFLOW_TUI_SOURCE_COPY,
             "recursively copy the complete TUI source tree",
+        ),
+        (
+            WORKFLOW_FRONTEND_VERSION_COPY,
+            "copy the aggregate frontend version into the self-contained TUI runtime",
         ),
         (
             WORKFLOW_TUI_INSTALL,
@@ -498,10 +582,11 @@ fn validate_first_party_lists(run_blocks: &[String]) -> Result<()> {
         .map(str::trim)
         .filter(|line| line.starts_with("first_party=("))
         .collect();
-    ensure!(
-        !lists.is_empty(),
-        "release workflow must declare the first-party bundle set: `{expected}`"
-    );
+    if lists.is_empty() {
+        // The side-specific workflow delegates the authoritative bundle set to
+        // stage-first-party-bundles instead of duplicating a shell array.
+        return Ok(());
+    }
     for list in lists {
         ensure!(
             list == expected,
@@ -746,67 +831,94 @@ fn check_bash_syntax(index: usize, script: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate the semver, version files, and newest-only changelog contract.
+/// Validate the semver, version files, and side-specific newest-only changelog contract.
 fn validate_release_metadata(
     root: &Path,
     version: &str,
     target: &str,
+    component: Component,
     workflow: &Value,
 ) -> Result<()> {
     ensure!(
         is_semver(version),
         "release version `{version}` is not semver-shaped"
     );
-    let representative_tag = format!("v{version}");
-    ensure!(
-        representative_tag.strip_prefix('v') == Some(version),
-        "representative release tag does not match version `{version}`"
-    );
+    let representative_tag = format!("{}/{version}", component.as_str());
     validate_release_tag_trigger(workflow, &representative_tag)?;
+    let other_component = if component == Component::Backend {
+        "frontend"
+    } else {
+        "backend"
+    };
+    validate_release_tag_trigger(workflow, &format!("{other_component}/{version}"))?;
     ensure!(
         RELEASE_TARGETS.contains(&target),
         "release target `{target}` is not in the build job matrix {RELEASE_TARGETS:?}"
     );
-
-    let manifest_path = root.join("Cargo.toml");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let manifest: toml::Value = toml::from_str(&manifest_source)
-        .with_context(|| format!("parse {}", manifest_path.display()))?;
-    let workspace_version = manifest
-        .get("workspace")
-        .and_then(|workspace| workspace.get("package"))
-        .and_then(|package| package.get("version"))
-        .and_then(toml::Value::as_str)
-        .context("Cargo.toml [workspace.package].version is missing")?;
+    let (backend_version, frontend_version, minimum_backend_version) = aggregate_versions(root)?;
     ensure!(
-        workspace_version == version,
-        "Cargo.toml workspace version `{workspace_version}` does not match `{version}`"
+        release_version_at_least(&backend_version, &minimum_backend_version)?,
+        "backend version `{backend_version}` is below frontend minimum `{minimum_backend_version}`"
     );
-
-    let readme = read_text(root, "README.md")?;
+    let frontend_source = read_text(root, "packages/hya-tui/frontend-version.ts")?;
     ensure!(
-        readme.contains(&format!("workspace version `{version}`")),
-        "README.md does not report workspace version `{version}`"
+        frontend_source.contains(&format!("= \"{frontend_version}\"")),
+        "packages/hya-tui/frontend-version.ts does not carry frontend version {frontend_version}"
     );
-
-    let lockfile = read_text(root, "Cargo.lock")?;
-    validate_lockfile_versions(&lockfile, version)?;
+    ensure!(
+        frontend_source.contains(&format!("= \"{minimum_backend_version}\"")),
+        "packages/hya-tui/frontend-version.ts does not carry minimum backend version {minimum_backend_version}"
+    );
     validate_bun_lockfile(root)?;
+    match component {
+        Component::Backend => {
+            let manifest: toml::Value =
+                toml::from_str(&read_text(root, "Cargo.toml")?).context("parse Cargo.toml")?;
+            let workspace_version = manifest
+                .get("workspace")
+                .and_then(|workspace| workspace.get("package"))
+                .and_then(|package| package.get("version"))
+                .and_then(toml::Value::as_str)
+                .context("Cargo.toml [workspace.package].version is missing")?;
+            ensure!(
+                workspace_version == version,
+                "Cargo.toml workspace version `{workspace_version}` does not match `{version}`"
+            );
+            ensure!(
+                backend_version == version,
+                "versions.toml backend version `{backend_version}` does not match `{version}`"
+            );
+            validate_lockfile_versions(&read_text(root, "Cargo.lock")?, version)?;
+            validate_newest_changelog(
+                &read_text(root, "CHANGELOG_BACKEND.md")?,
+                "CHANGELOG_BACKEND.md",
+                version,
+            )?;
+        }
+        Component::Frontend => {
+            ensure!(
+                frontend_version == version,
+                "versions.toml frontend version `{frontend_version}` does not match `{version}`"
+            );
+            validate_newest_changelog(
+                &read_text(root, "CHANGELOG_FRONTEND.md")?,
+                "CHANGELOG_FRONTEND.md",
+                version,
+            )?;
+        }
+    }
+    Ok(())
+}
 
-    let changelog = read_text(root, "CHANGELOG.md")?;
-    let first_heading = changelog.lines().find(|line| line.starts_with("# "));
+fn validate_newest_changelog(source: &str, path: &str, version: &str) -> Result<()> {
+    let first_heading = source.lines().find(|line| line.starts_with("# "));
     let expected_heading = format!("# {version}");
     ensure!(
         first_heading == Some(expected_heading.as_str()),
-        "CHANGELOG.md first heading must be `{expected_heading}`"
+        "{path} first heading must be `{expected_heading}`"
     );
-    if let Some(heading) = changelog
-        .lines()
-        .filter(|line| line.starts_with("# "))
-        .nth(1)
-    {
-        bail!("CHANGELOG.md must be newest-only; found extra heading `{heading}`");
+    if let Some(heading) = source.lines().filter(|line| line.starts_with("# ")).nth(1) {
+        bail!("{path} must be newest-only; found extra heading `{heading}`");
     }
     Ok(())
 }
@@ -861,7 +973,7 @@ fn tag_pattern_matches(pattern: &str, tag: &str) -> bool {
     pattern.ends_with('*') || remainder.is_empty()
 }
 
-/// Validate that every hya workspace package in the lockfile uses one version.
+/// Validate the aggregate backend package and placeholder component versions.
 fn validate_lockfile_versions(lockfile: &str, version: &str) -> Result<()> {
     let mut found = false;
     for package in lockfile.split("[[package]]").skip(1) {
@@ -874,9 +986,14 @@ fn validate_lockfile_versions(lockfile: &str, version: &str) -> Result<()> {
         found = true;
         let package_version = lockfile_field(package, "version")
             .with_context(|| format!("Cargo.lock package {name} has no version"))?;
+        let expected = if name == "hya-backend" {
+            version
+        } else {
+            "0.0.0"
+        };
         ensure!(
-            package_version == version,
-            "Cargo.lock package {name} has version `{package_version}`, expected `{version}`"
+            package_version == expected,
+            "Cargo.lock package {name} has version `{package_version}`, expected `{expected}`"
         );
     }
     ensure!(found, "Cargo.lock contains no hya packages");
@@ -887,6 +1004,40 @@ fn validate_lockfile_versions(lockfile: &str, version: &str) -> Result<()> {
 fn read_text(root: &Path, relative: &str) -> Result<String> {
     let path = root.join(relative);
     fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
+}
+
+fn aggregate_versions(root: &Path) -> Result<(String, String, String)> {
+    let source = read_text(root, "versions.toml")?;
+    let manifest: toml::Value = toml::from_str(&source).context("parse versions.toml")?;
+    let value = |section: &str, key: &str| {
+        manifest
+            .get(section)
+            .and_then(|section| section.get(key))
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .with_context(|| format!("versions.toml [{section}].{key} is missing"))
+    };
+    Ok((
+        value("backend", "version")?,
+        value("frontend", "version")?,
+        value("frontend", "minimum_backend_version")?,
+    ))
+}
+
+fn release_version_at_least(actual: &str, minimum: &str) -> Result<bool> {
+    let parse = |version: &str| -> Result<[u64; 3]> {
+        let without_build = version.split_once('+').map_or(version, |(core, _)| core);
+        let core = without_build
+            .split_once('-')
+            .map_or(without_build, |(core, _)| core);
+        let parts = core
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ensure!(parts.len() == 3, "version `{version}` is not semver-shaped");
+        Ok([parts[0], parts[1], parts[2]])
+    };
+    Ok(parse(actual)? >= parse(minimum)?)
 }
 
 /// Read one field from a Cargo.lock package block.
@@ -937,12 +1088,15 @@ fn is_safe_target(target: &str) -> bool {
 
 /// Check the pinned Bun (used by the Bun adapter packaging) and run the
 /// exact locked target release build.
-fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
+fn prepare_and_build(root: &Path, target: &str, component: Component) -> Result<()> {
     let bun_version = run_checked(OsStr::new("bun"), &arg_list(&["--version"]), root, &[], &[])?;
     ensure!(
         String::from_utf8_lossy(&bun_version.stdout).trim() == BUN_VERSION,
         "Bun from PATH must report version {BUN_VERSION}"
     );
+    if component == Component::Frontend {
+        return Ok(());
+    }
 
     let args = vec![
         "build".to_owned(),
@@ -967,11 +1121,14 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
 }
 
 /// Reproduce the workflow archive, checksum, extraction, and smoke checks.
-fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
+fn rehearse_package(root: &Path, version: &str, target: &str, component: Component) -> Result<()> {
+    if component == Component::Frontend {
+        return rehearse_frontend_package(root, version, target);
+    }
     let scratch = ScratchDirectory::create()?;
     let dist = scratch.path().join("dist");
     fs::create_dir_all(&dist).with_context(|| format!("create {}", dist.display()))?;
-    let package_name = format!("{BINARY_NAME}-{version}-{target}");
+    let package_name = format!("{BINARY_NAME}-{}-{version}-{target}", component.as_str());
     let package_root = dist.join(&package_name);
     let bin = package_root.join("bin");
     fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
@@ -989,11 +1146,10 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     copy_file(&bun_on_path()?, &packaged_bun)?;
     set_executable(&packaged_bun)?;
 
-    for runtime in PACKAGED_RUNTIMES {
-        let destination = package_root.join(runtime.destination);
-        stage_bun_runtime(root, runtime, &destination)?;
-        install_runtime_dependencies(runtime, &destination)?;
-    }
+    let runtime = &BUN_ADAPTER_RUNTIME;
+    let destination = package_root.join(runtime.destination);
+    stage_bun_runtime(root, runtime, &destination)?;
+    install_runtime_dependencies(runtime, &destination)?;
 
     let example = package_root.join("examples/hya-argus-example.hyabundle");
     fs::create_dir_all(example.parent().context("example archive has no parent")?)
@@ -1062,7 +1218,7 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
 
     write_and_verify_checksums(&dist, target, &archive_name, &assets)?;
 
-    verify_package_layout(&package_root, target)?;
+    verify_package_layout(&package_root, target, Component::Backend)?;
     let extract_root = scratch.path().join("extract");
     fs::create_dir_all(&extract_root)
         .with_context(|| format!("create {}", extract_root.display()))?;
@@ -1080,10 +1236,18 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     )
     .context("extract release archive")?;
     let extracted = extract_root.join(&package_name);
-    verify_package_layout(&extracted, target)?;
-    verify_archive_listing(root, &archive, &package_name, &scratch)?;
-    smoke_packaged_release(&extracted, &scratch, version)?;
-    smoke_release_installer(root, &dist, &archive_name, target, version, &scratch)?;
+    verify_package_layout(&extracted, target, Component::Backend)?;
+    verify_archive_listing(root, &archive, &package_name, &scratch, Component::Backend)?;
+    smoke_packaged_release(&extracted, &scratch, version, Component::Backend)?;
+    smoke_release_installer(
+        root,
+        &dist,
+        &archive_name,
+        target,
+        version,
+        &scratch,
+        Component::Backend,
+    )?;
     for bundle in &staged {
         let asset = bundle
             .asset
@@ -1101,11 +1265,75 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
             asset.display()
         );
     }
-    verify_tui_imports_resolve(&extracted, &scratch)?;
+    if component == Component::Frontend {
+        verify_tui_imports_resolve(&extracted, &scratch)?;
+    }
     Ok(())
 }
 
 /// Copy one Bun program's manifest files and source trees into the package.
+/// Reproduce the frontend archive and its extraction/package checks.
+fn rehearse_frontend_package(root: &Path, version: &str, target: &str) -> Result<()> {
+    let scratch = ScratchDirectory::create()?;
+    let dist = scratch.path().join("dist");
+    fs::create_dir_all(&dist)?;
+    let package_name = format!("{BINARY_NAME}-frontend-{version}-{target}");
+    let package_root = dist.join(&package_name);
+    let packaged_bun = package_root.join(PACKAGED_BUN);
+    copy_file(&bun_on_path()?, &packaged_bun)?;
+    set_executable(&packaged_bun)?;
+    for runtime in [&TUI_RUNTIME, &TUI_WEB_RUNTIME] {
+        let destination = package_root.join(runtime.destination);
+        stage_bun_runtime(root, runtime, &destination)?;
+        install_runtime_dependencies(runtime, &destination)?;
+    }
+    let archive_name = format!("{package_name}.tar.gz");
+    let archive = dist.join(&archive_name);
+    run_checked(
+        OsStr::new("tar"),
+        &[
+            "-czf".to_owned(),
+            archive.display().to_string(),
+            "-C".to_owned(),
+            dist.display().to_string(),
+            package_name.clone(),
+        ],
+        root,
+        &[("COPYFILE_DISABLE", OsString::from("1"))],
+        &[],
+    )?;
+    write_and_verify_checksums(&dist, target, &archive_name, &[])?;
+    verify_package_layout(&package_root, target, Component::Frontend)?;
+    let extract_root = scratch.path().join("extract");
+    fs::create_dir_all(&extract_root)?;
+    run_checked(
+        OsStr::new("tar"),
+        &[
+            "-xzf".to_owned(),
+            archive.display().to_string(),
+            "-C".to_owned(),
+            extract_root.display().to_string(),
+        ],
+        root,
+        &[],
+        &[],
+    )?;
+    let extracted = extract_root.join(&package_name);
+    verify_package_layout(&extracted, target, Component::Frontend)?;
+    verify_archive_listing(root, &archive, &package_name, &scratch, Component::Frontend)?;
+    smoke_packaged_release(&extracted, &scratch, version, Component::Frontend)?;
+    smoke_release_installer(
+        root,
+        &dist,
+        &archive_name,
+        target,
+        version,
+        &scratch,
+        Component::Frontend,
+    )?;
+    Ok(())
+}
+
 fn stage_bun_runtime(root: &Path, runtime: &BunRuntime, destination: &Path) -> Result<()> {
     let source = root.join(runtime.source);
     fs::create_dir_all(destination)
@@ -1146,10 +1374,10 @@ fn package_argus_example(root: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Write `SHA256SUMS-<target>` for the archive and bundle assets, then verify it like CI.
+/// Write SHA256SUMS for the archive and bundle assets, then verify it like CI.
 fn write_and_verify_checksums(
     dist: &Path,
-    target: &str,
+    _target: &str,
     archive_name: &str,
     assets: &[String],
 ) -> Result<()> {
@@ -1157,7 +1385,7 @@ fn write_and_verify_checksums(
     files.push(archive_name.to_owned());
     files.extend(assets.iter().cloned());
     let checksum = run_checked(OsStr::new("shasum"), &files, dist, &[], &[])?;
-    let sums_name = format!("SHA256SUMS-{target}");
+    let sums_name = "SHA256SUMS".to_owned();
     let sums = dist.join(&sums_name);
     fs::write(&sums, &checksum.stdout)
         .with_context(|| format!("write checksum manifest {}", sums.display()))?;
@@ -1193,7 +1421,20 @@ fn verify_example_listing(listing: &str) -> Result<()> {
 }
 
 /// Verify required runtime files before archiving.
-fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
+fn verify_package_layout(package_root: &Path, target: &str, component: Component) -> Result<()> {
+    if component == Component::Frontend {
+        require_file(&package_root.join(PACKAGED_BUN), "packaged Bun")?;
+        verify_tui_layout(package_root, target)?;
+        ensure!(
+            !package_root.join("bin/hya").exists(),
+            "frontend package contains backend binary"
+        );
+        ensure!(
+            !package_root.join("bundles").exists(),
+            "frontend package contains backend bundles"
+        );
+        return Ok(());
+    }
     require_file(&package_root.join("bin").join("hya"), "packaged binary")?;
     require_file(&package_root.join(PACKAGED_BUN), "packaged Bun")?;
 
@@ -1201,7 +1442,14 @@ fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
     for path in ["package.json", "bun.lock", "src/main.ts"] {
         require_file(&bun_adapter.join(path), "packaged Bun adapter file")?;
     }
-    verify_tui_layout(package_root, target)?;
+    ensure!(
+        !package_root.join("lib/hya/tui").exists(),
+        "backend package contains TUI runtime"
+    );
+    ensure!(
+        !package_root.join("lib/hya/tui-web").exists(),
+        "backend package contains WebUI runtime"
+    );
     for identity in hya_bundle::FIRST_PARTY_BUNDLES {
         let name = hya_bundle::first_party_package_name(identity)
             .with_context(|| format!("no package name for {identity}"))?;
@@ -1275,6 +1523,7 @@ fn verify_archive_listing(
     archive: &Path,
     package_name: &str,
     scratch: &ScratchDirectory,
+    component: Component,
 ) -> Result<()> {
     let output = run_checked(
         OsStr::new("tar"),
@@ -1285,6 +1534,32 @@ fn verify_archive_listing(
     )
     .context("list release tar archive")?;
     let listing = String::from_utf8_lossy(&output.stdout);
+    if component == Component::Frontend {
+        require_listing_line(
+            &listing,
+            &format!("{package_name}/{PACKAGED_BUN}"),
+            "frontend release tar listing",
+        )?;
+        require_listing_line(
+            &listing,
+            &format!("{package_name}/lib/hya/tui/frontend-version.ts"),
+            "frontend release tar listing",
+        )?;
+        require_listing_line(
+            &listing,
+            &format!("{package_name}/lib/hya/tui-web/web/index.html"),
+            "frontend release tar listing",
+        )?;
+        ensure!(
+            !listing.contains(&format!("{package_name}/bin/hya")),
+            "frontend release tar contains backend binary"
+        );
+        ensure!(
+            !listing.contains(&format!("{package_name}/bundles/")),
+            "frontend release tar contains backend bundles"
+        );
+        return Ok(());
+    }
     let listing_path = scratch.path().join("archive.txt");
     fs::write(&listing_path, listing.as_bytes())
         .with_context(|| format!("write archive listing {}", listing_path.display()))?;
@@ -1294,13 +1569,6 @@ fn verify_archive_listing(
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
         "lib/hya/bun-adapter/src/main.ts",
-        "lib/hya/tui/package.json",
-        "lib/hya/tui/bun.lock",
-        "lib/hya/tui/src/main.ts",
-        "lib/hya/tui-web/package.json",
-        "lib/hya/tui-web/bun.lock",
-        "lib/hya/tui-web/src/main.ts",
-        "lib/hya/tui-web/web/index.html",
         "examples/hya-argus-example.hyabundle",
     ] {
         require_listing_line(
@@ -1318,16 +1586,6 @@ fn verify_archive_listing(
             "release tar listing",
         )?;
     }
-    for prefix in [
-        "lib/hya/tui/node_modules/@opentui/core/",
-        "lib/hya/tui-web/node_modules/@xterm/xterm/",
-    ] {
-        let prefix = format!("{package_name}/{prefix}");
-        ensure!(
-            listing.lines().any(|line| line.starts_with(&prefix)),
-            "release tar listing lacks entries under `{prefix}`"
-        );
-    }
     ensure!(
         !listing.contains(&format!("{package_name}/bundles/examples/argus-example")),
         "release tar contains the example source-tree prefix"
@@ -1340,7 +1598,23 @@ fn smoke_packaged_release(
     package_root: &Path,
     scratch: &ScratchDirectory,
     version: &str,
+    component: Component,
 ) -> Result<()> {
+    if component == Component::Frontend {
+        let bun = package_root.join(PACKAGED_BUN);
+        let output = run_checked(
+            bun.as_os_str(),
+            &arg_list(&["--version"]),
+            scratch.path(),
+            &[],
+            &[],
+        )?;
+        ensure!(
+            String::from_utf8_lossy(&output.stdout).trim() == BUN_VERSION,
+            "packaged Bun must report version {BUN_VERSION}"
+        );
+        return smoke_tui_runtime(package_root, scratch);
+    }
     let backend = package_root.join("bin/hya");
     let version_output = run_checked(
         backend.as_os_str(),
@@ -1377,7 +1651,6 @@ fn smoke_packaged_release(
     );
 
     smoke_bun_adapter(&package_root.join("lib/hya/bun-adapter"), scratch)?;
-    smoke_tui_runtime(package_root, scratch)?;
     Ok(())
 }
 
@@ -1424,8 +1697,9 @@ fn bun_on_path() -> Result<PathBuf> {
         .context("bun is not on PATH")
 }
 
-/// Install the archive with `scripts/hya-install.sh` from a file:// release
-/// tree like the workflow, then require bare `hya update` to find it current.
+/// Install the archive with `scripts/hya-install.sh` (`--backend-only` or
+/// `--tui-only`) from a file:// release tree like the workflow, then require
+/// `hya update --backend-only` to find the backend current.
 fn smoke_release_installer(
     root: &Path,
     dist: &Path,
@@ -1433,19 +1707,18 @@ fn smoke_release_installer(
     target: &str,
     version: &str,
     scratch: &ScratchDirectory,
+    component: Component,
 ) -> Result<()> {
     let releases = scratch.path().join("releases");
-    let sums = dist.join(format!("SHA256SUMS-{target}"));
-    for directory in [
-        releases.join(format!("download/v{version}")),
-        releases.join("latest/download"),
-    ] {
-        copy_file(&sums, &directory.join("SHA256SUMS"))?;
-    }
+    let sums = dist.join("SHA256SUMS");
+    let tag_dir = releases.join(format!("download/{}/{version}", component.as_str()));
+    copy_file(&sums, &tag_dir.join("SHA256SUMS"))?;
     copy_file(
-        &dist.join(archive_name),
-        &releases.join(format!("download/v{version}/{archive_name}")),
+        &sums,
+        &releases.join(format!("latest/download/{}/SHA256SUMS", component.as_str())),
     )?;
+    copy_file(&sums, &releases.join("latest/download/SHA256SUMS"))?;
+    copy_file(&dist.join(archive_name), &tag_dir.join(archive_name))?;
     let home = scratch.path().join("installer-home");
     let installed = scratch.path().join("installed");
     let envs = [
@@ -1459,10 +1732,16 @@ fn smoke_release_installer(
             OsString::from(format!("file://{}", releases.display())),
         ),
     ];
+    let side_flag = if component == Component::Backend {
+        "--backend-only"
+    } else {
+        "--tui-only"
+    };
     run_checked(
         OsStr::new("sh"),
         &[
             root.join("scripts/hya-install.sh").display().to_string(),
+            side_flag.to_owned(),
             "--prefix".to_owned(),
             installed.display().to_string(),
         ],
@@ -1470,8 +1749,15 @@ fn smoke_release_installer(
         &envs,
         &[],
     )
-    .context("install the archive with scripts/hya-install.sh")?;
-    verify_package_layout(&installed, target)?;
+    .context("install the side-specific release archive")?;
+    verify_package_layout(&installed, target, component)?;
+    if component == Component::Frontend {
+        ensure!(
+            !installed.join("bin/hya").exists(),
+            "frontend installer installed backend binary"
+        );
+        return Ok(());
+    }
     let backend = installed.join("bin/hya");
     let version_output = run_checked(
         backend.as_os_str(),
@@ -1486,15 +1772,15 @@ fn smoke_release_installer(
     );
     let update = run_checked(
         backend.as_os_str(),
-        &arg_list(&["update"]),
+        &arg_list(&["update", "--backend-only"]),
         scratch.path(),
         &envs,
         &[],
     )
-    .context("run bare hya update against the installed release")?;
+    .context("run hya update --backend-only against the installed release")?;
     ensure!(
-        combined_output(&update).contains(&format!("hya {version} is already installed")),
-        "bare hya update did not find the installed {version} current"
+        combined_output(&update).contains(&format!("hya backend {version} is already installed")),
+        "hya update --backend-only did not find the installed {version} current"
     );
     Ok(())
 }
@@ -1981,6 +2267,7 @@ mod tests {
         WORKFLOW_TUI_SOURCE_COPY,
         WORKFLOW_TUI_INSTALL,
         WORKFLOW_TUI_WEB_SOURCE_COPY,
+        WORKFLOW_FRONTEND_VERSION_COPY,
         WORKFLOW_TUI_WEB_PAGE_COPY,
         WORKFLOW_TUI_WEB_INSTALL,
         WORKFLOW_FIRST_PARTY_STAGE,
@@ -1993,7 +2280,7 @@ mod tests {
         let source = canonical_workflow_source()?;
         let workflow: Value = serde_norway::from_str(&source).context("parse release workflow")?;
         for target in RELEASE_TARGETS {
-            validate_workflow(&workflow, target)?;
+            validate_workflow(&workflow, target, Component::Backend)?;
         }
         Ok(())
     }
@@ -2003,7 +2290,7 @@ mod tests {
     fn validate_workflow_rejects_a_target_outside_the_matrix() -> Result<()> {
         let workflow: Value =
             serde_norway::from_str(&canonical_workflow_source()?).context("parse workflow")?;
-        let error = validate_workflow(&workflow, "x86_64-pc-windows-msvc")
+        let error = validate_workflow(&workflow, "x86_64-pc-windows-msvc", Component::Backend)
             .expect_err("unlisted target accepted");
         assert!(error.to_string().contains("matrix"), "{error:#}");
         Ok(())
@@ -2019,7 +2306,7 @@ mod tests {
             1,
         );
         let workflow: Value = serde_norway::from_str(&modified).context("parse workflow")?;
-        let error = validate_workflow(&workflow, "x86_64-unknown-linux-gnu")
+        let error = validate_workflow(&workflow, "x86_64-unknown-linux-gnu", Component::Backend)
             .expect_err("incomplete matrix accepted");
         assert!(error.to_string().contains("matrix"), "{error:#}");
         Ok(())
@@ -2056,29 +2343,56 @@ mod tests {
         assert!(opentui_native_package("x86_64-pc-windows-msvc").is_err());
         Ok(())
     }
-    /// Keep the packaged frontend's self-reported version aligned with the backend.
+
+    /// The release metadata separates aggregate versions from component placeholders.
     #[test]
-    fn packaged_frontend_versions_match_workspace() -> Result<()> {
+    fn version_contract_separates_backend_and_frontend_aggregates() -> Result<()> {
         let root = repo_root()?;
-        let cargo: toml::Value = toml::from_str(&read_text(&root, "Cargo.toml")?)?;
-        let version = cargo
-            .get("workspace")
-            .and_then(|workspace| workspace.get("package"))
-            .and_then(|package| package.get("version"))
-            .and_then(toml::Value::as_str)
-            .context("workspace package version is missing")?;
+
+        let backend = read_text(&root, "crates/hya-backend/Cargo.toml")?;
+        assert!(backend.contains("version.workspace = true"));
+        let component = read_text(&root, "crates/hya-provider/Cargo.toml")?;
+        assert!(component.contains("version = \"0.0.0\""));
+        assert!(component.contains("version-reference = \"backend\""));
+
         for path in [
             "packages/hya-tui/package.json",
             "packages/hya-tui-web/package.json",
+            "crates/hya-plugin-bun/adapter/package.json",
         ] {
             let package: serde_json::Value = serde_json::from_str(&read_text(&root, path)?)?;
-            let package_version = package
-                .get("version")
-                .and_then(serde_json::Value::as_str)
-                .with_context(|| format!("{path} package version is missing"))?;
+            assert_eq!(package["version"], "0.0.0", "{path}");
+            assert_eq!(package["hya"]["version-reference"], "frontend", "{path}");
+        }
+        Ok(())
+    }
+    /// Keep frontend components on the placeholder plus aggregate-reference contract.
+    #[test]
+    fn packaged_frontend_versions_use_aggregate_reference() -> Result<()> {
+        let root = repo_root()?;
+        let (_, frontend_version, minimum_backend_version) = aggregate_versions(&root)?;
+        let source = read_text(&root, "packages/hya-tui/frontend-version.ts")?;
+        ensure!(
+            source.contains(&format!("= \"{frontend_version}\"")),
+            "packages/hya-tui/frontend-version.ts does not carry frontend version {frontend_version}"
+        );
+        ensure!(
+            source.contains(&format!("= \"{minimum_backend_version}\"")),
+            "packages/hya-tui/frontend-version.ts does not carry minimum backend version {minimum_backend_version}"
+        );
+        for path in [
+            "packages/hya-tui/package.json",
+            "packages/hya-tui-web/package.json",
+            "crates/hya-plugin-bun/adapter/package.json",
+        ] {
+            let package: serde_json::Value = serde_json::from_str(&read_text(&root, path)?)?;
             ensure!(
-                package_version == version,
-                "{path} has version {package_version}, expected workspace version {version}"
+                package.get("version").and_then(serde_json::Value::as_str) == Some("0.0.0"),
+                "{path} must use placeholder version 0.0.0"
+            );
+            ensure!(
+                package["hya"]["version-reference"] == "frontend",
+                "{path} must reference the frontend aggregate"
             );
         }
         Ok(())
@@ -2107,6 +2421,7 @@ mod tests {
     /// Write a minimal staged TUI/WebUI tree that passes [`verify_tui_layout`].
     fn write_tui_fixture(package_root: &Path, target: &str) -> Result<()> {
         let native = opentui_native_package(target)?;
+        copy_or_write(&package_root.join("lib/hya/tui/frontend-version.ts"))?;
         let tui = package_root.join(TUI_RUNTIME.destination);
         for file in TUI_RUNTIME.files.iter().chain(&TUI_RUNTIME_FILES) {
             copy_or_write(&tui.join(file))?;
@@ -2213,15 +2528,19 @@ mod tests {
     fn validate_workflow_rejects_each_missing_release_contract() -> Result<()> {
         let source = canonical_workflow_source()?;
         for &marker in WORKFLOW_CONTRACTS {
-            let modified = source.replacen(marker, "", 1);
+            let modified = source.replace(marker, "");
             ensure!(
                 modified != source,
                 "workflow fixture did not contain contract marker `{marker}`"
             );
             let workflow: Value = serde_norway::from_str(&modified)
                 .with_context(|| format!("parse workflow fixture without `{marker}`"))?;
-            let error = validate_workflow(&workflow, RELEASE_TARGETS[0])
-                .expect_err("workflow validation accepted a missing release contract");
+            let error = match validate_workflow(&workflow, RELEASE_TARGETS[0], Component::Backend) {
+                Ok(_) => {
+                    panic!("workflow validation accepted a missing release contract `{marker}`")
+                }
+                Err(error) => error,
+            };
             assert!(
                 error.to_string().contains(marker),
                 "missing `{marker}` produced an unrelated error: {error:#}"

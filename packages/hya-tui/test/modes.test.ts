@@ -10,7 +10,6 @@ import {
   yoloConfirmText,
   type PermissionModeInfo,
 } from "../src/state/modes"
-import { statusLineText } from "../src/state/activity"
 
 const key = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; sequence: string }> = {}) =>
   ({ name, ctrl: false, meta: false, shift: false, sequence: name.length === 1 ? name : "", ...extra })
@@ -88,17 +87,4 @@ test("picker rows show title, source, description, and mark the current mode", (
   ])
   // Without a listing, the built-ins are offered.
   expect(modeRows([], "manual").map((row) => row.id)).toEqual(["manual", "yolo"])
-})
-
-test("the status line drops turn-progress text while the working line shows the run", () => {
-  expect(statusLineText("Running · msg_1", true)).toBe("")
-  expect(statusLineText("Running · msg_1 · 2 queued", true)).toBe("")
-  expect(statusLineText("Running shell · ls", true)).toBe("")
-  expect(statusLineText("Sending prompt…", true)).toBe("")
-  expect(statusLineText("Queued · 1 waiting", true)).toBe("")
-  // Other messages stay, and nothing is hidden without the working line.
-  expect(statusLineText("Permission mode yolo", true)).toBe("Permission mode yolo")
-  expect(statusLineText("Error: boom", true)).toBe("Error: boom")
-  expect(statusLineText("Running · msg_1", false)).toBe("Running · msg_1")
-  expect(statusLineText("Ready", false)).toBe("Ready")
 })

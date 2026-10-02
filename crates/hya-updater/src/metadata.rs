@@ -49,8 +49,8 @@ pub struct ReleaseMetadata {
     pub recovery: bool,
     /// Metadata protocol version. Must equal [`SUPPORTED_PROTOCOL_VERSION`].
     pub protocol_version: u32,
-    /// Minimum updater package version required to apply this release
-    /// (semver string compared as `CARGO_PKG_VERSION`).
+    /// Minimum updater version required to apply this release, compared with
+    /// dotted-numeric order against the backend release version.
     pub min_updater_version: String,
     /// Trust-root key id that produced `signature`.
     pub key_id: String,

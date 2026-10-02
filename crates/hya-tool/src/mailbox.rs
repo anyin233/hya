@@ -318,6 +318,7 @@ impl MailboxPlane {
         .await?
         .map_err(MailboxError::Rejected)
     }
+
     /// Read one channel's recent history (ADR-0016 `channel://`).
     pub async fn read_channel(
         &self,

@@ -261,24 +261,6 @@ impl SessionEngine {
         }
         resumed
     }
-
-    /// List sessions still fenced at a durable handoff close.
-    pub async fn pending_handoff_sessions(self: &Arc<Self>) -> Vec<SessionId> {
-        let candidates = self
-            .store
-            .handoff_candidate_sessions()
-            .await
-            .unwrap_or_default();
-        let mut result = Vec::new();
-        for session in candidates {
-            if let Ok(projection) = self.store.read_projection(session).await
-                && is_handoff_resume_candidate(&projection)
-            {
-                result.push(session);
-            }
-        }
-        result
-    }
 }
 
 fn is_handoff_resume_candidate(projection: &Projection) -> bool {

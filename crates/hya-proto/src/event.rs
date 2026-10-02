@@ -50,17 +50,6 @@ impl SessionKind {
             Self::Temporary => "temporary",
         }
     }
-
-    /// Parse a wire/storage label; `None` for anything but `project` or
-    /// `temporary`.
-    #[must_use]
-    pub fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "project" => Some(Self::Project),
-            "temporary" => Some(Self::Temporary),
-            _ => None,
-        }
-    }
 }
 
 /// Canonical runtime event stream: one tagged variant per discrete state change.
@@ -1973,6 +1962,5 @@ mod tests {
         let usage: TokenUsage = serde_json::from_str(json).expect("legacy usage decodes");
         assert!(!usage.reasoning_unknown);
         assert_eq!(usage.prompt(), 7);
-        assert_eq!(usage.visible_output(), Some(3));
     }
 }

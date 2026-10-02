@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { HyaClient, ProjectInfo, SessionInfo, SessionPlacement, StreamFrame } from "../src/client"
 import { createController } from "../src/app/controller"
-import { activeProject, newestTopLevelSession, noProjectStatus, pathInside, projectBusy, projectScope, sessionPlacement, sessionsInScope } from "../src/state/projects"
+import { activeProject, newestTopLevelSession, noProjectStatus, pathInside, projectScope, sessionPlacement, sessionsInScope } from "../src/state/projects"
 import { createAppStore } from "../src/state/store"
 
 const work: ProjectInfo = { id: "prj_work", name: "work", roots: ["/work", "/docs"], busy: false }
@@ -63,8 +63,6 @@ test("the store keeps the Project list, the active Project, and per-Project busy
   store.setProjects([work, other])
   store.setActiveProject("prj_other")
   expect(activeProject(store.state)?.name).toBe("other")
-  expect(projectBusy(store.state, "prj_other")).toBe(true)
-  expect(projectBusy(store.state, "prj_work")).toBe(false)
   store.setActiveProject(undefined)
   expect(activeProject(store.state)).toBeUndefined()
 })
@@ -82,7 +80,7 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
   const client = {
     get directory() { return directory },
     setDirectory(next: string) { directory = next; calls.push(["setDirectory", next]) },
-    bootstrap: async () => ({ location: { version: "test" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] }),
+    bootstrap: async () => ({ location: { version: "0.43.41" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] }),
     ensureProjectForPath: async (path: string) => {
       calls.push(["ensureProjectForPath", path])
       return { project: work, created: false }
@@ -190,6 +188,15 @@ test("a new session in the active Project works in --dir when --dir lies inside 
   outside.controller.dispose()
 })
 
+test("plain local startup creates a fresh session even when the Project has existing sessions", async () => {
+  const existing: SessionInfo = { id: "old", projectId: "prj_work", workdir: "/work/sub", agent: "hya-main", model: { providerId: "hya", modelId: "echo" }, kind: "SESSION_KIND_PROJECT" }
+  const h = harness({ sessions: [existing] })
+  await h.controller.start()
+  expect(h.store.state.selected?.id).toBe("new_1")
+  expect(h.named("createSession")).toEqual([["createSession", { projectId: "prj_work", workdir: "/work/sub" }]])
+  h.controller.dispose()
+})
+
 test("newTemporarySession creates a SESSION_KIND_TEMPORARY session", async () => {
   const h = harness()
   await h.controller.start()
@@ -250,7 +257,6 @@ test("a projectsUpdated frame on the global stream re-reads the Project list (de
   await h.global({ event: { projectsUpdated: {} } })
   await Bun.sleep(200)
   expect(h.named("listProjects").length).toBe(before + 1)
-  expect(projectBusy(h.store.state, "prj_work")).toBe(true)
   h.controller.dispose()
 })
 

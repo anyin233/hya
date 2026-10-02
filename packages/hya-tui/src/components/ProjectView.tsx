@@ -33,7 +33,7 @@ function BusyLine(props: { busy: ProjectViewBusy }) {
 }
 
 export function ProjectView() {
-  const { store, ui } = useApp()
+  const { store, controller, ui } = useApp()
   const size = useTerminalDimensions()
   return (
     <Show when={store.state.projectView}>
@@ -70,7 +70,7 @@ export function ProjectView() {
                   const on = () => project.id === open().highlighted
                   const active = () => project.id === store.state.activeProjectId
                   return (
-                    <text height={1} wrapMode="none">
+                    <text height={1} wrapMode="none" onMouseDown={(event) => { if (event.button === 2) { controller.openProjectContext(project.id, { x: event.x, y: event.y }); return } if (event.button === 0) controller.switchFromSidebar(project.id) }}>
                       <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
                       <span style={{ fg: project.busy ? colors.warning : colors.fg }}>{project.busy ? "● " : "  "}</span>
                       <span style={{ fg: active() ? colors.accent : colors.fg }}>{truncate(project.name, Math.max(1, Math.floor(width() * 0.4)))}</span>

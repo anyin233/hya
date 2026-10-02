@@ -26,8 +26,9 @@ const pickerMaxWidth = 96
 export function Picker() {
   const { store, controller, ui } = useApp()
   const size = useTerminalDimensions()
-  const width = () => Math.max(20, Math.min(pickerMaxWidth, size().width - 4))
-  const left = () => Math.max(0, Math.floor((size().width - width()) / 2))
+  const width = () => store.state.picker?.contextMenu ? Math.max(22, Math.min(38, size().width - 2)) : Math.max(20, Math.min(pickerMaxWidth, size().width - 4))
+  const left = () => { const point = store.state.picker?.contextMenu; return point ? Math.max(0, Math.min(point.x, size().width - width())) : Math.max(0, Math.floor((size().width - width()) / 2)) }
+  const top = () => { const point = store.state.picker?.contextMenu; return point ? Math.max(0, Math.min(point.y, size().height - 3)) : 2 }
   return (
     <Show when={store.state.picker}>
       {(open: () => ActivePicker) => {
@@ -67,13 +68,13 @@ export function Picker() {
         return (
           <box
             position="absolute"
-            top={2}
+            top={top()}
             left={left()}
             width={width()}
             zIndex={100}
             border
             borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "picker" ? colors.accent : colors.border}
-            title={open().title}
+            title={open().contextMenu ? undefined : open().title}
             backgroundColor={colors.panel}
             flexDirection="column"
             paddingX={1}
@@ -96,6 +97,7 @@ export function Picker() {
                 </>
               }
             >
+              <Show when={!open().contextMenu}>
               <text height={1} wrapMode="none">
                 <span style={{ fg: colors.muted }}>Filter </span>
                 <span style={{ fg: colors.fg }}>{open().query}</span>
@@ -107,11 +109,12 @@ export function Picker() {
                   {`    ${column(open().columns!.shortcut, shortcutWidth())}  ${column(open().columns!.label, actionWidth())}  ${column(open().columns!.tag, scopeWidth())}`}
                 </text>
               </Show>
+              </Show>
               <For each={shown()}>
                 {(item) => {
                   const highlighted = () => item.at === open().index
                   return (
-                    <text height={1} wrapMode="none" onMouseDown={() => controller.choosePickerRow(item.row)}>
+                    <text height={1} wrapMode="none" onMouseDown={(event) => { if (event.button === 0) controller.choosePickerRow(item.row) }}>
                       <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
                       <span style={{ fg: colors.accent }}>{item.row.current ? "● " : "  "}</span>
                       <Show when={open().columns} fallback={

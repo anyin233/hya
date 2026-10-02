@@ -67,7 +67,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
     get token() { return token },
     get directory() { return directory },
     setDirectory(next: string) { directory = next },
-    bootstrap: async () => { record("bootstrap"); return { location: { version: "test" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] } },
+    bootstrap: async () => { record("bootstrap"); return { location: { version: "0.43.41" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] } },
     ensureProjectForPath: async (path: string) => { record("ensureProjectForPath", path); return { project: work, created: false } },
     listProjects: async () => projectsOf(),
     getProject: async (id: string) => projectsOf().find((row) => row.id === id)!,

@@ -149,5 +149,5 @@ fn definition_view_reports_builtin_origin() {
     let definition = agent.definition();
     assert_eq!(definition.stable_id, "hya-main");
     assert_eq!(definition.role, AgentRole::Main);
-    assert!(definition.origin.is_builtin());
+    assert!(matches!(definition.origin, hya_core::AgentOrigin::Builtin));
 }

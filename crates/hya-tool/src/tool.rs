@@ -801,7 +801,7 @@ fn maps_match(left: &HashMap<String, ResolvedTool>, right: &HashMap<String, Reso
 fn builtin_dispatch_identity(canonical: &str) -> Option<[u8; 32]> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(BUILTIN_DISPATCH_IDENTITY_DOMAIN_V1);
-    append_length_prefixed(&mut bytes, env!("CARGO_PKG_VERSION").as_bytes())?;
+    append_length_prefixed(&mut bytes, hya_version::BACKEND_VERSION.as_bytes())?;
     append_length_prefixed(&mut bytes, canonical.as_bytes())?;
     Some(Sha256::digest(bytes).into())
 }

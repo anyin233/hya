@@ -76,6 +76,8 @@ export interface PickerState {
   detailPane?: boolean
   /** Opt in to aligned shortcut, label and tag columns with these headings. */
   columns?: PickerColumns
+  /** Render as a compact mouse context menu at terminal coordinates. */
+  contextMenu?: { x: number; y: number }
   /** `"list"` (default) browses; `"rename"`/`"confirm"` are a row action in progress. */
   mode?: PickerMode
   /** `id` of the row a `"rename"`/`"confirm"` mode targets. */
@@ -105,7 +107,7 @@ function currentIndex(rows: PickerRow[]): number {
   return Math.max(0, rows.findIndex((row) => row.current))
 }
 
-export function createPicker(options: { title: string; rows: PickerRow[]; hint?: string; actions?: readonly PickerAction[]; maxRows?: number; detailPane?: boolean; columns?: PickerColumns }): PickerState {
+export function createPicker(options: { title: string; rows: PickerRow[]; hint?: string; actions?: readonly PickerAction[]; maxRows?: number; detailPane?: boolean; columns?: PickerColumns; contextMenu?: { x: number; y: number } }): PickerState {
   return {
     title: options.title,
     rows: options.rows,
@@ -117,6 +119,7 @@ export function createPicker(options: { title: string; rows: PickerRow[]; hint?:
     ...(options.maxRows ? { maxRows: options.maxRows } : {}),
     ...(options.detailPane ? { detailPane: true } : {}),
     ...(options.columns ? { columns: options.columns } : {}),
+    ...(options.contextMenu ? { contextMenu: options.contextMenu } : {}),
   }
 }
 
@@ -233,6 +236,8 @@ export interface PickerSpec {
   detailPane?: boolean
   /** Opt in to aligned shortcut, label and tag columns with these headings. */
   columns?: PickerColumns
+  /** Place this picker as a compact context menu at terminal coordinates. */
+  contextMenu?: { x: number; y: number }
   /** Runs after the picker closed (focus is back on the composer). */
   onSelect(row: PickerRow): void | Promise<void>
   /** Runs after a row action committed (`id` is the `PickerAction.id`; `value` is the edited text for `prompt: "value"`). */

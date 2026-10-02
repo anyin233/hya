@@ -74,7 +74,13 @@ async fn chain_folds_in_load_order_not_handshake_order() {
     )
     .await;
     assert_eq!(host.len(), 2, "both fixtures must connect");
-    assert_eq!(host.plugin_ids(), vec!["first", "second"]);
+    assert_eq!(
+        host.contributions()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
 
     let outcome = host
         .tool_execute_before(ToolExecuteBeforeInput {

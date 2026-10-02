@@ -395,19 +395,6 @@ impl crate::engine::SessionEngine {
         }
     }
 
-    /// Persist and publish one durable root-owned Workflow control event.
-    ///
-    /// # Errors
-    /// Returns a typed core failure when validation or persistence fails.
-    pub async fn record_workflow_event(
-        &self,
-        session: hya_proto::SessionId,
-        event: hya_proto::Event,
-    ) -> Result<(), crate::error::CoreError> {
-        self.record_workflow_event_for_actor(None, session, event)
-            .await
-    }
-
     /// Persist and publish one durable Workflow event under an optional actor fence.
     ///
     /// # Errors

@@ -7,10 +7,7 @@ mod support;
 use std::path::Path;
 use std::sync::Arc;
 
-use hya_core::{
-    CoreError, EventBus, ResidentRecovery, SessionEngine, SpawnAdmissionOutcome, SubagentGovernor,
-    SubagentLimits,
-};
+use hya_core::{CoreError, EventBus, ResidentRecovery, SessionEngine, SpawnAdmissionOutcome};
 use hya_proto::{
     AgentName, Event, MailEndpoint, MailKind, MemberId, MemberRunStatus, MessageId, OperationId,
     PartId, RosterStatus, SessionId, SubagentMode, ToolCallId, ToolName, ToolPartState,
@@ -30,18 +27,6 @@ async fn engine(store: SessionStore) -> SessionEngine {
         permission,
         EventBus::default(),
     )
-}
-
-fn engine_with_governor(store: SessionStore, governor: SubagentGovernor) -> SessionEngine {
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    SessionEngine::new(
-        store,
-        Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(ToolRegistry::builtins())),
-        permission,
-        EventBus::default(),
-    )
-    .with_governor(governor)
 }
 
 #[tokio::test]
@@ -117,76 +102,6 @@ async fn stale_tool_or_child_completion_cannot_append_or_advance_projection() {
 }
 
 #[tokio::test]
-async fn takeover_aborts_and_refunds_bound_operation_exactly_once() {
-    let store = SessionStore::connect_memory().await.unwrap();
-    let governor = SubagentGovernor::new(SubagentLimits {
-        per_run_budget: 1,
-        ..SubagentLimits::default()
-    });
-    let engine = engine_with_governor(store.clone(), governor.clone());
-    let actor_id = SessionId::new();
-    let old_claim = store
-        .try_claim_new(actor_id, OwnerRunId::new())
-        .await
-        .unwrap();
-    let source = ToolCallId::new();
-    let operation = OperationId::from_tool_call(source);
-
-    assert_eq!(
-        engine
-            .begin_spawn_admission(
-                actor_id,
-                hya_tool::ToolOperation::from_tool_call(source),
-                [44; 32],
-                1,
-                Some(old_claim),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap(),
-        SpawnAdmissionOutcome::Started
-    );
-    assert_eq!(governor.remaining_budget(actor_id), 0);
-
-    let recovered = store
-        .recover_claim(actor_id, OwnerRunId::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        engine
-            .abort_recovered_actor_operations(&recovered)
-            .await
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        engine
-            .abort_recovered_actor_operations(&recovered)
-            .await
-            .unwrap(),
-        0
-    );
-    assert_eq!(governor.remaining_budget(actor_id), 1);
-    let record = store.admission(operation).await.unwrap().unwrap();
-    assert_eq!(record.state, AdmissionState::Aborted);
-    assert!(record.logical_released);
-
-    assert!(matches!(
-        engine
-            .finalize_spawn_admission(
-                operation,
-                AdmissionTerminal::Completed,
-                "late completion",
-                Some(&old_claim),
-            )
-            .await,
-        Err(CoreError::Store(StoreError::StaleActorClaim { actor_id: stale }))
-            if stale == actor_id
-    ));
-    assert_eq!(governor.remaining_budget(actor_id), 1);
-}
-
-#[tokio::test]
 async fn queued_resident_message_resumes_but_running_message_aborts() {
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = engine(store.clone()).await;
@@ -231,9 +146,10 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
 
     assert_eq!(
         engine
-            .recover_resident_work(&queued_recovered, queued_root, "queued-1")
+            .recover_resident_actor(&queued_recovered, queued_root, "queued-1")
             .await
-            .unwrap(),
+            .unwrap()
+            .work,
         ResidentRecovery::Queued { inbox_cursor: 0 }
     );
     assert_eq!(queued_claim.epoch, queued_recovered.previous_epoch);
@@ -352,9 +268,10 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
 
     assert_eq!(
         engine
-            .recover_resident_work(&running_recovered, running_root, "running-1")
+            .recover_resident_actor(&running_recovered, running_root, "running-1")
             .await
-            .unwrap(),
+            .unwrap()
+            .work,
         ResidentRecovery::AbortedRunning {
             inbox_cursor: 1,
             queued_after: true,

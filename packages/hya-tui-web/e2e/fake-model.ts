@@ -206,7 +206,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Opening of the fixed `hya-title` agent's system prompt (the `core-agents` preset). */
-export const titleAgentMarker = "You are a title generator."
+const titleAgentMarker = "You are a title generator."
 
 /** Start the fake model server. `initial` seeds the shared (unrouted) queue. */
 export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {

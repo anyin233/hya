@@ -10,14 +10,12 @@ use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const WORKFLOW_CONTRACTS: &[&str] = &[
-    "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"",
-    "cp -R packages/hya-tui/src/. \"$tui/src/\"",
-    "(cd \"$tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)",
-    "cp -R packages/hya-tui-web/src/. \"$tui_web/src/\"",
-    "cp -R packages/hya-tui-web/web/. \"$tui_web/web/\"",
-    "(cd \"$tui_web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)",
-    "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist",
-    "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")",
+    "backend/*",
+    "frontend/*",
+    "https://hya.ed-aisys.com/install.sh",
+    "frontend-version.ts",
+    "CHANGELOG_${COMPONENT^^}.md",
+    "hya-${COMPONENT}-${VERSION}-${TARGET}",
 ];
 
 /// Reject a matrix target that differs from the host before any build starts.
@@ -48,7 +46,7 @@ fn release_rehearsal_requires_a_host_target() {
         .arg(workspace_root().join(".github/workflows/release.yml"))
         .args([
             "--version",
-            env!("CARGO_PKG_VERSION"),
+            hya_version::BACKEND_VERSION,
             "--target",
             foreign,
             "--no-publish",
@@ -71,8 +69,8 @@ fn release_rehearsal_requires_no_publish() {
             "--version",
             "0.36.9",
             "--target",
-            TARGET,
         ])
+        .arg(host_target())
         .output()
         .expect("run release rehearsal");
 
@@ -145,12 +143,12 @@ fn release_rehearsal_rejects_nonmatching_tag_trigger() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join(".github/workflows/release.yml"))
         .expect("read release workflow fixture");
-    let modified = source.replacen("- \"v*.*.*\"", "- \"release-*\"", 1);
+    let modified = source.replacen("- \"backend/*\"", "- \"release-*\"", 1);
     let directory = common::tempdir("release-tag-trigger");
     let workflow = directory.join("release.yml");
     fs::write(&workflow, modified).expect("write tag trigger fixture");
 
-    let output = run_rehearsal(&workflow, "0.36.9");
+    let output = run_rehearsal(&workflow, hya_version::BACKEND_VERSION);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
@@ -178,13 +176,13 @@ fn release_rehearsal_rejects_non_semver_version() {
 fn release_rehearsal_rejects_each_missing_package_contract() {
     let source = canonical_workflow_fixture();
     for (index, &marker) in WORKFLOW_CONTRACTS.iter().enumerate() {
-        let modified = source.replacen(marker, "", 1);
+        let modified = source.replace(marker, "");
         assert_ne!(
             modified, source,
             "workflow fixture did not contain contract marker `{marker}`"
         );
         let fixture = WorkflowFixture::new(&format!("release-package-contract-{index}"), modified);
-        let output = run_rehearsal(fixture.path(), "0.36.9");
+        let output = run_rehearsal(fixture.path(), hya_version::BACKEND_VERSION);
         assert_contract_failure(&output, marker);
     }
 }
@@ -198,6 +196,21 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn host_target() -> String {
+    String::from_utf8(
+        Command::new("rustc")
+            .arg("-vV")
+            .output()
+            .expect("run rustc")
+            .stdout,
+    )
+    .expect("rustc output is UTF-8")
+    .lines()
+    .find_map(|line| line.strip_prefix("host: "))
+    .expect("rustc reports its host")
+    .to_owned()
+}
+
 /// Run the no-publish command against one workflow fixture.
 fn run_rehearsal(workflow: &Path, version: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_xtask"))
@@ -208,9 +221,9 @@ fn run_rehearsal(workflow: &Path, version: &str) -> Output {
             "--version",
             version,
             "--target",
-            TARGET,
-            "--no-publish",
         ])
+        .arg(host_target())
+        .arg("--no-publish")
         .output()
         .expect("run release rehearsal fixture")
 }

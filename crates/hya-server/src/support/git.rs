@@ -6,22 +6,11 @@ use serde::Serialize;
 
 use crate::ApiError;
 
-mod default_branch;
-mod patch;
 mod status;
 
 #[derive(Serialize)]
 pub(crate) struct FileStatus {
     file: String,
-    additions: usize,
-    deletions: usize,
-    status: &'static str,
-}
-
-#[derive(Serialize)]
-pub(crate) struct FileDiff {
-    file: String,
-    patch: String,
     additions: usize,
     deletions: usize,
     status: &'static str,
@@ -33,13 +22,35 @@ struct GitItem {
     code: String,
     status: &'static str,
 }
+fn status_name(code: &str) -> &'static str {
+    if code.contains('D') {
+        "deleted"
+    } else if code.contains('A') || code == "??" {
+        "added"
+    } else {
+        "modified"
+    }
+}
+
+fn untracked_raw(workdir: &Path, file: &str) -> Result<String, ApiError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .arg("diff")
+        .arg("--no-index")
+        .arg("--")
+        .arg("/dev/null")
+        .arg(workdir.join(file))
+        .output()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if matches!(output.status.code(), Some(0) | Some(1)) {
+        return String::from_utf8(output.stdout).map_err(|e| ApiError::internal(e.to_string()));
+    }
+    Err(ApiError::internal(stderr(&output.stderr)))
+}
 
 pub(crate) fn branch(workdir: &Path) -> Option<String> {
     output(workdir, &["branch", "--show-current"])
-}
-
-pub(crate) fn default_branch(workdir: &Path) -> Option<String> {
-    default_branch::get(workdir)
 }
 
 pub(crate) fn is_repo(workdir: &Path) -> bool {
@@ -52,30 +63,6 @@ pub(crate) fn status(workdir: &Path) -> Result<Vec<FileStatus>, ApiError> {
     for item in status::items(workdir)? {
         let (additions, deletions) = stats(workdir, &item, ref_name)?;
         out.push(FileStatus {
-            file: item.file,
-            additions,
-            deletions,
-            status: item.status,
-        });
-    }
-    Ok(out)
-}
-
-pub(crate) fn diff(
-    workdir: &Path,
-    mode: &str,
-    context: Option<usize>,
-) -> Result<Vec<FileDiff>, ApiError> {
-    let (ref_name, items) = diff_items(workdir, mode)?;
-    let ref_name = ref_name.as_deref();
-    let mut total_patch_bytes = 0;
-    let mut out = Vec::new();
-    for item in items {
-        let (additions, deletions) = stats(workdir, &item, ref_name)?;
-        let patch = patch::for_item(workdir, &item, ref_name, context, total_patch_bytes)?;
-        total_patch_bytes = total_patch_bytes.saturating_add(patch.len());
-        out.push(FileDiff {
-            patch,
             file: item.file,
             additions,
             deletions,
@@ -103,7 +90,7 @@ pub(crate) fn raw_diff(workdir: &Path, paths: &[String]) -> Result<String, ApiEr
         .into_iter()
         .filter(|item| item.code == "??")
     {
-        chunks.push(patch::untracked_raw(workdir, &item.file)?);
+        chunks.push(untracked_raw(workdir, &item.file)?);
     }
     Ok(chunks.join("\n"))
 }
@@ -126,72 +113,6 @@ pub(crate) fn apply_patch(workdir: &Path, patch: &str) -> Result<(), ()> {
         .wait()
         .map_err(|_| ())
         .and_then(|status| status.success().then_some(()).ok_or(()))
-}
-
-fn diff_items(workdir: &Path, mode: &str) -> Result<(Option<String>, Vec<GitItem>), ApiError> {
-    match mode {
-        "git" => Ok((
-            has_head(workdir).then(|| "HEAD".to_string()),
-            status::items(workdir)?,
-        )),
-        "branch" => branch_items(workdir),
-        _ => Err(ApiError::bad_request("invalid vcs diff mode")),
-    }
-}
-
-fn branch_items(workdir: &Path) -> Result<(Option<String>, Vec<GitItem>), ApiError> {
-    let Some(default) = default_branch(workdir) else {
-        return Ok((None, Vec::new()));
-    };
-    if branch(workdir).as_deref() == Some(default.as_str()) {
-        return Ok((None, Vec::new()));
-    }
-    let origin_ref = format!("origin/{default}");
-    let ref_name = if ref_exists(workdir, &origin_ref) {
-        origin_ref
-    } else {
-        default
-    };
-    let Some(base) = output(workdir, &["merge-base", "HEAD", &ref_name]) else {
-        return Ok((None, Vec::new()));
-    };
-    let out = text(workdir, &["diff", "--name-status", "-z", &base])?;
-    let mut items = items_from_name_status(&out);
-    items.extend(
-        status::items(workdir)?
-            .into_iter()
-            .filter(|item| item.code == "??"),
-    );
-    items.sort_by(|a, b| a.file.cmp(&b.file));
-    Ok((Some(base), items))
-}
-
-fn items_from_name_status(out: &str) -> Vec<GitItem> {
-    out.split('\0')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .chunks(2)
-        .filter_map(|chunk| {
-            let [code, file] = chunk else {
-                return None;
-            };
-            Some(GitItem {
-                file: (*file).to_string(),
-                code: (*code).to_string(),
-                status: status_name(code),
-            })
-        })
-        .collect()
-}
-
-fn status_name(code: &str) -> &'static str {
-    if code.contains('D') {
-        "deleted"
-    } else if code.contains('A') || code == "??" {
-        "added"
-    } else {
-        "modified"
-    }
 }
 
 fn stats(
@@ -227,10 +148,6 @@ fn has_head(workdir: &Path) -> bool {
         Ok(output) => output.status.success(),
         Err(_) => false,
     }
-}
-
-fn ref_exists(workdir: &Path, ref_name: &str) -> bool {
-    output(workdir, &["rev-parse", "--verify", ref_name]).is_some()
 }
 
 fn output(workdir: &Path, args: &[&str]) -> Option<String> {
