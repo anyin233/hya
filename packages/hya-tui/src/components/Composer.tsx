@@ -691,7 +691,9 @@ export function Composer(props: { width: number }) {
   const workspaceInput = { onKey: onWorkspaceKey, onPaste: onWorkspacePaste }
   const editorInput = { onKey: onEditorKey, onPaste: onEditorPaste }
   ui.workspaceInput = workspaceInput
-  ui.composerRows = rows
+  const composerHeight = () => (store.state.secretEntry ? 4 : rows() + 2)
+    + (menu() ? menu()!.items.length + 3 : 0) + attachments().length
+  ui.composerHeight = composerHeight
   let editorPaneId: string | undefined
   createEffect(() => {
     if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
@@ -701,7 +703,7 @@ export function Composer(props: { width: number }) {
   })
   onCleanup(() => {
     if (ui.workspaceInput === workspaceInput) ui.workspaceInput = undefined
-    if (ui.composerRows === rows) ui.composerRows = undefined
+    if (ui.composerHeight === composerHeight) ui.composerHeight = undefined
     if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
   })
 

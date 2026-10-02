@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAppStore } from "../src/state/store"
 import { focusedPane, keyboardOwner } from "../src/state/focus"
-import { defaultPaneLayout, movePaneFocus, normalizePaneFocus, paneDefinitions, paneKinds, paneLeaves, parsePaneLayout, type PaneNode, rotatePaneFocus, selectablePanes, setPaneKind, splitPane } from "../src/state/panes"
+import { defaultPaneLayout, movePaneFocus, normalizePaneFocus, paneDefinitions, paneKinds, paneLeaves, parsePaneLayout, type PaneNode, resizePane, rotatePaneFocus, selectablePanes, setPaneKind, splitPane } from "../src/state/panes"
 
 test("every pane declares eligibility; viewer and informational panes are passive", () => {
   expect(Object.keys(paneDefinitions).sort()).toEqual([...paneKinds].sort())
@@ -68,4 +68,35 @@ test("there is one focus source, and overlays temporarily own the highlight", ()
   store.setPaneLayout({ ...layout, active: "pane-6" })
   expect(focusedPane(store.state)?.kind).toBe("composer")
   expect(store.state.projectsSidebarFocus).toBe(false)
+})
+
+
+test("saved default docks migrate to content sizing without changing custom ratios", () => {
+  const old = JSON.parse(JSON.stringify(defaultPaneLayout()))
+  const strip = (node: PaneNode): void => {
+    if (node.type === "split") { delete node.sizing; strip(node.first); strip(node.second) }
+  }
+  strip(old.root)
+  expect(parsePaneLayout(old)).toEqual(defaultPaneLayout())
+  const custom = JSON.parse(JSON.stringify(old))
+  if (custom.root.second.first.type !== "split") throw new Error("expected center")
+  custom.root.second.first.weight = 0.7
+  expect(parsePaneLayout(custom)).toEqual(custom)
+})
+
+test("explicit resize releases content sizing and persists weighted geometry", () => {
+  const resized = resizePane(defaultPaneLayout(), 0.1)
+  if (resized.root.type !== "split" || resized.root.second.type !== "split" || resized.root.second.first.type !== "split") throw new Error("expected center")
+  const center = resized.root.second.first
+  expect(center.sizing).toBe("weighted")
+  if (center.second.type !== "split") throw new Error("expected editor dock")
+  expect(center.second.sizing).toBe("weighted")
+  expect(center.second.weight).toBeCloseTo(0.1)
+  expect(parsePaneLayout(JSON.parse(JSON.stringify(resized)))).toEqual(resized)
+})
+
+test("content sizing is validated as a horizontal split contract", () => {
+  const layout = defaultPaneLayout()
+  expect(parsePaneLayout({ ...layout, root: { ...layout.root, sizing: "content-second" } })).toBeUndefined()
+  expect(parsePaneLayout({ ...layout, root: { ...layout.root, sizing: "unknown" } })).toBeUndefined()
 })

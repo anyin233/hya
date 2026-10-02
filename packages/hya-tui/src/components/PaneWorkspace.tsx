@@ -7,6 +7,7 @@ import { boundaryWeight, isSelectablePane, normalizePaneFocus, paneDefinitions, 
 import { pageStep } from "../state/scroll"
 import { keyboardOwner } from "../state/focus"
 import { paneRegistry } from "./paneRegistry"
+import { workingLineText } from "../state/activity"
 import { currentPrompt } from "../state/prompts"
 import { pendingLines } from "../state/format"
 
@@ -86,13 +87,15 @@ function PaneNodeView(props: { node: PaneNode; width: number; drag: SplitDrag })
   const { store, ui } = useApp()
   const minRows = (node: PaneNode): number => {
     if (node.type === "split") return node.axis === "horizontal" ? minRows(node.first) + minRows(node.second) : Math.max(minRows(node.first), minRows(node.second))
+    if (node.kind === "activity") return workingLineText(store.state, Date.now()) ? 1 : 0
     if (node.kind !== "composer") return paneDefinitions[node.kind].minRows
     // Draft updates establish a dependency before the editor mounts its row accessor.
     void store.state.draft
+    void store.state.secretEntry
     const prompt = currentPrompt(store.state)?.view
     const pending = pendingLines(store.state, props.width).length
-    return (ui.composerRows?.() ?? 1) + 2 + (prompt ? 5 + prompt.body.length + prompt.options.length : 0)
-      + (pending ? Math.min(3, pending) + 3 : 0) + (store.state.modeConfirm ? 1 : 0) + (store.state.secretEntry ? 4 : 0)
+    return (ui.composerHeight?.() ?? 3) + (prompt ? 5 + prompt.body.length + prompt.options.length : 0)
+      + (pending ? Math.min(3, pending) + 3 : 0) + (store.state.modeConfirm ? 1 : 0)
   }
   return (
     <>
@@ -117,10 +120,16 @@ function PaneNodeView(props: { node: PaneNode; width: number; drag: SplitDrag })
           }
           return (
             <box ref={(element: BoxRenderable) => (box = element)} width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection={node.axis === "vertical" ? "row" : "column"}>
-              <box ref={(element: BoxRenderable) => (first = element)} minHeight={node.axis === "horizontal" ? minRows(node.first) : 1} flexGrow={weight()} flexShrink={1} flexBasis={0}>
+              <box ref={(element: BoxRenderable) => (first = element)} height={node.sizing === "content-first" ? minRows(node.first) : undefined}
+                minHeight={node.axis === "horizontal" ? minRows(node.first) : 1}
+                flexGrow={node.sizing === "content-first" ? 0 : node.sizing === "content-second" ? 1 : weight()}
+                flexShrink={node.sizing === "content-first" ? 0 : 1} flexBasis={node.sizing === "content-first" ? undefined : 0}>
                 <PaneNodeView node={node.first} width={node.axis === "vertical" ? props.width * weight() : props.width} drag={props.drag} />
               </box>
-              <box minHeight={node.axis === "horizontal" ? minRows(node.second) : 1} flexGrow={1 - weight()} flexShrink={1} flexBasis={0}>
+              <box height={node.sizing === "content-second" ? minRows(node.second) : undefined}
+                minHeight={node.axis === "horizontal" ? minRows(node.second) : 1}
+                flexGrow={node.sizing === "content-second" ? 0 : node.sizing === "content-first" ? 1 : 1 - weight()}
+                flexShrink={node.sizing === "content-second" ? 0 : 1} flexBasis={node.sizing === "content-second" ? undefined : 0}>
                 <PaneNodeView node={node.second} width={node.axis === "vertical" ? props.width * (1 - weight()) : props.width} drag={props.drag} />
               </box>
             </box>
