@@ -98,3 +98,25 @@ test("setSplitWeight changes the split between two panes in the saved tree and n
   // No split has pane-3 on its first side and pane-1 on its second: nothing to resize.
   expect(setSplitWeight(layout, "pane-3", "pane-1", 0.7)).toBe(layout)
 })
+
+
+test("named close removes passive panes without changing input focus", () => {
+  const layout = defaultPaneLayout()
+  const closed = closePane(layout, "todos")
+  expect(paneLeaves(closed.root).some((pane) => pane.kind === "todos")).toBe(false)
+  expect(closed.active).toBe(layout.active)
+  expect(parsePaneLayout(closed)).toEqual(closed)
+  expect(paneLeaves(closePane(closed, "pane-5").root).some((pane) => pane.kind === "context")).toBe(false)
+  expect(() => closePane(layout, "missing")).toThrow("Unknown pane")
+  for (const target of ["conversation", "composer", "pane-6", "pane-1"]) expect(() => closePane(layout, target)).toThrow("Cannot close")
+})
+
+test("duplicate pane names require an id; unnamed close still uses selection", () => {
+  const layout = splitPane(defaultPaneLayout(), "vertical", "todos")
+  expect(() => closePane(layout, "todos")).toThrow("pane-8")
+  const closed = closePane(layout, "pane-8")
+  expect(paneLeaves(closed.root).filter((pane) => pane.kind === "todos")).toHaveLength(1)
+  const jobs = splitPane(closed, "vertical", "jobs")
+  expect(closePane(jobs).active).toBe("pane-1")
+  expect(paneLeaves(closePane(jobs).root).some((pane) => pane.id === jobs.active)).toBe(false)
+})
