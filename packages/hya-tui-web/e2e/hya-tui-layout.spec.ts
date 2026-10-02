@@ -74,6 +74,23 @@ test.describe("layout", () => {
     await term.attach(testInfo, "named-close-restored")
   })
 
+  for (const width of [1100, 690]) {
+    test(`split up places a new Jobs pane above the selected editor (${width}px)`, async ({ tui, backend }, testInfo) => {
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await term.waitForText("Message, !shell, or @file · / commands")
+      await statusSessionId(term)
+      await prompt(term, "/layout split up jobs")
+      await term.waitForText("▸ jobs · pane-8")
+      const jobs = (await term.find("jobs · pane-8"))!
+      const editor = (await term.find("Message, !shell, or @file · / commands"))!
+      expect(jobs.row).toBeLessThan(editor.row)
+      await term.press("Alt+ArrowDown")
+      await term.type("editor below jobs")
+      await term.waitForText("editor below jobs")
+      await term.attach(testInfo, "split-up")
+    })
+  }
+
   test("an open command survives a responsive pane reshape", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
@@ -89,13 +106,13 @@ test.describe("layout", () => {
   test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
     let term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await prompt(term, "/layout split vertical jobs")
+    await prompt(term, "/layout split left jobs")
     await term.waitForText("▸ jobs · pane-8")
-    const conversation = (await term.find("No messages yet"))!
+    const editor = (await term.find("Message, !shell, or @file · / commands"))!
     const jobs = (await term.find("jobs · pane-8"))!
-    expect(jobs.col).toBeGreaterThan(conversation.col)
-    await term.press("Alt+ArrowLeft")
-    await prompt(term, "/layout split horizontal todos")
+    expect(jobs.col).toBeLessThan(editor.col)
+    await term.press("Alt+ArrowRight")
+    await prompt(term, "/layout split up todos")
     await expect.poll(async () => (await term.lines()).filter((line) => line.includes("Todos")).length).toBeGreaterThanOrEqual(2)
     const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.col
     await term.type("/")
@@ -103,7 +120,7 @@ test.describe("layout", () => {
     await term.type("layout focus pane-8")
     await term.press("Enter")
     await prompt(term, "/layout assign composer")
-    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.col).toBeGreaterThan(inputBeforeSwap)
+    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.col).toBeLessThan(inputBeforeSwap)
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
@@ -227,9 +244,9 @@ test.describe("jobs pane", () => {
   test("shows the open session working while its turn streams", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await prompt(term, "/layout split vertical jobs")
+    await prompt(term, "/layout split left jobs")
     await term.waitForText("▸ jobs · pane-8")
-    await term.press("Alt+ArrowLeft")
+    await term.press("Alt+ArrowRight")
     await prompt(term, "show the work")
     await term.waitForText("turn running", 20_000)
     await term.waitForText("finished from tiled jobs pane", 20_000)

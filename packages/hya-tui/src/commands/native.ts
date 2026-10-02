@@ -5,7 +5,7 @@ import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from 
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
-import { closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
+import { closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -329,7 +329,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
     argumentHint: "[split|assign|focus|resize|close|reload|reset|show]",
     complete: ({ words, current, head }, context) => {
       if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reload", "reset", "show"])
-      if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
+      if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["up", "left"])
       if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
       if (words[0] === "close" && words.length === 2) {
         const panes = (context.panes ?? []).filter((pane) => pane.kind !== "conversation" && pane.kind !== "composer")
@@ -348,10 +348,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
       switch (command) {
         case "show": break
         case "split": {
-          const axis = args[1]
+          const direction = args[1]
           const kind = args[2] ?? "jobs"
-          if ((axis !== "horizontal" && axis !== "vertical") || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout split <horizontal|vertical> [job]")
-          next = splitPane(current, axis as PaneAxis, kind as PaneKind)
+          if ((direction !== "up" && direction !== "left") || !paneKinds.includes(kind as PaneKind) || args.length > 3) throw new Error("Usage: /layout split <up|left> [job]")
+          next = splitPane(current, direction === "up" ? "horizontal" : "vertical", kind as PaneKind, true)
           break
         }
         case "assign": {

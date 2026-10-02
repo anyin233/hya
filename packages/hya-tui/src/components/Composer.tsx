@@ -322,7 +322,7 @@ export function Composer(props: { width: number }) {
     } else {
       const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
       if (!projects) {
-        store.setStatus("No Projects pane · /layout split vertical projects to add one")
+        store.setStatus("No Projects pane · /layout split left projects to add one")
         return
       }
       if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
