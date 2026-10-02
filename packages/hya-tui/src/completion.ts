@@ -9,6 +9,7 @@ export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
 export interface CompletionContext {
   /** Saved layout leaves, including passive and currently hidden panes. */
   panes?: { id: string; kind: string }[]
+  layoutContainers?: { id: string; children: string[]; removable: boolean }[]
   backendCommands: string[]
   models: string[]
   /** Listed sessions; `/open` and `/resume` show a titled one as `title (id)`. */

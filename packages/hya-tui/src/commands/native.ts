@@ -5,7 +5,7 @@ import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from 
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
-import { closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
+import { insertPane, movePane, wrapPane, paneNodes, closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout, type LayoutDirection, type PaneNode } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -325,17 +325,36 @@ export const nativeCommandSpecs: CommandSpec[] = [
   keybindingsCommand,
   {
     name: "/layout",
-    description: "Edit workspace panes: split, assign, focus, resize, close, reload, reset, or show",
-    argumentHint: "[split|assign|focus|resize|close|reload|reset|show]",
+    description: "Edit workspace panes: split, insert, move, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
+    argumentHint: "[split|insert|move|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]",
     complete: ({ words, current, head }, context) => {
-      if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reload", "reset", "show"])
+      if (words.length === 1) return matchValues(head, current, ["split", "insert", "move", "wrap", "remove", "assign", "focus", "resize", "close", "reload", "reset", "tree", "show"])
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["up", "left"])
       if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
-      if (words[0] === "close" && words.length === 2) {
+      if ((words[0] === "close" || words[0] === "remove") && words.length === 2) {
         const panes = (context.panes ?? []).filter((pane) => pane.kind !== "conversation" && pane.kind !== "composer")
         const names = panes.filter((pane) => panes.filter((other) => other.kind === pane.kind).length === 1).map((pane) => pane.kind)
-        return matchValues(head, current, [...names, ...panes.map((pane) => pane.id)])
+        return matchValues(head, current, [...names, ...panes.map((pane) => pane.id), ...(context.layoutContainers ?? []).filter((node) => node.removable).map((node) => node.id)])
       }
+      const groups = ["root", ...(context.layoutContainers ?? []).map((node) => node.id)]
+      const targets = [...groups, ...(context.panes ?? []).map((pane) => pane.id)]
+      if (words[0] === "insert" && words.length === 2) return matchValues(head, current, groups)
+      const container = (target: string | undefined) => target === "root" ? context.layoutContainers?.[0] : context.layoutContainers?.find((node) => node.id === target)
+      if (words[0] === "insert" && words.length === 3) {
+        const target = container(words[1])
+        return target ? matchValues(head, current, Array.from({ length: target.children.length + 1 }, (_, i) => String(i))) : []
+      }
+      if (words[0] === "move" && words.length === 4) {
+        const target = container(words[2])
+        return target ? matchValues(head, current, Array.from({ length: target.children.length + (target.children.includes(words[1] ?? "") ? 0 : 1) }, (_, i) => String(i))) : []
+      }
+      if (words[0] === "insert" && words.length === 4) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
+      if (words[0] === "move" && words.length === 2) return matchValues(head, current, targets)
+      if (words[0] === "move" && words.length === 3) return matchValues(head, current, groups)
+      if (words[0] === "wrap" && words.length === 2) return matchValues(head, current, targets)
+      if (words[0] === "wrap" && words.length === 3) return matchValues(head, current, ["row", "column"])
+      if (words[0] === "wrap" && words.length === 4) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
+      if (words[0] === "wrap" && words.length === 5) return matchValues(head, current, ["before", "after"])
       if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
       if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down", "next", "previous"])
       return []
@@ -346,7 +365,41 @@ export const nativeCommandSpecs: CommandSpec[] = [
       let next: PaneLayout = current
       let reloadedPath: string | undefined
       switch (command) {
+        case "tree": {
+          if (args.length !== 1) throw new Error("Usage: /layout tree")
+          const rows: { id: string; label: string; detail: string }[] = []
+          const visit = (node: PaneNode, depth: number, size = "root") => {
+            rows.push({ id: node.id, label: `${"  ".repeat(depth)}${node.id} · ${node.type === "pane" ? node.kind : node.direction}`, detail: `${size}${node.type === "pane" ? isSelectablePane(node) ? " · selectable" : " · passive" : " · container"}` })
+            if (node.type === "split") for (const child of node.children) visit(child.node, depth + 1, child.size.mode === "content" ? "content" : `weight ${child.size.value}`)
+          }
+          visit(current.root, 0)
+          actions.openPicker({ title: "Layout tree", rows, hint: "Ids for insert/move/wrap/remove · Esc closes", onSelect: () => undefined })
+          return
+        }
         case "show": break
+        case "insert": {
+          const [_, container, index, kind] = args
+          if (args.length !== 4 || !container || !index || !/^\d+$/.test(index) || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout insert <container-id|root> <index> <job>")
+          next = insertPane(current, container, Number(index), kind as PaneKind)
+          break
+        }
+        case "move": {
+          const [_, target, container, index] = args
+          if (args.length !== 4 || !target || !container || !index || !/^\d+$/.test(index)) throw new Error("Usage: /layout move <node-id|pane-name> <container-id|root> <index>")
+          next = movePane(current, target, container, Number(index))
+          break
+        }
+        case "wrap": {
+          const [_, target, direction, kind, position = "before"] = args
+          if (args.length < 4 || args.length > 5 || !target || (direction !== "row" && direction !== "column") || !paneKinds.includes(kind as PaneKind) || (position !== "before" && position !== "after")) throw new Error("Usage: /layout wrap <node-id|pane-name|root> <row|column> <job> [before|after]")
+          next = wrapPane(current, target, direction as LayoutDirection, kind as PaneKind, position === "before")
+          break
+        }
+        case "remove": {
+          if (args.length !== 2 || !args[1]) throw new Error("Usage: /layout remove <node-id|pane-name>")
+          next = closePane(current, args[1])
+          break
+        }
         case "split": {
           const direction = args[1]
           const kind = args[2] ?? "jobs"
@@ -363,8 +416,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
         case "focus": {
           const target = args[1]
           if (!target) throw new Error("Usage: /layout focus <left|right|up|down|next|previous|pane-id>")
-          if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection).active }
-          else if (target === "next" || target === "previous") next = { ...current, active: rotatePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target === "next" ? 1 : -1).active }
+          if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection, actions.paneBounds?.()).active }
+          else if (target === "next" || target === "previous") next = { ...current, active: rotatePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target === "next" ? 1 : -1, actions.paneBounds?.()).active }
           else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target && isSelectablePane(pane))) next = { ...current, active: target }
           else throw new Error(`Pane ${target} is unselectable, hidden, or unknown`)
           break
@@ -376,7 +429,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
           break
         }
         case "close": {
-          if (args.length > 2) throw new Error("Usage: /layout close [pane-name|pane-id]")
+          if (args.length > 2) throw new Error("Usage: /layout close [pane-name|node-id]")
           next = closePane(current, args[1])
           break
         }
@@ -388,7 +441,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
           break
         }
         case "reset": next = defaultPaneLayout(); break
-        default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reload|reset|show]")
+        default: throw new Error("Usage: /layout [split|insert|move|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]")
       }
       store.setView("chat")
       const active = paneLeaves(next.root).find((pane) => pane.id === next.active)

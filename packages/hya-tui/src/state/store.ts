@@ -45,7 +45,7 @@ import type { View } from "../instructions"
 import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
-import { paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
+import { paneNodes, paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
 import { foldMember, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -960,6 +960,7 @@ export function createAppStore() {
     completionContext(): CompletionContext {
       return {
         panes: paneLeaves(state.paneLayout.root).map(({ id, kind }) => ({ id, kind })),
+        layoutContainers: paneNodes(state.paneLayout.root).flatMap((node) => node.type === "pane" ? [] : [{ id: node.id, children: node.children.map((child) => child.node.id), removable: paneLeaves(node).every((pane) => pane.kind !== "conversation" && pane.kind !== "composer") }]),
         backendCommands: state.backendCommands.map((command) => command.name),
         models: state.models.map((model) => model.id),
         sessions: state.sessions.map((session) => ({ id: session.id, title: session.title })),

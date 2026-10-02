@@ -1,4 +1,6 @@
-# 0.43.52
+# 0.43.53
 
-- Replace `/layout split horizontal|vertical` with `/layout split up|left`, inserting the new pane above or to the left of the selected pane.
-- Update command completion, hints and examples while preserving saved split-axis compatibility.
+- Introduce layout v4 ordered row/column containers, with migration of saved binary layouts, content sizing and safe normalization.
+- Add `/layout tree`, `insert`, `move`, `wrap` and `remove` commands for uniform branch editing.
+- Make Alt+Left/Right cycle through every visible selectable pane in visual order; Alt+Up/Down choose nearby panes using drawn bounds.
+- Preserve mounted pane state, drafts and transcript scroll across structural edits and reloads, and support dragging row and column boundaries.
