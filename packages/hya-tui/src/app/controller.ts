@@ -861,19 +861,30 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   /** Open the context actions for one session row (mouse right-click). */
-  function openSessionContext(id: string): void {
+  function openSessionContext(id: string, point?: { x: number; y: number }): void {
     const session = store.state.sessions.find((row) => row.id === id)
     if (!session) return
     openPicker({
       title: `Session · ${session.title || id}`,
-      rows: [{ id, label: session.title || id, name: session.title || id, detail: session.archived ? "archived" : "active" }],
-      hint: "Enter opens · F2 renames · F3 archives · Ctrl+D deletes · Esc closes",
+      rows: point
+        ? [{ id: "open", label: "Open" }, ...(session.archived ? [] : [{ id: "archive", label: "Archive" }]), { id: "delete", label: "Delete" }]
+        : [{ id, label: session.title || id, name: session.title || id, detail: session.archived ? "archived" : "active" }],
+      hint: point ? "Click an action · Esc closes" : "Enter opens · F2 renames · F3 archives · Ctrl+D deletes · Esc closes",
+      ...(point ? { contextMenu: point } : {}),
       actions: [
         { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
         { id: "archive", key: "f3", label: "F3 archive", prompt: "confirm", confirmText: "Archive {label}? Enter confirms" },
         { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: "Delete {label}? Enter confirms" },
       ],
-      onSelect: (row) => { void openRootSession(row.id).catch((error: unknown) => status(`Open failed: ${errorLine(error)}`)) },
+      onSelect: (row) => {
+        if (point) {
+          if (row.id === "open") void openRootSession(id).catch((error: unknown) => status(`Open failed: ${errorLine(error)}`))
+          else if (row.id === "archive") void client.setArchived(id, true).then(refresh).then(() => status("Session archived")).catch((error: unknown) => status(`Archive failed: ${errorLine(error)}`))
+          else if (row.id === "delete") void deleteSession(id).then(refresh).then(() => status("Session deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`))
+          return
+        }
+        void openRootSession(row.id).catch((error: unknown) => status(`Open failed: ${errorLine(error)}`))
+      },
       onAction: (action, row, value) => {
         if (action === "rename") void client.updateSession(row.id, { title: value ?? "" }).then(refresh).then(() => status("Session renamed")).catch((error: unknown) => status(`Rename failed: ${errorLine(error)}`))
         else if (action === "archive") void client.setArchived(row.id, true).then(refresh).then(() => status("Session archived")).catch((error: unknown) => status(`Archive failed: ${errorLine(error)}`))
@@ -883,18 +894,19 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   /** Open the context actions for one Project row (mouse right-click). */
-  function openProjectContext(id: string): void {
+  function openProjectContext(id: string, point?: { x: number; y: number }): void {
     const project = store.state.projects.find((row) => row.id === id)
     if (!project) return
     openPicker({
       title: `Project · ${project.name}`,
-      rows: [{ id, label: project.name, name: project.name }],
-      hint: "Enter opens · F2 renames · Ctrl+D deletes · Esc closes",
+      rows: point ? [{ id: "open", label: "Open" }, { id: "delete", label: "Delete" }] : [{ id, label: project.name, name: project.name }],
+      hint: point ? "Click an action · Esc closes" : "Enter opens · F2 renames · Ctrl+D deletes · Esc closes",
+      ...(point ? { contextMenu: point } : {}),
       actions: [
         { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
         { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: "Delete {label}? Enter confirms" },
       ],
-      onSelect: (row) => switchFromSidebar(row.id),
+      onSelect: (row) => { if (point) { if (row.id === "open") switchFromSidebar(id); else if (row.id === "delete") void client.deleteProject(id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`)); return } switchFromSidebar(row.id) },
       onAction: (action, row, value) => {
         if (action === "rename") void client.updateProject(row.id, { name: value ?? "" }).then(refreshProjects).then(() => status("Project renamed")).catch((error: unknown) => status(`Rename failed: ${errorLine(error)}`))
         else if (action === "delete") void client.deleteProject(row.id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`))

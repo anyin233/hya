@@ -44,7 +44,7 @@ export function ProjectsSidebar(props: { width: number; active?: boolean }) {
                 const row = entry.row!
                 const on = () => row.id === highlighted()
                 return (
-                  <text width="100%" height={1} wrapMode="none" onMouseDown={(event) => { if (event.button === 2) { controller.openProjectContext(row.id); return } if (event.button === 0) controller.switchFromSidebar(row.id) }}>
+                  <text width="100%" height={1} wrapMode="none" onMouseDown={(event) => { if (event.button === 2) { controller.openProjectContext(row.id, { x: event.x, y: event.y }); return } if (event.button === 0) controller.switchFromSidebar(row.id) }}>
                     <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
                     <span style={{ fg: row.busy ? colors.warning : colors.fg }}>{row.busy ? "● " : "  "}</span>
                     <span style={{ fg: row.active ? colors.accent : colors.fg }}>{truncate(row.name, Math.max(1, inner() - 8))}</span>
