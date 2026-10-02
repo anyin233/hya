@@ -101,7 +101,7 @@ fall back to `hya-task`.
 | `effort` | Thinking effort for this spawn (also per member): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
 | `command` | Optional command that triggered the task. |
 | `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
-| `members[]` | Fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
+| `members[]` | Fan one call out to several subagents concurrently (each needs `prompt`; optional per-member overrides). Registration runs in parallel and returns all handles together. |
 
 Handles are never reused within a team (live or archived members), so a bare
 leaf always names one member and mail to an archived member's handle wakes

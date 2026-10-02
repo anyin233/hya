@@ -786,11 +786,14 @@ export function createController({ client, store, directory, remote: startedRemo
     const highlighted = store.state.projectSidebarHighlight ?? store.state.activeProjectId
     const outcome = projectsSidebarKeyOutcome(pressed, rows, highlighted)
     if (outcome.type === "move") store.setProjectSidebarHighlight(outcome.id)
-    else if (outcome.type === "switch") {
-      store.setProjectsSidebarFocus(false)
-      void switchProject(outcome.id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`))
-    }
+    else if (outcome.type === "switch") switchFromSidebar(outcome.id)
     else if (outcome.type === "blur") store.setProjectsSidebarFocus(false)
+  }
+
+  /** Switch to Project from the left sidebar, used by keyboard Enter and mouse clicks. */
+  function switchFromSidebar(id: string): void {
+    store.setProjectsSidebarFocus(false)
+    void switchProject(id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`))
   }
 
   /** Leave a subagent's read-only view: open its parent session. */
@@ -1690,7 +1693,8 @@ export function createController({ client, store, directory, remote: startedRemo
     closeProjectView: () => projectView.close(),
     /** One key while the left Projects sidebar has focus (components/Composer.tsx routes it). */
     projectsSidebarKey,
-    /** Shared with the AppContext `ui` prop (app/run.tsx): the Diff view registers its scroller here. */
+    /** Switch to a Project from the left sidebar (Enter or a click on its row). */
+    switchFromSidebar,
     ui,
     refreshAll,
     start,

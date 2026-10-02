@@ -188,6 +188,15 @@ test("a new session in the active Project works in --dir when --dir lies inside 
   outside.controller.dispose()
 })
 
+test("plain local startup creates a fresh session even when the Project has existing sessions", async () => {
+  const existing: SessionInfo = { id: "old", projectId: "prj_work", workdir: "/work/sub", agent: "hya-main", model: { providerId: "hya", modelId: "echo" }, kind: "SESSION_KIND_PROJECT" }
+  const h = harness({ sessions: [existing] })
+  await h.controller.start()
+  expect(h.store.state.selected?.id).toBe("new_1")
+  expect(h.named("createSession")).toEqual([["createSession", { projectId: "prj_work", workdir: "/work/sub" }]])
+  h.controller.dispose()
+})
+
 test("newTemporarySession creates a SESSION_KIND_TEMPORARY session", async () => {
   const h = harness()
   await h.controller.start()

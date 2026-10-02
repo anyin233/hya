@@ -817,10 +817,10 @@ keyboard ownership and highlighted composer.
   live todo list — see
   [Working indicator, metadata state, and todo panel](#working-indicator-metadata-state-and-todo-panel)),
   and `Context` (permission mode, session, agent, model, message count,
-  context occupancy, tokens, directory, branch, server, and connection).
-  These are independent panes in the editable layout tree. The right sidebar
-  needs 150 columns and is always hidden below that width. At 150 columns or
-  more, Ctrl+B or `/sidebar [on|off]` toggles its visibility. It is never
+  context occupancy, tokens, directory, branch, server, frontend/backend
+  version as `<frontend>/<backend>`, and connection). These are independent
+  panes in the editable layout tree. The right sidebar needs 150 columns and
+  is always hidden below that width. At 150 columns or more, Ctrl+B or `/sidebar [on|off]` toggles its visibility. It is never
   narrower than 29 columns; drag its left border to resize it, and the saved
   split weight persists across launches. Hiding Context does not add metadata
   rows to Conversation. Its `Sessions`
@@ -829,9 +829,10 @@ keyboard ownership and highlighted composer.
   [Projects](#projects) and [Pickers](#pickers)).
 - **Left Projects sidebar.** A narrower titled pane on
   the left: one row per Project (`ListProjects`, live via `projectsUpdated`
-  the same as the Project view), the active one marked `▸`, a busy marker
-  `●` while a session of it runs a turn, and its session count. It needs
-  both sidebars and the chat column to fit, so it follows a threshold no
+  the same as the Project view), with a separator between rows, the active one marked `▸`, a busy marker
+  `●` while a session of it runs a turn, and its session count. Clicking a
+  Project row switches to it just like clicking a session row opens that
+  session. It needs both sidebars and the chat column to fit, so it follows a threshold no
   lower than the right sidebar's (150 columns; an 80-column or even a
   149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
   hidden — Up/Down move the highlight, Enter switches (`switchProject`),
@@ -959,7 +960,9 @@ columns, Sessions, Todos, and Context are always hidden; at 150 or more,
 jobs in any layout; the saved tree remains intact. `Ctrl+P` opens and
 selects a Projects pane; `Ctrl+B` toggles panes assigned Sessions, Todos,
 and Context, wherever they are placed. Conversation stays free of metadata
-headings when Context is hidden.
+headings when Context is hidden; its compact top status line instead shows
+the available Context fields, including the frontend/backend version as
+`<frontend>/<backend>` (for example, `0.44.2/0.45.0`).
 Resizing the terminal or toggling a sidebar keeps unsent message and command
 drafts, including their in-process input histories.
 
@@ -1298,16 +1301,15 @@ bottom. The transcript shows the newest 200 messages.
 
 Every tool call of an assistant message is a transparent, outlined card. The
 header names the canonical tool and shows its state icon and duration. The
-first content row is the complete compact JSON argument object; while collapsed
-it stays to one terminal row to keep large calls from pushing the composer down.
-Expanding the card wraps the complete arguments and shows the output below a
-divider (the divider is omitted when there is no output). Errors are shown below
-the output in the error color.
+first content row is a display-ready argument block: builtin tools use their
+semantic summary (for example `src/main.rs · lines 1-40`) rather than raw JSON;
+generic namespaced/MCP tools use pretty-printed JSON. The raw argument JSON is
+still retained for compatibility and expanded output is shown below a divider.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ ✓ read                                                                  │
-│ {"path":"src/main.rs","offset":1,"limit":40}                         │
+│ src/main.rs · lines 1-40                                              │
 │ ──────────────────────────────────────────────────────────────────────── │
 │ 1  fn main() {                                                          │
 └──────────────────────────────────────────────────────────────────────────┘

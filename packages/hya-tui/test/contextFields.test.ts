@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { contextFields, contextRows } from "../src/state/contextFields"
+import { contextFields, contextRows, contextStatus } from "../src/state/contextFields"
 import { shownServer } from "../src/state/format"
 import { createAppStore, type AppStore } from "../src/state/store"
 
@@ -18,11 +18,11 @@ function openedStore() {
 
 test("without a session: the startup placeholder, then none, the server label, and the WebUI", () => {
   const store = createAppStore()
-  expect(rows(store)).toEqual(["Mode     manual", "Session  connecting…", "Server   127.0.0.1:8080"])
+  expect(rows(store)).toEqual(["Mode     manual", "Session  connecting…", "Server   127.0.0.1:8080", "Version  0.44.2/unknown"])
   store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
   store.setServerLabel("remote: relay.example.com/room")
   store.setWeb({ error: "port 3250 is in use" })
-  expect(rows(store)).toEqual(["Mode     manual", "Session  none", "Server   remote: relay.example.com/room", "WebUI    unavailable"])
+  expect(rows(store)).toEqual(["Mode     manual", "Session  none", "Server   remote: relay.example.com/room", "WebUI    unavailable", "Version  0.44.2/unknown"])
   expect(contextFields(store.state, "x").find((field) => field.label === "WebUI")).toMatchObject({ short: "WebUI unavailable", tone: "warning" })
 })
 
@@ -61,4 +61,12 @@ test("the Messages count reflects the merged transcript, and a fork names its so
   store.applyEvent({ seq: "1", session: "hysec_1", messageStarted: { message: "m2", role: "ROLE_ASSISTANT" } })
   store.flushOverlay()
   expect(rows(store)).toContain("Messages 2")
+})
+
+test("shows frontend/backend versions in Context and its compact status segment", () => {
+  const store = createAppStore()
+  store.applyBootstrap({ location: { version: "0.45.0" } })
+  const version = contextFields(store.state, server).find((field) => field.label === "Version")
+  expect(version).toMatchObject({ value: "0.44.2/0.45.0", short: "0.44.2/0.45.0" })
+  expect(contextStatus(contextFields(store.state, server), 200)).toContain("0.44.2/0.45.0")
 })

@@ -96,7 +96,7 @@ test.describe("one-command launch", () => {
     expect(await next.waitForExit()).toBe(0)
   })
 
-  test("a plain start reopens the saved session; an explicit empty new one is dropped after exit; --continue reopens the saved chat", async ({ tui, workspace }) => {
+  test("a plain start creates a fresh Project session; --continue reopens the saved chat", async ({ tui, workspace }) => {
     // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Message, !shell, or @file · / commands", 30_000)
@@ -107,18 +107,17 @@ test.describe("one-command launch", () => {
     await first.press("Control+d")
     await first.waitForExit()
 
-    // A plain start restores the saved chat; /new creates an empty one.
+    // A plain start creates a new empty session in the current Project rather than reopening the saved chat.
     const fresh = await tui(...selfLaunch(workspace))
-    await fresh.waitForText("remember this", 30_000)
-    await prompt(fresh, "/new")
-    await fresh.waitForText("No messages yet")
+    await fresh.waitForText("No messages yet", 30_000)
+    expect(await fresh.find("remember this")).toBeNull()
     const empty = await sessionId(fresh)
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     await prompt(fresh, "/exit")
     expect(await fresh.waitForExit()).toBe(0)
     // …which the daemon drops once no client shows it (after a short grace):
-    // only the session with messages is left.
+    // only the saved session with messages is left.
     await expect.poll(() => listed(url), { timeout: 20_000 }).not.toContain(empty)
     expect(await listed(url)).toHaveLength(1)
 
