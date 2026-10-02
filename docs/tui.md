@@ -1082,120 +1082,143 @@ keyboard ownership and highlighted composer.
 
 ### Tiled workspace
 
-The complete screen is one editable tree of nested rectangles. The default
-tree has Projects on the left, Conversation in the middle, and Sessions,
-Todos, and Context stacked on the right. Conversation contains the
-transcript, prompts, and message composer, so moving
-it moves the whole interactive surface. Each other rectangle has an assigned
-job; you can split, resize, reassign, or close any auxiliary rectangle.
-Additional jobs include jobs, models, Workflows, interactions, status, and
-API output. The global modal and full-screen overlays cover the tree.
-`/layout reset` restores the five-pane arrangement.
+The screen is one tree of nested rectangles. Every pane uses a common
+registration contract, and declares whether it is **selectable** (can own
+keyboard input) or **unselectable** (passive information). Layout membership
+is independent of focus: passive panes still occupy, render, and resize their
+rectangles. This separates message editing from viewing and provides the
+foundation for additional built-in panes and a future pane plugin interface.
 
-Open the command pane with `/` on an empty message, then enter a layout
-command. For example:
+The default arrangement is Projects on the left; a conversation viewer,
+agent activity line, and message editor in the middle; and Sessions, Todos,
+and Context on the right. The viewer is passive and the editor is selectable.
+They read the same session projection. No additional stream or durable state
+model is created. The editor also holds the existing permission/question dock
+and pending-request controls.
+
+| Pane kind | Keyboard eligibility |
+| --- | --- |
+| `composer`, `projects`, `sessions`, `jobs`, `models`, `workflows`, `interactions`, `api` | Selectable |
+| `conversation`, `activity`, `todos`, `context`, `status` | Unselectable |
+
+Alt+arrows search visible selectable rectangles by geometry. A subtree with
+only one selectable leaf navigates as a group with its passive siblings, so
+Sessions can return directly to the editor despite the passive transcript above
+it. Rotation follows
+split-tree order and wraps; use `/layout focus next` or `previous`, or bind
+those commands with `/keybind set`. No extra default shortcuts are installed.
+Clicking a passive pane preserves keyboard ownership; mouse scrolling and text
+selection remain available. One accent border belongs to the focused editor,
+selectable side pane, or active overlay. A hidden, removed, or newly passive
+focus target falls back to the editor. Focus changes do not rebuild the tree.
+
+Ordinary keys and paste go exclusively to the focused selectable pane.
+Unsupported input stops there rather than editing the message draft. Global
+commands and modal/command overlays retain priority. The transcript's existing
+PageUp/PageDown and empty-input Home/End shortcuts remain available from editor
+focus, even though the transcript itself is passive. Projects retains its own
+Up/Down/Enter selection and Esc return-to-editor behavior. The legacy Projects
+focus accessor is derived from `paneLayout.active`; it is not a second owner.
+
+For example, open commands using `/` (Ctrl+X then `/` while drafting):
 
 ```text
-/layout focus pane-2              # select Projects on a wide terminal
-/layout resize +5                 # widen Projects by five percentage points
-/layout focus pane-3              # select Sessions
-/layout assign jobs               # show Jobs in the former Sessions rectangle
-/layout split horizontal todos    # split Jobs into top and bottom rectangles
-/layout focus pane-1              # select Conversation
-/layout reset                     # restore Projects | Conversation | right stack
+/layout focus pane-3              # Sessions owns input
+/layout focus next                # rotate to Projects on a wide screen
+/layout focus pane-1              # Message editor owns input
+/layout split vertical jobs       # new selectable Jobs pane gets focus
+/layout split horizontal status   # add passive Status; focus stays on Jobs
+/layout focus previous            # rotate through selectable panes only
+/layout reset                     # restore the seven-pane default
 ```
 
-`vertical` divides left/right; `horizontal` divides top/bottom. A new pane
-starts selected. The selected pane has an accent border; generic auxiliary
-panes also show `▸` and their pane id in the title.
-The accent border marks exactly one keyboard owner: Conversation highlights
-its bottom message input, auxiliary panes highlight their rectangle, and opening
-Commands, Help, a picker, or a form moves the highlight to that overlay. Borders
-behind it return to the normal border color; closing it restores the workspace
-highlight. For example, select Jobs, press `/` to see Commands highlighted,
-then Esc to restore Jobs. This also applies after resizing the terminal.
-
-The focus contract is derived locally, in priority order: concealed secret
-entry, picker (including Help), the open full-screen view (its provider form
-when present), Commands, then the selected workspace pane. A provider form
-highlights its own box and dims the enclosing Provider View. Conversation uses
-the same owner decision for its textarea focus and border. Focus uses the theme's
-`accent` color, while inactive borders use `border`; it adds no persisted field
-or server API.
-
-Alt+Left/Right/Up/Down selects the nearest pane in that direction; a click
-also selects a pane. If a terminal multiplexer consumes Alt+arrows, use
-`/layout focus <direction>`. PgUp/PgDn scroll the selected
-pane. Up/Down scroll read-only panes one line. Ordinary typing, paste, Enter,
-Backspace, Esc, input history, Vim edits, and conversation shortcuts belong only
-to the focused pane; unsupported keys in an auxiliary pane are ignored. They
-never edit or submit the conversation draft, answer a permission request, or
-cancel a turn. Projects keeps its Up/Down/Enter selection and Esc return behavior.
-For example, draft a message, select Sessions with Alt+Right, inspect it, then
-return with Alt+Left to continue the same draft. `/` and `?`, Alt+arrows, Ctrl+X
-then `/`, and the exit shortcuts remain global workspace
-actions. Ctrl+C from an auxiliary pane uses the usual two-press exit guard without
-clearing the conversation draft. Esc leaving Projects selects Conversation.
-This is client-side keyboard ownership based on `paneLayout.active` and the
-Projects focus flag; it adds no RPC or configuration fields.
-
-Focus changes keep each pane mounted, including its scroll position;
-for example, scroll up in Conversation, press Alt+Right to inspect a side pane,
-then Alt+Left to return to the same part of the transcript. The visible tree
-is recalculated when the layout, terminal width, or sidebar visibility changes,
-while live session and todo data still update their panes. Alt+Left/Right are
-pane keys, so use plain arrow keys for cursor movement in the message editor.
-Commands still use the single
-[command pane](#command-pane). Existing main views such as `/models` appear
-in the Conversation rectangle; full-screen views and modal pickers cover the
-tree. `/layout show` returns Conversation to chat.
+`vertical` divides left/right; `horizontal` divides top/bottom. A new
+selectable pane gets focus; adding a passive pane preserves focus. The viewer
+and editor are singletons and cannot be duplicated or closed. Assigning either
+kind swaps it with the existing instance; if the target becomes passive,
+keyboard focus follows the normal editor fallback. Additional ways to target
+passive panes for layout editing are deferred; keyboard navigation does not
+select them.
 
 | Command | Effect |
 | --- | --- |
-| `/layout` or `/layout show` | Show the pane count and selected pane; return from another main view. |
-| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to 16 panes. |
-| `/layout assign <job>` | Change the selected pane's job. Assigning `conversation` swaps it with the current conversation pane; the sole conversation cannot be removed. |
-| `/layout focus <left\|right\|up\|down\|pane-id>` | Select a neighboring pane or a stable id such as `pane-2`. Alt+arrows use this action. |
-| `/layout resize <+N\|-N>` | Grow or shrink the selected pane against its nearest sibling by N percentage points, clamped to 10–90%. |
-| `/layout close` | Close the selected auxiliary pane and give its rectangle to its sibling. |
-| `/layout reset` | Restore the five-pane left/middle/right layout. |
+| `/layout` or `/layout show` | Show count and focused pane in status; return the viewer to chat. |
+| `/layout split <horizontal\|vertical> [job]` | Split the focused pane equally; default job `jobs`; maximum 32 panes. |
+| `/layout assign <job>` | Assign the focused rectangle; viewer/editor assignment swaps singleton instances. |
+| `/layout focus <left\|right\|up\|down\|next\|previous\|pane-id>` | Focus a visible selectable pane; passive/hidden/unknown ids are refused. |
+| `/layout resize <+N\|-N>` | Resize the focused pane against its nearest sibling, within 10–90%. |
+| `/layout close` | Close the focused auxiliary pane and promote its sibling; fall back to editor focus. |
+| `/layout reset` | Restore the default arrangement. |
 
-Jobs are derived from the TUI's current projection: busy sessions, live
-subagent members of the open session, queued prompts, and pending requests.
-The open session's turn and member activity update through its stream; busy
-state for other sessions follows their catalog updates or `/refresh`. This
-layout does not start another session stream or create another chat input.
+Default ids are `pane-1` editor, `pane-2` Projects, `pane-3` Sessions,
+`pane-4` Todos, `pane-5` Context, `pane-6` viewer, and `pane-7` activity.
+Below 150 columns Projects is hidden unless `/projects-sidebar on` pins it;
+Sessions, Todos, and Context are hidden below 150 columns. At wider sizes
+`/sidebar off` hides those three kinds wherever they are placed. The saved
+layout remains intact. Resizing and toggling preserve drafts and histories.
+Editor and prompt controls have a minimum height so pending interactions stay
+visible, taking space from the viewer when necessary.
 
-The default pane ids are `pane-1` Conversation, `pane-2` Projects, `pane-3`
-Sessions, `pane-4` Todos, and `pane-5` Context. At widths below 150 columns,
-Projects is hidden unless `/projects-sidebar on` pins it open. Below 150
-columns, Sessions, Todos, and Context are always hidden; at 150 or more,
-`/sidebar off`  hides them. These modes filter the matching pane
-jobs in any layout; the saved tree remains intact. `/projects-sidebar on` opens Projects; `/sidebar` toggles panes assigned Sessions, Todos,
-and Context, wherever they are placed. Conversation stays free of metadata
-headings when Context is hidden.
-Resizing the terminal or toggling a sidebar keeps unsent message and command
-drafts, including their in-process input histories.
+Jobs show busy sessions, current subagents, queued prompts and pending
+requests from the existing TUI projection. Current-turn activity streams live;
+other sessions follow catalog refreshes.
 
-The layout is saved automatically in the TUI preferences file and restored
-on the next start. TUI processes sharing that file (including WebUI tabs)
-each keep their loaded layout in memory; the last layout edit saved wins for
-the next start. Its exact JSON contract is `paneLayout: {version: 2,
-root: PaneNode, active: string}`. A `PaneNode` is either
-`{type: "pane", id: "pane-N", kind: PaneKind}` or
-`{type: "split", axis: "horizontal"|"vertical", weight: number,
-first: PaneNode, second: PaneNode}`. `weight` is the first child's fraction
-and stays between `0.1` and `0.9`; a mouse drag writes it on release. A split
-whose second side holds only Sessions, Todos, or Context panes is drawn with
-that side at least 29 columns wide whatever its weight. `PaneKind` is
-`conversation`, `projects`, `jobs`,
-`sessions`, `todos`, `context`, `models`, `workflows`, `interactions`,
-`status`, or `api`. Saved trees with duplicate ids, no conversation,
-unknown jobs, invalid weights, or more than 16 panes are ignored. Saved
-version-1 center-only trees are migrated by placing them between editable
-Projects and right-side panes. Layout
-editing uses no new backend route: each pane reads the existing session,
-catalog, interaction, and stream data already held by the TUI.
+#### Pane interfaces and persistence
+
+The preferences contract is `paneLayout: {version: 3, root: PaneNode,
+active: string}`. `PaneNode` is either `{type: "pane", id: "pane-N",
+kind: PaneKind}` or `{type: "split", axis: "horizontal"|"vertical",
+weight: number, first: PaneNode, second: PaneNode}`. Weights are finite
+fractions from `0.1` through `0.9`. Trees require unique positive numeric ids,
+exactly one `conversation` and one `composer`, a known active id, at most 32
+leaves and at most 31 nested split levels. An active passive id normalizes to
+editor focus. Invalid trees are ignored. Version 1 center-only layouts first
+receive their sidebars; version 1/2 conversation leaves become viewer/activity/editor
+splits, preserving the old id on the editor and allocating fresh viewer and activity ids.
+Saved split weights and auxiliary jobs survive migration.
+
+The built-in registry in `components/paneRegistry.tsx` exposes:
+
+```ts
+interface PaneDefinition {
+  title: string;
+  selectable: boolean;
+  minColumns: number;
+  minRows: number;
+}
+interface PaneRenderProps {
+  node: PaneLeaf;
+  width: number;
+  focused: boolean;
+  scrollRef(element: ScrollBoxRenderable): void;
+}
+interface RegisteredPane extends PaneDefinition {
+  render: Component<PaneRenderProps>;
+  input?(context: PaneInputContext): PaneInputHandle;
+}
+interface PaneInputContext {
+  controller: Pick<Controller, "projectsSidebarKey">;
+  scroll: DiffScroller;
+}
+interface PaneInputHandle {
+  onKey(event: KeyEvent): void;
+  onPaste?(event: PasteEvent): void;
+}
+```
+
+Mounted selectable panes register input handles in `UiHandles.paneInputs`,
+keyed by stable pane id; passive panes register no input handle. Registry input
+factories build side-pane handlers; the editor registers its stateful handler
+on mount. The workspace
+installs the single keyboard/paste listener. The current workspace router is
+registered by the singleton editor and applies global/overlay actions before
+dispatching local input to the active pane. Native textarea editing runs only
+while the editor owns focus. Disposal removes only the component's own handles.
+Registry metadata and renderers cover all built-in kinds; an external plugin
+loader and passive-pane targeting UI are not introduced in this version.
+`minRows` constrains horizontal splits, with extra editor space for prompts;
+`minColumns` is metadata for future sizing policy. No RPC or backend wire
+contract changes.
 
 **Resizing with the mouse.** Drag the border between two side-by-side panes
 with the left mouse button to move it: the right sidebar's left border, the

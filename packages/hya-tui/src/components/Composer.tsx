@@ -1,5 +1,4 @@
 import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, usePaste } from "@opentui/solid"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
@@ -78,7 +77,7 @@ interface FileMenu {
 export function Composer(props: { width: number }) {
   const { store, controller, ui } = useApp()
   const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
-    === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "conversation")?.id
+    === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")?.id
   let editor: TextareaRenderable | undefined
   const [value, setValue] = createSignal("")
   const [rows, setRows] = createSignal(1)
@@ -335,7 +334,7 @@ export function Composer(props: { width: number }) {
     return
   }
 
-  useKeyboard((key: KeyEvent) => {
+  const onWorkspaceKey = (key: KeyEvent) => {
     const consume = (): void => {
       key.preventDefault()
       key.stopPropagation()
@@ -404,14 +403,14 @@ export function Composer(props: { width: number }) {
       if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
       chord = undefined
       quitGuard.disarm()
-      if (commandBinding.scope === "workspace" || focusedPane(store.state)?.kind === "conversation") {
+      if (commandBinding.scope === "workspace" || focusedPane(store.state)?.kind === "composer") {
         void controller.submit(commandBinding.command, "command")
       }
       return
     }
     const inputEmpty = !(editor?.plainText ?? value())
     const commandPaneFocus = focusedPane(store.state)
-    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || commandPaneFocus?.kind !== "conversation" || inputEmpty, chord })
+    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || commandPaneFocus?.kind !== "composer" || inputEmpty, chord })
     if (commandShortcut === "openCommands") {
       consume()
       if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
@@ -420,33 +419,25 @@ export function Composer(props: { width: number }) {
       ui.command?.open()
       return
     }
-    if (commandPaneFocus?.kind !== "conversation" && commandShortcut === "chord") {
+    if (commandPaneFocus?.kind !== "composer" && commandShortcut === "chord") {
       consume()
       chord = "ctrl+x"
       if (store.state.status !== chordHint) beforeChord = store.state.status
       store.setStatus(chordHint)
       return
     }
-    // The left Projects sidebar has focus: Up/Down/Enter/Esc go to it.
-    if (commandPaneFocus?.kind !== "conversation"
+    // Auxiliary selectable panes receive local input through their registered handle.
+    if (commandPaneFocus?.kind !== "composer"
       && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar"
       && commandShortcut !== "refresh" && commandShortcut !== "help" && commandShortcut !== "reviewPending"
       && commandShortcut !== "quit" && commandShortcut !== "eof") {
       chord = undefined
       consume()
-      if (commandPaneFocus?.kind === "projects") controller.projectsSidebarKey(key)
-      else {
-        const pane = commandPaneFocus && ui.panes?.get(commandPaneFocus.id)
-        if (key.name === "up" && !key.ctrl && !key.meta) pane?.line(-1)
-        else if (key.name === "down" && !key.ctrl && !key.meta) pane?.line(1)
-        else if (commandShortcut === "pageUp" || commandShortcut === "pageDown") pane?.page(commandShortcut === "pageUp" ? -1 : 1)
-        else if (commandShortcut === "scrollTop") pane?.top()
-        else if (commandShortcut === "scrollBottom") pane?.bottom()
-      }
+      if (commandPaneFocus) ui.paneInputs?.get(commandPaneFocus.id)?.onKey(key)
       return
     }
     // Global workspace actions skip conversation-local prompts, history and Vim.
-    if (commandPaneFocus?.kind !== "conversation") {
+    if (commandPaneFocus?.kind !== "composer") {
       consume()
       chord = undefined
       if (commandShortcut === "help") { controller.openHelp(); return }
@@ -462,10 +453,16 @@ export function Composer(props: { width: number }) {
       else if (commandShortcut === "toggleProjectsSidebar") toggleProjectsFocus()
       return
     }
+    const pane = focusedPane(store.state)
+    if (pane) ui.paneInputs?.get(pane.id)?.onKey(key)
+  }
+
+  const onEditorKey = (key: KeyEvent) => {
+    const consume = (): void => { key.preventDefault(); key.stopPropagation() }
     // The yolo confirmation line takes Enter, Esc, and Shift+Tab before the
     // lists and the prompt dock (so they never answer an ask); any other key
     // cancels it and is handled as usual.
-    if (commandPaneFocus?.kind === "conversation" && store.state.modeConfirm && controller.modes.key(key)) {
+    if (store.state.modeConfirm && controller.modes.key(key)) {
       consume()
       quitGuard.disarm()
       return
@@ -535,7 +532,7 @@ export function Composer(props: { width: number }) {
     if (!action) return
     const selectedPane = focusedPane(store.state)
     const transcript = store.state.view === "chat"
-      ? selectedPane?.kind === "conversation" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
+      ? selectedPane?.kind === "composer" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
       : undefined
     switch (action) {
       case "interrupt": {
@@ -642,9 +639,9 @@ export function Composer(props: { width: number }) {
         // Reached only through the chord (handled above).
         return
     }
-  })
+  }
 
-  usePaste((event: PasteEvent) => {
+  const onWorkspacePaste = (event: PasteEvent) => {
     event.preventDefault()
     event.stopPropagation()
     const text = new TextDecoder().decode(event.bytes)
@@ -664,7 +661,12 @@ export function Composer(props: { width: number }) {
       ui.command.paste(cleaned)
       return
     }
-    if (focusedPane(store.state)?.kind !== "conversation") return
+    const pane = focusedPane(store.state)
+    if (pane) ui.paneInputs?.get(pane.id)?.onPaste?.(event)
+  }
+
+  const onEditorPaste = (event: PasteEvent) => {
+    const cleaned = new TextDecoder().decode(event.bytes).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n")
     // A terminal pastes a file dragged into the window as its path (quoted or
     // escaped when it has spaces): turn it into an `@path ` mention instead
     // of raw text when the path exists, so it resolves like a typed mention.
@@ -684,6 +686,23 @@ export function Composer(props: { width: number }) {
       return
     }
     editor?.insertText(cleaned)
+  }
+
+  const workspaceInput = { onKey: onWorkspaceKey, onPaste: onWorkspacePaste }
+  const editorInput = { onKey: onEditorKey, onPaste: onEditorPaste }
+  ui.workspaceInput = workspaceInput
+  ui.composerRows = rows
+  let editorPaneId: string | undefined
+  createEffect(() => {
+    if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
+    editorPaneId = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")?.id
+    ui.paneInputs ??= new Map()
+    if (editorPaneId) ui.paneInputs.set(editorPaneId, editorInput)
+  })
+  onCleanup(() => {
+    if (ui.workspaceInput === workspaceInput) ui.workspaceInput = undefined
+    if (ui.composerRows === rows) ui.composerRows = undefined
+    if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
   })
 
   return (
