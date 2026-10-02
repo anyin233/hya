@@ -20,7 +20,7 @@ import { rulesKeyRows } from "../state/rules"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Rules", "Agents", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Layout", "Providers", "Diff", "Mcp", "Rules", "Agents", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -185,6 +185,14 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   const savedRuleRows: HelpRow[] = rulesKeyRows.map((row) => ({ group: "Rules", keys: row.keys, description: row.description }))
   const agentsViewRows: HelpRow[] = agentsViewKeyRows.map((row) => ({ group: "Agents", keys: row.keys, description: row.description }))
   const rows = [
+    ...([
+      { keys: "Up / Down", description: "Layout pane: select a tree node or action" },
+      { keys: "Left / Right", description: "Layout pane: select parent or first child" },
+      { keys: "Home / End", description: "Layout pane: select first or last row" },
+      { keys: "Enter", description: "Layout pane: edit the selected node, choose an action, or save a weight" },
+      { keys: "Esc", description: "Layout pane: cancel a form or return to the tree" },
+      { keys: "Backspace / Delete", description: "Layout pane weight form: erase the selected value or its last character" },
+    ].map((row): HelpRow => ({ group: "Layout", ...row }))),
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
     ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
     ...Object.entries(customKeybindings()).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== null).map(([keys, binding]): HelpRow => ({
