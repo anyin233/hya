@@ -75,7 +75,7 @@ export function SidebarPane(props: { kind: "sessions" | "todos" | "context"; wid
             <For each={sessionListEntries(store.state, inner())}>
               {(entry) => entry.separator
                 ? <text width="100%" height={1} wrapMode="none" fg={colors.border}>{entry.text}</text>
-                : <text width="100%" height={1} wrapMode="none" fg={colors.fg} onMouseDown={() => entry.sessionId && controller.openRootSession(entry.sessionId)}>{entry.text}</text>}
+                : <text width="100%" height={1} wrapMode="none" fg={colors.fg} onMouseDown={(event) => { if (event.button === 2) { if (entry.sessionId) controller.openSessionContext(entry.sessionId); return } if (event.button === 0 && entry.sessionId) void controller.openRootSession(entry.sessionId) }}>{entry.text}</text>}
             </For>
           </scrollbox>
         </SideBox>

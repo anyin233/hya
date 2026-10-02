@@ -1,9 +1,8 @@
-# 0.44.2
+# 0.44.3
 
 ## TUI
 
-- Start with a fresh session in the current path's Project instead of loading an existing transcript.
-- Keep startup failures in the chat surface while retaining `?` and `/help` access.
-- Improve Project sidebar rows, switching, and separators.
-- Show frontend/backend versions as `<frontend>/<backend>` in Context, the compact statusline, and `/status`.
-- Render clearer builtin tool argument summaries and improve tool-card presentation.
+- Add right-click actions to Sessions and Projects sidebars.
+- Sessions support Open, Rename, Archive, and Delete actions.
+- Projects support Open, Rename, and Delete actions with confirmation prompts.
+- Fix narrow startup rendering expectations for the compact context status line.

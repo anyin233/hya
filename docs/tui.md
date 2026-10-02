@@ -832,7 +832,11 @@ keyboard ownership and highlighted composer.
   the same as the Project view), with a separator between rows, the active one marked `▸`, a busy marker
   `●` while a session of it runs a turn, and its session count. Clicking a
   Project row switches to it just like clicking a session row opens that
-  session. It needs both sidebars and the chat column to fit, so it follows a threshold no
+  session. Right-clicking a Project opens Open, Rename, and Delete actions;
+  Rename edits the displayed name and Delete asks for confirmation. Right-clicking
+  a Sessions row opens Open, Rename, Archive, and Delete actions; Archive and
+  Delete ask for confirmation. These use the same v1 Project and Session
+  update/delete contracts as the Project view and session picker. It needs both sidebars and the chat column to fit, so it follows a threshold no
   lower than the right sidebar's (150 columns; an 80-column or even a
   149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
   hidden — Up/Down move the highlight, Enter switches (`switchProject`),
