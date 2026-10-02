@@ -10235,7 +10235,7 @@ pub struct GetHealthResponse {
     /// Always `true` when the endpoint answers successfully.
     #[prost(bool, tag = "1")]
     pub ok: bool,
-    /// Backend version string (workspace release version).
+    /// Backend aggregate release version.
     #[prost(string, tag = "2")]
     pub version: ::prost::alloc::string::String,
 }
@@ -10259,7 +10259,7 @@ pub struct LocationInfo {
     /// OS process id of the backend.
     #[prost(uint32, tag = "3")]
     pub pid: u32,
-    /// Backend version string (workspace release version).
+    /// Backend aggregate release version.
     #[prost(string, tag = "4")]
     pub version: ::prost::alloc::string::String,
 }

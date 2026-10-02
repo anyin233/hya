@@ -669,31 +669,12 @@ impl PreparedInstallableBundle {
         }
     }
 
-    /// Return the singular AgentBundle payload, if this is one.
-    #[must_use]
-    pub fn agent_bundle(&self) -> Option<&PreparedAgentBundle> {
-        match self {
-            Self::Agent(bundle) => Some(bundle),
-            Self::AgentSet(_) | Self::Workflow(_) | Self::Plugin(_) => None,
-        }
-    }
-
     /// Return the AgentSetBundle payload, if this is one.
     #[must_use]
     pub fn agent_set_bundle(&self) -> Option<&PreparedAgentSetBundle> {
         match self {
             Self::AgentSet(bundle) => Some(bundle),
             Self::Agent(_) | Self::Workflow(_) | Self::Plugin(_) => None,
-        }
-    }
-
-    /// Return the WorkflowBundle payload, if this is one.
-    #[must_use]
-    pub fn workflow_bundle(&self) -> Option<&PreparedWorkflowBundle> {
-        match self {
-            Self::Agent(_) | Self::AgentSet(_) => None,
-            Self::Workflow(bundle) => Some(bundle),
-            Self::Plugin(_) => None,
         }
     }
 

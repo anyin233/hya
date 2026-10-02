@@ -87,7 +87,7 @@ fn catalog_publication_is_atomic_and_turn_bindings_pin_old_catalog() {
 }
 
 #[test]
-fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
+fn roster_is_resolved_from_the_bound_spawn_graph() {
     let workdir = TestDir::new("agent-resolution");
     let catalog = test_catalog(&[
         ("hya-task", AgentRole::Main, &[]),
@@ -97,14 +97,6 @@ fn requested_agent_and_roster_are_resolved_from_the_bound_spawn_graph() {
     let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
     let binding = registry.bind_turn(workdir.path()).unwrap();
 
-    assert_eq!(
-        binding.resolve_requested_agent(None).unwrap().stable_id,
-        "hya-task"
-    );
-    assert!(matches!(
-        binding.resolve_requested_agent(Some("missing")),
-        Err(hya_bundle::BundleError::UnknownAgentId { .. })
-    ));
     let roster = binding.spawnable_agents("lead").unwrap();
     assert_eq!(
         roster

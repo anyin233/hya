@@ -6,15 +6,7 @@ use hya_proto::{ActorEpoch, OperationId, SessionId, ToolCallId, now_millis};
 use sqlx::Row;
 
 use crate::resident_claim::fence_actor_claim;
-use crate::{ActorClaim, MAX_ADMISSION_INTENT_BYTES, SessionStore, StoreError, decode_session_key};
-
-const MAX_ACTIVE_ADMISSIONS: u32 = 100;
-const MAX_NON_ACTIVE_ADMISSIONS: u32 = 156;
-const ADMISSION_COUNTS_SQL: &str = "SELECT \
-    COUNT(CASE WHEN state IN ('accepted', 'started') THEN 1 END) AS active, \
-    COUNT(CASE WHEN state IN ('queued', 'waiting') THEN 1 END) AS non_active, \
-    COUNT(CASE WHEN state IN ('queued', 'accepted', 'started', 'waiting') THEN 1 END) AS total \
- FROM admission_journal";
+use crate::{ActorClaim, SessionStore, StoreError, decode_session_key};
 
 /// Lifecycle of one admission_journal member row (wire strings match SQL CHECK).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,11 +65,11 @@ impl AdmissionState {
 /// Snapshot of journal occupancy against capacity caps.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AdmissionCounts {
-    /// Rows in `accepted` + `started` (cap 100).
+    /// Rows in accepted and started states.
     pub active: u32,
-    /// Rows in `queued` + `waiting` (cap 156).
+    /// Rows in queued and waiting states.
     pub non_active: u32,
-    /// Sum of nonterminal occupancy counts used for diagnostics.
+    /// Sum of all nonterminal rows.
     pub total: u32,
 }
 
@@ -96,30 +88,6 @@ pub struct AdmissionClaim {
     pub admission_units: u32,
     /// Optional resident actor binding for the claim.
     pub actor_claim: Option<ActorClaim>,
-}
-
-/// Bound spawn payload stored all-or-nothing with the journal row.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdmissionIntent {
-    /// Version of the runtime fingerprint schema.
-    pub runtime_fingerprint_version: u32,
-    /// Hash of the runtime binding at claim time.
-    pub runtime_fingerprint: [u8; 32],
-    /// Version of the admission-binding fingerprint schema.
-    pub admission_binding_fingerprint_version: u32,
-    /// Hash of admission-specific binding material.
-    pub admission_binding_fingerprint: [u8; 32],
-    /// Opaque spawn intent blob (1..=[`MAX_ADMISSION_INTENT_BYTES`] bytes).
-    pub spawn_intent: Vec<u8>,
-}
-
-/// An accepted member row paired with the intent needed to launch it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdmissionLaunch {
-    /// Journal row after claim/promotion.
-    pub record: AdmissionRecord,
-    /// Binding/intent material for the engine.
-    pub intent: AdmissionIntent,
 }
 
 /// Actor id + epoch stored on an admission row.
@@ -171,15 +139,6 @@ pub enum AdmissionClaimOutcome {
     Existing(AdmissionRecord),
 }
 
-/// Outcome of batch claim APIs.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AdmissionBatchClaimOutcome {
-    /// Newly claimed members with intents (accepted launches only).
-    Claimed(Vec<AdmissionLaunch>),
-    /// Operation already present; no new members claimed.
-    Existing,
-}
-
 /// Outcome of start (`accepted` → `started`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdmissionStartOutcome {
@@ -217,15 +176,6 @@ pub struct AdmissionFinalizeOutcome {
     pub record: AdmissionRecord,
     /// True only for the process that terminalized a started/debited operation.
     pub release_required: bool,
-}
-
-/// Batch finalize result: terminalized members plus any FIFO promotions.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdmissionReleaseOutcome {
-    /// Members that reached a terminal state in this call.
-    pub finalized: Vec<AdmissionFinalizeOutcome>,
-    /// Queued rows promoted into active slots after capacity freed.
-    pub promoted: Vec<AdmissionLaunch>,
 }
 
 impl SessionStore {
@@ -308,475 +258,6 @@ impl SessionStore {
         }
     }
 
-    /// Claim a multi-member batch with binding intents (capacity-checked).
-    pub async fn claim_admission_batch(
-        &self,
-        claim: &AdmissionClaim,
-        intents: Vec<AdmissionIntent>,
-    ) -> Result<AdmissionBatchClaimOutcome, StoreError> {
-        self.claim_admission_batch_impl(claim, intents, None).await
-    }
-
-    /// Move a parent member to `waiting`, then claim a child batch in one transaction.
-    pub async fn suspend_parent_and_claim_admission_batch(
-        &self,
-        parent_operation_id: OperationId,
-        parent_member_ordinal: u32,
-        child_claim: &AdmissionClaim,
-        child_intents: Vec<AdmissionIntent>,
-    ) -> Result<AdmissionBatchClaimOutcome, StoreError> {
-        self.claim_admission_batch_impl(
-            child_claim,
-            child_intents,
-            Some((parent_operation_id, parent_member_ordinal)),
-        )
-        .await
-    }
-
-    async fn claim_admission_batch_impl(
-        &self,
-        claim: &AdmissionClaim,
-        intents: Vec<AdmissionIntent>,
-        parent: Option<(OperationId, u32)>,
-    ) -> Result<AdmissionBatchClaimOutcome, StoreError> {
-        let requested = claim.admission_units;
-        if requested == 0 {
-            return Err(StoreError::AdmissionData(
-                "admission units must be greater than zero".to_string(),
-            ));
-        }
-        let requested_len = usize::try_from(requested).map_err(|_| {
-            StoreError::AdmissionData("admission request exceeds usize range".to_string())
-        })?;
-        if intents.len() != requested_len {
-            return Err(StoreError::AdmissionData(
-                "admission intent count must equal admission units".to_string(),
-            ));
-        }
-        if intents.iter().any(|intent| {
-            intent.spawn_intent.is_empty() || intent.spawn_intent.len() > MAX_ADMISSION_INTENT_BYTES
-        }) {
-            return Err(StoreError::AdmissionData(
-                "spawn intent size must be within the admission intent limit".to_string(),
-            ));
-        }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if let Some(actor_claim) = &claim.actor_claim {
-            fence_actor_claim(&mut tx, actor_claim).await?;
-        }
-
-        let existing = admissions_in_transaction(&mut tx, claim.operation_id).await?;
-        if !existing.is_empty() {
-            let expected_actor = claim.actor_claim.map(|actor| AdmissionActorBinding {
-                actor_id: actor.actor_id,
-                actor_epoch: actor.epoch,
-            });
-            let matches_claim = existing.len() == requested_len
-                && existing.iter().enumerate().all(|(index, record)| {
-                    u32::try_from(index).ok() == Some(record.member_ordinal)
-                        && record.batch_size == requested
-                        && record.admission_units == 1
-                        && record.operation_id == claim.operation_id
-                        && record.source_tool_call_id == claim.source_tool_call_id
-                        && record.root_session == claim.root_session
-                        && record.request_fingerprint == claim.request_fingerprint
-                        && record.actor == expected_actor
-                });
-            if matches_claim {
-                let mut payload_matches = true;
-                for (member_ordinal, intent) in intents.iter().enumerate() {
-                    let member_ordinal = i64::try_from(member_ordinal).map_err(|_| {
-                        StoreError::AdmissionData(
-                            "admission member ordinal exceeds SQLite INTEGER range".to_string(),
-                        )
-                    })?;
-                    let stored = sqlx::query(
-                        "SELECT 1 FROM admission_journal \
-                         WHERE operation_id = ? AND member_ordinal = ? \
-                           AND runtime_fingerprint_version = ? \
-                           AND runtime_fingerprint = ? \
-                           AND admission_binding_fingerprint_version = ? \
-                           AND admission_binding_fingerprint = ? \
-                           AND spawn_intent = ?",
-                    )
-                    .bind(claim.operation_id.as_uuid().as_bytes().as_slice())
-                    .bind(member_ordinal)
-                    .bind(i64::from(intent.runtime_fingerprint_version))
-                    .bind(intent.runtime_fingerprint.as_slice())
-                    .bind(i64::from(intent.admission_binding_fingerprint_version))
-                    .bind(intent.admission_binding_fingerprint.as_slice())
-                    .bind(intent.spawn_intent.as_slice())
-                    .fetch_optional(&mut *tx)
-                    .await?;
-                    if stored.is_none() {
-                        payload_matches = false;
-                        break;
-                    }
-                }
-                if payload_matches {
-                    tx.commit().await?;
-                    return Ok(AdmissionBatchClaimOutcome::Existing);
-                }
-            }
-            tx.rollback().await?;
-            return Err(StoreError::OperationIdConflict {
-                operation_id: claim.operation_id,
-            });
-        }
-
-        if let Some((parent_operation_id, parent_member_ordinal)) = parent {
-            let parent_row = sqlx::query(
-                "SELECT operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                        member_ordinal, batch_size, state, admission_units, logical_released, \
-                        terminal_reason, created_at, updated_at, actor_id, actor_epoch, \
-                        runtime_fingerprint_version, runtime_fingerprint, \
-                        admission_binding_fingerprint_version, admission_binding_fingerprint, \
-                        spawn_intent \
-                 FROM admission_journal \
-                 WHERE operation_id = ? AND member_ordinal = ?",
-            )
-            .bind(parent_operation_id.as_uuid().as_bytes().as_slice())
-            .bind(i64::from(parent_member_ordinal))
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some(parent_row) = parent_row else {
-                tx.rollback().await?;
-                return Err(StoreError::AdmissionNotFound {
-                    operation_id: parent_operation_id,
-                });
-            };
-            let parent_bound = parent_row
-                .try_get::<Option<i64>, _>("runtime_fingerprint_version")?
-                .is_some()
-                && parent_row
-                    .try_get::<Option<Vec<u8>>, _>("runtime_fingerprint")?
-                    .is_some()
-                && parent_row
-                    .try_get::<Option<i64>, _>("admission_binding_fingerprint_version")?
-                    .is_some()
-                && parent_row
-                    .try_get::<Option<Vec<u8>>, _>("admission_binding_fingerprint")?
-                    .is_some()
-                && parent_row
-                    .try_get::<Option<Vec<u8>>, _>("spawn_intent")?
-                    .is_some();
-            let parent_record = decode_record(parent_row)?;
-            if parent_record.state != AdmissionState::Started {
-                tx.rollback().await?;
-                return Err(StoreError::AdmissionTransitionConflict {
-                    operation_id: parent_operation_id,
-                    from: parent_record.state.as_str(),
-                    to: AdmissionState::Waiting.as_str(),
-                });
-            }
-            if !parent_bound {
-                tx.rollback().await?;
-                return Err(StoreError::AdmissionData(
-                    "parent admission binding is incomplete".to_string(),
-                ));
-            }
-            if parent_record.root_session != claim.root_session {
-                tx.rollback().await?;
-                return Err(StoreError::AdmissionData(
-                    "parent and child root sessions must match".to_string(),
-                ));
-            }
-            let expected_actor = claim.actor_claim.map(|actor| AdmissionActorBinding {
-                actor_id: actor.actor_id,
-                actor_epoch: actor.epoch,
-            });
-            if parent_record.actor != expected_actor {
-                tx.rollback().await?;
-                return Err(StoreError::AdmissionData(
-                    "parent and child actor bindings must match".to_string(),
-                ));
-            }
-        }
-
-        let source_operation = sqlx::query(
-            "SELECT operation_id FROM admission_journal \
-             WHERE source_tool_call_id = ? \
-             LIMIT 1",
-        )
-        .bind(claim.source_tool_call_id.as_uuid().as_bytes().as_slice())
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some(row) = source_operation {
-            let operation_id: Vec<u8> = row.try_get("operation_id")?;
-            let operation_id = uuid::Uuid::from_slice(&operation_id)
-                .map_err(|error| {
-                    StoreError::AdmissionData(format!("invalid operation id: {error}"))
-                })
-                .map(OperationId::from_storage_uuid)?;
-            if operation_id != claim.operation_id {
-                tx.rollback().await?;
-                return Err(StoreError::OperationIdConflict {
-                    operation_id: claim.operation_id,
-                });
-            }
-        }
-
-        let counts = decode_admission_counts(
-            &sqlx::query(ADMISSION_COUNTS_SQL)
-                .fetch_one(&mut *tx)
-                .await?,
-        )?;
-        let max_total = MAX_ACTIVE_ADMISSIONS
-            .checked_add(MAX_NON_ACTIVE_ADMISSIONS)
-            .ok_or_else(|| {
-                StoreError::AdmissionData("admission capacity exceeds u32 range".to_string())
-            })?;
-        let current_total = counts
-            .active
-            .checked_add(counts.non_active)
-            .ok_or_else(|| {
-                StoreError::AdmissionData("admission counts exceed u32 range".to_string())
-            })?;
-        if counts.active > MAX_ACTIVE_ADMISSIONS
-            || counts.non_active > MAX_NON_ACTIVE_ADMISSIONS
-            || current_total > max_total
-        {
-            tx.rollback().await?;
-            return Err(StoreError::AdmissionData(
-                "durable admission counts exceed fixed capacity".to_string(),
-            ));
-        }
-
-        let (effective_active, effective_non_active) = if parent.is_some() {
-            let active = counts.active.checked_sub(1).ok_or_else(|| {
-                StoreError::AdmissionData("active admission count underflow".to_string())
-            })?;
-            let non_active = counts.non_active.checked_add(1).ok_or_else(|| {
-                StoreError::AdmissionData(
-                    "non-active admission count exceeds u32 range".to_string(),
-                )
-            })?;
-            (active, non_active)
-        } else {
-            (counts.active, counts.non_active)
-        };
-        let effective_total = effective_active
-            .checked_add(effective_non_active)
-            .ok_or_else(|| {
-                StoreError::AdmissionData("admission count exceeds u32 range".to_string())
-            })?;
-        if effective_active > MAX_ACTIVE_ADMISSIONS
-            || effective_non_active > MAX_NON_ACTIVE_ADMISSIONS
-            || effective_total > max_total
-        {
-            tx.rollback().await?;
-            return Err(StoreError::AdmissionCapacityExceeded {
-                active: counts.active,
-                non_active: counts.non_active,
-                requested,
-            });
-        }
-
-        let available_active = MAX_ACTIVE_ADMISSIONS - effective_active;
-        let accepted = requested.min(available_active);
-        let queued = requested.checked_sub(accepted).ok_or_else(|| {
-            StoreError::AdmissionData("admission request arithmetic overflow".to_string())
-        })?;
-        let final_active = effective_active.checked_add(accepted).ok_or_else(|| {
-            StoreError::AdmissionData("active admission count exceeds u32 range".to_string())
-        })?;
-        let final_non_active = effective_non_active.checked_add(queued).ok_or_else(|| {
-            StoreError::AdmissionData("non-active admission count exceeds u32 range".to_string())
-        })?;
-        let final_total = final_active.checked_add(final_non_active).ok_or_else(|| {
-            StoreError::AdmissionData("admission count exceeds u32 range".to_string())
-        })?;
-        if final_active > MAX_ACTIVE_ADMISSIONS
-            || final_non_active > MAX_NON_ACTIVE_ADMISSIONS
-            || final_total > max_total
-        {
-            tx.rollback().await?;
-            return Err(StoreError::AdmissionCapacityExceeded {
-                active: counts.active,
-                non_active: counts.non_active,
-                requested,
-            });
-        }
-
-        let actor_id = claim
-            .actor_claim
-            .as_ref()
-            .map(|actor| actor.actor_id.storage_key());
-        let actor_epoch = claim
-            .actor_claim
-            .as_ref()
-            .map(|actor| i64::try_from(actor.epoch.get()))
-            .transpose()
-            .map_err(|_| {
-                StoreError::AdmissionData("actor epoch exceeds SQLite INTEGER range".to_string())
-            })?;
-        let max_admission_sequence: Option<i64> =
-            sqlx::query("SELECT MAX(admission_sequence) AS max_sequence FROM admission_journal")
-                .fetch_one(&mut *tx)
-                .await?
-                .try_get("max_sequence")?;
-        let admission_sequence_start =
-            next_sequence_start(max_admission_sequence, requested, "admission sequence")?;
-        let now = now_millis();
-        if let Some((parent_operation_id, parent_member_ordinal)) = parent {
-            let parent_updated = sqlx::query(
-                "UPDATE admission_journal SET state = 'waiting', updated_at = ? \
-                 WHERE operation_id = ? AND member_ordinal = ? AND state = 'started' \
-                   AND ((? IS NULL AND actor_id IS NULL) OR (actor_id = ? AND actor_epoch = ?)) \
-                 RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                           member_ordinal, batch_size, state, admission_units, logical_released, \
-                           terminal_reason, created_at, updated_at, actor_id, actor_epoch",
-            )
-            .bind(now)
-            .bind(parent_operation_id.as_uuid().as_bytes().as_slice())
-            .bind(i64::from(parent_member_ordinal))
-            .bind(actor_id.clone())
-            .bind(actor_id.clone())
-            .bind(actor_epoch)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some(parent_updated) = parent_updated else {
-                tx.rollback().await?;
-                return Err(StoreError::AdmissionTransitionConflict {
-                    operation_id: parent_operation_id,
-                    from: AdmissionState::Started.as_str(),
-                    to: AdmissionState::Waiting.as_str(),
-                });
-            };
-            decode_record(parent_updated)?;
-        }
-        for member_ordinal in 0..requested {
-            let state = if member_ordinal < accepted {
-                "accepted"
-            } else {
-                "queued"
-            };
-            let intent = &intents[usize::try_from(member_ordinal).map_err(|_| {
-                StoreError::AdmissionData(
-                    "admission member ordinal exceeds usize range".to_string(),
-                )
-            })?];
-            sqlx::query(
-                "INSERT INTO admission_journal \
-                 (operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                  state, admission_units, logical_released, terminal_reason, created_at, updated_at, \
-                  actor_id, actor_epoch, member_ordinal, batch_size, \
-                  runtime_fingerprint_version, runtime_fingerprint, \
-                  admission_binding_fingerprint_version, admission_binding_fingerprint, spawn_intent, \
-                  admission_sequence) \
-                 VALUES (?, ?, ?, ?, ?, 1, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(claim.operation_id.as_uuid().as_bytes().as_slice())
-            .bind(claim.source_tool_call_id.as_uuid().as_bytes().as_slice())
-            .bind(claim.root_session.storage_key())
-            .bind(claim.request_fingerprint.as_slice())
-            .bind(state)
-            .bind(now)
-            .bind(now)
-            .bind(actor_id.clone())
-            .bind(actor_epoch)
-            .bind(i64::from(member_ordinal))
-            .bind(i64::from(requested))
-            .bind(i64::from(intent.runtime_fingerprint_version))
-            .bind(intent.runtime_fingerprint.as_slice())
-            .bind(i64::from(intent.admission_binding_fingerprint_version))
-            .bind(intent.admission_binding_fingerprint.as_slice())
-            .bind(intent.spawn_intent.as_slice())
-            .bind(admission_sequence_start + i64::from(member_ordinal))
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        let records = admissions_in_transaction(&mut tx, claim.operation_id).await?;
-        tx.commit().await?;
-        let launches = records
-            .into_iter()
-            .zip(intents)
-            .filter_map(|(record, intent)| {
-                (record.state == AdmissionState::Accepted)
-                    .then_some(AdmissionLaunch { record, intent })
-            })
-            .collect();
-        Ok(AdmissionBatchClaimOutcome::Claimed(launches))
-    }
-
-    /// Transition a `waiting` member to `queued` for later FIFO promotion (idempotent if already queued).
-    pub async fn queue_waiting_admission_member(
-        &self,
-        operation_id: OperationId,
-        member_ordinal: u32,
-        actor_claim: Option<&ActorClaim>,
-    ) -> Result<AdmissionRecord, StoreError> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if let Some(actor_claim) = actor_claim {
-            fence_actor_claim(&mut tx, actor_claim).await?;
-        }
-        let actor_id = actor_claim.map(|claim| claim.actor_id.storage_key());
-        let actor_epoch = actor_claim
-            .map(|claim| i64::try_from(claim.epoch.get()))
-            .transpose()
-            .map_err(|_| {
-                StoreError::AdmissionData("actor epoch exceeds SQLite INTEGER range".to_string())
-            })?;
-        let row = sqlx::query(
-            "UPDATE admission_journal SET state = 'queued', updated_at = ? \
-             WHERE operation_id = ? AND member_ordinal = ? AND state = 'waiting' \
-               AND ((? IS NULL AND actor_id IS NULL) OR (actor_id = ? AND actor_epoch = ?)) \
-             RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                       member_ordinal, batch_size, state, admission_units, logical_released, \
-                       terminal_reason, created_at, updated_at, actor_id, actor_epoch",
-        )
-        .bind(now_millis())
-        .bind(operation_id.as_uuid().as_bytes().as_slice())
-        .bind(i64::from(member_ordinal))
-        .bind(actor_id.clone())
-        .bind(actor_id.clone())
-        .bind(actor_epoch)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some(row) = row {
-            let record = decode_record(row)?;
-            tx.commit().await?;
-            return Ok(record);
-        }
-
-        let record = sqlx::query(
-            "SELECT operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                    member_ordinal, batch_size, state, admission_units, logical_released, \
-                    terminal_reason, created_at, updated_at, actor_id, actor_epoch \
-             FROM admission_journal \
-             WHERE operation_id = ? AND member_ordinal = ?",
-        )
-        .bind(operation_id.as_uuid().as_bytes().as_slice())
-        .bind(i64::from(member_ordinal))
-        .fetch_optional(&mut *tx)
-        .await?
-        .map(decode_record)
-        .transpose()?
-        .ok_or(StoreError::AdmissionNotFound { operation_id })?;
-        let expected_actor = actor_claim.map(|claim| AdmissionActorBinding {
-            actor_id: claim.actor_id,
-            actor_epoch: claim.epoch,
-        });
-        if record.actor != expected_actor {
-            tx.rollback().await?;
-            return Err(StoreError::AdmissionData(
-                "admission actor binding does not match".to_string(),
-            ));
-        }
-        if record.state == AdmissionState::Queued {
-            tx.commit().await?;
-            return Ok(record);
-        }
-        let error = StoreError::AdmissionTransitionConflict {
-            operation_id,
-            from: record.state.as_str(),
-            to: AdmissionState::Queued.as_str(),
-        };
-        tx.rollback().await?;
-        Err(error)
-    }
-
     /// Load the single-member primary record (`member_ordinal=0`, `batch_size=1`), if present.
     pub async fn admission(
         &self,
@@ -814,127 +295,29 @@ impl SessionStore {
         rows.into_iter().map(decode_record).collect()
     }
 
-    /// Count active (`accepted`+`started`) and non-active (`queued`+`waiting`) rows.
+    /// Count active and non-active durable admission rows.
     pub async fn admission_counts(&self) -> Result<AdmissionCounts, StoreError> {
-        let row = sqlx::query(ADMISSION_COUNTS_SQL)
-            .fetch_one(&self.pool)
-            .await?;
-        decode_admission_counts(&row)
-    }
-
-    /// FIFO-promote up to `limit` queued rows into active slots using fairness indexes.
-    pub async fn promote_queued_admissions(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<AdmissionLaunch>, StoreError> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let launches =
-            Self::promote_queued_admissions_in_transaction(&mut tx, limit, now_millis()).await?;
-        tx.commit().await?;
-        Ok(launches)
-    }
-
-    async fn promote_queued_admissions_in_transaction(
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        limit: u32,
-        now: i64,
-    ) -> Result<Vec<AdmissionLaunch>, StoreError> {
-        let counts = decode_admission_counts(
-            &sqlx::query(ADMISSION_COUNTS_SQL)
-                .fetch_one(&mut **tx)
-                .await?,
-        )?;
-        let max_total = MAX_ACTIVE_ADMISSIONS
-            .checked_add(MAX_NON_ACTIVE_ADMISSIONS)
-            .ok_or_else(|| {
-                StoreError::AdmissionData("admission capacity exceeds u32 range".to_string())
-            })?;
-        let current_total = counts
-            .active
-            .checked_add(counts.non_active)
-            .ok_or_else(|| {
-                StoreError::AdmissionData("admission counts exceed u32 range".to_string())
-            })?;
-        if counts.active > MAX_ACTIVE_ADMISSIONS
-            || counts.non_active > MAX_NON_ACTIVE_ADMISSIONS
-            || current_total > max_total
-        {
-            return Err(StoreError::AdmissionData(
-                "durable admission counts exceed fixed capacity".to_string(),
-            ));
-        }
-
-        let promotion_limit = limit.min(MAX_ACTIVE_ADMISSIONS - counts.active);
-        if promotion_limit == 0 {
-            return Ok(Vec::new());
-        }
-        let mut launches = Vec::new();
-        for _ in 0..promotion_limit {
-            let Some(row) = sqlx::query(
-                "SELECT candidate.operation_id, candidate.member_ordinal \
-                 FROM admission_journal AS candidate \
-                 WHERE candidate.state = 'queued' \
-                   AND candidate.admission_sequence IS NOT NULL \
-                   AND candidate.runtime_fingerprint_version IS NOT NULL \
-                   AND candidate.runtime_fingerprint IS NOT NULL \
-                   AND candidate.admission_binding_fingerprint_version IS NOT NULL \
-                   AND candidate.admission_binding_fingerprint IS NOT NULL \
-                   AND candidate.spawn_intent IS NOT NULL \
-                 ORDER BY CASE WHEN ( \
-                     SELECT MAX(history.promotion_sequence) \
-                     FROM admission_journal AS history \
-                     WHERE history.root_session_id = candidate.root_session_id \
-                 ) IS NULL THEN 0 ELSE 1 END, \
-                 ( \
-                     SELECT MAX(history.promotion_sequence) \
-                     FROM admission_journal AS history \
-                     WHERE history.root_session_id = candidate.root_session_id \
-                 ), \
-                 candidate.admission_sequence, candidate.root_session_id, \
-                 candidate.operation_id, candidate.member_ordinal \
-                 LIMIT 1",
-            )
-            .fetch_optional(&mut **tx)
-            .await?
-            else {
-                break;
-            };
-            let operation_id: Vec<u8> = row.try_get("operation_id")?;
-            let member_ordinal: i64 = row.try_get("member_ordinal")?;
-            let max_promotion_sequence: Option<i64> = sqlx::query(
-                "SELECT MAX(promotion_sequence) AS max_sequence FROM admission_journal",
-            )
-            .fetch_one(&mut **tx)
-            .await?
-            .try_get("max_sequence")?;
-            let promotion_sequence =
-                next_sequence_start(max_promotion_sequence, 1, "promotion sequence")?;
-            let updated = sqlx::query(
-                "UPDATE admission_journal SET state = 'accepted', promotion_sequence = ?, \
-                         updated_at = ? \
-                 WHERE operation_id = ? AND member_ordinal = ? AND state = 'queued' \
-                 RETURNING operation_id, source_tool_call_id, root_session_id, \
-                           request_fingerprint, member_ordinal, batch_size, state, \
-                           admission_units, logical_released, terminal_reason, created_at, \
-                           updated_at, actor_id, actor_epoch, runtime_fingerprint_version, \
-                           runtime_fingerprint, admission_binding_fingerprint_version, \
-                           admission_binding_fingerprint, spawn_intent",
-            )
-            .bind(promotion_sequence)
-            .bind(now)
-            .bind(operation_id)
-            .bind(member_ordinal)
-            .fetch_optional(&mut **tx)
-            .await?;
-            let Some(updated) = updated else {
-                return Err(StoreError::AdmissionData(
-                    "queued admission changed during promotion".to_string(),
-                ));
-            };
-            launches.push(decode_admission_launch(updated)?);
-        }
-
-        Ok(launches)
+        let row = sqlx::query(
+            "SELECT COUNT(CASE WHEN state IN ('accepted', 'started') THEN 1 END) AS active, \
+                    COUNT(CASE WHEN state IN ('queued', 'waiting') THEN 1 END) AS non_active, \
+                    COUNT(CASE WHEN state IN ('queued', 'accepted', 'started', 'waiting') THEN 1 END) AS total \
+             FROM admission_journal",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(AdmissionCounts {
+            active: u32::try_from(row.try_get::<i64, _>("active")?).map_err(|_| {
+                StoreError::AdmissionData("admission active count exceeds u32 range".to_string())
+            })?,
+            non_active: u32::try_from(row.try_get::<i64, _>("non_active")?).map_err(|_| {
+                StoreError::AdmissionData(
+                    "admission non-active count exceeds u32 range".to_string(),
+                )
+            })?,
+            total: u32::try_from(row.try_get::<i64, _>("total")?).map_err(|_| {
+                StoreError::AdmissionData("admission total count exceeds u32 range".to_string())
+            })?,
+        })
     }
 
     /// Move a single-member claim from `accepted` to `started`.
@@ -943,37 +326,13 @@ impl SessionStore {
         operation_id: OperationId,
         actor_claim: Option<&ActorClaim>,
     ) -> Result<AdmissionStartOutcome, StoreError> {
-        self.start_admission_member_impl(operation_id, 0, actor_claim, true)
-            .await
-    }
-
-    /// Move one batch member from `accepted` to `started` by ordinal.
-    pub async fn start_admission_member(
-        &self,
-        operation_id: OperationId,
-        member_ordinal: u32,
-        actor_claim: Option<&ActorClaim>,
-    ) -> Result<AdmissionStartOutcome, StoreError> {
-        self.start_admission_member_impl(operation_id, member_ordinal, actor_claim, false)
-            .await
-    }
-
-    async fn start_admission_member_impl(
-        &self,
-        operation_id: OperationId,
-        member_ordinal: u32,
-        actor_claim: Option<&ActorClaim>,
-        single_row_only: bool,
-    ) -> Result<AdmissionStartOutcome, StoreError> {
-        let single_row_filter = if single_row_only { 1_i64 } else { 0_i64 };
         let mut tx = self.pool.begin().await?;
         if let Some(actor_claim) = actor_claim {
             fence_actor_claim(&mut tx, actor_claim).await?;
         }
         let row = sqlx::query(
             "UPDATE admission_journal SET state = 'started', updated_at = ? \
-             WHERE operation_id = ? AND member_ordinal = ? \
-               AND (? = 0 OR batch_size = 1) \
+             WHERE operation_id = ? AND member_ordinal = 0 AND batch_size = 1 \
                AND state = 'accepted' \
                AND ((? IS NULL AND actor_id IS NULL) OR (actor_id = ? AND actor_epoch = ?)) \
              RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
@@ -982,8 +341,6 @@ impl SessionStore {
         )
         .bind(now_millis())
         .bind(operation_id.as_uuid().as_bytes().as_slice())
-        .bind(i64::from(member_ordinal))
-        .bind(single_row_filter)
         .bind(actor_claim.map(|claim| claim.actor_id.storage_key()))
         .bind(actor_claim.map(|claim| claim.actor_id.storage_key()))
         .bind(
@@ -1008,12 +365,9 @@ impl SessionStore {
                     member_ordinal, batch_size, state, admission_units, logical_released, \
                     terminal_reason, created_at, updated_at, actor_id, actor_epoch \
              FROM admission_journal \
-             WHERE operation_id = ? AND member_ordinal = ? \
-               AND (? = 0 OR batch_size = 1)",
+             WHERE operation_id = ? AND member_ordinal = 0 AND batch_size = 1",
         )
         .bind(operation_id.as_uuid().as_bytes().as_slice())
-        .bind(i64::from(member_ordinal))
-        .bind(single_row_filter)
         .fetch_optional(&mut *tx)
         .await?
         .map(decode_record)
@@ -1105,148 +459,6 @@ impl SessionStore {
         };
         tx.rollback().await?;
         Err(error)
-    }
-
-    /// Terminalize multiple members and promote queued admissions into freed active slots.
-    pub async fn finalize_admission_members(
-        &self,
-        members: &[(OperationId, u32)],
-        terminal: AdmissionTerminal,
-        reason: &str,
-        actor_claim: Option<&ActorClaim>,
-    ) -> Result<AdmissionReleaseOutcome, StoreError> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        if let Some(actor_claim) = actor_claim {
-            fence_actor_claim(&mut tx, actor_claim).await?;
-        }
-        if members.is_empty() {
-            tx.commit().await?;
-            return Ok(AdmissionReleaseOutcome {
-                finalized: Vec::new(),
-                promoted: Vec::new(),
-            });
-        }
-
-        let target = terminal.state();
-        let expected_actor = actor_claim.map(|claim| AdmissionActorBinding {
-            actor_id: claim.actor_id,
-            actor_epoch: claim.epoch,
-        });
-        let actor_id = actor_claim.map(|claim| claim.actor_id.storage_key());
-        let actor_epoch = actor_claim
-            .map(|claim| i64::try_from(claim.epoch.get()))
-            .transpose()
-            .map_err(|_| {
-                StoreError::AdmissionData("actor epoch exceeds SQLite INTEGER range".to_string())
-            })?;
-        let now = now_millis();
-        let mut finalized = Vec::with_capacity(members.len());
-        let mut released_slots = 0_u32;
-
-        for &(operation_id, member_ordinal) in members {
-            let record = sqlx::query(
-                "SELECT operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                        member_ordinal, batch_size, state, admission_units, logical_released, \
-                        terminal_reason, created_at, updated_at, actor_id, actor_epoch \
-                 FROM admission_journal \
-                 WHERE operation_id = ? AND member_ordinal = ?",
-            )
-            .bind(operation_id.as_uuid().as_bytes().as_slice())
-            .bind(i64::from(member_ordinal))
-            .fetch_optional(&mut *tx)
-            .await?
-            .map(decode_record)
-            .transpose()?
-            .ok_or(StoreError::AdmissionNotFound { operation_id })?;
-
-            if record.actor != expected_actor {
-                return Err(StoreError::AdmissionData(
-                    "admission actor binding does not match".to_string(),
-                ));
-            }
-            if record.state == target {
-                finalized.push(AdmissionFinalizeOutcome {
-                    record,
-                    release_required: false,
-                });
-                continue;
-            }
-
-            let allowed = match target {
-                AdmissionState::Completed => record.state == AdmissionState::Started,
-                AdmissionState::Cancelled | AdmissionState::Aborted => matches!(
-                    record.state,
-                    AdmissionState::Queued
-                        | AdmissionState::Accepted
-                        | AdmissionState::Started
-                        | AdmissionState::Waiting
-                ),
-                AdmissionState::Queued
-                | AdmissionState::Accepted
-                | AdmissionState::Started
-                | AdmissionState::Waiting => false,
-            };
-            if !allowed {
-                return Err(StoreError::AdmissionTransitionConflict {
-                    operation_id,
-                    from: record.state.as_str(),
-                    to: target.as_str(),
-                });
-            }
-
-            let release_required = record.state == AdmissionState::Started;
-            let active_release = matches!(
-                record.state,
-                AdmissionState::Accepted | AdmissionState::Started
-            );
-            let updated = sqlx::query(
-                "UPDATE admission_journal \
-                 SET state = ?, \
-                     logical_released = CASE WHEN state = 'started' THEN 1 ELSE 0 END, \
-                     terminal_reason = ?, updated_at = ? \
-                 WHERE operation_id = ? AND member_ordinal = ? AND state = ? \
-                   AND ((? IS NULL AND actor_id IS NULL) OR (actor_id = ? AND actor_epoch = ?)) \
-                 RETURNING operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                           member_ordinal, batch_size, state, admission_units, logical_released, \
-                           terminal_reason, created_at, updated_at, actor_id, actor_epoch",
-            )
-            .bind(target.as_str())
-            .bind(reason)
-            .bind(now)
-            .bind(operation_id.as_uuid().as_bytes().as_slice())
-            .bind(i64::from(member_ordinal))
-            .bind(record.state.as_str())
-            .bind(actor_id.clone())
-            .bind(actor_id.clone())
-            .bind(actor_epoch)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let Some(updated) = updated else {
-                return Err(StoreError::AdmissionData(
-                    "admission changed during finalization".to_string(),
-                ));
-            };
-            let finalized_record = decode_record(updated)?;
-            if active_release {
-                released_slots = released_slots.checked_add(1).ok_or_else(|| {
-                    StoreError::AdmissionData(
-                        "released admission slots exceed u32 range".to_string(),
-                    )
-                })?;
-            }
-            finalized.push(AdmissionFinalizeOutcome {
-                record: finalized_record,
-                release_required,
-            });
-        }
-
-        let promoted =
-            Self::promote_queued_admissions_in_transaction(&mut tx, released_slots, now).await?;
-        tx.commit().await?;
-        Ok(AdmissionReleaseOutcome {
-            finalized,
-            promoted,
-        })
     }
 
     /// Recover non-actor operations at startup. Complete bound Accepted rows
@@ -1366,121 +578,6 @@ impl SessionStore {
         .await?;
         rows.into_iter().map(decode_record).collect()
     }
-}
-
-fn next_sequence_start(
-    max_sequence: Option<i64>,
-    count: u32,
-    name: &str,
-) -> Result<i64, StoreError> {
-    let first = max_sequence
-        .unwrap_or(0)
-        .checked_add(1)
-        .filter(|sequence| *sequence > 0)
-        .ok_or_else(|| StoreError::AdmissionData(format!("{name} exceeds SQLite INTEGER range")))?;
-    first
-        .checked_add(i64::from(count).checked_sub(1).ok_or_else(|| {
-            StoreError::AdmissionData(format!("{name} exceeds SQLite INTEGER range"))
-        })?)
-        .filter(|sequence| *sequence > 0)
-        .ok_or_else(|| StoreError::AdmissionData(format!("{name} exceeds SQLite INTEGER range")))?;
-    Ok(first)
-}
-
-fn decode_admission_count(value: i64, name: &str) -> Result<u32, StoreError> {
-    u32::try_from(value)
-        .map_err(|_| StoreError::AdmissionData(format!("admission {name} count exceeds u32 range")))
-}
-
-fn decode_admission_counts(row: &sqlx::sqlite::SqliteRow) -> Result<AdmissionCounts, StoreError> {
-    Ok(AdmissionCounts {
-        active: decode_admission_count(row.try_get("active")?, "active")?,
-        non_active: decode_admission_count(row.try_get("non_active")?, "non_active")?,
-        total: decode_admission_count(row.try_get("total")?, "total")?,
-    })
-}
-
-fn decode_admission_launch(row: sqlx::sqlite::SqliteRow) -> Result<AdmissionLaunch, StoreError> {
-    let runtime_fingerprint_version: i64 = row
-        .try_get::<Option<i64>, _>("runtime_fingerprint_version")?
-        .ok_or_else(|| {
-            StoreError::AdmissionData("runtime fingerprint version is missing".to_string())
-        })?;
-    let runtime_fingerprint_version = u32::try_from(runtime_fingerprint_version).map_err(|_| {
-        StoreError::AdmissionData("runtime fingerprint version exceeds u32 range".to_string())
-    })?;
-    let runtime_fingerprint: [u8; 32] = row
-        .try_get::<Option<Vec<u8>>, _>("runtime_fingerprint")?
-        .ok_or_else(|| StoreError::AdmissionData("runtime fingerprint is missing".to_string()))?
-        .try_into()
-        .map_err(|_| {
-            StoreError::AdmissionData("runtime fingerprint must contain 32 bytes".to_string())
-        })?;
-    let admission_binding_fingerprint_version: i64 = row
-        .try_get::<Option<i64>, _>("admission_binding_fingerprint_version")?
-        .ok_or_else(|| {
-            StoreError::AdmissionData(
-                "admission binding fingerprint version is missing".to_string(),
-            )
-        })?;
-    let admission_binding_fingerprint_version =
-        u32::try_from(admission_binding_fingerprint_version).map_err(|_| {
-            StoreError::AdmissionData(
-                "admission binding fingerprint version exceeds u32 range".to_string(),
-            )
-        })?;
-    let admission_binding_fingerprint: [u8; 32] = row
-        .try_get::<Option<Vec<u8>>, _>("admission_binding_fingerprint")?
-        .ok_or_else(|| {
-            StoreError::AdmissionData("admission binding fingerprint is missing".to_string())
-        })?
-        .try_into()
-        .map_err(|_| {
-            StoreError::AdmissionData(
-                "admission binding fingerprint must contain 32 bytes".to_string(),
-            )
-        })?;
-    let spawn_intent = row
-        .try_get::<Option<Vec<u8>>, _>("spawn_intent")?
-        .ok_or_else(|| StoreError::AdmissionData("spawn intent is missing".to_string()))?;
-    if spawn_intent.is_empty() || spawn_intent.len() > MAX_ADMISSION_INTENT_BYTES {
-        return Err(StoreError::AdmissionData(
-            "spawn intent size must be within the admission intent limit".to_string(),
-        ));
-    }
-
-    Ok(AdmissionLaunch {
-        record: decode_record(row)?,
-        intent: AdmissionIntent {
-            runtime_fingerprint_version,
-            runtime_fingerprint,
-            admission_binding_fingerprint_version,
-            admission_binding_fingerprint,
-            spawn_intent,
-        },
-    })
-}
-
-async fn admissions_in_transaction(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    operation_id: OperationId,
-) -> Result<Vec<AdmissionRecord>, StoreError> {
-    let mut records = sqlx::query(
-        "SELECT operation_id, source_tool_call_id, root_session_id, request_fingerprint, \
-                member_ordinal, batch_size, state, admission_units, logical_released, \
-                terminal_reason, created_at, updated_at, actor_id, actor_epoch \
-         FROM admission_journal \
-         WHERE operation_id = ? \
-         ORDER BY member_ordinal",
-    )
-    .bind(operation_id.as_uuid().as_bytes().as_slice())
-    .fetch_all(&mut **tx)
-    .await?
-    .into_iter()
-    .map(decode_record)
-    .collect::<Result<Vec<_>, _>>()?;
-    records.sort_by_key(|record| record.member_ordinal);
-    Ok(records)
 }
 
 pub(crate) async fn abort_recovered_actor_admissions_in_transaction(

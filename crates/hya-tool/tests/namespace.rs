@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
-    DuplicateName, NamespacedRegisterError, Tool, ToolCtx, ToolError, ToolRegistry, namespace_of,
+    DuplicateName, Tool, ToolCtx, ToolError, ToolPermission, ToolRegistry, namespace_of,
     namespaced_name,
 };
 use serde_json::{Value, json};
@@ -69,14 +69,14 @@ fn namespaced_name_rejects_invalid_tokens() {
     );
 }
 
-#[tokio::test]
-async fn register_namespaced_allows_same_local_name_across_namespaces() {
+#[test]
+fn direct_registration_allows_same_local_name_across_namespaces() {
     let registry = ToolRegistry::builtins();
     registry
-        .register_namespaced("alpha", "read", Arc::new(Probe("alpha__read")))
+        .register_with_permission(Arc::new(Probe("alpha__read")), ToolPermission::Tool)
         .unwrap();
     registry
-        .register_namespaced("beta", "read", Arc::new(Probe("beta__read")))
+        .register_with_permission(Arc::new(Probe("beta__read")), ToolPermission::Tool)
         .unwrap();
 
     let alpha = registry.get("alpha__read").unwrap();
@@ -84,36 +84,23 @@ async fn register_namespaced_allows_same_local_name_across_namespaces() {
     assert_eq!(alpha.name(), "alpha__read");
     assert_eq!(beta.name(), "beta__read");
 
-    // Duplicate canonical name (same namespace + local) is rejected.
     let err = registry
-        .register_namespaced("alpha", "read", Arc::new(Probe("alpha__read")))
+        .register_with_permission(Arc::new(Probe("alpha__read")), ToolPermission::Tool)
         .unwrap_err();
-    assert!(
-        matches!(err, NamespacedRegisterError::Duplicate(DuplicateName { ref name }) if name == "alpha__read"),
-        "expected duplicate rejection, got {err:?}"
-    );
+    assert!(matches!(err, DuplicateName { ref name } if name == "alpha__read"));
 }
 
-#[tokio::test]
-async fn register_namespaced_rejects_name_mismatch_and_invalid_tokens() {
+#[test]
+fn direct_registration_uses_validated_composed_names() {
     let registry = ToolRegistry::builtins();
-    // The tool's own name must match the composed canonical name so the
-    // advertised schema and registry key cannot drift apart.
-    let mismatch = registry
-        .register_namespaced("alpha", "read", Arc::new(Probe("other_name")))
-        .unwrap_err();
-    assert!(matches!(
-        &mismatch,
-        NamespacedRegisterError::NameMismatch { expected, .. } if expected == "alpha__read"
-    ));
+    let expected = namespaced_name("alpha", "read").unwrap();
+    assert_eq!(expected, "alpha__read");
+    registry
+        .register_with_permission(Arc::new(Probe("alpha__read")), ToolPermission::Tool)
+        .unwrap();
 
-    let invalid = registry
-        .register_namespaced("bad ns", "read", Arc::new(Probe("x")))
-        .unwrap_err();
-    assert!(matches!(invalid, NamespacedRegisterError::Invalid(_)));
-
-    // Nothing was registered by the failed attempts.
-    assert!(registry.get("alpha__read").is_none());
+    let invalid = namespaced_name("bad ns", "read").unwrap_err();
+    assert!(invalid.to_string().contains("invalid namespaced tool name"));
     assert!(registry.get("x").is_none());
 }
 
@@ -122,9 +109,7 @@ fn builtin_registry_pairs_namespaced_names_with_their_namespace() {
     let registry = ToolRegistry::builtins();
     assert!(registry.get("read").is_some());
     assert_eq!(namespace_of("read"), None);
-    // The todo namespace is a real builtin group (Feature: todo__ tools).
     assert!(registry.get("todo__read").is_some());
     assert_eq!(namespace_of("todo__read"), Some("todo"));
-    // Namespaces no builtin uses stay absent.
     assert!(registry.get("alpha__read").is_none());
 }

@@ -213,8 +213,6 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
 fn preset_preserves_read_protection_and_permission_defaults() {
     let preset = base_tools_preset();
     let extended = &tool_bundle_presets()[1];
-    assert!(preset.is_protected("read"));
-    assert!(!preset.is_protected("write"));
     assert_eq!(
         preset.tool("read").unwrap().permission(),
         ToolPermission::ReadOnly

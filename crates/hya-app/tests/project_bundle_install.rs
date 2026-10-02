@@ -301,8 +301,7 @@ async fn an_installed_project_bundle_reaches_only_its_project_scope() {
         hya_app::builtin_agent_catalog().unwrap(),
     ));
     let refresh = hya_app::ProjectScopeRefresh::new(Arc::new(
-        hya_app::InstalledBundleRefresh::new(root.join("registry.db"))
-            .with_config_file(root.join("config/config.yaml")),
+        hya_app::InstalledBundleRefresh::new(root.join("registry.db")),
     ));
     let scope = hya_core::CatalogScope::Project {
         id: hya_proto::ProjectId::new(),

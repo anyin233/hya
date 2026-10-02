@@ -197,7 +197,7 @@ async fn project_session_binds_its_project_and_a_roots_edit_applies_next_bind() 
 
     h.engine
         .store()
-        .replace_project_roots(id, &[text(&a), text(&c)])
+        .update_project(id, None, Some(&[text(&a), text(&c)]))
         .await
         .unwrap();
     let binding = h.engine.bind_session_runtime(session, &a).await.unwrap();
@@ -434,7 +434,6 @@ async fn a_scope_idle_past_the_ttl_is_swept() {
         engine: h.engine.with_catalog_scope_cache(config),
         refresh: h.refresh,
     };
-    assert_eq!(h.engine.catalog_scope_cache_config(), config);
     let registry = h.engine.runtime_registry();
 
     let held = h.engine.bind_root_runtime(&x).await.unwrap();

@@ -1,10 +1,8 @@
-export { backendCommand, createCommandRegistry, nativeCommandSpecs, openModelPicker, selectAgent, toBackground } from "./native"
-export { helpPickerHint, helpPickerRows, helpRows, keyHelpText } from "./help"
+export { createCommandRegistry, nativeCommandSpecs, openModelPicker, selectAgent, toBackground } from "./native"
+export { helpPickerHint, helpPickerRows } from "./help"
 export {
   commandSuggestionLimit,
-  filterCommands,
   mergeCommandEntries,
-  requiresArgument,
   suggestCommandInput,
   type CommandEntry,
   type CommandSource,
@@ -12,7 +10,6 @@ export {
 } from "./menu"
 export {
   CommandRegistry,
-  matchValues,
   type AppActions,
   type ArgumentPosition,
   type CommandContext,

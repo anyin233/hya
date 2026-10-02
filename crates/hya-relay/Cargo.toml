@@ -1,10 +1,12 @@
 [package]
 name = "hya-relay"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "hya secure relay: hya.relay.v1 rendezvous protocol, transport abstraction, and relay links (no hya runtime deps)"
+[package.metadata.hya]
+version-reference = "backend"
 
 [lints]
 workspace = true

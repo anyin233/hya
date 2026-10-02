@@ -88,12 +88,7 @@ fn core_agents_are_backed_by_the_verified_embedded_preset() {
     }
 
     for definition in catalog.all() {
-        assert!(definition.origin.is_builtin());
-        assert!(definition.origin.is_preset());
-        assert_eq!(
-            definition.origin.preset_bundle_id(),
-            Some("hya/core-agents")
-        );
+        assert!(matches!(definition.origin, AgentOrigin::Builtin));
         assert!(definition.model_policy.model.is_none());
         assert!(definition.model_policy.category.is_none());
         assert!(definition.model_policy.reasoning.is_none());
@@ -108,7 +103,7 @@ fn core_agents_resolve_through_their_preset_qualified_identity() {
         .resolve("bundle:hya/core-agents/agent/hya-main")
         .expect("qualified preset agent");
     assert_eq!(bare, qualified);
-    assert_eq!(qualified.origin.preset_bundle_id(), Some("hya/core-agents"));
+    assert_eq!(qualified.origin, AgentOrigin::Builtin);
 }
 
 #[test]
@@ -139,7 +134,7 @@ fn resolves_a_bundle_agent_and_reports_its_bundle_origin() {
         }
     );
     assert_eq!(definition.origin.bundle_id(), Some("acme/reviewer"));
-    assert!(!definition.origin.is_builtin());
+    assert!(!matches!(definition.origin, AgentOrigin::Builtin));
 }
 
 #[test]

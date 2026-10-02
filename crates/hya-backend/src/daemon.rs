@@ -607,7 +607,8 @@ pub(crate) enum HandoffRestart {
 /// Longest wait for the old generation's `queued` acknowledgement. A
 /// pre-handoff daemon (another hya version) never writes it.
 const HANDOFF_ACK_WAIT: Duration = Duration::from_secs(10);
-
+/// Maximum time a blocking restart waits for the successor to become healthy.
+pub(crate) const SUCCESSOR_READY_WAIT: Duration = Duration::from_secs(90);
 /// One restart attempt through the handoff protocol: record `requested`
 /// (with the successor spec, including the executable this restart command
 /// was invoked with), ask the holder with a `mode: "handoff"` stop request,
@@ -758,31 +759,38 @@ pub(crate) async fn restart_by_handoff(
     Ok(HandoffRestart::Queued(old))
 }
 
-/// The JSON `hya serve restart --json` prints once the running daemon
-/// acknowledged the handoff (`queued`): `url` is the one the successor
-/// keeps, `startedAt` is inherited by it unchanged, and `pid` is the
-/// generation that acknowledged (the successor's own pid is a matter for
-/// `hya serve status`).
-pub(crate) fn queued_json(found: &Discovery, db: &str) -> serde_json::Value {
-    serde_json::json!({
-        "url": found.url,
-        "pid": found.pid,
-        "version": found.version,
-        "startedAt": found.started_at,
-        "db": db,
-        "log": log_path(db).map(|path| path.to_string_lossy().into_owned()),
-        "started": false,
-        "queued": true,
-    })
-}
-
-/// The human line `hya serve restart` prints at the `queued` ack.
-pub(crate) fn queued_line(found: &Discovery, db: &str) -> String {
-    format!(
-        "restart queued: hya server pid {} at {} is handing off to a new generation \
-         (same URL, db {}); `hya serve status` shows the successor",
-        found.pid, found.url, db
-    )
+/// Wait until the successor generation has recorded readiness and answers health.
+/// This is the completion point exposed by the blocking `serve restart` CLI.
+pub(crate) async fn wait_for_successor(db: &str, old_pid: u32) -> anyhow::Result<Ready> {
+    let paths = db_lock::paths(db).context("locate the handoff journal")?;
+    let deadline = tokio::time::Instant::now() + SUCCESSOR_READY_WAIT;
+    loop {
+        if let Some(state) = db_lock::read_handoff(&paths.handoff) {
+            if state.stage() == db_lock::HandoffStage::Failed {
+                anyhow::bail!(
+                    "the successor rejected the restart: {}",
+                    state.error.as_deref().unwrap_or("no reason given")
+                );
+            }
+            if state.stage() >= db_lock::HandoffStage::Ready {
+                if let Some(found) = running(db).await {
+                    if found.pid != old_pid {
+                        return Ok(Ready {
+                            discovery: found,
+                            started: true,
+                        });
+                    }
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "the successor did not become healthy within {} s",
+                SUCCESSOR_READY_WAIT.as_secs()
+            );
+        }
+        tokio::time::sleep(POLL).await;
+    }
 }
 
 /// Poll until nothing holds `db`'s lock; `false` on timeout.

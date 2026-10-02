@@ -341,24 +341,6 @@ fn normalized_agent_target(value: &str) -> String {
     }
 }
 
-/// Coerce model-supplied `task_id` placeholders into "create fresh".
-///
-/// Empty / whitespace and common sentinels (`new`, `null`, `none`, `undefined`)
-/// become `None`. Non-empty real session ids are kept for resume validation.
-// Pending re-wiring in the in-flight task tool refactor; kept for the
-// follow-up commit that consumes it.
-#[allow(dead_code)]
-fn normalize_task_id(raw: Option<String>) -> Option<String> {
-    let s = raw?.trim().to_string();
-    if s.is_empty() {
-        return None;
-    }
-    match s.to_ascii_lowercase().as_str() {
-        "new" | "null" | "none" | "undefined" => None,
-        _ => Some(s),
-    }
-}
-
 fn render_single(result: TaskResult) -> Value {
     let state = if result.status == "done" || result.status == "completed" {
         "completed"
@@ -403,34 +385,4 @@ fn render_single(result: TaskResult) -> Value {
             result.session, model_attr, state, tag, result.summary, tag
         ),
     })
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::normalize_task_id;
-
-    #[test]
-    fn normalize_task_id_treats_empty_and_sentinels_as_new() {
-        assert_eq!(normalize_task_id(None), None);
-        assert_eq!(normalize_task_id(Some(String::new())), None);
-        assert_eq!(normalize_task_id(Some("   ".into())), None);
-        assert_eq!(normalize_task_id(Some("new".into())), None);
-        assert_eq!(normalize_task_id(Some("NEW".into())), None);
-        assert_eq!(normalize_task_id(Some("null".into())), None);
-        assert_eq!(normalize_task_id(Some("none".into())), None);
-        assert_eq!(normalize_task_id(Some("undefined".into())), None);
-    }
-
-    #[test]
-    fn normalize_task_id_keeps_real_ids() {
-        assert_eq!(
-            normalize_task_id(Some("hysec_00000000000000000000".into())).as_deref(),
-            Some("hysec_00000000000000000000")
-        );
-        assert_eq!(
-            normalize_task_id(Some("  hysec_abc ".into())).as_deref(),
-            Some("hysec_abc")
-        );
-    }
 }

@@ -64,16 +64,6 @@ pub struct SteerMailbox {
 }
 
 impl SessionEngine {
-    /// Snapshot the durable unread backlog and subscribe to live mail.
-    ///
-    /// Never fails the turn: a session outside a team gets an empty, inert
-    /// mailbox (every drain returns nothing).
-    pub async fn steer_mailbox_snapshot(&self, session: SessionId) -> SteerMailbox {
-        let policy = self.session_channel_policy(session);
-        self.steer_mailbox_snapshot_with_policy(session, policy)
-            .await
-    }
-
     /// Snapshot mail using the channel policy captured by this turn's admission binding.
     /// This is the turn-admission path; callers must pass the immutable snapshot
     /// derived from the turn's [`crate::TurnBinding`]. `None` denies delivery.

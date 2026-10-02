@@ -180,7 +180,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
     let bundles = agents
         .iter()
         // Built-in ids are compiled in; a fixture asking for one just gets it.
-        .filter(|agent| !hya_core::is_builtin_id(&agent.stable_id))
+        .filter(|agent| hya_core::builtin_agent(&agent.stable_id).is_none())
         .map(|agent| {
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
@@ -868,12 +868,7 @@ async fn reserved_system_agents_are_always_resolvable_from_the_embedded_preset()
         let definition = binding
             .resolve_agent(reserved)
             .unwrap_or_else(|| panic!("`{reserved}` must always resolve"));
-        assert!(definition.origin.is_builtin());
-        assert!(definition.origin.is_preset());
-        assert_eq!(
-            definition.origin.preset_bundle_id(),
-            Some("hya/core-agents")
-        );
+        assert!(matches!(definition.origin, hya_core::AgentOrigin::Builtin));
         assert_eq!(definition.prompt, Some(builtin_prompt(reserved)));
     }
 }

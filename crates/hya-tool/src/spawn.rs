@@ -289,19 +289,6 @@ impl SpawnerPlane {
         self.spawn_inner(operation, members, cancel).await
     }
 
-    /// Spawn members with `background = true` (host may return early).
-    ///
-    /// # Errors
-    /// Returns [`SpawnError`] when admission fails or the host reports an error.
-    pub async fn spawn_background(
-        &self,
-        operation: ToolOperation,
-        members: Vec<SpawnMember>,
-        cancel: CancellationToken,
-    ) -> Result<Vec<MemberOutcome>, SpawnError> {
-        self.spawn_inner(operation, members, cancel).await
-    }
-
     async fn spawn_inner(
         &self,
         operation: ToolOperation,

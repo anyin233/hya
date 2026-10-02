@@ -190,6 +190,9 @@ pub(crate) struct SourceAgentManifest {
     #[serde(default)]
     pub check: Option<SourceCheck>,
     pub kind: String,
+    /// Aggregate release version to resolve for this source manifest.
+    #[serde(default)]
+    pub version_ref: Option<String>,
     pub identity: BundleIdentity,
     /// Provider-facing namespace for this bundle's tools and schemas; the
     /// identity name segment is the default.
@@ -223,6 +226,9 @@ pub(crate) struct SourceAgentManifest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceAgentSetManifest {
     pub kind: String,
+    /// Aggregate release version to resolve for this source manifest.
+    #[serde(default)]
+    pub version_ref: Option<String>,
     pub identity: BundleIdentity,
     /// Optional source-root self-check.
     #[serde(default)]
@@ -255,6 +261,9 @@ pub(crate) struct SourceAgentSetManifest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourcePluginManifest {
     pub kind: String,
+    /// Aggregate release version to resolve for this source manifest.
+    #[serde(default)]
+    pub version_ref: Option<String>,
     pub identity: BundleIdentity,
     /// Optional source-root self-check.
     #[serde(default)]
@@ -280,6 +289,9 @@ pub(crate) struct SourcePluginManifest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceWorkflowManifest {
     pub kind: String,
+    /// Aggregate release version to resolve for this source manifest.
+    #[serde(default)]
+    pub version_ref: Option<String>,
     pub identity: BundleIdentity,
     /// Optional source-root self-check.
     #[serde(default)]

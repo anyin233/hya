@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { ProjectInfo } from "../src/client"
-import { projectSidebarRows, projectsSidebarKey } from "../src/state/projectsSidebar"
+import { projectSidebarEntries, projectSidebarRows, projectsSidebarKey } from "../src/state/projectsSidebar"
 
 const key = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; sequence: string }> = {}) =>
   ({ name, ctrl: false, meta: false, shift: false, sequence: "", ...extra })
@@ -25,6 +25,17 @@ test("Up/Down move the highlight with wrap-around; Enter switches; Esc blurs", (
   expect(projectsSidebarKey(key("up"), rows, "a")).toEqual({ type: "move", id: "b" })
   expect(projectsSidebarKey(key("return"), rows, "b")).toEqual({ type: "switch", id: "b" })
   expect(projectsSidebarKey(key("escape"), rows, "a")).toEqual({ type: "blur" })
+})
+
+test("the rendered list separates Projects with a rule, like the Sessions list", () => {
+  expect(projectSidebarEntries(projects, "a")).toEqual([
+    { row: { id: "a", name: "alpha", busy: true, sessionCount: 3, active: true } },
+    { separator: true },
+    { row: { id: "b", name: "beta", busy: false, sessionCount: 0, active: false } },
+  ])
+  // A single Project (and an empty list) draws no rule.
+  expect(projectSidebarEntries([projects[0]!], "a")).toEqual([{ row: { id: "a", name: "alpha", busy: true, sessionCount: 3, active: true } }])
+  expect(projectSidebarEntries([], undefined)).toEqual([])
 })
 
 test("an empty row list moves nowhere", () => {

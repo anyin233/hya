@@ -240,46 +240,6 @@ impl QuestionRequests {
         ok
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn contains(&self, id: &str) -> bool {
-        self.inner.lock().await.contains_key(id)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn reply_any(&self, id: &str, answers: Vec<Vec<String>>) -> bool {
-        let entry = self.take_any(id).await;
-        let Some(entry) = entry else {
-            return false;
-        };
-        let session = entry.session;
-        let event_answers = answers.clone();
-        let ok = entry
-            .reply
-            .send_many(answers_from_reply(entry.questions, answers))
-            .is_ok();
-        if ok {
-            let _ = self.store.resolve_pending_interaction(id).await;
-        }
-        if ok {
-            self.publish_replied(session, id, event_answers);
-        }
-        ok
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn reject_any(&self, id: &str) -> bool {
-        let entry = self.take_any(id).await;
-        let Some(entry) = entry else {
-            return false;
-        };
-        let session = entry.session;
-        let ok = reject_entry(entry);
-        if ok {
-            self.publish_rejected(session, id);
-        }
-        ok
-    }
-
     async fn take(&self, session: SessionId, id: &str) -> Option<PendingQuestion> {
         let mut pending = self.inner.lock().await;
         let entry = pending.get(id)?;
@@ -287,10 +247,6 @@ impl QuestionRequests {
             return None;
         }
         pending.remove(id)
-    }
-
-    async fn take_any(&self, id: &str) -> Option<PendingQuestion> {
-        self.inner.lock().await.remove(id)
     }
 
     fn publish_replied(&self, session: Option<SessionId>, id: &str, answers: Vec<Vec<String>>) {

@@ -39,7 +39,7 @@ pub(crate) struct StagedBundle {
 pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     let usage = "usage: cargo xtask stage-first-party-bundles --library-dir <dir> \
                  --package-root <dir> [--version <semver>] [--target <triple> --assets <dir>]";
-    let mut version = env!("CARGO_PKG_VERSION").to_string();
+    let mut version = hya_version::BACKEND_VERSION.to_string();
     let (mut library_dir, mut package_root, mut target, mut assets) = (None, None, None, None);
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {

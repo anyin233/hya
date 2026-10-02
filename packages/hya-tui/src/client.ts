@@ -15,6 +15,8 @@ export interface SessionInfo {
   parent?: string
   /** Subagents this session spawned (folded rows; the live counterpart is `memberUpdated`). */
   members?: MemberInfo[]
+  /** When the session was created (RFC 3339); stable ordering for sidebar numbers. */
+  timeCreated?: string
   /** When the session projection last changed (RFC 3339); the `/sessions` picker's relative time (state/catalog.ts). */
   timeUpdated?: string
   /** Server-resolved reasoning effort and the precedence source. */

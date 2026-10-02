@@ -8,9 +8,9 @@
 import { contextUsage, formatTokens, modelEffortLabel, sessionTokens, todoStatusText, truncate, truncateStart, webLabel } from "./format"
 import { mergeTranscript } from "./overlay"
 import { effectiveMode, modeDisplay } from "./modes"
-import { paneLeaves, visiblePaneRoot } from "./panes"
 import { forkSourceText } from "./revert"
 import type { AppState } from "./store"
+import { tuiVersion } from "../version"
 
 /**
  * How a field is colored: `plain` is the box's text color and the status
@@ -40,11 +40,6 @@ export interface ContextRow {
   tone: ContextTone
 }
 
-export interface StatusLineSegment {
-  text: string
-  tone: ContextTone
-}
-
 /** The Context box's label column (`Messages` plus one space). */
 const labelWidth = 9
 /** The status line's directory segment keeps this many columns of the path's tail. */
@@ -57,7 +52,7 @@ const hostOf = (url: string): string => url.replace(/^https?:\/\//, "").replace(
 
 /**
  * The ordered fields: Vim (when on), Mode, Session, Forked, Agent, Model,
- * Messages, Context, Tokens, Dir, Branch, Todos, Server, WebUI, Backend.
+ * Messages, Context, Tokens, Dir, Branch, Todos, Server, WebUI, Version, Backend.
  * Fields with no data are omitted.
  */
 export function contextFields(state: AppState, server: string): ContextField[] {
@@ -101,6 +96,8 @@ export function contextFields(state: AppState, server: string): ContextField[] {
   if (state.web) {
     add({ label: "WebUI", value: state.web.url ? hostOf(state.web.url) : "unavailable", short: webLabel(state.web)!, tone: state.web.url ? "plain" : "warning", priority: 4 })
   }
+  const version = `${tuiVersion}/${state.serverVersion || "unknown"}`
+  add({ label: "Version", value: version, short: version, priority: 1 })
   if (state.backendStopped) add({ label: "Backend", value: "stopped", short: "backend stopped", tone: "error", priority: 2 })
   else if (!state.connected) add({ label: "Backend", value: "reconnecting", short: "reconnecting", tone: "warning", priority: 2 })
   return fields
@@ -116,48 +113,17 @@ export function contextRows(fields: readonly ContextField[], width: number): Con
   }))
 }
 
-/** Greedy packing into at most `rows` lines of `width` columns; `undefined` when the fields do not fit. */
-function pack(fields: readonly ContextField[], width: number, rows: number): StatusLineSegment[][] | undefined {
-  const lines: StatusLineSegment[][] = [[]]
-  let used = 0
-  for (const field of fields) {
-    const text = truncate(field.short, width)
-    const line = lines[lines.length - 1]!
-    const cost = (line.length ? 3 : 0) + text.length
-    if (used + cost <= width) {
-      line.push({ text, tone: field.tone })
-      used += cost
-      continue
-    }
-    if (lines.length === rows) return undefined
-    lines.push([{ text, tone: field.tone }])
-    used = text.length
-  }
-  return lines
-}
 
-/**
- * The top status line: the fields in order, packed onto at most `rows` lines
- * of `width` columns. While they do not fit, the field with the highest
- * `priority` (the last one among equals) is dropped; priority-0 fields stay
- * and are cut to `width` instead.
- */
-export function statusLines(fields: readonly ContextField[], width: number, rows = 2): StatusLineSegment[][] {
-  const shown = [...fields]
-  for (;;) {
-    const lines = pack(shown, width, rows)
-    if (lines) return lines
-    let drop = -1
-    shown.forEach((field, index) => {
-      if (field.priority > 0 && (drop < 0 || field.priority >= shown[drop]!.priority)) drop = index
-    })
-    if (drop < 0) return shown.slice(0, rows).map((field) => [{ text: truncate(field.short, width), tone: field.tone }])
-    shown.splice(drop, 1)
+/** Compact Context metadata for the top status line when the sidebar is hidden. */
+export function contextStatus(fields: readonly ContextField[], width: number): string {
+  const visible = fields.slice().sort((left, right) => left.priority - right.priority)
+  const kept: string[] = []
+  let room = Math.max(1, width)
+  for (const field of visible) {
+    const separator = kept.length ? 3 : 0
+    if (field.priority > 0 && field.short.length + separator > room) continue
+    kept.push(field.short)
+    room -= field.short.length + separator
   }
-}
-
-/** The top status line is shown exactly when no `context` pane is on screen (width, `/sidebar`, `/layout`). */
-export function contextStatusShown(state: Pick<AppState, "paneLayout" | "columns" | "sidebar" | "projectsSidebar">): boolean {
-  const root = visiblePaneRoot(state.paneLayout.root, state.columns, state.sidebar, state.projectsSidebar)
-  return !paneLeaves(root).some((pane) => pane.kind === "context")
+  return kept.join(" · ")
 }

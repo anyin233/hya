@@ -1,10 +1,12 @@
 [package]
 name = "hya-todo-tools"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+[package.metadata.hya]
+version-reference = "backend"
 
 [lib]
 crate-type = ["rlib", "cdylib"]

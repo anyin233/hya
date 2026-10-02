@@ -2,9 +2,7 @@
 //! Relay link grammar:
 //! `hya[+insecure]://<host>[:port][/<prefix>]/<room_id>[?t=auto|grpc|ws]#<b64url(x25519_pub)>.<b64url(psk)>`.
 
-use hya_relay::link::{
-    KeyField, LinkError, RelayAddress, RelayLink, RoomId, Transport, WsRoute, room_id_from_ed25519,
-};
+use hya_relay::link::{KeyField, LinkError, RelayAddress, RelayLink, RoomId, Transport, WsRoute};
 
 const KEY_B64: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"; // bytes 0..32
 const PSK_B64: &str = "__________________________________________8"; // 0xff * 32
@@ -29,7 +27,7 @@ fn room_id_derivation_matches_reference_vector() {
         0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07,
         0x51, 0x1a,
     ];
-    assert_eq!(room_id_from_ed25519(&pk).as_str(), ROOM);
+    assert_eq!(RoomId::from_ed25519(&pk).as_str(), ROOM);
     assert_eq!(
         RoomId::from_ed25519(&[0; 32]).as_str(),
         "mzuhvlpymk6xo3epygfy5h4oea"
@@ -283,7 +281,6 @@ fn binding_endpoint_urls() {
     let address = parsed.address();
     assert_eq!(address.origin(), "https://relay.example.com");
     assert_eq!(address.base_url(), "https://relay.example.com/hya");
-    assert_eq!(address.grpc_url(), "https://relay.example.com/hya");
     assert_eq!(
         address.ws_url(WsRoute::Host),
         "wss://relay.example.com/hya/hya.relay.v1/ws/host"
@@ -296,7 +293,7 @@ fn binding_endpoint_urls() {
     let plain: RelayLink = link(&format!("hya+insecure://10.0.0.2:8766/{ROOM}"))
         .parse()
         .unwrap();
-    assert_eq!(plain.address().grpc_url(), "http://10.0.0.2:8766");
+    assert_eq!(plain.address().base_url(), "http://10.0.0.2:8766");
     assert_eq!(
         plain.address().ws_url(WsRoute::Accept),
         "ws://10.0.0.2:8766/hya.relay.v1/ws/accept"
@@ -326,7 +323,7 @@ fn proxy_url_parses_into_an_address() {
 #[test]
 fn link_is_built_from_parts() {
     let address = RelayAddress::parse_proxy_url("https://relay.example.com").unwrap();
-    let room = room_id_from_ed25519(&[0; 32]);
+    let room = RoomId::from_ed25519(&[0; 32]);
     let built = RelayLink::new(address, room, Transport::Auto, key(), [0xff; 32]);
     assert_eq!(
         built.to_secret_string(),

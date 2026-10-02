@@ -1,16 +1,19 @@
 [package]
 name = "xtask"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+[package.metadata.hya]
+version-reference = "backend"
 
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+hya-version = { workspace = true }
 hya-bundle = { workspace = true }
 pbjson-build = { workspace = true }
 protoc-bin-vendored = { workspace = true }
