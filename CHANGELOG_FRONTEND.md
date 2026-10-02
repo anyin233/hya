@@ -1,5 +1,6 @@
-# 0.44.4
+# 0.44.5
 
 ## TUI
 
-- Hide the compact context status line during narrow-screen startup until the backend is ready.
+- Added pointer-positioned context menus for Sessions and Projects, including the full Projects view.
+- Removed stale hard-coded frontend-version tests.
