@@ -1109,16 +1109,24 @@ and pending-request controls.
 | `composer`, `projects`, `sessions`, `jobs`, `models`, `workflows`, `interactions`, `api` | Selectable |
 | `conversation`, `activity`, `todos`, `context`, `status` | Unselectable |
 
-Alt+arrows search visible selectable rectangles by geometry. A subtree with
-only one selectable leaf navigates as a group with its passive siblings, so
-Sessions can return directly to the editor despite the passive transcript above
-it. Rotation follows
-split-tree order and wraps; use `/layout focus next` or `previous`, or bind
-those commands with `/keybind set`. No extra default shortcuts are installed.
+Alt+Left and Alt+Right visit the previous/next visible selectable pane in
+visual reading order: top edge, then left edge, then numeric pane id as a tie
+breaker. The order wraps into one cycle, guaranteeing reachability of every
+visible selectable pane. `/layout focus previous|next` uses the same order.
+Alt+Up and Alt+Down choose the nearest selectable rectangle wholly above or
+below: prefer horizontal overlap, then vertical gap, then horizontal center
+distance, vertical center distance and id. With no candidate they stay put.
+Navigation reads mounted native bounds after minimum sizes, content sizing and
+responsive hiding; hidden and zero-area panes are excluded. No extra default
+shortcuts are installed.
+
 Clicking a passive pane preserves keyboard ownership; mouse scrolling and text
 selection remain available. One accent border belongs to the focused editor,
-selectable side pane, or active overlay. A hidden, removed, or newly passive
-focus target falls back to the editor. Focus changes do not rebuild the tree.
+selectable side pane, or active overlay. A hidden, removed, zero-area, or newly
+passive focus target falls back to a visible editor or another visible
+selectable pane. Focus changes do not rebuild the tree. Pane instances mount
+once per stable pane id and receive new bounds when moved, wrapped, resized or
+reloaded; drafts, histories and transcript scroll survive changes of parent.
 
 Ordinary keys and paste go exclusively to the focused selectable pane.
 Unsupported input stops there rather than editing the message draft. Global
@@ -1132,7 +1140,7 @@ For example, open commands using `/` (Ctrl+X then `/` while drafting):
 
 ```text
 /layout focus pane-3              # Sessions owns input
-/layout focus next                # rotate to Projects on a wide screen
+/layout focus next                # next pane in visual reading order
 /layout focus pane-1              # Message editor owns input
 /layout split left jobs           # new selectable Jobs pane gets focus
 /layout split up status           # add passive Status; focus stays on Jobs
@@ -1163,9 +1171,14 @@ closable ids and unambiguous names, updating after each layout edit.
 | `/layout split <up\|left> [job]` | Split the focused pane equally; default job `jobs`; maximum 32 panes. |
 | `/layout assign <job>` | Assign the focused rectangle; viewer/editor assignment swaps singleton instances. |
 | `/layout focus <left\|right\|up\|down\|next\|previous\|pane-id>` | Focus a visible selectable pane; passive/hidden/unknown ids are refused. |
-| `/layout resize <+N\|-N>` | Resize the focused pane against its nearest sibling, within 10–90%. |
-| `/layout close [pane-name\|pane-id]` | Without a target, close the selected auxiliary pane. With a target, close that leaf regardless of visibility or selectability; promote its sibling and preserve surviving focus. |
+| `/layout resize <+N\|-N>` | Transfer percentage points of parent weight between the selected child and its next sibling (previous at the end), within 10–90% of the pair; converts that parent’s content slots to weights. |
+| `/layout close [pane-name\|node-id]` | Close the selected auxiliary pane or an explicit auxiliary pane/container, including hidden or passive content; preserve surviving focus. |
 | `/layout reload` | Read and validate `paneLayout` from this TUI’s preferences file and apply it immediately, without writing the file or loading other settings. |
+| `/layout tree` | Inspect pane/container ids, order, sizing and eligibility in a read-only modal; Esc closes. |
+| `/layout insert <container-id\|root> <index> <job>` | Insert a new auxiliary pane at a zero-based child index (0 through child count); a selectable new pane gets focus. |
+| `/layout move <node-id\|pane-name> <container-id\|root> <index>` | Move an existing pane/subtree, retaining ids and focus. Index refers to destination children after removing the source. Cycles are refused. |
+| `/layout wrap <node-id\|pane-name\|root> <row\|column> <job> [before\|after]` | Wrap a target, including the whole root, with a new auxiliary pane; default position `before`. |
+| `/layout remove <node-id\|pane-name>` | Remove an auxiliary pane or subtree; refuse any subtree containing the viewer/editor. |
 | `/layout reset` | Restore the default arrangement. |
 
 Default ids are `pane-1` editor, `pane-2` Projects, `pane-3` Sessions,
@@ -1181,10 +1194,10 @@ rows while idle. The viewer receives all remaining height, keeping the input
 adjacent to the transcript rather than reserving an empty percentage of the
 screen. This also applies after resizing the terminal. Existing generated
 80%/20% viewer/activity/editor arrangements upgrade automatically; custom
-split ratios remain weighted. No reset or new shortcut is needed. An explicit
-`/layout resize +10` or `/layout split left jobs` changes the edited branch
-back to weighted sizing, so manually sized or subdivided layouts remain
-proportional.
+split ratios remain weighted. No reset or new shortcut is needed. An explicit `/layout resize +10` converts that parent’s content slots to
+weights. Splitting a weighted slot divides its weight equally; splitting a
+content slot along its parent’s direction replaces it with two equal weighted
+slots. An opposite-direction split wraps the slot and retains its outer sizing.
 
 ### Editing layout with an agent
 
@@ -1201,11 +1214,11 @@ For example:
 
 1. Run `/layout reset` once to save a valid starter tree, if no layout has been saved.
 2. Ask the agent: “Edit `~/.config/hya/tui.json`: remove the `context` leaf
-   from `paneLayout.root` and replace its parent split with its remaining
-   child. Preserve the conversation and composer leaves, unique ids, and all
+   from its parent’s `children` list under `paneLayout.root`; collapse the parent
+   only when it has one remaining child. Preserve the conversation and composer leaves, unique ids, and all
    other preferences.” Substitute your actual configured path.
 3. Run `/layout reload`. The edited tree appears immediately. The agent can
-   also adjust split `axis`, `weight`, and `sizing` using the contract below.
+   also edit a container’s `direction` and each child’s `size` using the contract below.
 
 **Command contract:** `/layout reload` takes no arguments. It parses and
 migrates the saved `PaneLayout` using the same validator as startup, normalizes
@@ -1226,37 +1239,100 @@ other sessions follow catalog refreshes.
 
 #### Pane interfaces and persistence
 
-The local close reducer contract is `closePane(layout: PaneLayout, target?: string): PaneLayout`.
-An omitted target means `layout.active`; an explicit target matches the exact
-`PaneKind` or `pane-N` id. It removes exactly one auxiliary leaf, refuses
-unknown/ambiguous targets and the viewer/editor, and normalizes focus only if
-necessary. Command completion receives `CompletionContext.panes?: {id: string;
-kind: string}[]` from the full saved layout. No backend RPC is added.
+### Ordered layout containers and interfaces
 
-The split command accepts only `up` and `left`; old `horizontal`/`vertical`
-command arguments are replaced. Saved JSON retains `axis: "horizontal"` for
-`up` and `axis: "vertical"` for `left`, with the new leaf in `first` and the
-selected leaf in `second`. The helper contract is
-`splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", before: boolean = false): PaneLayout`;
-the command passes `before: true`.
+Rows place children left-to-right; columns place children top-to-bottom. Each
+container has an ordered child list, so inserting into a branch and wrapping
+the whole layout use the same tree operations. `/layout split left|up` inserts
+next to the selected leaf if its parent has the matching direction; otherwise
+it wraps that leaf. A weighted slot is divided equally; other sibling weights
+are retained. The old `horizontal`/`vertical` command arguments are replaced.
 
-The preferences contract is `paneLayout: {version: 3, root: PaneNode,
-active: string}`. `PaneNode` is either `{type: "pane", id: "pane-N",
-kind: PaneKind}` or `{type: "split", axis: "horizontal"|"vertical",
-weight: number, first: PaneNode, second: PaneNode,
-sizing?: "weighted"|"content-first"|"content-second"}`. Omitted `sizing` means
-weighted. `content-first` and `content-second` are valid only for horizontal
-splits: the named child gets exactly its current content/minimum row count,
-while its sibling fills the remaining height. A content-sized child may be zero
-rows when its activity indicator is hidden. `weight` remains saved for weighted
-layout edits; it does not reserve empty space while content sizing is active. Weights are finite
-fractions from `0.1` through `0.9`. Trees require unique positive numeric ids,
-exactly one `conversation` and one `composer`, a known active id, at most 32
-leaves and at most 31 nested split levels. An active passive id normalizes to
-editor focus. Invalid trees are ignored. Version 1 center-only layouts first
-receive their sidebars; version 1/2 conversation leaves become viewer/activity/editor
-splits, preserving the old id on the editor and allocating fresh viewer and activity ids.
-Saved split weights and auxiliary jobs survive migration.
+For example, from the default arrangement:
+
+```text
+/layout tree                           # root group-1; center group-2; right group-3
+/layout insert group-3 1 jobs           # pane-8 between Sessions and Todos
+/layout move pane-8 group-2 1           # move Jobs after the conversation viewer
+/layout wrap root column status before # add passive Status above the entire layout
+/layout remove pane-9                  # remove Status and collapse the wrapper
+```
+
+Only auxiliary pane kinds can be inserted or added by wrapping. Pane names are
+case-sensitive; duplicate names require exact ids. Containers can be addressed
+by `group-N`; `root` resolves the current root. Removing a container removes
+its auxiliary descendants from the layout, without deleting backend sessions.
+Moving the root into itself or a descendant is refused. Closing a selected
+pane falls back to editor focus; moving preserves focus. Completion lists live
+container ids, pane ids, valid insertion indexes and jobs. Empty containers
+are removed and single-child containers collapse.
+
+Equal-direction weighted containers flatten with multiplied relative weights,
+so ordinary branches alternate rows and columns. A content-sized container can
+flatten into content-sized children. A weighted container holding a mixture
+of content and weighted children remains a group when flattening would change
+its allocation. This preserves sizing constraints rather than silently
+altering geometry. Pane ids remain stable across edits; a group id exists until
+that container is collapsed or flattened. There is no backend layout RPC.
+
+The preferences contract is:
+
+```ts
+interface PaneLayout { version: 4; root: PaneNode; active: string }
+type PaneNode = PaneLeaf | PaneSplit
+interface PaneLeaf { type: "pane"; id: string; kind: PaneKind }
+interface PaneSplit {
+  type: "split"
+  id: string                   // group-N
+  direction: "row" | "column"
+  children: PaneChild[]
+}
+interface PaneChild { node: PaneNode; size: PaneSize }
+type PaneSize = { mode: "weight"; value: number } | { mode: "content" }
+```
+
+Weights are positive finite relative numbers; they need not sum to one, but
+the total in each container must be finite. Content sizing is valid only for
+column children and takes their current minimum/content row count (zero for
+idle activity). Weighted siblings divide remaining space, subject to pane
+minimums. All-content containers leave unallocated space blank. Layout bounds
+fit the viewport even when it is too small to satisfy minimums. Boundaries
+between adjacent children in rows or columns can be dragged; their combined
+weight is preserved, with a 10–90% clamp on the pair. Hidden siblings and
+zero-height activity slots are skipped when choosing the visible pair; their
+saved weights/sizing stay unchanged.
+
+Trees require unique safe positive numeric `pane-N`/`group-N` ids, exactly one
+conversation and composer, a known active pane id, at most 32 leaves, at most
+31 containers, at least two children per container, and at most 31 nested
+levels. Passive active ids normalize to editor focus. Invalid startup trees
+are ignored; invalid explicit reloads fail without changing the current tree.
+Version 1–3 binary layouts migrate automatically to v4 ordered containers,
+retaining pane ids and weighted proportions. Old generated editor docks
+migrate to content sizing. Version 1/2 keep the old conversation id on the
+editor and allocate fresh viewer/activity ids. Saving any layout edit writes
+v4; `/layout reload` itself does not rewrite the file.
+
+Local reducer contracts in `src/state/panes.ts` (all return `PaneLayout`):
+
+```ts
+insertPane(layout, container: string, index: number, kind: PaneKind)
+movePane(layout, target: string, container: string, index: number)
+wrapPane(layout, target: string, direction: "row" | "column", kind: PaneKind, before = true)
+closePane(layout, target = layout.active)
+resizePane(layout, delta: number)
+setContainerBoundary(layout, container: string, index: number, ratio: number, secondIndex = index + 1)
+```
+
+`splitPane(layout, axis: "horizontal"|"vertical", kind = "jobs", before = false)`
+remains the internal convenience wrapper; the command passes `before: true`.
+`layoutRects(root, rect, minimum?)` returns bounds keyed by pane/container ids.
+`movePaneFocus(layout, direction, measured?)` and
+`rotatePaneFocus(layout, step = 1, measured?)` use an optional read-only map of
+`{left, top, right, bottom}` bounds; running frontend calls always pass native
+bounds via `AppActions.paneBounds()`. Completion adds
+`layoutContainers?: {id: string; children: string[]; removable: boolean}[]`
+to `CompletionContext`, alongside `panes?: {id: string; kind: string}[]`.
 
 The built-in registry in `components/paneRegistry.tsx` exposes:
 
@@ -3333,7 +3409,7 @@ together.
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the controller status state. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar visibility modes and width breakpoints, plus `parseSwitch()` for `on`/`off` arguments. |
-| `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned full-screen split tree, visibility filtering, migration, focus geometry, assignment, close/resize reducers, and the recursive renderer. |
+| `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned ordered row/column containers, legacy migration, tree operations, rendered-bound navigation and stable flat pane instances. |
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
 | `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |

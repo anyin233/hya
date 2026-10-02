@@ -27,3 +27,13 @@ Verify browser rendering through packages/hya-tui-web. New regression: e2e/hya-t
 ## What direction does a split command place its new pane?
 
 **Answer:** `/layout split up [job]` inserts above; `/layout split left [job]` inserts to the left. Both give half the selected rectangle to each leaf and preserve existing focus eligibility. Old axis command arguments are rejected. Saved axis fields remain horizontal/vertical; command passes before=true to splitPane so the added leaf is first. Existing internal callers retain default append behavior.
+
+## How do ordered containers and navigation work in v4?
+
+**Answer (0.43.53, supersedes v3 tree/navigation notes above):** Layout containers have stable group-N ids, row/column direction and ordered children with weight/content slots. Compatible equal-direction branches flatten with multiplied relative weights. Preserve a weighted group with mixed content/weight children when flattening would change its allocation. Content-sized parent slots can flatten their contents into content slots. Legacy v1–3 files migrate through the read-only legacyPaneLayout reader; edits save v4. Commands insert/move/wrap/remove operate on this single tree, and /layout tree exposes ids. /layout split up|left remains the simple entry point.
+
+AltLeft/Right rotate through all positive-area visible selectable panes in measured top/left order, wrapping at either end. AltUp/Down choose panes wholly above/below, preferring horizontal overlap, then vertical gap and center distance. AppActions supplies native mounted bounds; passive and responsive-hidden panes never own keys.
+
+PaneWorkspace mounts each id once at one flat parent; the solver updates absolute bounds instead of reparenting components. This preserves drafts and transcript scroll during insert/move/wrap/reload. Focus changes retain the root reference and do not recalculate layout geometry. Native bounds getters report hidden panes as zero area.
+
+**Dragging pitfall:** visible children can differ from saved children because responsive filtering collapses groups and idle activity has zero height. Map each drawn boundary back to its two saved child indexes, and update only that pair. Hidden/zero-height siblings retain their sizing. All-content columns leave spare space blank rather than stretching the last input. Browser regressions: hya-tui-layout-foundation (normal/narrow reachability, state-preserving tree edits, hidden-sibling dragging), plus existing compact-dock, layout, reload, sidebar-resize and routing specs.

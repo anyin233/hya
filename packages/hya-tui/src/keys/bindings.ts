@@ -75,7 +75,7 @@ export const keyBindings: readonly KeyBinding[] = [
   ...(["left", "right", "up", "down"] as const).map((direction) => ({
     action: `focusPane${direction[0]!.toUpperCase()}${direction.slice(1)}` as KeyAction,
     label: `Alt+${direction[0]!.toUpperCase()}${direction.slice(1)}`,
-    description: `Focus the ${direction} tiled pane`,
+    description: direction === "left" ? "Previous pane in visual reading order (wrap)" : direction === "right" ? "Next pane in visual reading order (wrap)" : `Nearest selectable pane ${direction === "up" ? "above" : "below"}`,
     matches: (key: KeyLike) => (key.meta || key.option === true) && !key.ctrl && !key.shift && key.name === direction,
   })),
   // The second key of a Ctrl+X chord comes first: while the chord is armed it wins over every other binding.

@@ -24,10 +24,10 @@ test("passive panes preserve focus on click and are skipped by navigation and ro
   const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("draft stays")
-  await term.press("Alt+ArrowUp")
+  await command(term, "/layout focus pane-1")
   await term.type(" in editor") // Viewer and activity above the editor cannot take focus.
   await term.waitForText("draft stays in editor")
-  await term.press("Alt+ArrowRight")
+  await term.press("Alt+ArrowLeft")
   await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
   for (const title of ["Todos", "Context", "No messages yet"]) {
     await click(term, title)
@@ -37,9 +37,9 @@ test("passive panes preserve focus on click and are skipped by navigation and ro
   await term.page.evaluate(() => window.hyaTerm.term.paste("not pasted either"))
   await command(term, "/layout focus pane-4") // Passive id cannot take focus.
   await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
-  await command(term, "/layout focus next")
+  await command(term, "/layout focus previous")
   await expect.poll(() => focus(term, "Projects")).toBe("#73c8e8")
-  await command(term, "/layout focus next")
+  await command(term, "/layout focus pane-1")
   await term.type(" continues")
   await term.waitForText("draft stays in editor continues")
   expect(await term.text()).not.toContain("not the draft")
@@ -76,7 +76,7 @@ test.describe("legacy pane layout", () => {
     await term.waitForText(/Writing|Thinking/, 20_000)
     await term.waitForText("MIGRATION DONE", 20_000)
     await command(term, "/layout focus next")
-    await expect.poll(async () => JSON.parse(await readFile(prefs, "utf8")).paneLayout.version).toBe(3)
+    await expect.poll(async () => JSON.parse(await readFile(prefs, "utf8")).paneLayout.version).toBe(4)
     const saved = JSON.parse(await readFile(prefs, "utf8")).paneLayout
     expect(saved.active).toBe("pane-1")
     expect(JSON.stringify(saved.root)).toContain('"kind":"activity"')
@@ -98,7 +98,7 @@ test("pane boxes are reserved for selectable panes; Todos and Context stay borde
   const lines = await term.lines()
   const right = sessions.col - 2
   for (const line of lines.slice(todos.row)) expect(line.slice(right)).not.toMatch(/[┌┐└┘│─]/)
-  await term.press("Alt+ArrowRight")
+  await term.press("Alt+ArrowLeft")
   await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
   await click(term, "Todos")
   await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
