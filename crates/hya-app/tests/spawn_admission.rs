@@ -175,7 +175,7 @@ async fn explicit_unknown_inline_target_creates_no_child() {
     let operation = operation();
     let result = fixture
         .scoped_spawner()
-        .spawn_background(
+        .spawn(
             operation,
             vec![SpawnMember {
                 description: "unknown target".to_string(),
@@ -264,17 +264,10 @@ async fn inline_description_is_unsupported_before_admission_without_side_effects
         } else {
             vec![invalid]
         };
-        let result = if foreground {
-            fixture
-                .scoped_spawner()
-                .spawn(operation, members, Default::default())
-                .await
-        } else {
-            fixture
-                .scoped_spawner()
-                .spawn_background(operation, members, Default::default())
-                .await
-        };
+        let result = fixture
+            .scoped_spawner()
+            .spawn(operation, members, Default::default())
+            .await;
 
         assert!(
             matches!(
@@ -552,7 +545,7 @@ async fn released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root() {
         let first_operation = operation();
         tokio::time::timeout(
             Duration::from_secs(5),
-            fixture.scoped_spawner().spawn_background(
+            fixture.scoped_spawner().spawn(
                 first_operation,
                 vec![SpawnMember {
                     description: "single reservation".to_string(),
@@ -589,7 +582,7 @@ async fn released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root() {
 
         let second = tokio::time::timeout(
             Duration::from_secs(5),
-            fixture.scoped_spawner().spawn_background(
+            fixture.scoped_spawner().spawn(
                 operation(),
                 vec![SpawnMember {
                     description: "concurrent".to_string(),
@@ -615,7 +608,7 @@ async fn admitted_background_resident_uses_the_common_pre_create_path() {
     let fixture = admission_fixture(1).await;
     let outcome = tokio::time::timeout(
         Duration::from_secs(5),
-        fixture.scoped_spawner().spawn_background(
+        fixture.scoped_spawner().spawn(
             operation(),
             vec![SpawnMember {
                 description: "resident admission".to_string(),
@@ -688,7 +681,7 @@ async fn resident_root_registration_failure_aborts_without_child_side_effects() 
     let operation = operation();
     let result = fixture
         .scoped_spawner()
-        .spawn_background(
+        .spawn(
             operation,
             vec![SpawnMember {
                 description: "root registration failure".to_string(),
@@ -810,7 +803,7 @@ async fn background_overload_prevents_child_creation(_resident_member: bool) {
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        fixture.scoped_spawner().spawn_background(
+        fixture.scoped_spawner().spawn(
             operation,
             vec![SpawnMember {
                 description: "overloaded member".to_string(),
@@ -880,7 +873,7 @@ async fn duplicate_operation_never_dispatches_or_creates_a_second_child() {
 
     fixture
         .scoped_spawner()
-        .spawn_background(operation, vec![member.clone()], Default::default())
+        .spawn(operation, vec![member.clone()], Default::default())
         .await
         .expect("first dispatch");
     let mut sessions_after_first: Vec<SessionId> = fixture
@@ -896,7 +889,7 @@ async fn duplicate_operation_never_dispatches_or_creates_a_second_child() {
 
     let duplicate = fixture
         .scoped_spawner()
-        .spawn_background(operation, vec![member], Default::default())
+        .spawn(operation, vec![member], Default::default())
         .await;
     let mut sessions_after_duplicate: Vec<SessionId> = fixture
         .engine
@@ -922,7 +915,7 @@ async fn reused_operation_with_different_request_fails_closed() {
     let operation = operation();
     fixture
         .scoped_spawner()
-        .spawn_background(
+        .spawn(
             operation,
             vec![SpawnMember {
                 description: "original".to_string(),
@@ -947,7 +940,7 @@ async fn reused_operation_with_different_request_fails_closed() {
 
     let conflict = fixture
         .scoped_spawner()
-        .spawn_background(
+        .spawn(
             operation,
             vec![SpawnMember {
                 description: "changed".to_string(),
@@ -987,8 +980,8 @@ async fn concurrent_retry_debits_and_dispatches_only_once() {
     let right_plane = fixture.scoped_spawner();
 
     let (left, right) = tokio::join!(
-        left_plane.spawn_background(operation, vec![member.clone()], Default::default()),
-        right_plane.spawn_background(operation, vec![member], Default::default())
+        left_plane.spawn(operation, vec![member.clone()], Default::default()),
+        right_plane.spawn(operation, vec![member], Default::default())
     );
 
     assert_eq!(

@@ -25,7 +25,6 @@ mod project;
 mod projection_cache;
 mod recovery;
 mod resident_claim;
-mod sync;
 mod workflow;
 
 /// Upper bound on durable `spawn_intent` bytes (1 MiB); mirrored by SQL CHECK.
@@ -47,9 +46,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub use admission::{
-    AdmissionActorBinding, AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionClaimOutcome,
-    AdmissionCounts, AdmissionFinalizeOutcome, AdmissionIntent, AdmissionLaunch, AdmissionRecord,
-    AdmissionReleaseOutcome, AdmissionStartOutcome, AdmissionState, AdmissionTerminal,
+    AdmissionActorBinding, AdmissionClaim, AdmissionClaimOutcome, AdmissionCounts,
+    AdmissionFinalizeOutcome, AdmissionRecord, AdmissionStartOutcome, AdmissionState,
+    AdmissionTerminal,
 };
 pub use agent_effort_preference::AgentEffortPreference;
 pub use agent_model_preference::AgentModelPreference;

@@ -408,16 +408,16 @@ pub(crate) async fn cmd_serve_action(
             }
             match daemon::restart_by_handoff(&db, &daemon_spec, &relay).await? {
                 daemon::HandoffRestart::Queued(queued) => {
-                    // The old generation owns the rest of the handoff (it
-                    // rolls back to its pinned generation if the successor
-                    // fails). The successor keeps this URL, so this return
-                    // value stays accurate; its pid is `hya serve status`'s.
+                    // The handoff is complete only after the successor is healthy.
+                    // Keep restart blocking so its success output names the new generation.
+                    let ready = daemon::wait_for_successor(&db, queued.pid).await?;
                     if json {
-                        let mut value = daemon::queued_json(&queued, &db);
+                        let mut value = daemon::ready_json(&ready, &db);
                         value["check"] = check;
+                        value["restarted"] = serde_json::json!(true);
                         println!("{value}");
                     } else {
-                        println!("{}", daemon::queued_line(&queued, &db));
+                        println!("{}", daemon::ready_line(&ready, &db));
                     }
                 }
                 daemon::HandoffRestart::NotApplicable => {
@@ -1626,7 +1626,6 @@ pub(crate) async fn prepare_server(
     let mcp_control = built.mcp_control();
     let agent_model_control = Arc::new(built.agent_model_control());
     let workflow_control = Arc::new(built.workflow_control());
-    let plugin_host = built.plugin_host();
     let provider_manager = hya_app::ProviderManager::new(Arc::clone(&engine));
     let mut state = AppState::new(Arc::clone(&engine), Arc::clone(&agent))
         .with_provider_control(Arc::new(provider_manager.clone()))
@@ -1634,7 +1633,6 @@ pub(crate) async fn prepare_server(
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
         .with_agent_model_control(agent_model_control)
-        .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_pure_guidance(pure)
         .with_auto_title(true)
@@ -2063,13 +2061,25 @@ mod listener_tests {
     /// ownership is taken. The old path adopted an invalid descriptor with
     /// `from_raw_fd` and aborted the whole process (`IO Safety violation`)
     /// when dropping it closed the bad FD.
+    ///
+    /// The number is the soft `RLIMIT_NOFILE` (or `i32::MAX` when unlimited):
+    /// the kernel never allocates it, so a parallel test cannot reuse it the
+    /// way it could reuse a just-closed descriptor.
     #[test]
     fn rejects_closed_fd_with_normal_error() {
-        let socket = std::net::TcpListener::bind("127.0.0.1:0").expect("bind scratch socket");
-        let fd = socket.into_raw_fd();
-        drop(unsafe { OwnedFd::from_raw_fd(fd) }); // close it: the number names nothing now
-        let error = inherited_std_listener(u32::try_from(fd).expect("test fd fits u32"))
-            .expect_err("a closed FD must be rejected");
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            0
+        );
+        let fd = u32::try_from(limit.rlim_cur)
+            .ok()
+            .filter(|fd| i32::try_from(*fd).is_ok())
+            .unwrap_or(i32::MAX as u32);
+        let error = inherited_std_listener(fd).expect_err("a closed FD must be rejected");
         assert!(error.to_string().contains("not open"), "{error:#}");
     }
 

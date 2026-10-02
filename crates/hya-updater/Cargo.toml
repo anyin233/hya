@@ -1,10 +1,13 @@
 [package]
 name = "hya-updater"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Independent release metadata verifier and update TCB (no runtime/plugin/MCP/bundle deps)"
+
+[package.metadata.hya]
+version-reference = "backend"
 
 [lints]
 workspace = true
@@ -12,6 +15,7 @@ workspace = true
 [dependencies]
 clap = { workspace = true }
 ed25519-dalek = { workspace = true }
+hya-version = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

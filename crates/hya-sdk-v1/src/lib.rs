@@ -611,9 +611,8 @@ impl V1Sdk {
 
 /// In-memory transcript mirror folded from curated stream frames.
 ///
-/// Seed with [`V1Sdk::list_messages`], then [`apply`](Self::apply) every
-/// live frame; on `resync`, re-seed from the server.
-///
+/// Start empty and apply [`apply`](Self::apply) to every live frame; on
+/// `resync`, re-read the projection and build a fresh mirror from live events.
 /// Folding rules (the v1 stream contract):
 /// - Parts are keyed by id: a `partStarted` for a known part id (the durable
 ///   record of a part first seen live) does not add a second part.
@@ -638,26 +637,6 @@ pub struct V1SessionMirror {
 }
 
 impl V1SessionMirror {
-    /// Seed the mirror from a projected transcript read.
-    #[must_use]
-    pub fn from_messages(messages: &[pb::MessageInfo]) -> Self {
-        let mut mirror = Self::default();
-        for message in messages {
-            for part in &message.parts {
-                mirror.durable_parts.insert(part.id.clone());
-            }
-            mirror.messages.insert(message.id.clone(), message.clone());
-        }
-        mirror
-    }
-
-    /// Seed the member rows from a session read (`SessionInfo.members`).
-    pub fn seed_members(&mut self, members: &[pb::MemberInfo]) {
-        for member in members {
-            self.members.insert(member.member.clone(), member.clone());
-        }
-    }
-
     /// Apply one live frame; returns `true` when a resync is required.
     pub fn apply(&mut self, frame: &pb::StreamFrame) -> bool {
         match &frame.frame {
@@ -976,21 +955,13 @@ mod tests {
             })
         };
         mirror.apply(&frame(2, added()));
-        let mut replay = V1SessionMirror::from_messages(
-            &mirror.messages()[0..1]
-                .iter()
-                .map(|m| (*m).clone())
-                .collect::<Vec<_>>(),
-        );
-        replay.apply(&frame(0, added()));
-        for mirror in [&mirror, &replay] {
-            let parts = &mirror.messages()[0].parts;
-            assert_eq!(parts.len(), 1);
-            assert!(matches!(
-                parts[0].kind.as_ref(),
-                Some(pb::part_info::Kind::Attachment(attachment)) if attachment.name == "pixel.png"
-            ));
-        }
+        mirror.apply(&frame(0, added()));
+        let parts = &mirror.messages()[0].parts;
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(
+            parts[0].kind.as_ref(),
+            Some(pb::part_info::Kind::Attachment(attachment)) if attachment.name == "pixel.png"
+        ));
     }
 
     /// Live deltas build the part; the durable start for the same id does
@@ -1056,25 +1027,28 @@ mod tests {
         assert_eq!(mirror.last_seq, 8);
     }
 
-    /// A part seeded from the projection is final: stale live deltas for it
-    /// (the subscription buffered them before the read) do not double it.
+    /// A durable part is final: stale live deltas for it do not double it.
     #[test]
-    fn live_deltas_for_a_seeded_part_are_ignored() {
-        let mut mirror = V1SessionMirror::from_messages(&[pb::MessageInfo {
-            id: "m".into(),
-            role: pb::Role::Assistant as i32,
-            parts: vec![pb::PartInfo {
-                id: "p".into(),
-                kind: Some(pb::part_info::Kind::Text(pb::TextPart {
-                    text: "Hello".into(),
-                })),
-            }],
-            ..Default::default()
-        }]);
-        mirror.apply(&frame(0, started("p")));
-        mirror.apply(&frame(0, appended("p", "Hel")));
-        mirror.apply(&frame(0, appended("p", "lo")));
-        mirror.apply(&frame(9, started("p")));
+    fn live_deltas_for_a_durable_part_are_ignored() {
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&frame(
+            1,
+            P::MessageStarted(pb::MessageStarted {
+                message: "m".into(),
+                role: pb::Role::Assistant as i32,
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(2, started("p")));
+        mirror.apply(&frame(
+            3,
+            P::PartReplaced(pb::PartReplaced {
+                message: "m".into(),
+                part: "p".into(),
+                text: "Hello".into(),
+            }),
+        ));
+        mirror.apply(&frame(0, appended("p", " stale")));
         assert_eq!(text_of(&mirror), vec![("p".into(), "Hello".into())]);
     }
 

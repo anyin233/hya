@@ -1,9 +1,11 @@
 [package]
 name = "hya-base-tools"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+[package.metadata.hya]
+version-reference = "backend"
 
 [lib]
 crate-type = ["rlib", "cdylib"]

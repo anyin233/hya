@@ -1,30 +1,38 @@
 //! Bare `hya update`: reinstall the running prefix from the published GitHub
-//! release with the same installer `curl … | sh` runs.
+//! releases with the same installer `curl … | sh` runs.
 //!
 //! This path is separate from the signed-metadata TCB in the rest of this
-//! crate: it trusts HTTPS to the release host and the release's `SHA256SUMS`
+//! crate: it trusts HTTPS to the release host and each release's `SHA256SUMS`
 //! (docs/install.md).
 use clap::Args;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact script
-/// the release publishes as `hya-install.sh`.
+/// `scripts/hya-install.sh`, embedded so `hya update` runs the exact installer
+/// `hya.ed-aisys.com/install.sh` serves. It installs the backend and frontend
+/// releases, or one side with `--backend-only`/`--tui-only`.
 pub const RELEASE_INSTALLER: &str = include_str!("../../../scripts/hya-install.sh");
 
 /// Options of bare `hya update`.
 #[derive(Debug, Default, Args)]
 pub struct ReleaseInstallArgs {
-    /// Install this release instead of the latest one (`0.43.23` or `v0.43.23`).
+    /// Install this release of each selected side instead of the latest one
+    /// (`0.43.23` or `v0.43.23`).
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
-    /// Reinstall even when that version is already installed.
+    /// Reinstall a side even when that version is already installed.
     #[arg(long)]
     pub force: bool,
     /// Install prefix (`<prefix>/bin/hya`); defaults to the running hya's prefix.
     #[arg(long, value_name = "DIR")]
     pub prefix: Option<PathBuf>,
+    /// Update only the backend (`bin/hya`, bundles, Bun adapter).
+    #[arg(long, conflicts_with = "tui_only")]
+    pub backend_only: bool,
+    /// Update only the frontend (Bun, TUI, WebUI).
+    #[arg(long)]
+    pub tui_only: bool,
 }
 
 /// The install prefix of a released `hya` at `executable`: the real (symlink
@@ -46,8 +54,7 @@ pub fn install_prefix(executable: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Run the embedded installer with `sh` for the running hya's prefix (or
-/// `--prefix`). Its output goes straight to the terminal.
+/// Run the embedded installer with `sh` for the selected sides.
 pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
     let prefix = match &args.prefix {
         Some(prefix) => prefix.clone(),
@@ -64,6 +71,12 @@ pub fn run_release_install(args: &ReleaseInstallArgs) -> Result<(), String> {
     }
     if args.force {
         command.arg("--force");
+    }
+    if args.backend_only {
+        command.arg("--backend-only");
+    }
+    if args.tui_only {
+        command.arg("--tui-only");
     }
     let mut child = command
         .stdin(Stdio::piped())

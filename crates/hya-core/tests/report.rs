@@ -1276,7 +1276,9 @@ async fn steer_notice_carries_the_channel_id_for_handle_mail() {
         )
         .await
         .unwrap();
-    let mut steer = engine.steer_mailbox_snapshot(root).await;
+    let mut steer = engine
+        .steer_mailbox_snapshot_with_policy(root, Some(steer_everything()))
+        .await;
     let notice = steer.drain(&engine).await.unwrap().expect("notice");
     assert!(
         notice.contains(&format!("@{dm}")),
@@ -1309,7 +1311,9 @@ async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
     ensure_main(&supervisor, &engine, root).await;
     let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "hya-scout").await;
 
-    let mut steer = engine.steer_mailbox_snapshot(root).await;
+    let mut steer = engine
+        .steer_mailbox_snapshot_with_policy(root, Some(steer_everything()))
+        .await;
     engine
         .mail_send(
             child,

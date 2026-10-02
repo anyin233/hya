@@ -87,5 +87,3 @@ export function createSessionKeeper({ client }: SessionKeeperOptions) {
     },
   }
 }
-
-export type SessionKeeper = ReturnType<typeof createSessionKeeper>

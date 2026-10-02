@@ -108,12 +108,6 @@ pub fn join_path(parent: &str, leaf: &str) -> String {
     format!("{parent}{PATH_SEPARATOR}{leaf}")
 }
 
-/// Number of separators in a path: the root is 0, its children 1, and so on.
-#[must_use]
-pub fn depth(path: &str) -> usize {
-    path.matches(PATH_SEPARATOR).count()
-}
-
 /// Whether `leaf` is usable as a path segment.
 ///
 /// Rejects the empty string and anything carrying a structural separator or
@@ -201,24 +195,6 @@ pub fn split_channel_key(key: &str) -> Option<(&str, &str)> {
     key.rsplit_once(CHANNEL_SEPARATOR)
 }
 
-/// The channel name from a qualified key, or the whole key when unqualified.
-#[must_use]
-pub fn channel_name(key: &str) -> &str {
-    split_channel_key(key).map_or(key, |(_, name)| name)
-}
-
-/// The owning unit of a qualified channel key, or `None` when unqualified.
-#[must_use]
-pub fn channel_unit(key: &str) -> Option<&str> {
-    split_channel_key(key).map(|(unit, _)| unit)
-}
-
-/// Whether a qualified channel key names a unit's reserved announce channel.
-#[must_use]
-pub fn is_announce_channel(key: &str) -> bool {
-    channel_name(key) == ANNOUNCE_CHANNEL
-}
-
 /// The qualified key of a unit's reserved announce channel.
 #[must_use]
 pub fn announce_channel_of(unit: &str) -> String {
@@ -250,7 +226,6 @@ mod tests {
     fn parent_of_root_is_none_and_leaf_is_itself() {
         assert_eq!(parent_path(ROOT), None);
         assert_eq!(leaf(ROOT), ROOT);
-        assert_eq!(depth(ROOT), 0);
         assert_eq!(home_unit(ROOT), None, "the root belongs to no unit");
         assert_eq!(led_unit(ROOT), ROOT, "but it leads its own");
     }
@@ -260,7 +235,6 @@ mod tests {
         assert_eq!(join_path(LEAD_1, "worker-2"), WORKER_2);
         assert_eq!(parent_path(WORKER_2), Some(LEAD_1));
         assert_eq!(leaf(WORKER_2), "worker-2");
-        assert_eq!(depth(WORKER_2), 2);
     }
 
     #[test]
@@ -332,42 +306,12 @@ mod tests {
     }
 
     #[test]
-    fn channel_keys_qualify_and_split() {
-        let key = qualify_channel(LEAD_1, "build");
-        assert_eq!(key, "main/lead-1#build");
-        assert_eq!(split_channel_key(&key), Some((LEAD_1, "build")));
-        assert_eq!(channel_unit(&key), Some(LEAD_1));
-        assert_eq!(channel_name(&key), "build");
-    }
-
-    /// The same channel name in two units is two different channels. This is the
-    /// whole point of qualifying the key.
-    #[test]
-    fn same_name_in_two_units_is_two_channels() {
-        let left = qualify_channel(LEAD_1, "build");
-        let right = qualify_channel(LEAD_2, "build");
-        assert_ne!(left, right);
-        assert_eq!(channel_name(&left), channel_name(&right));
-        assert_ne!(channel_unit(&left), channel_unit(&right));
-    }
-
-    /// An unqualified key is what a pre-scoping log contains; it must not be
-    /// mistaken for a qualified one.
-    #[test]
-    fn unqualified_legacy_key_reports_no_unit() {
-        assert_eq!(split_channel_key("build"), None);
-        assert_eq!(channel_unit("build"), None);
-        assert_eq!(channel_name("build"), "build", "the whole key is the name");
-    }
-
-    #[test]
-    fn announce_channel_is_recognized_per_unit() {
-        let announce = announce_channel_of(LEAD_1);
-        assert_eq!(announce, "main/lead-1#announce");
-        assert!(is_announce_channel(&announce));
-        assert!(!is_announce_channel(&qualify_channel(LEAD_1, "build")));
-        // Recognized independently of which unit owns it.
-        assert!(is_announce_channel(&announce_channel_of(ROOT)));
-        assert!(is_announce_channel(&announce_channel_of(WORKER_7)));
+    fn announce_channel_is_qualified_per_unit() {
+        assert_eq!(announce_channel_of(LEAD_1), "main/lead-1#announce");
+        assert_eq!(announce_channel_of(ROOT), "main#announce");
+        assert_eq!(
+            announce_channel_of(WORKER_7),
+            "main/lead-2/worker-7#announce"
+        );
     }
 }

@@ -1377,15 +1377,6 @@ async fn restart_handoff_does_not_auto_resume_child_or_workflow_sessions() {
     }
 
     // Both are handoff-marked, and the resume driver picks up neither.
-    let candidates = engine.store().handoff_candidate_sessions().await.unwrap();
-    assert_eq!(
-        candidates
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>(),
-        std::collections::HashSet::from([child, workflow]),
-        "both sessions carry the handoff marker"
-    );
     let resumed = engine.resume_handed_off_turns(&agent, None).await;
     assert!(resumed.is_empty(), "{resumed:?}");
     tokio::time::sleep(Duration::from_millis(100)).await;

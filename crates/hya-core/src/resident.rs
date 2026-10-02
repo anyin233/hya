@@ -125,20 +125,6 @@ impl SessionEngine {
             aborted_operations,
         })
     }
-
-    /// Classify durable resident work after its claim has been fenced by takeover.
-    /// Running work is terminalized without retry; queued mail remains schedulable.
-    pub async fn recover_resident_work(
-        &self,
-        recovered: &hya_store::RecoveredActorClaim,
-        root: SessionId,
-        handle: &str,
-    ) -> Result<ResidentRecovery, CoreError> {
-        let (work, _) = self
-            .recover_resident_actor_durable(recovered, root, handle)
-            .await?;
-        Ok(map_recovered_resident_work(work))
-    }
 }
 
 fn map_recovered_resident_work(work: hya_store::RecoveredResidentWork) -> ResidentRecovery {

@@ -1,15 +1,18 @@
 [package]
 name = "hya-mcp"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+[package.metadata.hya]
+version-reference = "backend"
 
 [lints]
 workspace = true
 
 [dependencies]
 hya-tool = { workspace = true }
+hya-version = { workspace = true }
 hya-proto = { workspace = true }
 async-trait = { workspace = true }
 eventsource-stream = { workspace = true }

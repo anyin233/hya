@@ -407,67 +407,77 @@ engine.refresh_runtime(|candidate| {
 ### 1. Scope / Trigger
 
 - Trigger: any change that publishes release binaries, creates GitHub Releases, or modifies the release changelog process.
-- Applies to `.github/workflows/release.yml`, root `CHANGELOG.md`, `docs/changes/`, root `AGENTS.md` release rules, and release-related task artifacts.
+- Applies to `.github/workflows/release.yml`, `CHANGELOG_BACKEND.md`, `CHANGELOG_FRONTEND.md`, `docs/changes/`, root `AGENTS.md` release rules, and release-related task artifacts.
 
 ### 2. Signatures
 
-- Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya-backend` package version.
+- Release tags are `backend/<version>` and `frontend/<version>`; neither tag has a `v` prefix. Backend version mirrors Cargo's `hya-backend` package; frontend version is independent.
+- Release download paths use the exact side tag, `/releases/download/backend/<version>/...` or `/releases/download/frontend/<version>/...`; `/releases/download/<side>/v<version>/...` is invalid.
 - Release targets (build job matrix): `x86_64-unknown-linux-gnu`
   (`ubuntu-22.04`), `aarch64-unknown-linux-gnu` (`ubuntu-22.04-arm`),
   `aarch64-apple-darwin` (`macos-15`).
-- Cargo command per target: `cargo build --release --locked -p hya-backend --bins --target "$TARGET"`,
-  plus the five tool-family libraries.
-- Release archive per target: `hya-<version>-<target>.tar.gz`.
-- Bundle assets: `hya-<name>-<version>-<target>.hyabundle` (native tool
-  families, per target) and `hya-<name>-<version>.hyabundle` (the seven
-  platform-independent first-party bundles, once).
-- Checksum files: `SHA256SUMS-<target>` from each build job and a combined
-  `SHA256SUMS` from the release job, written with `shasum -a 256`.
+- Backend archive per target: `hya-backend-<version>-<target>.tar.gz` with
+  `bin/hya`, Bun, backend bundles, and the Bun adapter; no TUI/WebUI.
+- Frontend archive per target: `hya-frontend-<version>-<target>.tar.gz` with
+  `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`; no `bin/hya`.
+- Installer: releases publish no installer script. `scripts/hya-install.sh`
+  (served at `https://hya.ed-aisys.com/install.sh` from `main`, embedded in
+  `hya update`) installs both sides or one with `--backend-only`/`--tui-only`.
+  Each side publishes its own `SHA256SUMS` and release body command.
+- Checksum files: each build job writes a side archive checksum, and the
+  release job publishes a combined `SHA256SUMS`, all with `shasum -a 256`.
+- Main pushes that change manifests, `Cargo.lock`, or the workflow, the daily
+  schedule, and `workflow_dispatch` refresh dependency caches only; only the
+  side tags publish packages and GitHub Releases.
 - Non-publishing rehearsal on a host of the rehearsed target (requires Bun
-  `1.4.2`, `actionlint` `1.7.12`, 7-Zip `7z`, and `shasum` on `PATH`):
+  `1.4.2`, `actionlint`, 7-Zip `7z`, and `shasum` on `PATH`):
 
 ```sh
 cargo run -p xtask -- release-rehearsal \
+  --component backend \
   --workflow .github/workflows/release.yml \
-  --version <workspace version> \
+  --version <backend-semver> \
   --target "$(rustc -vV | sed -n 's/^host: //p')" \
   --no-publish
+# Repeat with --component frontend and --version <frontend-semver> when shipping the frontend.
 ```
 
 ### 3. Contracts
 
-- Root `CHANGELOG.md` contains only the newest version's release notes.
-- Historical changelogs live under `docs/changes/CHANGELOG_<version>.md`.
-- The GitHub Release body is read verbatim from root `CHANGELOG.md`.
-- Release workflow permissions are read-only by default; only the release publishing job may request `contents: write`.
-- Build provenance attestations are generated for every archive, bundle asset,
-  and checksum file.
+- `CHANGELOG_BACKEND.md` and `CHANGELOG_FRONTEND.md` each contain only the
+  newest release notes for that side; the release body appends that side's
+  pinned one-click install command.
+- Historical side-specific changelogs live under
+  `docs/changes/CHANGELOG_BACKEND_<version>.md` and
+  `docs/changes/CHANGELOG_FRONTEND_<version>.md`.
+- Release workflow permissions are read-only by default; only the release
+  publishing job may request `contents: write`.
+- Build provenance attestations are generated for every archive, checksum file,
+  and standalone `.hyabundle` asset; the hosted installer is not a release asset.
 - Third-party release actions are pinned to immutable commit SHAs.
-- The publishing job uses the `release` environment so repository settings can require manual approval.
-- Within the release archive, the payload includes the shipped `hya` binary,
-  the eleven first-party bundles under `bundles/`, the production
-  `lib/hya/bun-adapter`, and the generated member
-  `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
-- Platform-independent bundles must be byte-identical across targets; the
-  release job compares them before publishing.
-  (The legacy frontend launcher/runtime payload was removed with the legacy
-  TUI.)
-- `scripts/package-argus-example.sh` generates that member from tracked source
-  `bundles/examples/argus-example`; no root `examples/` artifact is an input.
+- The publishing job uses the `release` environment so repository settings can
+  require manual approval.
+- Backend release payload includes `bin/hya`, the eleven first-party backend
+  bundles under `bundles/`, Bun, and production `lib/hya/bun-adapter`; it
+  excludes the TUI and WebUI. The frontend release separately carries
+  `lib/hya/bin/bun`, `lib/hya/tui`, and `lib/hya/tui-web`, and excludes
+  `bin/hya`.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
   in a temporary directory, and never creates a tag or GitHub Release.
-- `release-rehearsal` owns the pinned `actionlint` and embedded-shell checks.
-  The current CI workflow does not run `actionlint` as a separate gate.
 
 ### 4. Validation & Error Matrix
 
-- Missing `v` tag prefix -> fail before build.
+- Missing `backend/<version>` or `frontend/<version>` tag -> fail before build.
+- A `v`-prefixed release tag -> fail before build; release download URLs use the exact side tag.
 - Tag version is not semver-shaped -> fail before build.
-- Tag version differs from `cargo metadata` package version for `hya-backend` -> fail before build.
-- Missing or empty `CHANGELOG.md` -> fail before publishing.
-- `CHANGELOG.md` first heading differs from the tag version -> fail before build.
-- Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
-- Missing release assets -> fail `softprops/action-gh-release` with `fail_on_unmatched_files: true`.
+- Backend tag version differs from `cargo metadata` package version for
+  `hya-backend` -> fail before build.
+- Missing or empty side-specific changelog, or a heading that differs from its
+  tag version -> fail before publishing.
+- Build, archive, checksum, or packaged-binary smoke failure -> skip release
+  publishing.
+- Missing release assets -> fail the release publisher with
+  `fail_on_unmatched_files: true`.
 - Missing `--no-publish` -> rehearsal rejects before validation or build.
 - `actionlint` missing or not version `1.7.12`, or Bun not version `1.4.2` ->
   rehearsal fails its pinned prerequisite check.
@@ -476,8 +486,8 @@ cargo run -p xtask -- release-rehearsal \
 - Rehearsal target outside the build matrix, a matrix that differs from the
   supported targets, or a target other than the host -> rehearsal fails before
   build.
-- Platform-independent bundle bytes differ between targets -> the release job
-  fails before publishing.
+- Backend rehearsals verify each target's platform-independent bundle contents
+  before publication.
 - Missing Bun adapter runtime, Argus package, locked production dependency,
   first-party bundle, or archive member -> package/rehearsal smoke fails
   before publication.
@@ -490,12 +500,14 @@ cargo run -p xtask -- release-rehearsal \
 
 ### 5. Good/Base/Bad Cases
 
-- Good: `v0.1.0`, `[workspace.package].version = "0.1.0"`, root `CHANGELOG.md` contains only `0.1.0` notes, archive and checksum pass smoke checks.
-- Base: first release has no historical changelog; keep `docs/changes/.gitkeep` and root `CHANGELOG.md` for the current version.
-- Bad: appending old release notes to root `CHANGELOG.md`; this publishes stale history as the GitHub Release body.
-- Good: the no-publish rehearsal validates the real workflow, exact payload,
-  Compat adapter handshake, Argus package closure, and
-  checksum without publishing.
+- Good: `backend/0.1.0`, `[workspace.package].version = "0.1.0"`,
+  `CHANGELOG_BACKEND.md` contains only `0.1.0` notes, archive and checksum pass
+  smoke checks; the frontend changelog may carry its independent version.
+- Base: first release has no historical side changelog; keep `docs/changes/.gitkeep` and the current side-specific files.
+- Bad: appending old release notes to either side-specific changelog; this publishes stale history or mislabels the release body.
+- Good: the no-publish rehearsal validates the real workflow, exact side
+  payload, Bun adapter and first-party bundle closure, and checksums without
+  publishing.
 - Base: a rehearsal uses temporary package/extract roots and leaves the source
   checkout and release provider untouched.
 - Bad: validating only the binary while omitting the
@@ -509,11 +521,15 @@ cargo run -p xtask -- release-rehearsal \
   embedded shell `run` block.
 - Run the tag/version/changelog validation logic with a representative tag and
   require the explicit `--no-publish` rehearsal guard.
+- Run `bash tests/hya_install_script.sh`; assert combined, backend-only, and
+  frontend-only installation preserve side boundaries, verify checksums, and
+  roll back a failed side without damaging the other side.
 - Run the release build command for the configured target.
-- Package the `hya` binary and the production Compat adapter; verify
-  `SHA256SUMS`, extract the archive, and run
-  each binary smoke.
-- Assert the Compat adapter's locked files and initialize/shutdown handshake.
+- Package the `hya` binary and production Bun adapter for backend releases, or
+  Bun/TUI/WebUI production dependencies for frontend releases; verify
+  `SHA256SUMS`, extract the archive, and run each side's smoke checks.
+- Assert the selected side's locked production dependencies and required
+  archive members.
 - Generate `examples/hya-argus-example.hyabundle` inside the temporary package
   from `bundles/examples/argus-example`, then assert its canonical root closure.
 - Confirm third-party actions are pinned to commit SHAs and release publication
@@ -822,45 +838,59 @@ const lifecycle = resolveLifecyclePresentation(node)
 - Not a trigger: documentation-only changes (`docs/`, `*.md`, code comments,
   `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and
   config), and test-only changes that leave shipped code untouched. These
-  neither bump the version nor write a new root `CHANGELOG.md`.
-- Mixed change: if any file affects shipped behavior, bump once for the whole
-  atomic change.
+  neither bump an aggregate nor write a new side-specific changelog.
+- Mixed change: bump each affected shipped side once.
 
 ### 2. Contracts
 
-Bumping the version means updating **all** of these together:
+Bumping a release updates the aggregate for the shipped side:
 
 | File | What to change |
 | --- | --- |
-| `Cargo.toml` | `[workspace.package].version` |
-| `Cargo.lock` | every `hya` / `hya-*` package version (a build refreshes it) |
-| `bundles/presets/*/bundle.yaml`, `bundles/first-party/*/bundle.yaml`, `bundles/extra/*/bundle.yaml` | identity `version` |
-| `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json` | `version` |
-| `README.md` | the `workspace version \`X.Y.Z\`` string |
-| `CHANGELOG.md` | first heading is exactly `# X.Y.Z` |
-| `docs/changes/CHANGELOG_<prev>.md` | move the previous root changelog here first |
+| `versions.toml` | backend release updates `[backend].version`; frontend release updates `[frontend].version` and its `minimum_backend_version` when required |
+| `Cargo.toml` | `[workspace.package].version` and `hya-backend` mirror the backend aggregate; frontend-only releases leave them unchanged |
+| `Cargo.lock` | `hya-backend` carries the backend version; other `hya` packages remain `0.0.0` |
+| Rust `Cargo.toml` manifests | non-backend packages stay at `0.0.0` with `version-reference = "backend"` |
+| `bundles/**/bundle.yaml` | source identity stays `0.0.0` with `version_ref: backend`; preparation resolves the backend version |
+| frontend package manifests | stay at `0.0.0` with `version-reference = "frontend"` |
+| `packages/hya-tui/frontend-version.ts` | embedded frontend version and minimum backend version |
+| `README.md` | independently reported backend/frontend versions and frontend compatibility minimum |
+| `CHANGELOG_BACKEND.md` | backend release heading, exactly `# <backend-version>` |
+| `CHANGELOG_FRONTEND.md` | frontend release heading, exactly `# <frontend-version>` |
+
+The frontend accepts only a backend version greater than or equal to its
+declared `minimum_backend_version`; missing, malformed, and older versions fail
+during TUI bootstrap, server switching, and remote entry. Backend and frontend
+versions MAY differ. Each side-specific changelog contains only its newest
+notes; archive prior side notes under the matching
+`docs/changes/CHANGELOG_BACKEND_<version>.md` or
+`docs/changes/CHANGELOG_FRONTEND_<version>.md` path.
+Component placeholders prevent a bump from requiring mass edits; explicit
+metadata references and release checks make the intended aggregate relationship
+visible and fail closed.
 
 ### 3. Validation & Error Matrix
 
-- Stale `package.json` -> `cargo test -p xtask`
-  (`packaged_frontend_versions_match_workspace`) fails.
-- Stale first-party bundle -> `cargo test -p hya-bundle --test first_party` and
-  `stage-first-party-bundles` fail; stale extra bundle ->
-  `cargo test -p hya-bundle --test extra_bundles` fails.
-- Stale `README.md` or `Cargo.lock` -> the release metadata check in
-  `cargo run -p xtask -- release-rehearsal` fails.
-- Root `CHANGELOG.md` retaining old releases -> stale history is published verbatim
-  as the GitHub Release body.
+- Stale aggregate/reference/minimum-backend metadata -> `cargo test -p xtask`
+  fails.
+- Unresolved or mismatched bundle version reference -> `cargo test -p
+  hya-bundle` and `stage-first-party-bundles` fail.
+- Stale README, lockfile, package layout, or archive copy -> release
+  metadata/rehearsal checks fail.
+- A stale or extra heading in either side-specific changelog -> release
+  metadata/rehearsal checks fail.
 
 ### 4. Good/Base/Bad Cases
 
-- Good: every file above updated in the same atomic change, verified with
-  `cargo test -p xtask` and `cargo test -p hya-bundle`.
-- Base: a docs-only or CI-only change keeps the current version and root
+- Good: bump only the aggregate for the shipped side, update compatibility
+  minimums when needed, and verify with `cargo test -p xtask` and
+  `cargo test -p hya-bundle`.
+- Base: a docs-only or CI-only change keeps both aggregate versions and root
   changelog untouched.
-- Bad: bumping `Cargo.toml` and running only the changed crate's tests — the
-  version checks live in `xtask` and `hya-bundle`, so that scoped run misses them.
-- Bad: bumping the version for a docs-only or CI-only change.
+- Bad: editing every component manifest or bundle source file for one release;
+  use the placeholder/reference contract instead.
+- Bad: shipping a frontend whose minimum backend version exceeds the backend
+  release it is packaged with.
 
 ---
 

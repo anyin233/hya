@@ -77,23 +77,12 @@ pub(crate) enum PtyEvent {
 
 pub(crate) struct PtyAttachment {
     pub(crate) replay: String,
-    pub(crate) cursor: u64,
     pub(crate) events: broadcast::Receiver<PtyEvent>,
 }
 
 impl PtyState {
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    pub(crate) async fn list(&self) -> Vec<PtyInfo> {
-        self.inner
-            .read()
-            .await
-            .sessions
-            .values()
-            .map(|session| session.info.clone())
-            .collect()
     }
 
     pub(crate) async fn create(&self, payload: CreatePayload) -> Result<PtyInfo, String> {
@@ -236,11 +225,7 @@ impl PtyState {
             _ => 0,
         };
         let replay = replay_from(session, from);
-        Some(PtyAttachment {
-            replay,
-            cursor: end,
-            events,
-        })
+        Some(PtyAttachment { replay, events })
     }
 
     pub(crate) async fn write(&self, id: &str, data: &str) -> bool {

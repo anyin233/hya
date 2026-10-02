@@ -23,7 +23,7 @@ static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
     let bundles = agents
         .iter()
-        .filter(|(stable_id, _, _)| !hya_core::is_builtin_id(stable_id))
+        .filter(|(stable_id, _, _)| hya_core::builtin_agent(stable_id).is_none())
         .map(|(stable_id, role, can_spawn)| PreparedAgentBundle {
             check: None,
             format_version: 2,

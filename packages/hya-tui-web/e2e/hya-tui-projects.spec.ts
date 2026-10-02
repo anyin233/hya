@@ -26,6 +26,13 @@ async function esc(term: Tui, thenGone: string | RegExp): Promise<void> {
   await expect.poll(() => term.find(typeof thenGone === "string" ? thenGone : "")).toBeNull()
 }
 
+/** Center of one terminal cell in page pixels (see hya-tui-sidebar-resize.spec.ts). */
+async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
+  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const { cols, rows } = await term.size()
+  return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
+}
+
 test.describe("Projects sidebar", () => {
   test.use({ model: { steps: [textStep("first reply"), textStep("second reply")] } })
 
@@ -69,6 +76,32 @@ test.describe("Projects sidebar", () => {
     await term.press("ArrowDown")
     await term.press("Enter")
     await expectStatus(term, "Directory", secondRoot)
+  })
+
+  test("a rule separates the Projects and a mouse click on a row switches to it", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend), { viewport: wide })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await prompt(term, "hello")
+    await term.waitForText("first reply", 20_000)
+
+    // A second Project arrives through the API; the sidebar list follows live.
+    // The narrow pane may truncate its name (`seco…`).
+    const secondRoot = await mkdtemp(join(tmpdir(), "hya-e2e-click-"))
+    await api(backend, "POST", "/v1/projects", { name: "second", roots: [secondRoot] })
+    await term.waitForText(/(second|seco…) \(0\)/)
+    const row = (await term.find("seco"))!
+    // A full rule sits next to the Project row inside the pane, like the Sessions list's separators (list order is newest-first).
+    const lines = await term.lines()
+    const edge = lines[0]!.indexOf("┐")
+    const rule = (line: string | undefined) => line !== undefined && /^─+$/.test(line.slice(2, edge).trimEnd())
+    expect([lines[row.row - 1], lines[row.row + 1]].some(rule)).toBe(true)
+    await term.attach(testInfo, "sidebar-separated")
+
+    // A click on the row switches (Enter and the Project view do the same).
+    const point = await cellPoint(term, row.row, row.col + 2)
+    await term.page.mouse.click(point.x, point.y)
+    await expectStatus(term, "Directory", secondRoot)
+    await term.attach(testInfo, "sidebar-clicked")
   })
 
   test("about 80 columns hides it even when the terminal is otherwise wide enough for the right sidebar", async ({ tui, backend }, testInfo) => {

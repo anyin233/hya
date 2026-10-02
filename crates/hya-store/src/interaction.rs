@@ -125,14 +125,6 @@ impl super::SessionStore {
             .collect()
     }
 
-    /// Mark a reply consumed after continuation events are durable.
-    pub async fn ack_pending_interaction_reply(&self, id: &str) -> Result<bool, super::StoreError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        let result = sqlx::query("UPDATE pending_interaction_reply SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").bind(now).bind(id).execute(&self.pool).await?;
-        Ok(result.rows_affected() == 1)
-    }
     /// Atomically claim a reply and resolve its interaction. This is the
     /// successor handoff fence: once claimed, a crash cannot cause the
     /// operator answer (or its continuation) to be applied a second time.

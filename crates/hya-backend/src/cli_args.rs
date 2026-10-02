@@ -434,8 +434,9 @@ pub(crate) enum Command {
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,
-    /// Update hya: bare `hya update` reinstalls the latest GitHub release into
-    /// this hya's prefix (docs/install.md); the subcommands verify, stage,
+    /// Update hya: bare `hya update` reinstalls the latest GitHub backend and
+    /// frontend releases into this hya's prefix (`--backend-only`/`--tui-only`
+    /// select one side; docs/install.md); the subcommands verify, stage,
     /// activate, or recover signed releases (update TCB, docs/self-update.md).
     #[command(args_conflicts_with_subcommands = true)]
     Update {
@@ -740,6 +741,16 @@ mod tests {
             Some(super::Command::Update { command: None, .. })
         ));
         assert!(Cli::try_parse_from(["hya", "update", "--force", "version"]).is_err());
+        let cli = parse_slice(&["hya", "update", "--tui-only"]);
+        let Some(super::Command::Update { install, .. }) = cli.command else {
+            panic!("`hya update --tui-only` must parse as `hya update`");
+        };
+        assert!(install.tui_only && !install.backend_only);
+        assert!(
+            Cli::try_parse_from(["hya", "update", "--backend-only", "--tui-only"]).is_err(),
+            "one side at a time"
+        );
+        assert!(Cli::try_parse_from(["hya", "update", "tui"]).is_err());
     }
 
     #[test]

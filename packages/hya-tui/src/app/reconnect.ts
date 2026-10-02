@@ -243,5 +243,3 @@ export function createReconnector({
     stopped: (): boolean => stopped,
   }
 }
-
-export type Reconnector = ReturnType<typeof createReconnector>

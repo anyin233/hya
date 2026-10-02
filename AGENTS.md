@@ -15,9 +15,6 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - Before editing a layer, read its guideline index under `docs/spec/backend/`;
   consult `docs/spec/guides/index.md` for cross-layer changes and code-reuse
   decisions.
-- `docs/development-history/` preserves prior tasks and journals as historical
-  evidence, not active workflow instructions. Bring relevant unfinished work
-  into a planning directory when explicitly resumed.
 
 ## Forum Rule
 
@@ -94,16 +91,21 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 
 ## Release & Changelog Rule
 
-- Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
-- Every fix or feature change must include an explicit project version number update in `[workspace.package].version` in `Cargo.toml` (with every coupled version listed below); keep the release tag and changelog aligned when publishing.
-- Bump the version only for changes to shipped behavior: Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else that lands in the release archive or source install.
-- Do not bump the version for documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`) or CI-only changes (`.github/`, CI scripts and config). The same holds for test-only changes that leave shipped code untouched. Such changes also do not write a new root `CHANGELOG.md` entry.
-- A mixed change follows its shipped part: if any file in the change affects shipped behavior, bump the version once for the whole atomic change.
-- The eleven first-party bundles are released with hya: every `bundles/presets/*/bundle.yaml` and `bundles/first-party/*/bundle.yaml` identity `version` must equal `[workspace.package].version`. Bump them together; `stage-first-party-bundles` and the `hya-bundle` first-party test reject a mismatch. The `bundles/extra/*/bundle.yaml` bundles follow the same rule; `crates/hya-bundle/tests/extra_bundles.rs` rejects a mismatch.
-- The same version also appears in `packages/hya-tui/package.json`, `packages/hya-tui-web/package.json`, and the `README.md` status paragraph; `cargo test -p xtask` rejects a `package.json` mismatch, and the `release-rehearsal` metadata check rejects a stale `README.md` or `Cargo.lock`.
-- Root `CHANGELOG.md` must contain only the newest version's changelog because the GitHub release workflow reads it verbatim as the GitHub Release notes.
-- When a previous root changelog exists, move it to `docs/changes/CHANGELOG_<version>.md` before writing the new root `CHANGELOG.md`.
-- Historical changelog files stay under `docs/changes/`; do not append old release history back into root `CHANGELOG.md`.
+- Backend and frontend release iterations are independent. `versions.toml` is the aggregate source: `[backend].version` is the backend release version and `[frontend].version` is the frontend release version; they MAY differ.
+- A backend release updates `[backend].version`, `[workspace.package].version`, the `hya-backend` package version, the `backend/<version>` tag, and `CHANGELOG_BACKEND.md`. The tag has no `v` prefix. Its first heading MUST be exactly `# <backend-version>`.
+- A frontend release updates `[frontend].version`, `packages/hya-tui/frontend-version.ts`, and `CHANGELOG_FRONTEND.md`; it uses the independent `frontend/<version>` tag with no `v` prefix and MUST NOT require a backend workspace/package version bump. Its first heading MUST be exactly `# <frontend-version>`.
+- Backend release archives contain `bin/hya`, first-party bundles, Bun, and the Bun adapter, but no TUI/WebUI. Frontend release archives contain Bun, TUI, and WebUI, but no `bin/hya`. The release assets are `hya-backend-<version>-<target>.tar.gz` or `hya-frontend-<version>-<target>.tar.gz`; neither release carries an installer script.
+- The single installer is `scripts/hya-install.sh`, served from `https://hya.ed-aisys.com/install.sh` on `main` and embedded in `hya update`. It installs both sides by default, or one side with `--backend-only`/`--tui-only`; it verifies each side's `SHA256SUMS` independently and rolls back a failed side. Release tags omit `v`; the installer's `--version` may accept and normalize a leading `v`.
+- Release publication is tag-driven by `.github/workflows/release.yml`: push `backend/<version>` or `frontend/<version>` only for the side being shipped. Main-branch pushes, the schedule, and `workflow_dispatch` refresh dependency caches and MUST NOT publish a release.
+- Before pushing a release tag, run `cargo test -p xtask -p hya-bundle`, `actionlint .github/workflows/release.yml`, `bash tests/hya_install_script.sh`, and the matching `release-rehearsal --no-publish` on a supported target. Push the version commit before the tag; never use a `v<version>` release tag.
+- A cross-contract change MAY publish both side tags, but each side is validated and published independently. Use the frontend's declared `minimum_backend_version`/`minimumBackendVersion` to keep the selected backend compatible.
+- The packaged frontend declares `minimum_backend_version` in `versions.toml` and `minimumBackendVersion` in `packages/hya-tui/frontend-version.ts`. It accepts only backend versions greater than or equal to that minimum; missing, malformed, or older backend versions MUST be rejected during bootstrap, backend switching, and remote entry. Raise the minimum only when the frontend requires a newer backend contract.
+- Every shipped behavior change updates the aggregate for each shipped side it changes. Shipped behavior includes Rust crates, `proto/`, `bundles/`, `packages/hya-tui`, `packages/hya-tui-web`, the Bun adapter, and anything else in the release archive or source install.
+- Documentation-only changes (`docs/`, `*.md` files, code comments, `AGENTS.md`, `.planning/`), CI-only changes (`.github/`, CI scripts and config), and test-only changes that leave shipped code untouched MUST NOT bump either aggregate or write a new changelog.
+- A mixed change bumps each affected shipped side once. A frontend-only change bumps only the frontend aggregate; a backend-only change bumps only the backend aggregate; a cross-contract change MAY require both and MUST keep the frontend minimum compatible.
+- Only aggregate versions are real release versions. Other Rust package manifests use `0.0.0` plus `[package.metadata.hya] version-reference = "backend"`; frontend package manifests use `0.0.0` plus the equivalent `frontend` reference. Bundle source manifests use identity version `0.0.0` plus `version_ref: backend`; preparation resolves that reference to the backend aggregate.
+- `CHANGELOG_BACKEND.md` and `CHANGELOG_FRONTEND.md` each contain only the newest notes for that side. When a side advances, archive its previous file under `docs/changes/CHANGELOG_BACKEND_<version>.md` or `docs/changes/CHANGELOG_FRONTEND_<version>.md`; do not merge the two streams or recreate `CHANGELOG.md`.
+- Version checks: `cargo test -p xtask` validates aggregate/reference metadata, both side-specific changelog headings, frontend minimum-backend compatibility, and release layout; `cargo test -p hya-bundle` validates bundle preparation and resolved identities; release rehearsal validates `README.md`, `Cargo.lock`, and packaged assets.
 
 ## Project Overview
 
@@ -166,7 +168,6 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-mcp` | MCP support. Implements the MCP protocol/client/manager and bridges MCP tools into `hya-tool` with namespaced `mcp__server__tool` names and permission checks. |
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
 | `crates/hya-plugin-bun` | Bun extension adapter (`kind: bun`). The Rust crate exports `BUN_ADAPTER_VERSION`; the Bun adapter under `adapter/` loads bundle JS extensions (`--bundle-extension`/`--extension`), translates hya wire hooks/tools/events, and exposes the runtime over NDJSON JSON-RPC stdio. The OpenCode compat layer is deleted. |
-| `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/hya-relay` | Secure relay (ADR-0025): the `hya.relay.v1` rendezvous protocol (`proto/hya/relay/v1`, separate from `hya.v1`; generated prost/tonic code committed, regenerate with `cargo run -p xtask -- gen-relay`), the binding-independent `RelayTransport` message stream (in-memory pair for tests), the `RelayLink` (`hya://…` link grammar, room-id derivation), relay identity keys, the Noise `NKpsk0` tunnel (`tunnel.rs`), the proxy core (`proxy/`: rooms, host registration, splicing, limits), and the gRPC + WebSocket bindings on both sides (`server/`: one listener, path prefix, TLS; `client/`: `t=auto` negotiation, heartbeat, reconnect). Must not depend on hya runtime crates; the CLI surfaces (`hya proxy`, `hya relay doctor`, `hya bridge`, `hya serve --relay`) live in `hya-backend`, the host connector in `hya-server::relay_host`. See `docs/relay.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, `release-rehearsal`, `gen-api`, and `gen-relay`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
@@ -174,7 +175,6 @@ or verifiers; workers do not decide that their own objective is done.
 | `packages/hya-tui-web` | Bun host that runs a terminal frontend on a real PTY and renders it in the browser with xterm.js (WebSocket frames reuse `hya.v1` `PtyClientFrame`/`PtyServerFrame`). Playwright harness for TUI visual/interaction tests and the WebUI host that bare `hya` starts (shipped as `lib/hya/tui-web`). See `docs/tui-web.md`. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
-| `docs/development-history` | Preserved task artifacts and developer journals for historical reference. |
 | `docs` | Project documentation: user guides, architecture, the `hya.v1` protocol references, historical Compat parity record, and testing/agent matrix under `docs/testing/`. |
 
 ## Change Guidance

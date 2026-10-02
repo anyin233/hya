@@ -121,7 +121,7 @@ import { createReconnector, type ServerSwitch } from "./reconnect"
 import { createSessionKeeper, type ExitMode } from "./sessionKeeper"
 import { createResumer } from "./resume"
 import { probeHealth } from "../launch"
-import { tuiVersion } from "../version"
+import { backendVersionError, tuiVersion } from "../version"
 import { containsRelayLink, parseConnectRemote, redactRelayLinks, type Bridge, type BridgeFlags } from "../bridge"
 import { stripTerminalControls } from "../sanitize"
 import { SecretEntry } from "../completion"
@@ -141,6 +141,11 @@ const globalRetryMaxMs = 15_000
 /** Longest wait on exit for archiving the open session (a graceful exit of a used session only). */
 const archiveOnExitMs = 2_000
 
+
+function requireCompatibleBackend(version: string | undefined): void {
+  const error = backendVersionError(version ?? "")
+  if (error) throw new Error(error)
+}
 export interface ControllerOptions {
   client: HyaClient
   store: AppStore
@@ -781,11 +786,14 @@ export function createController({ client, store, directory, remote: startedRemo
     const highlighted = store.state.projectSidebarHighlight ?? store.state.activeProjectId
     const outcome = projectsSidebarKeyOutcome(pressed, rows, highlighted)
     if (outcome.type === "move") store.setProjectSidebarHighlight(outcome.id)
-    else if (outcome.type === "switch") {
-      store.setProjectsSidebarFocus(false)
-      void switchProject(outcome.id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`))
-    }
+    else if (outcome.type === "switch") switchFromSidebar(outcome.id)
     else if (outcome.type === "blur") store.setProjectsSidebarFocus(false)
+  }
+
+  /** Switch to Project from the left sidebar, used by keyboard Enter and mouse clicks. */
+  function switchFromSidebar(id: string): void {
+    store.setProjectsSidebarFocus(false)
+    void switchProject(id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`))
   }
 
   /** Leave a subagent's read-only view: open its parent session. */
@@ -821,7 +829,10 @@ export function createController({ client, store, directory, remote: startedRemo
     keeper.created(session.id)
     store.setPendingAgent(undefined)
     store.setPendingModel(undefined)
-    await refresh()
+    // Creation already returns the authoritative projection. Avoid the old full
+    // catalog refresh here (sessions, models, providers, and bundles); update
+    // only the session index and let the normal live stream refresh catalogs.
+    store.upsertSession(session)
     await openSession(session.id)
     status(`Created ${session.id}`)
     // A mode chosen before any session existed applies before the first prompt is admitted.
@@ -846,6 +857,60 @@ export function createController({ client, store, directory, remote: startedRemo
       ...(spec.onAction ? { onAction: spec.onAction } : {}),
       ...(spec.onHighlight ? { onHighlight: spec.onHighlight } : {}),
       ...(spec.onCancel ? { onCancel: spec.onCancel } : {}),
+    })
+  }
+
+  /** Open the context actions for one session row (mouse right-click). */
+  function openSessionContext(id: string, point?: { x: number; y: number }): void {
+    const session = store.state.sessions.find((row) => row.id === id)
+    if (!session) return
+    openPicker({
+      title: `Session · ${session.title || id}`,
+      rows: point
+        ? [{ id: "open", label: "Open" }, ...(session.archived ? [] : [{ id: "archive", label: "Archive" }]), { id: "delete", label: "Delete" }]
+        : [{ id, label: session.title || id, name: session.title || id, detail: session.archived ? "archived" : "active" }],
+      hint: point ? "Click an action · Esc closes" : "Enter opens · F2 renames · F3 archives · Ctrl+D deletes · Esc closes",
+      ...(point ? { contextMenu: point } : {}),
+      actions: [
+        { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
+        { id: "archive", key: "f3", label: "F3 archive", prompt: "confirm", confirmText: "Archive {label}? Enter confirms" },
+        { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: "Delete {label}? Enter confirms" },
+      ],
+      onSelect: (row) => {
+        if (point) {
+          if (row.id === "open") void openRootSession(id).catch((error: unknown) => status(`Open failed: ${errorLine(error)}`))
+          else if (row.id === "archive") void client.setArchived(id, true).then(refresh).then(() => status("Session archived")).catch((error: unknown) => status(`Archive failed: ${errorLine(error)}`))
+          else if (row.id === "delete") void deleteSession(id).then(refresh).then(() => status("Session deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`))
+          return
+        }
+        void openRootSession(row.id).catch((error: unknown) => status(`Open failed: ${errorLine(error)}`))
+      },
+      onAction: (action, row, value) => {
+        if (action === "rename") void client.updateSession(row.id, { title: value ?? "" }).then(refresh).then(() => status("Session renamed")).catch((error: unknown) => status(`Rename failed: ${errorLine(error)}`))
+        else if (action === "archive") void client.setArchived(row.id, true).then(refresh).then(() => status("Session archived")).catch((error: unknown) => status(`Archive failed: ${errorLine(error)}`))
+        else if (action === "delete") void deleteSession(row.id).then(refresh).then(() => status("Session deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`))
+      },
+    })
+  }
+
+  /** Open the context actions for one Project row (mouse right-click). */
+  function openProjectContext(id: string, point?: { x: number; y: number }): void {
+    const project = store.state.projects.find((row) => row.id === id)
+    if (!project) return
+    openPicker({
+      title: `Project · ${project.name}`,
+      rows: point ? [{ id: "open", label: "Open" }, { id: "delete", label: "Delete" }] : [{ id, label: project.name, name: project.name }],
+      hint: point ? "Click an action · Esc closes" : "Enter opens · F2 renames · Ctrl+D deletes · Esc closes",
+      ...(point ? { contextMenu: point } : {}),
+      actions: [
+        { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
+        { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: "Delete {label}? Enter confirms" },
+      ],
+      onSelect: (row) => { if (point) { if (row.id === "open") switchFromSidebar(id); else if (row.id === "delete") void client.deleteProject(id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`)); return } switchFromSidebar(row.id) },
+      onAction: (action, row, value) => {
+        if (action === "rename") void client.updateProject(row.id, { name: value ?? "" }).then(refreshProjects).then(() => status("Project renamed")).catch((error: unknown) => status(`Rename failed: ${errorLine(error)}`))
+        else if (action === "delete") void client.deleteProject(row.id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`))
+      },
     })
   }
 
@@ -1223,8 +1288,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * skipped with `--remote`, which starts without an active Project),
    * catalogs, then the session `startup` names (`--session <id>`, or
    * `--continue`: the most recent nonarchived root of that Project). A
-   * plain local start reopens a saved chat, preferring one with a waiting
-   * request; with no history it creates a new ephemeral session.
+   * plain local start restores a saved chat, prioritizing pending requests, or creates a new ephemeral session.
    */
   async function start(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
@@ -1232,6 +1296,7 @@ export function createController({ client, store, directory, remote: startedRemo
       // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
       if (remote) client.setDirectory("")
       const bootstrap = await client.bootstrap()
+      requireCompatibleBackend(bootstrap.location?.version)
       store.applyBootstrap(bootstrap)
       store.setRemote(remote)
       let missing = ""
@@ -1276,14 +1341,17 @@ export function createController({ client, store, directory, remote: startedRemo
       // (unless `--resume` already shows its picker).
       if (remote && !store.state.activeProjectId && !startup.resume) projectView.open()
       const version = bootstrap.location?.version ?? ""
-      const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion} · hya serve restart` : ""
+      const compatibilityError = backendVersionError(version)
+      const mismatch = compatibilityError ? ` · ${compatibilityError}` : ""
       // A WebUI that bare `hya` could not start is the one notice worth the status line.
       // Reopening any session already said `Resumed …`; keep it unless something needs saying.
       const resumed = !missing && !mismatch && store.state.status.startsWith("Resumed ")
       if (!resumed) status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
-      store.setView("help")
+      // Keep the chat surface usable on startup failures; full-screen help is an
+      // explicit ? or /help action, not an error fallback.
+      store.setView("chat")
       store.markReady()
     }
   }
@@ -1302,9 +1370,12 @@ export function createController({ client, store, directory, remote: startedRemo
       })
     }
     try {
-      store.applyBootstrap(await client.bootstrap())
-    } catch {
-      // The catalog refresh below reports a server that does not answer.
+      const bootstrap = await client.bootstrap()
+      requireCompatibleBackend(bootstrap.location?.version)
+      store.applyBootstrap(bootstrap)
+    } catch (error) {
+      status(`Connection failed: ${String(error)}`)
+      return
     }
     await refresh().catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
     startGlobalStream()
@@ -1362,7 +1433,9 @@ export function createController({ client, store, directory, remote: startedRemo
     let detail = ""
     let ok = true
     try {
-      store.applyBootstrap(await client.bootstrap())
+      const bootstrap = await client.bootstrap()
+      requireCompatibleBackend(bootstrap.location?.version)
+      store.applyBootstrap(bootstrap)
       let ensured: ProjectInfo | undefined
       if (!remote) {
         ensured = await client.ensureProjectForPath(directory).then((result) => result.project, (error: unknown) => {
@@ -1377,7 +1450,7 @@ export function createController({ client, store, directory, remote: startedRemo
       catalogStale = true
       detail += ` · ${String(error)}`
     }
-    startGlobalStream()
+    if (ok) startGlobalStream()
     if (remote) {
       if (!store.state.activeProjectId) projectView.open()
     } else if (ok) {
@@ -1619,6 +1692,18 @@ export function createController({ client, store, directory, remote: startedRemo
     secret.clear()
   }
 
+  /** Open a session's top-level owner; used by mouse navigation in the session tab. */
+  function openRootSession(sessionId: string): Promise<void> {
+    const byId = new Map(store.state.sessions.map((session) => [session.id, session]))
+    let session = byId.get(sessionId)
+    const seen = new Set<string>()
+    while (session?.parent && !seen.has(session.id)) {
+      seen.add(session.id)
+      session = byId.get(session.parent)
+    }
+    return openSession((session ?? byId.get(sessionId))?.id ?? sessionId)
+  }
+
   /** Merged, deduplicated suggestions for the command pane (commands/menu.ts). */
   function commandEntries(): CommandEntry[] {
     // A WebUI tab does not offer terminal-only commands (`/to-background`).
@@ -1628,6 +1713,9 @@ export function createController({ client, store, directory, remote: startedRemo
 
   return {
     ...actions,
+    openRootSession,
+    openSessionContext,
+    openProjectContext,
     /** Register the composer's input (components/Composer.tsx); returns the unregister function. */
     attachComposer(access: ComposerAccess): () => void {
       composer = access
@@ -1673,7 +1761,8 @@ export function createController({ client, store, directory, remote: startedRemo
     closeProjectView: () => projectView.close(),
     /** One key while the left Projects sidebar has focus (components/Composer.tsx routes it). */
     projectsSidebarKey,
-    /** Shared with the AppContext `ui` prop (app/run.tsx): the Diff view registers its scroller here. */
+    /** Switch to a Project from the left sidebar (Enter or a click on its row). */
+    switchFromSidebar,
     ui,
     refreshAll,
     start,

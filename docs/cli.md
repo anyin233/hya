@@ -1,20 +1,20 @@
 # CLI Reference
 
-`hya` is the single terminal entry point: one executable (built from the
-`hya-backend` package, [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs))
-whose subcommands select the area being controlled. Since 0.38.0 there are no
+`hya` is the backend executable and the backend-only command entry point. Its
+subcommands select the area being controlled; the optional frontend package
+adds the TUI and WebUI that bare `hya` launches. Since 0.38.0 there are no
 other user-facing executables — the former `hya-backend` binary name and the
 standalone `hya-updater` binary are gone.
 
 | Area | Subcommands |
 | --- | --- |
-| Interactive TUI and WebUI | bare `hya` on a terminal (see [Bare `hya`](#bare-hya)) |
+| Interactive TUI and WebUI | bare `hya` when the separately installed frontend is present (see [Bare `hya`](#bare-hya)) |
 | Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
 | Server and wire protocols | `serve` (and `serve start`/`status`/`stop`/`restart` for the backend daemon), `rpc` |
 | Sessions | `sessions`, `tail-session` |
 | Providers and auth | `provider` (alias `providers`: `add`, `list`, `remove`, `logout`), `login`, `oauth`, `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
-| Update | bare `update` (reinstall from the latest release, [`docs/install.md`](install.md)); self-update TCB `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
+| Update | `update` installs the latest backend and frontend releases; `--backend-only` or `--tui-only` selects one side (also `--version`, `--prefix`, `--force`; see [`docs/install.md`](install.md)); self-update TCB commands remain separate |
 | Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
@@ -548,14 +548,16 @@ its command first and falls back to the database's daemon (found or started)
 when it does not answer.
 
 **Requirements.** Bare `hya` starts the frontends only when both stdin and
-stdout are terminals. It needs [Bun](https://bun.sh) (`$BUN`, else `bun` on
-`PATH`) and the two Bun packages, which a release archive or `install.sh`
-places next to the binary. Without a terminal it prints a guidance banner and
-exits **0**, starting nothing:
+stdout are terminals. It needs the separately installed frontend package,
+including Bun (`$BUN`, else `bun` on `PATH`) and the TUI/WebUI directories. A
+backend-only install therefore prints a guidance banner telling the user to
+install the frontend with `hya update --tui-only`; `hya serve`, `hya exec`, and other
+headless commands do not need it. Without a terminal it prints the same
+guidance banner and exits **0**, starting nothing:
 
 ```text
 hya <version> — a multi-agent coding agent
-Run `hya` in a terminal to start the TUI and the WebUI (http://127.0.0.1:3250; needs Bun). Without a terminal, try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
+Run `hya` in a terminal to start the TUI and the WebUI (needs the optional frontend package). Without a terminal, try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
 ```
 
 Scripts that run `hya` with no arguments and no terminal get this banner and
@@ -940,7 +942,7 @@ after the action. The path is made absolute.
 | `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`, `--allow-host`, and relay flags) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
 | `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?, "lastRestart"?}` (text: `relay` and `hosts` lines when set). `lastRestart: {"rolledBack": true, "error"}` (text: a `restart` line) when this server is the rollback of a failed restart. | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
 | `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
-| `restart [--json] [--force] [--timeout <s>] [--verify <cmd>]… [--exe <path>]` | **Self-proof first:** run the successor executable's `hya serve check --db <db> --json` (up to 120 s), then every `--verify` command (`sh -c` in the current directory); any failure prints the reason and output tail and exits 1 without touching the running daemon. The successor is this `hya` (its `current_exe`) or `--exe`. Then request a successor generation. The old daemon keeps its listener and database lock capabilities while it quiesces admissions, waits for a safe boundary (up to the drain deadline), checkpoints transferable root turns with `cause: handoff`, and starts the successor with inherited listener, lock, journal, status, and optional gRPC descriptors. The command returns **queued** once the old generation accepts the handoff; the old generation then waits for successor composition, durable resume, and `/v1/health`. If the successor fails (records `failed`, exits, or is not ready within 90 s) the old generation kills it and **rolls back**: it starts its own pinned build (see [Self-proof and rollback](#self-proof-and-rollback)) over the same listener and lock; only if that also fails does it park as the recoverable owner. `--force` applies only to the stop/start fallback when no handoff-capable daemon is serving. | `self-check passed: …` on stderr, then `restart queued: ...` (or JSON with `queued: true` and `check: {ok, exe, version, verified: [cmd…]}`); the old generation's streams end with `serverStopping {reason: "restart"}`. Query `status` after the queued response for the successor. | **0** when queued or when the fallback starts; **1** when the self-proof fails, the request is rejected, or the fallback cannot start |
+| `restart [--json] [--force] [--timeout <s>] [--verify <cmd>]… [--exe <path>]` | **Self-proof first:** run the successor executable's `hya serve check --db <db> --json` (up to 120 s), then every `--verify` command (`sh -c` in the current directory); any failure prints the reason and output tail and exits 1 without touching the running daemon. The successor is this `hya` (its `current_exe`) or `--exe`. Then request a successor generation. The old daemon keeps its listener and database lock capabilities while it quiesces admissions, waits for a safe boundary (up to the drain deadline), checkpoints transferable root turns with `cause: handoff`, and starts the successor with inherited listener, lock, journal, status, and optional gRPC descriptors. The command blocks until the successor records `ready` and answers `/v1/health`. If the successor fails (records `failed`, exits, or is not ready within 90 s) the old generation kills it and **rolls back**: it starts its own pinned build (see [Self-proof and rollback](#self-proof-and-rollback)) over the same listener and lock; only if that also fails does it park as the recoverable owner. `--force` applies only to the stop/start fallback when no handoff-capable daemon is serving. | `self-check passed: …` on stderr, then a final successor-ready line (or JSON with `restarted: true` and `check: {ok, exe, version, verified: [cmd…]}`); the old generation's streams end with `serverStopping {reason: "restart"}`. | **0** when the successor is healthy or when the fallback starts; **1** when the self-proof fails, the request is rejected, or the successor/fallback cannot start |
 | `check [--json]` | Compose the complete runtime a daemon start would (configuration without the offline fallback, providers, first-party and installed bundles, native tool libraries, plugins, startup recovery) against a private `VACUUM INTO` snapshot of the database (an in-memory store when the file does not exist), then shut it down and delete the snapshot. Binds no port, takes no lock of the live database, publishes nothing; safe beside a running daemon. | `hya <version> composes its runtime (<exe>)`; `--json`: `{"ok": true, "version", "exe"}` or `{"ok": false, "version", "exe", "error"}` | **0** composes; **1** otherwise |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |
 
@@ -951,13 +953,14 @@ the healthy daemon's URL and pid. For example, `hya serve start --db s.db`
 can follow a `hya serve stop --db s.db` while the old process is finishing
 shutdown.
 
-The `restart` response means the old daemon has queued the handoff and is
-already refusing new turns. If a resumed shell turn immediately runs
-`hya serve restart --db s.db` again, the second request waits up to 10 seconds
-for the previous handoff to reach `ready` and for its predecessor to exit.
-Then it records its own request and returns the same queued response. The
-handoff journal stages remain `requested`, `queued`, `released`, `ready`, and
-`transferred`; `hya serve status --db s.db` reports the current generation.
+The `restart` command blocks until the successor generation has reached `ready`,
+answers its health check, and the predecessor has completed the handoff. If a
+resumed shell turn immediately runs `hya serve restart --db s.db` again, the
+second request waits up to 10 seconds for the previous handoff to reach `ready`
+and for its predecessor to exit. Then it records its own request and waits for
+that successor too. The handoff journal stages remain `requested`, `queued`,
+`released`, `ready`, and `transferred`; `hya serve status --db s.db` reports
+the current generation.
 
 `start` and `restart` accept the relay flags of plain `hya serve`
 (`--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`,
@@ -1355,9 +1358,15 @@ filters such as `head` and `grep -q` can close stdout without causing a panic.
 
 ## `hya update`
 
-Bare `hya update [--version VERSION] [--force] [--prefix DIR]` reinstalls
-the running hya's prefix from the latest (or the given) GitHub release with
-the same installer as `curl … | sh`; see [Install and update](install.md).
+`hya update [--backend-only | --tui-only] [--version VERSION] [--force]
+[--prefix DIR]` installs or reinstalls the latest backend and frontend
+releases into the running hya's prefix. `--backend-only` updates only the
+backend (`bin/hya`, bundles, Bun adapter); `--tui-only` updates only the
+frontend (Bun, TUI, WebUI) and never installs `bin/hya`. The two flags conflict.
+`--version` pins each selected side. A backend-only installation can run
+headless commands without the frontend, while bare `hya` tells the user to run
+`hya update --tui-only` when the frontend is missing. See
+[Install and update](install.md).
 
 The subcommands below are the self-update TCB. They verify signed release
 metadata, stage immutable generations,
@@ -1371,13 +1380,13 @@ providers, plugins, MCP, or session store are loaded. Global flags such as
 
 | Command | Purpose |
 | --- | --- |
-| `hya update version` | Print the updater package version and supported metadata protocol. |
+| `hya update version` | Print the updater version (the backend release version) and supported metadata protocol. |
 | `hya update status --root DIR` | Show selector, accepted floor, and layout paths. |
 | `hya update recover --root DIR` | Recover interrupted prepare/commit journal state. |
 | `hya update apply --root DIR --metadata FILE --package DIR --platform TRIPLE [--smoke CMD] [--trust-roots FILE] [--authorization FILE]` | Verify, stage, optionally smoke, and activate only with an owner-issued capability (`--authorization`). |
-| `hya update authorize --root DIR --sequence N --out FILE [--yes]` | Owner only: bind release `N` to the active generation and write the capability `apply --authorization` needs. Asks `Authorize activating release sequence N over generation G …? [y/N]` at a terminal; without a terminal it refuses unless `--yes`. Prints `authorized sequence=N generation=G capability=FILE`. |
+| `hya update authorize --root DIR --sequence N --out FILE [--yes]` | Owner only: bind release `N` to the active generation and write the capability `apply --authorization` needs. |
 | `hya update discard --root DIR --sequence N` | Discard a staged-but-not-accepted candidate. |
-| `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json` (operator only). |
+| `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json`. |
 
 ```sh
 hya update version
@@ -1389,11 +1398,8 @@ hya update apply \
   --package ./package-dir \
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh
-# activation only with an owner-issued capability (see self-update.md):
 hya update authorize --root /var/lib/hya/updater --sequence 42 --out ./activation.authorization.json
 hya update apply ... --authorization ./activation.authorization.json
-# optional trust-roots override (default: <root>/trust_roots.json):
-hya update apply ... --trust-roots /secure/media/trust_roots.json
 hya update discard --root /var/lib/hya/updater --sequence 42
 hya update init-roots \
   --path /var/lib/hya/updater/trust_roots.json \

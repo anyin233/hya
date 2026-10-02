@@ -54,7 +54,7 @@ message GetHealthRequest {}
 message GetHealthResponse {
   // Always `true` when the endpoint answers successfully.
   bool ok = 1;
-  // Backend version string (workspace release version).
+  // Backend aggregate release version.
   string version = 2;
 }
 
@@ -73,7 +73,7 @@ message LocationInfo {
   string hostname = 2;
   // OS process id of the backend.
   uint32 pid = 3;
-  // Backend version string (workspace release version).
+  // Backend aggregate release version.
   string version = 4;
 }
 

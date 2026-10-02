@@ -265,6 +265,14 @@ test("dropSessionRow removes a sessionDeleted frame's row; dropping an id not li
   expect(store.state.sessions).toBe(before)
 })
 
+test("upsertSession adds a newly created session without replacing the catalog", () => {
+  const store = createAppStore()
+  store.setSessions([session("hysec_existing")])
+  store.upsertSession(session("hysec_new", { title: "New" }))
+  expect(store.state.sessions.map((row) => row.id)).toEqual(["hysec_new", "hysec_existing"])
+  expect(store.state.selected).toBeUndefined()
+})
+
 test("notifications default on and focused defaults true; both are settable", () => {
   const store = createAppStore()
   expect(store.state.notifications).toBe(true)

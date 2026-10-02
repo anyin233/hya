@@ -3,11 +3,8 @@ name: release
 on:
   push:
     tags:
-      - "v*.*.*"
-    # A tag run can restore caches saved on the default branch, never those of
-    # another tag. Main therefore keeps one warm dependency cache per target;
-    # it rebuilds it when the dependency set changes, and the daily schedule
-    # catches a new stable toolchain. Path filters do not apply to tag pushes.
+      - "backend/*"
+      - "frontend/*"
     branches: [main]
     paths:
       - Cargo.lock
@@ -17,8 +14,6 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
-# A release tag always runs to completion; a newer cache refresh supersedes an
-# older one.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
@@ -53,7 +48,23 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+      - name: Select release component
+        if: github.ref_type == 'tag'
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          case "$tag" in
+            backend/*) component=backend; version=${tag#backend/} ;;
+            frontend/*) component=frontend; version=${tag#frontend/} ;;
+            *) echo "release tag must use backend/<version> or frontend/<version>" >&2; exit 1 ;;
+          esac
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || { echo "invalid release version $version" >&2; exit 1; }
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "COMPONENT=$component" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Install Bun 1.4.2
         if: github.ref_type == 'tag'
         shell: bash
@@ -61,294 +72,129 @@ jobs:
           curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"
           test "$("$HOME/.bun/bin/bun" --version)" = "1.4.2"
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-      - name: Install 7-Zip for Workflow package smoke test
+      - name: Install 7-Zip for package smoke test
         if: github.ref_type == 'tag'
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            brew install p7zip
-          else
-            sudo apt-get update
-            sudo apt-get install -y p7zip-full
-          fi
-
+          if [[ "$RUNNER_OS" == macOS ]]; then brew install p7zip; else sudo apt-get update && sudo apt-get install -y p7zip-full; fi
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: ${{ matrix.target }}
-
-      # Only main saves (see `on.push.branches`); a tag's cache could serve no
-      # later tag and would only push main's caches out of the quota.
       - id: cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Validate tag version and changelog
+      - name: Validate release metadata
         if: github.ref_type == 'tag'
-        id: version
         shell: bash
         run: |
           set -euo pipefail
-
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          if [[ "$tag" == "$version" || -z "$version" ]]; then
-            echo "release tags must be prefixed with v" >&2
-            exit 1
+          if [[ "$COMPONENT" == backend ]]; then
+            cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "hya-backend"))')"
+            test "$cargo_version" = "$VERSION"
+            grep -m1 -Fx "# $VERSION" CHANGELOG_BACKEND.md
+          else
+            frontend_version="$(awk -F '"' '/^\[frontend\]/{in_frontend=1; next} in_frontend && /^version/{print $2; exit}' versions.toml)"
+            test "$frontend_version" = "$VERSION"
+            grep -m1 -Fx "# $VERSION" CHANGELOG_FRONTEND.md
+            grep -F "$VERSION" packages/hya-tui/frontend-version.ts
           fi
-
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "version $version is not semver-shaped" >&2
-            exit 1
-          fi
-
-          cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "hya-backend"))')"
-          if [[ "$cargo_version" != "$version" ]]; then
-            echo "tag version $version does not match hya version $cargo_version" >&2
-            exit 1
-          fi
-
-          if [[ ! -s CHANGELOG.md ]]; then
-            echo "CHANGELOG.md must exist and contain the newest release notes" >&2
-            exit 1
-          fi
-          first_heading="$(grep -m1 -E '^# ' CHANGELOG.md || true)"
-          if [[ "$first_heading" != "# $version" ]]; then
-            echo "CHANGELOG.md first heading must be # $version" >&2
-            exit 1
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      # A cache refresh whose exact key is already cached has nothing to add.
-      - name: Build release binaries
+      - name: Build release inputs
         if: github.ref_type == 'tag' || steps.cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          cargo build --release --locked -p hya-backend --bins --target "$TARGET"
-          cargo build --release --locked -p hya-todo-tools --lib --target "$TARGET"
-          cargo build --release --locked -p hya-extended-tools --lib --target "$TARGET"
-          cargo build --release --locked -p hya-base-tools -p hya-network-tools -p hya-channel-tools --lib --target "$TARGET"
-          # Packaging runs xtask; building it here puts its dependencies in the cache.
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" != tag || "${COMPONENT:-}" == backend ]]; then
+            cargo build --release --locked -p hya-backend --bins --target "$TARGET"
+            cargo build --release --locked -p hya-todo-tools --lib --target "$TARGET"
+            cargo build --release --locked -p hya-extended-tools --lib --target "$TARGET"
+            cargo build --release --locked -p hya-base-tools -p hya-network-tools -p hya-channel-tools --lib --target "$TARGET"
+          fi
           cargo build --locked -p xtask
-
-      - name: Package release asset
+      - name: Package side-specific release asset
         if: github.ref_type == 'tag'
         id: package
         shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-
-          version="$VERSION"
-          package_dir="${BINARY_NAME}-${version}-${TARGET}"
-          archive="${package_dir}.tar.gz"
-
-          # macOS tar would otherwise add AppleDouble `._*` entries.
           export COPYFILE_DISABLE=1
+          package_dir="hya-${COMPONENT}-${VERSION}-${TARGET}"
           rm -rf dist
-          bun_adapter="dist/$package_dir/lib/hya/bun-adapter"
-          mkdir -p "dist/$package_dir/bin" "$bun_adapter/src" "dist/$package_dir/lib/hya/bin"
-          cp "target/$TARGET/release/hya" "dist/$package_dir/bin/"
-          cp README.md THIRD_PARTY_NOTICES "dist/$package_dir/"
-          chmod 755 "dist/$package_dir/bin/hya"
-          # The pinned Bun runs the TUI, WebUI host, and Bun adapter of an
-          # installed hya, so the archive needs no separately installed Bun.
-          install -m 0755 "$HOME/.bun/bin/bun" "dist/$package_dir/lib/hya/bin/bun"
-          cp crates/hya-plugin-bun/adapter/package.json \
-            crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
-          cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
-          (cd "$bun_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
-          # Bare `hya` runs the TUI and the WebUI host from these directories.
-          # Installing on this runner pulls the host's OpenTUI native package.
-          tui="dist/$package_dir/lib/hya/tui"
-          tui_web="dist/$package_dir/lib/hya/tui-web"
-          mkdir -p "$tui/src" "$tui_web/src" "$tui_web/web"
-          cp packages/hya-tui/package.json packages/hya-tui/bun.lock \
-            packages/hya-tui/bunfig.toml packages/hya-tui/tsconfig.json "$tui/"
-          cp -R packages/hya-tui/src/. "$tui/src/"
-          (cd "$tui" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
-          cp packages/hya-tui-web/package.json packages/hya-tui-web/bun.lock \
-            packages/hya-tui-web/tsconfig.json "$tui_web/"
-          cp -R packages/hya-tui-web/src/. "$tui_web/src/"
-          cp -R packages/hya-tui-web/web/. "$tui_web/web/"
-          (cd "$tui_web" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
-          cargo run --locked -p xtask -- stage-first-party-bundles --target "$TARGET" --version "$version" --library-dir "target/$TARGET/release" --package-root "dist/$package_dir" --assets dist
-          scripts/package-argus-example.sh bundles/examples/argus-example \
-            "dist/$package_dir/examples/hya-argus-example.hyabundle"
-
+          mkdir -p "dist/$package_dir/lib/hya"
+          if [[ "$COMPONENT" == backend ]]; then
+            mkdir -p "dist/$package_dir/bin" "dist/$package_dir/lib/hya/bin" "dist/$package_dir/lib/hya/bun-adapter/src" "dist/$package_dir/bundles"
+            cp "target/$TARGET/release/hya" "dist/$package_dir/bin/hya"
+            cp README.md THIRD_PARTY_NOTICES "dist/$package_dir/"
+            install -m 0755 "$HOME/.bun/bin/bun" "dist/$package_dir/lib/hya/bin/bun"
+            cp crates/hya-plugin-bun/adapter/package.json crates/hya-plugin-bun/adapter/bun.lock "dist/$package_dir/lib/hya/bun-adapter/"
+            cp -R crates/hya-plugin-bun/adapter/src/. "dist/$package_dir/lib/hya/bun-adapter/src/"
+            (cd "dist/$package_dir/lib/hya/bun-adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+            cargo run --locked -p xtask -- stage-first-party-bundles --target "$TARGET" --version "$VERSION" --library-dir "target/$TARGET/release" --package-root "dist/$package_dir" --assets dist
+            scripts/package-argus-example.sh bundles/examples/argus-example "dist/$package_dir/examples/hya-argus-example.hyabundle"
+          else
+            mkdir -p "dist/$package_dir/lib/hya/bin" "dist/$package_dir/lib/hya/tui/src" "dist/$package_dir/lib/hya/tui-web/src" "dist/$package_dir/lib/hya/tui-web/web"
+            install -m 0755 "$HOME/.bun/bin/bun" "dist/$package_dir/lib/hya/bin/bun"
+            cp packages/hya-tui/frontend-version.ts "dist/$package_dir/lib/hya/tui/frontend-version.ts"
+            cp packages/hya-tui/package.json packages/hya-tui/bun.lock packages/hya-tui/bunfig.toml packages/hya-tui/tsconfig.json "dist/$package_dir/lib/hya/tui/"
+            cp -R packages/hya-tui/src/. "dist/$package_dir/lib/hya/tui/src/"
+            (cd "dist/$package_dir/lib/hya/tui" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+            cp packages/hya-tui-web/package.json packages/hya-tui-web/bun.lock packages/hya-tui-web/tsconfig.json "dist/$package_dir/lib/hya/tui-web/"
+            cp -R packages/hya-tui-web/src/. "dist/$package_dir/lib/hya/tui-web/src/"
+            cp -R packages/hya-tui-web/web/. "dist/$package_dir/lib/hya/tui-web/web/"
+            (cd "dist/$package_dir/lib/hya/tui-web" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          fi
+          archive="$package_dir.tar.gz"
           tar -czf "dist/$archive" -C dist "$package_dir"
-          (cd dist && shasum -a 256 "$archive" hya-*.hyabundle > "SHA256SUMS-$TARGET")
-
+          if [[ "$COMPONENT" == backend ]]; then
+            (cd dist && shasum -a 256 "$archive" ./*.hyabundle > SHA256SUMS)
+          else
+            (cd dist && shasum -a 256 "$archive" > SHA256SUMS)
+          fi
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke test packaged binary
+      - name: Smoke test side-specific package
         if: github.ref_type == 'tag'
         shell: bash
-        env:
-          ARCHIVE: ${{ steps.package.outputs.archive }}
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-
-          version="$VERSION"
-          package_dir="${BINARY_NAME}-${version}-${TARGET}"
-          scratch="$(mktemp -d)"
-          trap 'rm -rf "$scratch"' EXIT
-
-          tar -xzf "dist/$ARCHIVE" -C "$scratch"
-          packaged_binary="$scratch/$package_dir/bin/hya"
-          "$packaged_binary" --version | tee "$scratch/version.txt"
-          grep -F "$version" "$scratch/version.txt"
-          "$packaged_binary" --help >/dev/null
-          (cd dist && shasum -a 256 -c "SHA256SUMS-$TARGET")
-          # The first-party set (hya_bundle::FIRST_PARTY_BUNDLES; the rehearsal checks it).
-          first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
-          asset_count=0
-          for asset in dist/hya-*.hyabundle; do
-            name="$(basename "$asset" .hyabundle)"
-            name="${name#hya-}"
-            name="${name%-"$TARGET"}"
-            name="${name%-"$version"}"
-            cmp "$asset" "$scratch/$package_dir/bundles/hya-$name.hyabundle"
-            asset_count=$((asset_count + 1))
-          done
-          test "$asset_count" -eq "${#first_party[@]}"
-          test "$(find "$scratch/$package_dir/bundles" -name 'hya-*.hyabundle' | wc -l)" -eq "${#first_party[@]}"
-          smoke_home="$scratch/smoke-home"
-          mkdir -p "$smoke_home"
-          HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
-            XDG_STATE_HOME="$smoke_home/state" XDG_CACHE_HOME="$smoke_home/cache" \
-            "$packaged_binary" bundle list > "$scratch/bundle-list.txt"
-          for bundle in "${first_party[@]}"; do
-            grep -E "^hya/$bundle $version " "$scratch/bundle-list.txt"
-          done
-          bun_adapter="$scratch/$package_dir/lib/hya/bun-adapter"
-          for path in package.json bun.lock src/main.ts; do
-            test -e "$bun_adapter/$path"
-          done
-          bun_probe="$scratch/bun-adapter-probe"
-          bun_output="$scratch/bun-adapter-output"
-          mkdir -p "$bun_probe"
-          (
-            cd "$bun_probe"
-            env -u HYA_BUN_ADAPTER_DIR HYA_DIRECTORY="$bun_probe" HYA_WORKTREE="$bun_probe" \
-              "$HOME/.bun/bin/bun" run "$bun_adapter/src/main.ts" >"$bun_output" <<'BUN_REQUESTS'
-          {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"host":{"name":"hya","version":"release"}}}
-          {"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}
-          BUN_REQUESTS
-          )
-          grep -F '"protocol_version":1' "$bun_output"
-          grep -F '"hooks":[]' "$bun_output"
-          grep -F '"tools":[]' "$bun_output"
-          grep -F '"id":2,"result":{}' "$bun_output"
-          tui="$scratch/$package_dir/lib/hya/tui"
-          tui_web="$scratch/$package_dir/lib/hya/tui-web"
-          case "$TARGET" in
-            x86_64-unknown-linux-gnu) opentui_native=linux-x64 ;;
-            aarch64-unknown-linux-gnu) opentui_native=linux-arm64 ;;
-            aarch64-apple-darwin) opentui_native=darwin-arm64 ;;
-            *) echo "no OpenTUI native package is known for $TARGET" >&2; exit 1 ;;
-          esac
-          for path in package.json bun.lock bunfig.toml tsconfig.json src/main.ts \
-            node_modules/@opentui/core/package.json node_modules/@opentui/solid/package.json \
-            "node_modules/@opentui/core-$opentui_native/package.json" node_modules/solid-js/package.json; do
-            test -f "$tui/$path"
-          done
-          test ! -e "$tui/node_modules/bun-types"
-          for path in package.json bun.lock tsconfig.json src/main.ts src/frames.ts \
-            web/index.html web/client.ts web/style.css \
-            node_modules/@xterm/xterm/package.json node_modules/@xterm/xterm/css/xterm.css \
-            node_modules/@xterm/addon-fit/package.json; do
-            test -f "$tui_web/$path"
-          done
-          for dev_dependency in @playwright/test @opentui/core bun-types typescript; do
-            test ! -e "$tui_web/node_modules/$dev_dependency"
-          done
-          tui_probe="$scratch/tui-probe"
-          mkdir -p "$tui_probe"
-          (
-            cd "$tui_probe"
-            env -u HYA_TUI_DIR -u HYA_TUI_WEB_DIR "$HOME/.bun/bin/bun" "$tui/src/main.ts" --help > tui-help.txt
-            grep -F "Usage:" tui-help.txt
-            env -u HYA_TUI_DIR -u HYA_TUI_WEB_DIR "$HOME/.bun/bin/bun" "$tui_web/src/main.ts" --help > tui-web-help.txt
-            grep -F "Usage:" tui-web-help.txt
-            # `--help` skips lazily loaded modules; bundling resolves every import
-            # and fails on any that leaves the staged directory.
-            "$HOME/.bun/bin/bun" build --target=bun --external '@opentui/core-*' \
-              --outdir tui-build "$tui/src/main.ts" >/dev/null
-            "$HOME/.bun/bin/bun" build --target=bun --outdir tui-web-build "$tui_web/src/main.ts" >/dev/null
-          )
-          example_archive="$scratch/$package_dir/examples/hya-argus-example.hyabundle"
-          test -f "$example_archive"
-          7z t "$example_archive" >/dev/null
-          7z l -slt "$example_archive" >"$scratch/argus-listing.txt"
-          grep -Fx "Path = bundle.yaml" "$scratch/argus-listing.txt"
-          grep -Fx "Path = workflows/argus.hya.md" "$scratch/argus-listing.txt"
-          if grep -F "bundles/examples/argus-example" "$scratch/argus-listing.txt"; then
-            echo "Argus archive must not contain its source-tree prefix" >&2
-            exit 1
+          package_dir="hya-${COMPONENT}-${VERSION}-${TARGET}"
+          scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT
+          tar -xzf "dist/${package_dir}.tar.gz" -C "$scratch"
+          listing="$scratch/listing"; tar -tzf "dist/${package_dir}.tar.gz" > "$listing"
+          if [[ "$COMPONENT" == backend ]]; then
+            grep -Fx "$package_dir/bin/hya" "$listing"
+            grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$listing"
+            if grep -q -- "$package_dir/lib/hya/tui" "$listing"; then
+              exit 1
+            fi
+            if grep -q -- "$package_dir/lib/hya/tui-web" "$listing"; then
+              exit 1
+            fi
+          else
+            grep -Fx "$package_dir/lib/hya/bin/bun" "$listing"
+            grep -Fx "$package_dir/lib/hya/tui/frontend-version.ts" "$listing"
+            grep -Fx "$package_dir/lib/hya/tui-web/web/index.html" "$listing"
+            if grep -q -- "$package_dir/bin/hya" "$listing"; then
+              exit 1
+            fi
+            if grep -q -- "$package_dir/bundles/" "$listing"; then
+              exit 1
+            fi
           fi
-          tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
-          grep -Fx "$package_dir/bin/hya" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/bin/bun" "$scratch/archive.txt"
-          test "$("$scratch/$package_dir/lib/hya/bin/bun" --version)" = "1.4.2"
-          grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/bun-adapter/bun.lock" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/bun-adapter/src/main.ts" "$scratch/archive.txt"
-          grep -F "$package_dir/lib/hya/bun-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
-          grep -Fx "$package_dir/lib/hya/tui/src/main.ts" "$scratch/archive.txt"
-          grep -F "$package_dir/lib/hya/tui/node_modules/@opentui/core/" "$scratch/archive.txt" >/dev/null
-          grep -Fx "$package_dir/lib/hya/tui-web/src/main.ts" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/tui-web/web/index.html" "$scratch/archive.txt"
-          grep -F "$package_dir/lib/hya/tui-web/node_modules/@xterm/xterm/" "$scratch/archive.txt" >/dev/null
-          for bundle in "${first_party[@]}"; do
-            grep -Fx "$package_dir/bundles/hya-$bundle.hyabundle" "$scratch/archive.txt"
-          done
-          grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
-          if grep -F "$package_dir/bundles/examples/argus-example" "$scratch/archive.txt"; then
-            echo "release archive must not contain the example source-tree prefix" >&2
-            exit 1
-          fi
-          # Install the archive with the published installer over file://
-          # URLs, then let the installed hya's bare `hya update` find it current.
-          releases="$scratch/releases"
-          mkdir -p "$releases/download/v$version" "$releases/latest/download"
-          cp "dist/$ARCHIVE" "$releases/download/v$version/"
-          cp "dist/SHA256SUMS-$TARGET" "$releases/download/v$version/SHA256SUMS"
-          cp "dist/SHA256SUMS-$TARGET" "$releases/latest/download/SHA256SUMS"
-          installed="$scratch/installed"
-          export HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
-            XDG_STATE_HOME="$smoke_home/state" XDG_CACHE_HOME="$smoke_home/cache" \
-            HYA_RELEASES_URL="file://$releases"
-          sh scripts/hya-install.sh --prefix "$installed"
-          test "$("$installed/bin/hya" --version)" = "hya $version"
-          test -x "$installed/lib/hya/bin/bun"
-          test -f "$installed/lib/hya/tui/src/main.ts"
-          test "$(find "$installed/bundles" -name 'hya-*.hyabundle' | wc -l)" -eq "$(find "$scratch/$package_dir/bundles" -name 'hya-*.hyabundle' | wc -l)"
-          "$installed/bin/hya" update > "$scratch/update.txt"
-          grep -F "hya $version is already installed" "$scratch/update.txt"
-
+          (cd dist && shasum -a 256 -c SHA256SUMS)
       - name: Attest release assets
         if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/*.tar.gz
+            dist/SHA256SUMS
             dist/*.hyabundle
-            dist/SHA256SUMS-*
-
-      - name: Upload release assets
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.ref_type == 'tag'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-assets-${{ matrix.target }}
-          path: |
-            dist/*.tar.gz
-            dist/*.hyabundle
-            dist/SHA256SUMS-*
+          path: dist/*
           if-no-files-found: error
 
   release:
@@ -363,60 +209,43 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Validate release notes
+      - name: Select release component
+        id: release
         shell: bash
-        run: test -s CHANGELOG.md
-
-      - name: Download release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        run: |
+          tag="$GITHUB_REF_NAME"
+          case "$tag" in backend/*) echo "component=backend" >> "$GITHUB_OUTPUT"; version=${tag#backend/};; frontend/*) echo "component=frontend" >> "$GITHUB_OUTPUT"; version=${tag#frontend/};; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-assets-*
           path: artifacts
-
-      - name: Assemble release assets
+      - name: Assemble release assets and body
         shell: bash
+        env:
+          COMPONENT: ${{ steps.release.outputs.component }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-
           mkdir -p dist
-          # The first-party set (hya_bundle::FIRST_PARTY_BUNDLES); the five
-          # tool-family bundles are per target, the others are shared.
-          first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
-          targets=0
           for directory in artifacts/release-assets-*; do
-            targets=$((targets + 1))
-            (cd "$directory" && shasum -a 256 -c SHA256SUMS-*)
-            for file in "$directory"/*; do
-              name="$(basename "$file")"
-              if [[ -e "dist/$name" ]]; then
-                # Platform-independent bundles must be byte-identical on every target.
-                cmp "$file" "dist/$name"
-              else
-                cp "$file" "dist/$name"
-              fi
+            for asset in "$directory"/*; do
+              if [[ -f "$asset" ]]; then cp "$asset" dist/; fi
             done
           done
-          test "$targets" -eq 3
-          test "$(find dist -name '*.tar.gz' | wc -l)" -eq "$targets"
-          test "$(find dist -name 'hya-*.hyabundle' | wc -l)" -eq $((5 * targets + ${#first_party[@]} - 5))
-          (cd dist && for file in *.tar.gz hya-*.hyabundle; do shasum -a 256 "$file"; done > SHA256SUMS)
-          (cd dist && shasum -a 256 -c SHA256SUMS)
-          # The curl-pipe installer `hya update` also runs (docs/install.md).
-          install -m 0755 scripts/hya-install.sh dist/hya-install.sh
-
-      - name: Attest combined checksums
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+          if [[ "$COMPONENT" == backend ]]; then
+            (cd dist && shasum -a 256 ./*.tar.gz ./*.hyabundle > SHA256SUMS)
+          else
+            (cd dist && shasum -a 256 ./*.tar.gz > SHA256SUMS)
+          fi
+          cp "CHANGELOG_${COMPONENT^^}.md" dist/RELEASE_NOTES.md
+          side_flag=--backend-only
+          [[ "$COMPONENT" == frontend ]] && side_flag=--tui-only
+          printf "\n\nInstall or update this release with:\n\n\`\`\`sh\ncurl -fsSL https://hya.ed-aisys.com/install.sh | sh -s -- %s --version %s\n\`\`\`\n\nWithout options the installer installs the latest backend and frontend.\n" \
+            "$side_flag" "$VERSION" >> dist/RELEASE_NOTES.md
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          subject-path: |
-            dist/SHA256SUMS
-            dist/hya-install.sh
-
-      - name: Publish release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          body_path: CHANGELOG.md
-          # `releases/latest`, which the installer follows, skips prereleases.
+          body_path: dist/RELEASE_NOTES.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: dist/*
           fail_on_unmatched_files: true

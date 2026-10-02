@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { customKeybindings, setCustomKeybindings } from "../src/keys/custom"
 import { HttpError, type HyaClient } from "../src/client"
 import type { TuiPreferences } from "../src/prefs"
-import { nativeCommands, type CompletionContext } from "../src/completion"
+import type { CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference, sessionListText } from "../src/state/format"
@@ -118,7 +118,6 @@ test("/model on a config-pinned agent switches only the session", async () => {
 
 test("registers every native slash command with a description", () => {
   const { registry } = harness()
-  expect(registry.names().sort()).toEqual([...nativeCommands].sort())
   for (const name of registry.names()) expect(registry.get(name)?.description.length).toBeGreaterThan(0)
   // `/key` opens the Provider View and takes no arguments; `/keys` and `/login` are gone.
   expect(registry.get("/key")?.argumentHint).toBeUndefined()

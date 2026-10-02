@@ -32,7 +32,7 @@ pub fn apply_spawn_model_policy(
         .model_policy
         .category
         .as_deref()
-        .and_then(&resolve_category)
+        .and_then(resolve_category)
     {
         agent.model = model;
     }
@@ -42,7 +42,7 @@ pub fn apply_spawn_model_policy(
         .and_then(|inline| inline.category.as_deref())
         .map(str::trim)
         .filter(|category| !category.is_empty())
-        .and_then(&resolve_category)
+        .and_then(resolve_category)
     {
         agent.model = model;
     }
@@ -63,7 +63,7 @@ pub fn apply_spawn_model_policy(
         .as_deref()
         .map(str::trim)
         .filter(|category| !category.is_empty())
-        .and_then(&resolve_category)
+        .and_then(resolve_category)
     {
         agent.model = model;
     }
@@ -252,21 +252,6 @@ impl CategoryRegistry {
     #[must_use]
     pub fn from_entries(entries: HashMap<String, CategoryEntry>) -> Self {
         Self { entries }
-    }
-
-    /// Overlay additional/replacement entries.
-    #[must_use]
-    pub fn with_overrides(mut self, overrides: HashMap<String, CategoryEntry>) -> Self {
-        for (k, v) in overrides {
-            self.entries.insert(k, v);
-        }
-        self
-    }
-
-    /// Whether no categories are registered.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     /// Return each category's exact ordered model candidates in canonical key

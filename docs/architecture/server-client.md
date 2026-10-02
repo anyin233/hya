@@ -44,7 +44,7 @@ Contract references:
 
 `AppState` holds the shared `SessionEngine`, process agent, pending
 permission/question queues, dependency-inverted MCP / Agent-model /
-Workflow control handles, workspace adapters, formatter status, and a
+Workflow control handles, formatter status, and a
 catalog-update broadcast. The router wraps it into internal `ServerState`,
 adding run tokens for busy/abort behavior plus the process-local config
 bag and PTY state. Helper machinery (catalogs, guidance, PTY, worktree,

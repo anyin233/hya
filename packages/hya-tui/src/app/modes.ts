@@ -152,5 +152,3 @@ export function createModeSwitcher({ store, client, preferredMode, saveMode }: M
     idle: (): Promise<void> => pending,
   }
 }
-
-export type ModeSwitcher = ReturnType<typeof createModeSwitcher>

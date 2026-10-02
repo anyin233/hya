@@ -1,26 +1,10 @@
 use hya_proto::Projection;
 use time::OffsetDateTime;
-use time::macros::format_description;
 
 const FALLBACK_PREFIX: &str = "Untitled Session_";
 const COMPAT_ROOT_PREFIX: &str = "New session - ";
 const COMPAT_CHILD_PREFIX: &str = "Child session - ";
 const TITLE_LIMIT: usize = 100;
-const TITLE_FORMAT: &[time::format_description::FormatItem<'_>] =
-    format_description!("[year]-[month]-[day]-[hour]-[minute]");
-
-#[must_use]
-/// Build a time-based fallback title string.
-pub fn fallback_title(activity_millis: i64) -> String {
-    let seconds = activity_millis.div_euclid(1000);
-    let Ok(time) = OffsetDateTime::from_unix_timestamp(seconds) else {
-        return format!("{FALLBACK_PREFIX}1970-01-01-00-00");
-    };
-    let timestamp = time
-        .format(TITLE_FORMAT)
-        .unwrap_or_else(|_| "1970-01-01-00-00".to_string());
-    format!("{FALLBACK_PREFIX}{timestamp}")
-}
 
 #[must_use]
 /// Whether `title` looks like a default/fallback auto title.
@@ -97,14 +81,6 @@ mod tests {
     use hya_proto::{MessageId, MessageProjection, Projection, Role, SessionId};
 
     use super::*;
-
-    #[test]
-    fn fallback_title_uses_utc_activity_minute() {
-        assert_eq!(
-            fallback_title(1_700_000_000_000),
-            "Untitled Session_2023-11-14-22-13"
-        );
-    }
 
     #[test]
     fn default_title_detector_accepts_hya_and_compat_defaults() {

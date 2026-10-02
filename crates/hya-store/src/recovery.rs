@@ -16,9 +16,7 @@ use hya_proto::{
 };
 use sqlx::Row as _;
 
-use crate::{
-    SessionStore, StoreError, append_event_in_transaction, decode_session_key, replay_projection,
-};
+use crate::{SessionStore, StoreError, append_event_in_transaction, replay_projection};
 
 /// Reason text written on tool parts and member rows closed by crash recovery.
 pub const INTERRUPTED_REASON: &str = "interrupted: the process stopped before this turn finished";
@@ -218,36 +216,5 @@ impl SessionStore {
             .await?;
         tx.commit().await?;
         Ok(envelopes)
-    }
-
-    /// Sessions whose event log carries a `MessageFinished { cause: handoff }`
-    /// row — restart-handoff resume candidates, written only by a runtime
-    /// that handed its sessions to a successor (`SessionEngine::handoff_turns`).
-    ///
-    /// Deliberately over-approximates: a session whose transcript has moved on
-    /// since a historical handoff still matches. The caller filters by the
-    /// folded projection, where the handoff close must still be the transcript
-    /// tail — so a resumed session is picked up exactly once. Read-only, hence
-    /// no runtime-owner claim.
-    ///
-    /// # Errors
-    /// Returns SQLite / decode failures.
-    pub async fn handoff_candidate_sessions(&self) -> Result<Vec<SessionId>, StoreError> {
-        // serde writes the `type` tag first and `cause` is the last optional
-        // field of a `message_finished` row, so this literal only matches
-        // handoff closes.
-        let rows = sqlx::query(
-            "SELECT DISTINCT session_id FROM event_log \
-             WHERE payload LIKE '%\"cause\":\"handoff\"%' ORDER BY session_id",
-        )
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .filter_map(|row| {
-            let key = row.try_get::<Vec<u8>, _>("session_id").ok()?;
-            decode_session_key(&key)
-        })
-        .collect();
-        Ok(rows)
     }
 }

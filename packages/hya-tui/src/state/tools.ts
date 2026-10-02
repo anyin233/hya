@@ -1,3 +1,13 @@
+/** Canonical builtin names and their compatibility aliases. */
+const builtinTools = new Set([
+  "bash", "shell", "read", "edit", "multiedit", "write", "apply_patch", "patch",
+  "grep", "glob", "find", "ls", "lsp", "webfetch", "fetch", "websearch", "search",
+  "skill", "ask_user", "question", "task", "invalid", "workflow", "list_agents", "search_agent", "archive", "plan_exit", "project_activity", "wait", "todo__update_content",
+  "send", "list_channel", "report",
+  "todo", "todo__read", "todo__write", "todo__update", "todo__update_status", "todo__replace",
+  "todo__add", "todo__remove", "todo__clear",
+  "spawn", "spawn_agent",
+ ])
 /**
  * The tool-card view model: one `ToolCallPart` (docs/protocol/README.md
  * "Tool calls") becomes a `ToolCardView` — a state, the tool name, a
@@ -40,6 +50,8 @@ export interface ToolCardView {
   status: ToolStatus
   /** One line summary retained for accessibility and compact views. */
   summary: string
+  /** Display-ready argument block: semantic text for builtins, pretty JSON for generic tools. */
+  displayArgs?: string
   /** Complete raw JSON arguments, shown as the first row of the card. */
   args?: string
   /** Formatted wall time, once done. */
@@ -234,6 +246,13 @@ interface Summary {
 /** The input's main string field while the arguments still stream. */
 const streamingFields = ["command", "path", "filePath", "pattern", "url", "query", "name", "description"]
 
+function semanticArguments(input: Json, summary: string, raw: string): string {
+  if (summary && !summary.startsWith("{")) return summary
+  const entries = Object.entries(input)
+  if (!entries.length) return raw
+  return entries.map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join("\n")
+}
+
 function describe(tool: string, input: Json, output: unknown, raw: string, shellCommand: string | undefined): Summary {
   const out = record(output)
   const meta = record(out.metadata)
@@ -358,6 +377,7 @@ function describe(tool: string, input: Json, output: unknown, raw: string, shell
 
 /** The card for one tool call. `options.command`: the command of this TUI's own shell turn (no input on the part yet). */
 export function toolCard(call: ToolCallPart, options: { command?: string } = {}): ToolCardView {
+  const ms = call.durationMs === undefined ? undefined : Number(call.durationMs)
   const tool = call.tool || "tool"
   const status = toolStatus(call.state)
   const raw = call.inputJson ?? ""
@@ -368,12 +388,18 @@ export function toolCard(call: ToolCallPart, options: { command?: string } = {})
   }
   const output = call.outputJson ? parse(call.outputJson) ?? call.outputJson : undefined
   const described = describe(tool, input, output, raw, options.command)
-  const ms = call.durationMs === undefined ? undefined : Number(call.durationMs)
   const args = raw || (described.command ? JSON.stringify({ command: described.command }) : Object.keys(input).length ? JSON.stringify(input) : "")
+  // Builtins already have a human-readable semantic summary. Generic/MCP tools
+  // retain their raw args for compatibility, but show valid JSON prettified.
+  const builtin = builtinTools.has(tool)
+  const parsedArgs = parse(raw)
+  const displayArgs = builtin
+    ? semanticArguments(input, described.summary, raw)
+    : parsedArgs !== undefined ? JSON.stringify(parsedArgs, null, 2) : raw
   // Keep the historical body shape for callers, but omit bash's `$ command`
   // presentation row from the output section of the new card.
   const outputLines = described.command && described.body[0]?.text === `$ ${described.command}` ? described.body.slice(1) : described.body
-  const card: ToolCardView = { tool, status, summary: described.summary, args, body: described.body, output: outputLines }
+  const card: ToolCardView = { tool, status, summary: described.summary, ...(displayArgs ? { displayArgs } : {}), args, body: described.body, output: outputLines }
   if (status === "done" && ms !== undefined && Number.isFinite(ms)) card.duration = formatDuration(ms)
   if (status === "failed") card.error = call.errorMessage || "failed"
   if (described.command !== undefined) card.command = described.command

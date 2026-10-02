@@ -152,18 +152,16 @@ async fn spawn_one(
     let spawner = spawn_sender.for_binding(&binding);
     let outcomes = tokio::time::timeout(
         Duration::from_secs(5),
-        spawner
-            .for_session_with_agents(parent, agents)
-            .spawn_background(
-                hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-                vec![SpawnMember {
-                    description: format!("spawn {agent_type}"),
-                    prompt: format!("run {agent_type}"),
-                    subagent_type: agent_type.to_string(),
-                    ..SpawnMember::default()
-                }],
-                Default::default(),
-            ),
+        spawner.for_session_with_agents(parent, agents).spawn(
+            hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            vec![SpawnMember {
+                description: format!("spawn {agent_type}"),
+                prompt: format!("run {agent_type}"),
+                subagent_type: agent_type.to_string(),
+                ..SpawnMember::default()
+            }],
+            Default::default(),
+        ),
     )
     .await
     .expect("spawn timed out")

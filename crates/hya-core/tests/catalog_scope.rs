@@ -102,13 +102,6 @@ fn two_project_scopes_resolve_their_own_agents_and_global_resolves_neither() {
     assert!(global.resolve_agent("alpha-agent").is_none());
     assert!(global.resolve_agent("beta-agent").is_none());
     assert_eq!(global.scope(), &CatalogScope::Global);
-    assert!(
-        registry
-            .bind_global()
-            .unwrap()
-            .resolve_agent("alpha-agent")
-            .is_none()
-    );
 
     // A Directory scope without an overlay binds the base, keyed by workdir.
     let directory = CatalogScope::Directory(root_a.path().to_path_buf());

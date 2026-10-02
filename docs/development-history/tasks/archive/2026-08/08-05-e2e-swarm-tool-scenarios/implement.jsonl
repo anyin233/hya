@@ -1,3 +1,0 @@
-{"file": "AGENTS.md", "reason": "TDD gate and verification commands binding on every new scenario"}
-{"file": "docs/testing/process-e2e.md", "reason": "Oracle rules (do not weaken) — binding on the new scenarios"}
-{"file": ".trellis/spec/backend/task-tool.md", "reason": "Durable-admission test-fixture contract: verified catalog + provider identity"}

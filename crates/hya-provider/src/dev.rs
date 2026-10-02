@@ -67,7 +67,7 @@ impl Provider for DevProvider {
     fn configured_identity_v1(&self) -> Option<Vec<u8>> {
         let mut identity = Vec::new();
         append_identity_bytes(&mut identity, b"hya.provider.offline.configured.v1")?;
-        append_identity_bytes(&mut identity, env!("CARGO_PKG_VERSION").as_bytes())?;
+        append_identity_bytes(&mut identity, hya_version::BACKEND_VERSION.as_bytes())?;
         append_identity_bytes(&mut identity, b"hya/offline")?;
         append_capabilities_identity(&mut identity, &dev_capabilities())?;
         Some(identity)

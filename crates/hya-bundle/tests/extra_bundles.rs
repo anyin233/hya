@@ -58,8 +58,8 @@ fn every_extra_bundle_prepares_and_packages_deterministically() {
         );
         assert_eq!(
             identity.version,
-            env!("CARGO_PKG_VERSION"),
-            "{}: extras version with hya (identity version must equal workspace version)",
+            hya_version::BACKEND_VERSION,
+            "{}: extras version with hya (identity version must equal backend version)",
             dir.display()
         );
 

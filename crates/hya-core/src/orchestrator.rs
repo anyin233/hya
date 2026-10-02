@@ -149,18 +149,6 @@ impl SubagentGovernor {
         crate::MAX_SUBAGENT_DEPTH
     }
 
-    /// Acquire one general streaming permit. Kept as a compatibility alias for
-    /// callers that predate the explicit general/reserved split.
-    pub async fn acquire_stream(&self) -> Option<OwnedSemaphorePermit> {
-        self.acquire_general_stream().await
-    }
-
-    /// Number of general streaming permits currently available.
-    #[must_use]
-    pub fn available_permits(&self) -> usize {
-        self.available_general_stream_permits()
-    }
-
     /// Acquire one general provider-stream permit.
     pub async fn acquire_general_stream(&self) -> Option<OwnedSemaphorePermit> {
         self.general_stream_sem.clone().acquire_owned().await.ok()
@@ -469,27 +457,6 @@ mod tests {
         assert_eq!(gov.remaining_budget(root), 3);
         assert!(!gov.release_operation(operation));
         assert_eq!(gov.remaining_budget(root), 3);
-    }
-
-    #[tokio::test]
-    async fn acquire_stream_caps_concurrency() {
-        let gov = SubagentGovernor::new(SubagentLimits {
-            max_concurrency: 2,
-            per_run_budget: 100,
-            ..SubagentLimits::default()
-        });
-        let p1 = gov.acquire_stream().await.expect("permit 1");
-        let _p2 = gov.acquire_stream().await.expect("permit 2");
-        assert_eq!(gov.available_permits(), 0);
-        // A third acquire would block; confirm it is not immediately available.
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), gov.acquire_stream())
-                .await
-                .is_err(),
-            "third permit must block past capacity"
-        );
-        drop(p1);
-        assert_eq!(gov.available_permits(), 1, "dropping a permit frees a slot");
     }
 
     #[test]

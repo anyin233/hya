@@ -1,7 +1,8 @@
 kind: Plugin
+version_ref: backend
 identity:
   id: hya-extra/token-summary
-  version: 0.43.54
+  version: 0.0.0
   publisher: hya-extra
 # An explicit `extensions.process` is spawned with its argv as-is (no Bun
 # adapter is injected), so summary.ts speaks the hya plugin protocol v1

@@ -64,9 +64,6 @@ struct SkillFrontmatter {
     model: Option<String>,
     #[serde(default)]
     disable: bool,
-    #[serde(default)]
-    #[allow(dead_code)]
-    license: Option<String>,
 }
 
 /// Default skill search roots for a project workdir (project + user paths).

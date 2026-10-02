@@ -3,8 +3,8 @@
 // of its database: the one already running, else one it starts with
 // `hya serve start` (detached, in `--dir`). The daemon outlives the TUI.
 // `--continue` reopens the most recent session that is not archived; a plain
-// start opens a new ephemeral session that the daemon drops again once it is
-// still empty and no TUI shows it (after `/exit`, or a `kill -9`). A
+// start restores a saved chat, or creates an ephemeral session when no history
+// exists; the daemon drops an empty session after its last client leaves. A
 // missing binary or a daemon that fails to start is reported with its
 // output tail.
 

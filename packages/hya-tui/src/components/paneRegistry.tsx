@@ -15,6 +15,7 @@ import { WorkingIndicator } from "./WorkingIndicator"
 import { ProjectsSidebar } from "./ProjectsSidebar"
 import { SidebarPane } from "./Sidebar"
 import { LayoutPane } from "./LayoutPane"
+import { tuiVersion } from "../version"
 
 export interface PaneRenderProps {
   node: PaneLeaf
@@ -64,7 +65,7 @@ function paneText(state: AppState, kind: PaneKind, server: string): string {
     case "jobs": return jobsText(state)
     case "status": return [
       `Server      ${shownServer(state, server)}`,
-      `Version     ${state.serverVersion || "unknown"}`,
+      `Version     ${tuiVersion}/${state.serverVersion || "unknown"}`,
       `Connection  ${state.connected ? "connected" : "disconnected"}`,
       `Session     ${state.selected?.title || state.selected?.id || "none"}`,
       `Agent       ${state.selected?.agent || "none"}`,

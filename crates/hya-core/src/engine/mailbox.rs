@@ -445,21 +445,6 @@ impl SessionEngine {
         })
     }
 
-    /// `send` with no explicit channel: route by the sender's role. A leader
-    /// posts on the unit group channel it leads (broadcast semantics); a
-    /// subordinate DMs its one upward peer; an agent with neither is asked to
-    /// address a channel explicitly.
-    #[cfg(test)]
-    pub(crate) async fn mail_send_default_for_actor(
-        &self,
-        from_session: SessionId,
-        body: String,
-        actor_claim: Option<&hya_store::ActorClaim>,
-    ) -> Result<MailReceipt, CoreError> {
-        self.mail_send_default_for_actor_with_policy(from_session, body, actor_claim, None)
-            .await
-    }
-
     pub(crate) async fn mail_send_default_for_actor_with_policy(
         &self,
         from_session: SessionId,
@@ -1579,7 +1564,12 @@ mod tests {
 
         // The root leads a unit: default send behaves like the broadcast.
         let receipt = engine
-            .mail_send_default_for_actor(org.root, "default all hands".to_string(), None)
+            .mail_send_default_for_actor_with_policy(
+                org.root,
+                "default all hands".to_string(),
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(
@@ -1597,7 +1587,12 @@ mod tests {
 
         // A leaf defaults to its parent DM.
         let receipt = engine
-            .mail_send_default_for_actor(org.worker_1.session, "leaf default up".to_string(), None)
+            .mail_send_default_for_actor_with_policy(
+                org.worker_1.session,
+                "leaf default up".to_string(),
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(receipt.recipients, 1);

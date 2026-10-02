@@ -1,13 +1,6 @@
 import type { ExtensionHooks } from "./loader/init"
 import { isNonEmptyString, isRecord } from "./validate"
 
-export type ModelFailureClass =
-  | "retryable"
-  | "unknown_model"
-  | "auth"
-  | "invalid_request"
-  | "other"
-
 export type ModelFallbackParams = {
   readonly session: string
   /** Root of the session's spawn tree; equals `session` for a root. */

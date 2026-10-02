@@ -233,7 +233,7 @@ impl McpClient {
             json!({
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
-                "clientInfo": { "name": "hya", "version": env!("CARGO_PKG_VERSION") }
+                "clientInfo": { "name": "hya", "version": hya_version::BACKEND_VERSION }
             }),
             INITIALIZE_TIMEOUT,
         )

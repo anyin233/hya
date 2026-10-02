@@ -116,8 +116,8 @@ fn load_preset(identity: &str) -> Result<BaseToolsPreset, String> {
         identity: policy.identity,
         bundle_digest: bundle.digest().to_string(),
         prepared_catalog_bytes: catalog.bytes(),
-        protected_names: policy.protected_names,
         schemes: policy.schemes,
+        protected_names: policy.protected_names,
         tools: policy.tools,
     })
 }
