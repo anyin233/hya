@@ -28,9 +28,9 @@ for (const width of [1100, 700]) {
     await term.attach(testInfo, "focused-composer")
     await term.type("/layout split vertical jobs")
     await term.press("Enter")
-    await term.waitForText("jobs · pane-6")
+    await term.waitForText("jobs · pane-8")
     await oneBox()
-    expect((await focusBoxes(term))[0]!.row).toBe(0)
+    expect((await focusBoxes(term))[0]!.row).toBeGreaterThan(20)
     await term.type("/")
     await term.waitForText("Commands")
     await oneBox()
@@ -42,7 +42,7 @@ for (const width of [1100, 700]) {
     await term.press("Escape")
     await expect.poll(() => term.find("Commands")).toBeNull()
     await oneBox()
-    expect((await focusBoxes(term))[0]!.row).toBe(0)
+    expect((await focusBoxes(term))[0]!.row).toBeGreaterThan(20)
     await term.type("?")
     await term.waitForText("Help · keys and commands")
     await oneBox()
@@ -78,10 +78,10 @@ test("provider form alone is highlighted over its view", async ({ tui, backend }
   expect((await focusBoxes(term))[0]!.row).toBeGreaterThan(20)
 })
 
-test("Projects, Sessions, Todos and Context each receive the single focus border", async ({ tui, backend }, testInfo) => {
+test("Projects and Sessions each receive the single focus border", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
   await term.waitForText("Message, !shell, or @file · / commands")
-  for (const [id, title] of [[2, "Projects"], [3, "Sessions"], [4, "Todos"], [5, "Context"]] as const) {
+  for (const [id, title] of [[2, "Projects"], [3, "Sessions"]] as const) {
     await term.type(`/layout focus pane-${id}`)
     await term.press("Enter")
     await expect.poll(() => term.find("Commands")).toBeNull()

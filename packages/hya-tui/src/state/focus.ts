@@ -1,12 +1,9 @@
 import type { AppState } from "./store"
-import { paneLeaves } from "./panes"
+import { isSelectablePane, paneLeaves } from "./panes"
 
-/** The workspace keyboard owner. Projects retains its existing explicit focus flag. */
+/** Only the layout's active selectable leaf can own workspace input. */
 export function focusedPane(state: AppState) {
-  const leaves = paneLeaves(state.paneLayout.root)
-  return state.projectsSidebarFocus
-    ? leaves.find((pane) => pane.kind === "projects")
-    : leaves.find((pane) => pane.id === state.paneLayout.active)
+  return paneLeaves(state.paneLayout.root).find((pane) => pane.id === state.paneLayout.active && isSelectablePane(pane))
 }
 
 /** One border owner, following the same priority as keyboard dispatch. */

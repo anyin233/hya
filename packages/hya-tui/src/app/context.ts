@@ -1,12 +1,16 @@
 /** Solid context giving every component the store, the controller, and the server URL. */
 import { createContext, useContext } from "solid-js"
-import type { KeyEvent } from "@opentui/core"
+import type { KeyEvent, PasteEvent } from "@opentui/core"
 import type { AppStore } from "../state/store"
 import type { InputHistory } from "../composer/history"
 import type { Controller } from "./controller"
 
 /** Imperative handles registered by mounted components (the transcript's and Diff view's scroll actions). */
 export interface UiHandles {
+  /** One workspace listener calls this router before native input dispatch. */
+  workspaceInput?: { onKey(event: KeyEvent): void; onPaste(event: PasteEvent): void }
+  /** Mounted selectable panes expose the same input contract, keyed by instance id. */
+  paneInputs?: Map<string, PaneInputHandle>
   transcript?: TranscriptScroller
   /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
   panes?: Map<string, DiffScroller>
@@ -14,8 +18,15 @@ export interface UiHandles {
   command?: CommandPaneHandle
   composerHistory?: InputHistory
   commandHistory?: InputHistory
+  composerRows?: () => number
   composerInput?: { text: string; cursor: number }
   commandInput?: { text: string; active: boolean; originSidebar: boolean }
+}
+
+/** A focused pane consumes unsupported input; it never falls through to another pane. */
+export interface PaneInputHandle {
+  onKey(event: KeyEvent): void
+  onPaste?(event: PasteEvent): void
 }
 
 /** One command input, independent of the message composer. */

@@ -118,7 +118,7 @@ test("a saved version-1 center split loads with editable outer side panes", () =
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
   writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
   const loaded = loadPreferences(path).preferences.paneLayout!
-  expect(loaded.version).toBe(2)
+  expect(loaded.version).toBe(3)
   expect(loaded.active).toBe("pane-2")
   expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
   expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')

@@ -5,7 +5,7 @@ import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from 
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
-import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
+import { closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -330,9 +330,9 @@ export const nativeCommandSpecs: CommandSpec[] = [
     complete: ({ words, current, head }) => {
       if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
-      if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation"))
+      if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
       if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
-      if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down"])
+      if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down", "next", "previous"])
       return []
     },
     run: ({ store, actions }, { args }) => {
@@ -356,10 +356,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
         }
         case "focus": {
           const target = args[1]
-          if (!target) throw new Error("Usage: /layout focus <left|right|up|down|pane-id>")
+          if (!target) throw new Error("Usage: /layout focus <left|right|up|down|next|previous|pane-id>")
           if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection).active }
-          else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target)) next = { ...current, active: target }
-          else throw new Error(`Unknown pane ${target}`)
+          else if (target === "next" || target === "previous") next = { ...current, active: rotatePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target === "next" ? 1 : -1).active }
+          else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target && isSelectablePane(pane))) next = { ...current, active: target }
+          else throw new Error(`Pane ${target} is unselectable, hidden, or unknown`)
           break
         }
         case "resize": {
@@ -374,7 +375,6 @@ export const nativeCommandSpecs: CommandSpec[] = [
       }
       store.setView("chat")
       const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
-      store.setProjectsSidebarFocus(command === "focus" && active?.kind === "projects")
       if (next !== current) {
         store.setPaneLayout(next)
         try { actions.savePreferences({ paneLayout: next }) }
