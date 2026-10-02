@@ -7,6 +7,8 @@ import { matchValues, type CommandRegistry, type Completion } from "./commands/r
 export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
 
 export interface CompletionContext {
+  /** Saved layout leaves, including passive and currently hidden panes. */
+  panes?: { id: string; kind: string }[]
   backendCommands: string[]
   models: string[]
   /** Listed sessions; `/open` and `/resume` show a titled one as `title (id)`. */

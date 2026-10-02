@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/channel-tools
-  version: 0.43.49
+  version: 0.43.50
   publisher: hya
 namespace: channel-tools
 extensions:

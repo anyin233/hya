@@ -327,10 +327,15 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/layout",
     description: "Edit workspace panes: split, assign, focus, resize, close, reset, or show",
     argumentHint: "[split|assign|focus|resize|close|reset|show]",
-    complete: ({ words, current, head }) => {
+    complete: ({ words, current, head }, context) => {
       if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
       if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
+      if (words[0] === "close" && words.length === 2) {
+        const panes = (context.panes ?? []).filter((pane) => pane.kind !== "conversation" && pane.kind !== "composer")
+        const names = panes.filter((pane) => panes.filter((other) => other.kind === pane.kind).length === 1).map((pane) => pane.kind)
+        return matchValues(head, current, [...names, ...panes.map((pane) => pane.id)])
+      }
       if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
       if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down", "next", "previous"])
       return []
@@ -369,7 +374,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
           next = resizePane(current, Number(percent) / 100)
           break
         }
-        case "close": next = closePane(current); break
+        case "close": {
+          if (args.length > 2) throw new Error("Usage: /layout close [pane-name|pane-id]")
+          next = closePane(current, args[1])
+          break
+        }
         case "reset": next = defaultPaneLayout(); break
         default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reset|show]")
       }
