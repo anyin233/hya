@@ -1164,6 +1164,7 @@ closable ids and unambiguous names, updating after each layout edit.
 | `/layout focus <left\|right\|up\|down\|next\|previous\|pane-id>` | Focus a visible selectable pane; passive/hidden/unknown ids are refused. |
 | `/layout resize <+N\|-N>` | Resize the focused pane against its nearest sibling, within 10–90%. |
 | `/layout close [pane-name\|pane-id]` | Without a target, close the selected auxiliary pane. With a target, close that leaf regardless of visibility or selectability; promote its sibling and preserve surviving focus. |
+| `/layout reload` | Read and validate `paneLayout` from this TUI’s preferences file and apply it immediately, without writing the file or loading other settings. |
 | `/layout reset` | Restore the default arrangement. |
 
 Default ids are `pane-1` editor, `pane-2` Projects, `pane-3` Sessions,
@@ -1183,6 +1184,40 @@ split ratios remain weighted. No reset or new shortcut is needed. An explicit
 `/layout resize +10` or `/layout split vertical jobs` changes the edited branch
 back to weighted sizing, so manually sized or subdivided layouts remain
 proportional.
+
+### Editing layout with an agent
+
+`/layout reload` applies a layout edited on disk without restarting the TUI.
+This gives an agent a file interface for arranging panes, including passive
+panes that cannot receive keyboard focus. It reads `paneLayout` from this
+frontend's preferences file: `$HYA_TUI_CONFIG`, otherwise
+`$XDG_CONFIG_HOME/hya/tui.json`, otherwise `~/.config/hya/tui.json`.
+The file belongs to the machine running the TUI (the PTY host for WebUI).
+An agent on a remote backend needs access to that file to edit this frontend's
+layout.
+
+For example:
+
+1. Run `/layout reset` once to save a valid starter tree, if no layout has been saved.
+2. Ask the agent: “Edit `~/.config/hya/tui.json`: remove the `context` leaf
+   from `paneLayout.root` and replace its parent split with its remaining
+   child. Preserve the conversation and composer leaves, unique ids, and all
+   other preferences.” Substitute your actual configured path.
+3. Run `/layout reload`. The edited tree appears immediately. The agent can
+   also adjust split `axis`, `weight`, and `sizing` using the contract below.
+
+**Command contract:** `/layout reload` takes no arguments. It parses and
+migrates the saved `PaneLayout` using the same validator as startup, normalizes
+passive focus to the editor, and returns the viewer to chat. Draft text and the
+current session are retained. It applies only `paneLayout`; theme, keys and
+permissions are untouched. Missing/unreadable files, invalid JSON, missing or
+invalid `paneLayout`, and extra arguments are errors; the current layout and
+file remain unchanged. It never rewrites the file, including after migration.
+Success sets status to `Layout reloaded from <path> · …`; errors use the usual
+command-error reporting. There is no file watcher, new default binding, or
+backend RPC. The internal reader is
+`loadPaneLayout(path: string): PaneLayout` (throws on failure); the controller
+exposes `AppActions.loadPaneLayout(): {layout: PaneLayout; path: string}`.
 
 Jobs show busy sessions, current subagents, queued prompts and pending
 requests from the existing TUI projection. Current-turn activity streams live;
@@ -1353,7 +1388,8 @@ interface TuiPreferences {
 }
 ```
 
-- The file is read once at start, before the first frame. A missing file
+- The file is read at start, before the first frame; `/layout reload` can
+  explicitly reread only its layout using stricter failure handling. A missing file
   means the defaults. An unreadable file, invalid JSON, or a JSON value that
   is not an object is ignored, and the controller status state says
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says

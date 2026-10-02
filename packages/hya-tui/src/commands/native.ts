@@ -325,10 +325,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
   keybindingsCommand,
   {
     name: "/layout",
-    description: "Edit workspace panes: split, assign, focus, resize, close, reset, or show",
-    argumentHint: "[split|assign|focus|resize|close|reset|show]",
+    description: "Edit workspace panes: split, assign, focus, resize, close, reload, reset, or show",
+    argumentHint: "[split|assign|focus|resize|close|reload|reset|show]",
     complete: ({ words, current, head }, context) => {
-      if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
+      if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reload", "reset", "show"])
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
       if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
       if (words[0] === "close" && words.length === 2) {
@@ -344,6 +344,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
       const current = store.state.paneLayout
       const command = args[0] ?? "show"
       let next: PaneLayout = current
+      let reloadedPath: string | undefined
       switch (command) {
         case "show": break
         case "split": {
@@ -379,20 +380,27 @@ export const nativeCommandSpecs: CommandSpec[] = [
           next = closePane(current, args[1])
           break
         }
+        case "reload": {
+          if (args.length !== 1) throw new Error("Usage: /layout reload")
+          const loaded = actions.loadPaneLayout()
+          next = loaded.layout
+          reloadedPath = loaded.path
+          break
+        }
         case "reset": next = defaultPaneLayout(); break
-        default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reset|show]")
+        default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reload|reset|show]")
       }
       store.setView("chat")
       const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
       if (next !== current) {
         store.setPaneLayout(next)
-        try { actions.savePreferences({ paneLayout: next }) }
+        try { if (!reloadedPath) actions.savePreferences({ paneLayout: next }) }
         catch (error) {
           store.setStatus(`Layout changed, not saved: ${error instanceof Error ? error.message : String(error)}`)
           return
         }
       }
-      store.setStatus(`Layout · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reset`)
+      store.setStatus(`${reloadedPath ? `Layout reloaded from ${reloadedPath}` : "Layout"} · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reload|reset`)
     },
   },
   {

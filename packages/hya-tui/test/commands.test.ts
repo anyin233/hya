@@ -6,6 +6,7 @@ import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference, sessionListText } from "../src/state/format"
+import { defaultPaneLayout, closePane } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
@@ -38,6 +39,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
     openHelp: () => { calls.push("help") },
     savePreferences: (patch) => { calls.push(`prefs ${JSON.stringify(patch)}`) },
+    loadPaneLayout: () => ({ layout: defaultPaneLayout(), path: "/test/tui.json" }),
     copyText: (text) => { calls.push(`copy ${text}`); return copyWorks },
     openEditor: () => { calls.push("editor") },
     undo: async () => { calls.push("undo") },
@@ -834,4 +836,25 @@ test("/layout close accepts passive names and ids, persists, and completes live 
   await h.run("/layout split vertical jobs")
   await h.run("/layout close")
   expect(h.store.state.paneLayout.active).toBe("pane-1")
+})
+
+
+test("/layout reload applies only the read layout, preserves drafts and never saves", async () => {
+  const h = harness()
+  const layout = closePane(defaultPaneLayout(), "context")
+  h.actions.loadPaneLayout = () => ({ layout, path: "/profile/tui.json" })
+  h.store.setDraft(true)
+  h.store.setView("models")
+  await h.run("/layout reload")
+  expect(h.store.state.paneLayout).toEqual(layout)
+  expect(h.store.state.draft).toBe(true)
+  expect(h.store.state.view).toBe("chat")
+  expect(h.store.state.status).toContain("Layout reloaded from /profile/tui.json")
+  expect(h.calls).toEqual([])
+  expect(h.registry.complete("/layout rel", h.store.completionContext())).toEqual(["/layout reload"])
+  await expect(h.run("/layout reload extra")).rejects.toThrow("Usage: /layout reload")
+  h.actions.loadPaneLayout = () => { throw new Error("Invalid paneLayout") }
+  await expect(h.run("/layout reload")).rejects.toThrow("Invalid paneLayout")
+  expect(h.store.state.paneLayout).toEqual(layout)
+  expect(h.calls).toEqual([])
 })
