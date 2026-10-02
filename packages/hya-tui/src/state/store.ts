@@ -45,7 +45,7 @@ import type { View } from "../instructions"
 import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
-import { paneLeaves, defaultPaneLayout, type PaneLayout } from "./panes"
+import { paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
 import { foldMember, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -99,7 +99,7 @@ export interface AppState {
   /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
-  /** Local editable workspace inside the central panel; exactly one conversation pane. */
+  /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
   readonly apiOutput: string
   readonly status: string
@@ -384,7 +384,9 @@ export function createAppStore() {
     Object.entries(initial).map(([key, value]) => [key, createSignal(value, { equals: false })]),
   ) as unknown as Signals
   const state = Object.defineProperties({} as AppState, Object.fromEntries(
-    Object.keys(initial).map((key) => [key, { enumerable: true, get: () => signals[key as keyof AppState][0]() }]),
+    Object.keys(initial).map((key) => [key, { enumerable: true, get: () => key === "projectsSidebarFocus"
+      ? paneLeaves(signals.paneLayout[0]().root).some((pane) => pane.id === signals.paneLayout[0]().active && pane.kind === "projects")
+      : signals[key as keyof AppState][0]() }]),
   ))
   const set = <K extends keyof AppState>(key: K, value: AppState[K]): void => {
     (signals[key][1] as (value: AppState[K]) => void)(value)
@@ -787,7 +789,7 @@ export function createAppStore() {
     },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
-    setPaneLayout(layout: PaneLayout): void { set("paneLayout", layout) },
+    setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
 
@@ -943,11 +945,10 @@ export function createAppStore() {
     setProjectsSidebar(mode: SidebarMode): void { set("projectsSidebar", mode) },
     toggleProjectsSidebar(): void { set("projectsSidebar", toggledProjectsSidebar(state.projectsSidebar, state.columns)) },
     setProjectsSidebarFocus(focus: boolean): void {
-      set("projectsSidebarFocus", focus)
       const leaves = paneLeaves(state.paneLayout.root)
       const active = leaves.find((pane) => pane.id === state.paneLayout.active)
       const target = focus ? leaves.find((pane) => pane.kind === "projects")
-        : active?.kind === "projects" ? leaves.find((pane) => pane.kind === "conversation") : undefined
+        : active?.kind === "projects" ? leaves.find((pane) => pane.kind === "composer") : undefined
       if (target) set("paneLayout", { ...state.paneLayout, active: target.id })
     },
     setProjectSidebarHighlight(id: string | undefined): void { set("projectSidebarHighlight", id) },

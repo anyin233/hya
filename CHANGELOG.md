@@ -1,6 +1,6 @@
-# 0.43.46
+# 0.43.47
 
-- Make keybinding overrides explicit: set replaces defaults, unset disables keys, reset restores defaults, with persisted null overrides.
-- Remove blanket browser, Ctrl+I/M/J/H and Ctrl+Shift assignment bans; match legacy terminal aliases.
-- Expose inherited editor and contextual keys in the binding list and shortcut inspection.
-- Show a visible usage error when `/keybind show` has no target.
+- Introduce common pane definitions and input handles with explicit selectable or passive eligibility.
+- Separate the passive conversation viewer and activity indicator from the selectable message editor.
+- Skip passive panes during directional focus and rotation; preserve one keyboard owner and prevent input fallthrough.
+- Migrate saved layouts to version 3, preserving existing editor ids, pane assignments and split weights.

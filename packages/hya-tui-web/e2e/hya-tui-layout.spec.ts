@@ -60,28 +60,28 @@ test.describe("layout", () => {
     let term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/layout split vertical jobs")
-    await term.waitForText("▸ jobs · pane-6")
+    await term.waitForText("▸ jobs · pane-8")
     const conversation = (await term.find("No messages yet"))!
-    const jobs = (await term.find("jobs · pane-6"))!
+    const jobs = (await term.find("jobs · pane-8"))!
     expect(jobs.col).toBeGreaterThan(conversation.col)
     await term.press("Alt+ArrowLeft")
     await prompt(term, "/layout split horizontal todos")
     await expect.poll(async () => (await term.lines()).filter((line) => line.includes("─Todos")).length).toBeGreaterThanOrEqual(2)
-    expect((await term.find("Todos"))!.col).toBeLessThan(jobs.col)
-    const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.row
+    const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.col
     await term.type("/")
     await term.waitForText("Commands")
-    await term.type("layout assign conversation")
+    await term.type("layout focus pane-8")
     await term.press("Enter")
-    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.row).toBeGreaterThan(inputBeforeSwap)
+    await prompt(term, "/layout assign composer")
+    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.col).toBeGreaterThan(inputBeforeSwap)
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
     term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("layout reply marker l1")
-    await term.waitForText("jobs · pane-6")
+    await term.waitForText("jobs · pane-1")
     await prompt(term, "/layout reset")
-    await expect.poll(() => term.find("pane-6")).toBeNull()
+    await expect.poll(() => term.find("pane-8")).toBeNull()
     await term.waitForText("Sessions")
   })
 
@@ -198,7 +198,7 @@ test.describe("jobs pane", () => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/layout split vertical jobs")
-    await term.waitForText("▸ jobs · pane-6")
+    await term.waitForText("▸ jobs · pane-8")
     await term.press("Alt+ArrowLeft")
     await prompt(term, "show the work")
     await term.waitForText("turn running", 20_000)

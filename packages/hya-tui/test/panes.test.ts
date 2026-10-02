@@ -5,13 +5,13 @@ import {
   renderedWeight, resizePane, setPaneKind, setSplitWeight, splitPane, visiblePaneRoot, type PaneLayout, type PaneSplit,
 } from "../src/state/panes"
 
-const singlePaneLayout = (): PaneLayout => ({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } })
+const singlePaneLayout = (): PaneLayout => ({ version: 3, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "composer" } })
 
 test("nested splits keep one conversation and focus the nearest pane in each direction", () => {
   const leftRight = splitPane(singlePaneLayout(), "vertical", "jobs")
-  expect(paneLeaves(leftRight.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs"])
-  const nested = splitPane(leftRight, "horizontal", "todos")
-  expect(paneLeaves(nested.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs", "todos"])
+  expect(paneLeaves(leftRight.root).map((pane) => pane.kind)).toEqual(["composer", "jobs"])
+  const nested = splitPane(leftRight, "horizontal", "sessions")
+  expect(paneLeaves(nested.root).map((pane) => pane.kind)).toEqual(["composer", "jobs", "sessions"])
   expect(movePaneFocus(nested, "left").active).toBe("pane-1")
   expect(movePaneFocus(nested, "up").active).toBe("pane-2")
   expect(movePaneFocus({ ...nested, active: "pane-1" }, "right").active).toBe("pane-2")
@@ -20,26 +20,26 @@ test("nested splits keep one conversation and focus the nearest pane in each dir
 test("assignment and close preserve the conversation; invalid saved layouts are refused", () => {
   const split = splitPane(singlePaneLayout(), "vertical", "jobs")
   const models = setPaneKind(split, "models")
-  expect(paneLeaves(models.root).map((pane) => pane.kind)).toEqual(["conversation", "models"])
-  const moved = setPaneKind(models, "conversation")
-  expect(paneLeaves(moved.root).map((pane) => pane.kind)).toEqual(["models", "conversation"])
-  expect(paneLeaves(closePane(models).root).map((pane) => pane.kind)).toEqual(["conversation"])
-  expect(() => closePane(moved)).toThrow("conversation")
-  expect(parsePaneLayout(JSON.parse(JSON.stringify(models)))).toEqual(models)
+  expect(paneLeaves(models.root).map((pane) => pane.kind)).toEqual(["composer", "models"])
+  const moved = setPaneKind(models, "composer")
+  expect(paneLeaves(moved.root).map((pane) => pane.kind)).toEqual(["models", "composer"])
+  expect(paneLeaves(closePane(models).root).map((pane) => pane.kind)).toEqual(["composer"])
+  expect(() => closePane(moved)).toThrow("composer")
+  expect(parsePaneLayout(JSON.parse(JSON.stringify(defaultPaneLayout())))).toEqual(defaultPaneLayout())
   expect(parsePaneLayout({ ...models, active: "missing" })).toBeUndefined()
   expect(parsePaneLayout({ ...models, root: { ...models.root, weight: 0 } })).toBeUndefined()
 })
 
 test("resize changes only the focused split and closes a nested auxiliary pane", () => {
-  const nested = splitPane(splitPane(singlePaneLayout(), "vertical", "jobs"), "horizontal", "todos")
+  const nested = splitPane(splitPane(singlePaneLayout(), "vertical", "jobs"), "horizontal", "sessions")
   const resized = resizePane(nested, 0.1)
   expect(resized.root.type).toBe("split")
   if (resized.root.type !== "split" || resized.root.second.type !== "split") return
   expect(resized.root.weight).toBe(0.5)
   expect(resized.root.second.weight).toBeCloseTo(0.4)
   const closed = closePane(resized)
-  expect(paneLeaves(closed.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs"])
-  expect(parsePaneLayout(closed)).toEqual(closed)
+  expect(paneLeaves(closed.root).map((pane) => pane.kind)).toEqual(["composer", "jobs"])
+  expect(parsePaneLayout(closed)).toBeUndefined() // Synthetic tree has no viewer.
 })
 
 test("default layout uses half-width project and context sidebars", () => {
@@ -50,7 +50,7 @@ test("default layout uses half-width project and context sidebars", () => {
 })
 
 test("version 2 default layout migrates its legacy sidebar widths", () => {
-  const legacy = { ...defaultPaneLayout(), root: { type: "split" as const, axis: "vertical" as const, weight: 0.18, first: { type: "pane" as const, id: "pane-2", kind: "projects" as const }, second: { type: "split" as const, axis: "vertical" as const, weight: 0.74, first: { type: "pane" as const, id: "pane-1", kind: "conversation" as const }, second: { type: "pane" as const, id: "pane-3", kind: "sessions" as const } } } }
+  const legacy = { version: 2, active: "pane-1", root: { type: "split" as const, axis: "vertical" as const, weight: 0.18, first: { type: "pane" as const, id: "pane-2", kind: "projects" as const }, second: { type: "split" as const, axis: "vertical" as const, weight: 0.74, first: { type: "pane" as const, id: "pane-1", kind: "conversation" as const }, second: { type: "pane" as const, id: "pane-3", kind: "sessions" as const } } } }
   const migrated = parsePaneLayout(legacy)
   expect(migrated?.root.type).toBe("split")
   if (migrated?.root.type !== "split" || migrated.root.second.type !== "split") return
@@ -72,7 +72,7 @@ test("the right sidebar is drawn at least sidebarMinColumns wide; wider when its
   // 12% of 300 columns is 36, above the minimum: the saved weight is drawn as is.
   expect(renderedWeight(split, 300)).toBe(0.88)
   // Only a split whose second side is the right sidebar is held open.
-  const jobs = splitPane({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }, "vertical", "jobs").root as PaneSplit
+  const jobs = splitPane({ version: 3, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "composer" } }, "vertical", "jobs").root as PaneSplit
   expect(renderedWeight({ ...jobs, weight: 0.9 }, 150)).toBe(0.9)
 })
 

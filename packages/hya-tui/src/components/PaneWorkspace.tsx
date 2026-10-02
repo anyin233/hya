@@ -1,55 +1,19 @@
 import type { BoxRenderable, MouseEvent, ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, Match, onCleanup, Show, Switch } from "solid-js"
+import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
+import type { PaneInputHandle } from "../app/context"
 import { useApp } from "../app/context"
-import { mainContent, modelReference, shownServer } from "../state/format"
-import type { AppState } from "../state/store"
-import { boundaryWeight, paneLeaves, renderedWeight, setSplitWeight, visiblePaneRoot, type PaneKind, type PaneLeaf, type PaneNode, type PaneSplit } from "../state/panes"
+import { boundaryWeight, isSelectablePane, normalizePaneFocus, paneDefinitions, paneLeaves, renderedWeight, setSplitWeight, visiblePaneRoot, type PaneLeaf, type PaneNode, type PaneSplit } from "../state/panes"
 import { pageStep } from "../state/scroll"
 import { keyboardOwner } from "../state/focus"
-import { colors } from "../theme"
-import { ConversationPane } from "./ConversationPane"
-import { ProjectsSidebar } from "./ProjectsSidebar"
-import { SidebarPane } from "./Sidebar"
+import { paneRegistry } from "./paneRegistry"
+import { currentPrompt } from "../state/prompts"
+import { pendingLines } from "../state/format"
 
-/** Jobs shown here are current projection facts: busy sessions, live members, queued prompts, and pending asks. */
-export function jobsText(state: AppState): string {
-  const lines: string[] = []
-  if (state.running && state.selected) lines.push(`● ${state.selected.title || state.selected.id} · turn running`)
-  for (const session of state.sessions) {
-    if (session.busy && !(state.running && session.id === state.selected?.id)) lines.push(`● ${session.title || session.id} · busy`)
-  }
-  for (const member of state.members) {
-    if (member.status === "MEMBER_STATUS_RUNNING" || member.status === "MEMBER_STATUS_SPAWNING") {
-      const activity = member.child ? state.children.get(member.child)?.activity : undefined
-      lines.push(`↳ ${member.description || member.agent || member.member} · ${member.status === "MEMBER_STATUS_SPAWNING" ? "starting" : "running"}${activity ? ` · ${activity}` : ""}`)
-    }
-  }
-  if (state.queued.length) lines.push(`${state.queued.length} queued prompt${state.queued.length === 1 ? "" : "s"}`)
-  if (state.interactions.length) lines.push(`${state.interactions.length} pending request${state.interactions.length === 1 ? "" : "s"} · /pending to review`)
-  return lines.length ? lines.join("\n") : "No active jobs. Busy sessions update on refresh; the open session's turn and members update live."
-}
-
-function paneText(state: AppState, kind: PaneKind, server: string): string {
-  switch (kind) {
-    case "jobs": return jobsText(state)
-    case "status": return [
-      `Server      ${shownServer(state, server)}`,
-      `Version     ${state.serverVersion || "unknown"}`,
-      `Connection  ${state.connected ? "connected" : "disconnected"}`,
-      `Session     ${state.selected?.title || state.selected?.id || "none"}`,
-      `Agent       ${state.selected?.agent || "none"}`,
-      `Model       ${state.selected ? modelReference(state.selected) || "default" : "none"}`,
-      `Mode        ${state.selected?.permissionMode || "manual"}`,
-      `Directory   ${state.selected?.workdir || "none"}`,
-    ].join("\n")
-    case "models": case "workflows": case "interactions": case "api": return mainContent(state, kind)
-    case "projects": case "conversation": case "sessions": case "todos": case "context": return ""
-  }
-}
+export { jobsText } from "./paneRegistry"
 
 function PaneLeafView(props: { node: PaneLeaf; width: number }) {
-  const { store, server, ui } = useApp()
+  const { store, controller, ui } = useApp()
   let scroll: ScrollBoxRenderable | undefined
   const scroller = {
     line: (direction: -1 | 1) => { if (scroll) scroll.scrollBy(direction) },
@@ -57,57 +21,42 @@ function PaneLeafView(props: { node: PaneLeaf; width: number }) {
     top: () => { if (scroll) scroll.scrollTop = 0 },
     bottom: () => { if (scroll) scroll.scrollTop = scroll.scrollHeight },
   }
+  const input = createMemo(() => paneRegistry[props.node.kind].input?.({ controller, scroll: scroller }))
+  let registeredInput: PaneInputHandle | undefined
   let registeredId: string | undefined
+  const unregister = () => {
+    if (!registeredId) return
+    if (ui.panes?.get(registeredId) === scroller) ui.panes.delete(registeredId)
+    if (registeredInput && ui.paneInputs?.get(registeredId) === registeredInput) ui.paneInputs.delete(registeredId)
+  }
   createEffect(() => {
-    ui.panes ??= new Map()
-    if (registeredId && registeredId !== props.node.id && ui.panes.get(registeredId) === scroller) ui.panes.delete(registeredId)
+    unregister()
     registeredId = props.node.id
-    if (props.node.kind === "conversation" || props.node.kind === "projects") ui.panes.delete(props.node.id)
-    else ui.panes.set(props.node.id, scroller)
+    ui.panes ??= new Map()
+    ui.paneInputs ??= new Map()
+    registeredInput = input()
+    if (registeredInput) {
+      ui.panes.set(props.node.id, scroller)
+      ui.paneInputs.set(props.node.id, registeredInput)
+    }
   })
-  onCleanup(() => { if (registeredId && ui.panes?.get(registeredId) === scroller) ui.panes.delete(registeredId) })
+  onCleanup(unregister)
   const active = () => store.state.paneLayout.active === props.node.id
   const highlighted = () => keyboardOwner(store.state, ui.command?.active() ?? false) === props.node.id
-  const title = () => `${active() ? "▸ " : ""}${props.node.kind} · ${props.node.id}`
   const select = () => {
-    if (active()) {
-      if (props.node.kind === "projects") store.setProjectsSidebarFocus(true)
-      return
-    }
+    if (!isSelectablePane(props.node)) return
+    if (active()) return
     store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id })
-    store.setProjectsSidebarFocus(props.node.kind === "projects")
   }
-  return (
-    <Switch>
-      <Match when={props.node.kind === "conversation"}>
-        <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <ConversationPane width={props.width} />
-        </box>
-      </Match>
-      <Match when={props.node.kind === "projects"}>
-        <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <ProjectsSidebar width={props.width} active={highlighted()} />
-        </box>
-      </Match>
-      <Match when={props.node.kind === "sessions" || props.node.kind === "todos" || props.node.kind === "context"}>
-        <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <SidebarPane kind={props.node.kind as "sessions" | "todos" | "context"} width={props.width} active={highlighted()} scrollRef={(element) => (scroll = element)} />
-        </box>
-      </Match>
-      <Match when={true}>
-    <box
-      width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column"
-      border borderColor={highlighted() ? colors.accent : colors.border}
-      title={title()} backgroundColor={colors.bg}
-      onMouseDown={select}
-    >
-      <scrollbox ref={(element: ScrollBoxRenderable) => (scroll = element)} width="100%" flexGrow={1} paddingX={1} paddingY={1}>
-        <text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>
-      </scrollbox>
-    </box>
-      </Match>
-    </Switch>
-  )
+  const renderer = createMemo(() => paneRegistry[props.node.kind].render)
+  return <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
+    <Show when={renderer()} keyed>{(render) => render({
+      get node() { return props.node },
+      get width() { return props.width },
+      get focused() { return highlighted() },
+      scrollRef: (element) => { scroll = element },
+    })}</Show>
+  </box>
 }
 
 /**
@@ -134,6 +83,17 @@ const splitKey = (node: PaneSplit): string => `${paneLeaves(node.first)[0]!.id}|
 function PaneNodeView(props: { node: PaneNode; width: number; drag: SplitDrag }) {
   const leaf = () => props.node.type === "pane" ? props.node : undefined
   const split = () => props.node.type === "split" ? props.node : undefined
+  const { store, ui } = useApp()
+  const minRows = (node: PaneNode): number => {
+    if (node.type === "split") return node.axis === "horizontal" ? minRows(node.first) + minRows(node.second) : Math.max(minRows(node.first), minRows(node.second))
+    if (node.kind !== "composer") return paneDefinitions[node.kind].minRows
+    // Draft updates establish a dependency before the editor mounts its row accessor.
+    void store.state.draft
+    const prompt = currentPrompt(store.state)?.view
+    const pending = pendingLines(store.state, props.width).length
+    return (ui.composerRows?.() ?? 1) + 2 + (prompt ? 5 + prompt.body.length + prompt.options.length : 0)
+      + (pending ? Math.min(3, pending) + 3 : 0) + (store.state.modeConfirm ? 1 : 0) + (store.state.secretEntry ? 4 : 0)
+  }
   return (
     <>
       <Show when={leaf()} keyed>{(node) => <PaneLeafView node={node} width={props.width} />}</Show>
@@ -157,10 +117,10 @@ function PaneNodeView(props: { node: PaneNode; width: number; drag: SplitDrag })
           }
           return (
             <box ref={(element: BoxRenderable) => (box = element)} width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection={node.axis === "vertical" ? "row" : "column"}>
-              <box ref={(element: BoxRenderable) => (first = element)} flexGrow={weight()} flexShrink={1} flexBasis={0}>
+              <box ref={(element: BoxRenderable) => (first = element)} minHeight={node.axis === "horizontal" ? minRows(node.first) : 1} flexGrow={weight()} flexShrink={1} flexBasis={0}>
                 <PaneNodeView node={node.first} width={node.axis === "vertical" ? props.width * weight() : props.width} drag={props.drag} />
               </box>
-              <box flexGrow={1 - weight()} flexShrink={1} flexBasis={0}>
+              <box minHeight={node.axis === "horizontal" ? minRows(node.second) : 1} flexGrow={1 - weight()} flexShrink={1} flexBasis={0}>
                 <PaneNodeView node={node.second} width={node.axis === "vertical" ? props.width * (1 - weight()) : props.width} drag={props.drag} />
               </box>
             </box>
@@ -179,15 +139,15 @@ function PaneNodeView(props: { node: PaneNode; width: number; drag: SplitDrag })
  * (`paneLayout` in the preferences file).
  */
 export function PaneWorkspace() {
-  const { store, controller } = useApp()
+  const { store, controller, ui } = useApp()
+  useKeyboard((event) => ui.workspaceInput?.onKey(event))
+  usePaste((event) => ui.workspaceInput?.onPaste(event))
   const size = useTerminalDimensions()
   const visibleRoot = createMemo(() => visiblePaneRoot(store.state.paneLayout.root, size().width, store.state.sidebar, store.state.projectsSidebar))
   createEffect(() => {
-    const leaves = paneLeaves(visibleRoot())
-    if (!leaves.some((pane) => pane.id === store.state.paneLayout.active)) {
-      const active = leaves.find((pane) => pane.kind === "conversation")?.id ?? leaves[0]!.id
-      store.setPaneLayout({ ...store.state.paneLayout, active })
-      store.setProjectsSidebarFocus(false)
+    const normalized = normalizePaneFocus({ ...store.state.paneLayout, root: visibleRoot() })
+    if (normalized.active !== store.state.paneLayout.active) {
+      store.setPaneLayout({ ...store.state.paneLayout, active: normalized.active })
     }
   })
   const [live, setLive] = createSignal<{ key: string; weight: number }>()
