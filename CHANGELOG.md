@@ -1,6 +1,5 @@
-# 0.43.53
+# 0.43.54
 
-- Introduce layout v4 ordered row/column containers, with migration of saved binary layouts, content sizing and safe normalization.
-- Add `/layout tree`, `insert`, `move`, `wrap` and `remove` commands for uniform branch editing.
-- Make Alt+Left/Right cycle through every visible selectable pane in visual order; Alt+Up/Down choose nearby panes using drawn bounds.
-- Preserve mounted pane state, drafts and transcript scroll across structural edits and reloads, and support dragging row and column boundaries.
+- Add a selectable Layout pane that shows and edits the whole saved layout tree, including hidden and passive panes.
+- Make `/layout tree` open or focus the Layout pane; support `layout` in split, insert and assign commands.
+- Add keyboard and mouse controls for inserting, moving, wrapping, assigning and removing nodes, and editing relative weights or content sizing. Keep edits in the focused pane and save them to frontend preferences.
