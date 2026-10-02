@@ -34,7 +34,7 @@ test("version 1 center-only layouts migrate into the complete workspace", () => 
   const old = { version: 1, active: "pane-2", root: { type: "split", axis: "vertical", weight: 0.5,
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
   const migrated = parsePaneLayout(old)!
-  expect(migrated.version).toBe(3)
+  expect(migrated.version).toBe(4)
   expect(migrated.active).toBe("pane-2")
   expect(paneLeaves(migrated.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "activity", "composer", "jobs", "sessions", "todos", "context"])
 })

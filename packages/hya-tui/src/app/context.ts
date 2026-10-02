@@ -1,6 +1,7 @@
 /** Solid context giving every component the store, the controller, and the server URL. */
 import { createContext, useContext } from "solid-js"
 import type { KeyEvent, PasteEvent } from "@opentui/core"
+import type { Rect } from "../state/panes"
 import type { AppStore } from "../state/store"
 import type { InputHistory } from "../composer/history"
 import type { Controller } from "./controller"
@@ -11,6 +12,9 @@ export interface UiHandles {
   workspaceInput?: { onKey(event: KeyEvent): void; onPaste(event: PasteEvent): void }
   /** Mounted selectable panes expose the same input contract, keyed by instance id. */
   paneInputs?: Map<string, PaneInputHandle>
+  /** Native render bounds, read at navigation time rather than estimated from ratios. */
+  paneBounds?: Map<string, () => Rect>
+  invalidateLayout?: () => void
   transcript?: TranscriptScroller
   /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
   panes?: Map<string, DiffScroller>

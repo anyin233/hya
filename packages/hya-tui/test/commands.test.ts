@@ -6,7 +6,7 @@ import { nativeCommands, type CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference, sessionListText } from "../src/state/format"
-import { defaultPaneLayout, closePane, paneRects } from "../src/state/panes"
+import { defaultPaneLayout, closePane, paneRects, paneNodes, paneLeaves, type Rect } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
@@ -876,4 +876,41 @@ test("/layout split up/left inserts on the named side and rejects axis keywords"
     for (const token of ["horizontal", "vertical", "right", "down"]) await expect(h.run(`/layout split ${token}`)).rejects.toThrow("Usage: /layout split <up|left>")
     await expect(h.run("/layout split up jobs extra")).rejects.toThrow("Usage:")
   }
+})
+
+
+test("layout tree commands expose container ids and share insert/move/wrap/remove operations", async () => {
+  const h = harness()
+  await h.run("/layout tree")
+  expect(h.pickers.at(-1)?.title).toBe("Layout tree")
+  expect(h.pickers.at(-1)?.rows.some((row) => row.label.includes("group-1 · row"))).toBe(true)
+  expect(h.registry.complete("/layout insert group-", h.store.completionContext())).toHaveLength(3)
+  await h.run("/layout insert root 1 jobs")
+  await h.run("/layout move pane-8 group-3 1")
+  expect(h.store.completionContext().layoutContainers?.find((node) => node.id === "group-3")?.children[1]).toBe("pane-8")
+  await h.run("/layout wrap pane-8 row models after")
+  const auxiliary = paneNodes(h.store.state.paneLayout.root).find((node) => node.type === "split" && paneLeaves(node).every((pane) => ["jobs", "models"].includes(pane.kind)))!
+  await h.run(`/layout remove ${auxiliary.id}`)
+  expect(h.store.completionContext().panes?.some((pane) => pane.kind === "jobs")).toBe(false)
+  await expect(h.run("/layout move root group-2 0")).rejects.toThrow("descendant")
+  for (const command of ["/layout insert root -1 jobs", "/layout move pane-1 root", "/layout wrap root sideways jobs", "/layout remove", "/layout tree extra"]) await expect(h.run(command)).rejects.toThrow("Usage:")
+})
+
+test("focus commands consume native bounds and horizontal navigation forms one cycle", async () => {
+  const h = harness()
+  const bounds = new Map<string, Rect>([
+    ["pane-1", { left: 0, top: 0, right: 20, bottom: 3 }],
+    ["pane-2", { left: 30, top: 10, right: 50, bottom: 20 }],
+    ["pane-3", { left: 0, top: 10, right: 20, bottom: 20 }],
+  ])
+  h.actions.paneBounds = () => bounds
+  h.store.setColumns(170)
+  await h.run("/layout focus right")
+  expect(h.store.state.paneLayout.active).toBe("pane-3")
+  await h.run("/layout focus right")
+  expect(h.store.state.paneLayout.active).toBe("pane-2")
+  await h.run("/layout focus right")
+  expect(h.store.state.paneLayout.active).toBe("pane-1")
+  await h.run("/layout focus down")
+  expect(h.store.state.paneLayout.active).toBe("pane-3")
 })

@@ -997,6 +997,7 @@ export function createController({ client, store, directory, remote: startedRemo
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
     savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
+    paneBounds: () => new Map([...ui.paneBounds ?? []].map(([id, read]) => [id, read()])),
     loadPaneLayout: () => {
       if (!preferencesPath) throw new Error("No TUI preferences path configured")
       return { layout: loadPaneLayout(preferencesPath), path: preferencesPath }

@@ -118,7 +118,7 @@ test("a saved version-1 center split loads with editable outer side panes", () =
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
   writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
   const loaded = loadPreferences(path).preferences.paneLayout!
-  expect(loaded.version).toBe(3)
+  expect(loaded.version).toBe(4)
   expect(loaded.active).toBe("pane-2")
   expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
   expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')
@@ -147,5 +147,5 @@ test("explicit layout loading refuses missing/corrupt/invalid layouts and never 
   expect(readFileSync(path, "utf8")).toBe(text)
   const legacy = { version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }
   writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
-  expect(loadPaneLayout(path).version).toBe(3)
+  expect(loadPaneLayout(path).version).toBe(4)
 })

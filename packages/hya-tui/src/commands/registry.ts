@@ -9,7 +9,7 @@
 import type { HyaClient } from "../client"
 import type { CompletionContext } from "../completion"
 import type { TuiPreferences } from "../prefs"
-import type { PaneLayout } from "../state/panes"
+import type { PaneLayout, Rect } from "../state/panes"
 import type { PickerSpec } from "../state/picker"
 import type { AppStore } from "../state/store"
 
@@ -63,6 +63,7 @@ export interface AppActions {
   savePreferences(patch: Partial<TuiPreferences>): void
   /** Strictly read the saved layout from this frontend's preferences file; does not write. */
   loadPaneLayout(): { layout: PaneLayout; path: string }
+  paneBounds?(): ReadonlyMap<string, Rect>
   /** Copy `text` to the system clipboard with OSC 52; `false` when the terminal does not accept it. */
   copyText(text: string): boolean
   /** Edit the composer's input in the external editor (composer/editor.ts); the result goes back into the input. */

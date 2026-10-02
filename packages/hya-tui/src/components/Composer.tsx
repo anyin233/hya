@@ -694,6 +694,7 @@ export function Composer(props: { width: number }) {
   const composerHeight = () => (store.state.secretEntry ? 4 : rows() + 2)
     + (menu() ? menu()!.items.length + 3 : 0) + attachments().length
   ui.composerHeight = composerHeight
+  queueMicrotask(() => ui.invalidateLayout?.())
   let editorPaneId: string | undefined
   createEffect(() => {
     if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
