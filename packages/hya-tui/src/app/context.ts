@@ -18,7 +18,7 @@ export interface UiHandles {
   command?: CommandPaneHandle
   composerHistory?: InputHistory
   commandHistory?: InputHistory
-  composerRows?: () => number
+  composerHeight?: () => number
   composerInput?: { text: string; cursor: number }
   commandInput?: { text: string; active: boolean; originSidebar: boolean }
 }

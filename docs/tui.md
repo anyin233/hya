@@ -1164,8 +1164,17 @@ Below 150 columns Projects is hidden unless `/projects-sidebar on` pins it;
 Sessions, Todos, and Context are hidden below 150 columns. At wider sizes
 `/sidebar off` hides those three kinds wherever they are placed. The saved
 layout remains intact. Resizing and toggling preserve drafts and histories.
-Editor and prompt controls have a minimum height so pending interactions stay
-visible, taking space from the viewer when necessary.
+The default editor dock sizes to its visible content: three rows for an empty
+input, more for multiline drafts, file completion, attachments, pending prompts,
+and permission controls. The activity pane takes one row while visible and zero
+rows while idle. The viewer receives all remaining height, keeping the input
+adjacent to the transcript rather than reserving an empty percentage of the
+screen. This also applies after resizing the terminal. Existing generated
+80%/20% viewer/activity/editor arrangements upgrade automatically; custom
+split ratios remain weighted. No reset or new shortcut is needed. An explicit
+`/layout resize +10` or `/layout split vertical jobs` changes the edited branch
+back to weighted sizing, so manually sized or subdivided layouts remain
+proportional.
 
 Jobs show busy sessions, current subagents, queued prompts and pending
 requests from the existing TUI projection. Current-turn activity streams live;
@@ -1176,7 +1185,13 @@ other sessions follow catalog refreshes.
 The preferences contract is `paneLayout: {version: 3, root: PaneNode,
 active: string}`. `PaneNode` is either `{type: "pane", id: "pane-N",
 kind: PaneKind}` or `{type: "split", axis: "horizontal"|"vertical",
-weight: number, first: PaneNode, second: PaneNode}`. Weights are finite
+weight: number, first: PaneNode, second: PaneNode,
+sizing?: "weighted"|"content-first"|"content-second"}`. Omitted `sizing` means
+weighted. `content-first` and `content-second` are valid only for horizontal
+splits: the named child gets exactly its current content/minimum row count,
+while its sibling fills the remaining height. A content-sized child may be zero
+rows when its activity indicator is hidden. `weight` remains saved for weighted
+layout edits; it does not reserve empty space while content sizing is active. Weights are finite
 fractions from `0.1` through `0.9`. Trees require unique positive numeric ids,
 exactly one `conversation` and one `composer`, a known active id, at most 32
 leaves and at most 31 nested split levels. An active passive id normalizes to

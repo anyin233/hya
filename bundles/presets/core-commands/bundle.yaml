@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/core-commands
-  version: 0.43.48
+  version: 0.43.49
   publisher: hya
 namespace: core-commands
 extensions:

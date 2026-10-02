@@ -51,6 +51,8 @@ export interface PaneLeaf {
 export interface PaneSplit {
   type: "split"
   axis: PaneAxis
+  /** Horizontal docks can size one child to its visible content; absent means weighted. */
+  sizing?: "weighted" | "content-first" | "content-second"
   /** Fraction of available width/height allocated to `first`. */
   weight: number
   first: PaneNode
@@ -71,8 +73,8 @@ export function defaultPaneLayout(): PaneLayout {
   return { version: 3, active: "pane-1", root: {
     type: "split", axis: "vertical", weight: 0.1, first: leaf(2, "projects"), second: {
       type: "split", axis: "vertical", weight: 0.88, first: {
-        type: "split", axis: "horizontal", weight: 0.8, first: leaf(6, "conversation"), second: {
-          type: "split", axis: "horizontal", weight: 0.2, first: leaf(7, "activity"), second: leaf(1, "composer"),
+        type: "split", axis: "horizontal", sizing: "content-second", weight: 0.8, first: leaf(6, "conversation"), second: {
+          type: "split", axis: "horizontal", sizing: "content-first", weight: 0.2, first: leaf(7, "activity"), second: leaf(1, "composer"),
         },
       }, second: {
         type: "split", axis: "horizontal", weight: 0.62, first: leaf(3, "sessions"), second: {
@@ -123,6 +125,12 @@ function mapPane(node: PaneNode, id: string, change: (pane: PaneLeaf) => PaneNod
   return { ...node, first: mapPane(node.first, id, change), second: mapPane(node.second, id, change) }
 }
 
+/** Explicit structural edits restore proportional sizing along the edited branch. */
+function weightedPaneAncestors(node: PaneNode, id: string): PaneNode {
+  if (node.type === "pane" || !paneLeaves(node).some((pane) => pane.id === id)) return node
+  return { ...node, ...(node.sizing && node.sizing !== "weighted" ? { sizing: "weighted" as const } : {}), first: weightedPaneAncestors(node.first, id), second: weightedPaneAncestors(node.second, id) }
+}
+
 /** Split the active rectangle into two equal rectangles; the new pane gets focus. */
 export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs"): PaneLayout {
   const leaves = paneLeaves(layout.root)
@@ -132,7 +140,7 @@ export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "
   const id = `pane-${next}`
   return {
     ...layout,
-    root: mapPane(layout.root, layout.active, (pane) => ({ type: "split", axis, weight: 0.5, first: pane, second: { type: "pane", id, kind } })),
+    root: mapPane(weightedPaneAncestors(layout.root, layout.active), layout.active, (pane) => ({ type: "split", axis, weight: 0.5, first: pane, second: { type: "pane", id, kind } })),
     active: paneDefinitions[kind].selectable ? id : layout.active,
   }
 }
@@ -237,7 +245,7 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
     if (secondHas) { const [second, done] = resize(node.second); return [{ ...node, second }, done] }
     return [node, false]
   }
-  return { ...layout, root: resize(layout.root)[0] }
+  return { ...layout, root: weightedPaneAncestors(resize(layout.root)[0], layout.active) }
 }
 
 const rightSidebarKinds: readonly PaneKind[] = ["sessions", "todos", "context"]
@@ -289,6 +297,21 @@ function migrateLegacyDefault(root: PaneNode): PaneNode {
   return { ...root, weight: 0.1, second: { ...center, weight: 0.88 } }
 }
 
+/** Upgrade only the generated viewer/activity/editor dock; custom weights remain weighted. */
+function migrateConversationDock(node: PaneNode): PaneNode {
+  if (node.type === "pane") return node
+  const first = migrateConversationDock(node.first)
+  const second = migrateConversationDock(node.second)
+  if (node.sizing === undefined && node.axis === "horizontal" && node.weight === 0.8
+    && first.type === "pane" && first.kind === "conversation"
+    && second.type === "split" && second.sizing === undefined && second.axis === "horizontal" && second.weight === 0.2
+    && second.first.type === "pane" && second.first.kind === "activity"
+    && second.second.type === "pane" && second.second.kind === "composer") {
+    return { ...node, sizing: "content-second", first, second: { ...second, sizing: "content-first" } }
+  }
+  return first === node.first && second === node.second ? node : { ...node, first, second }
+}
+
 /** Validate a preference file's untrusted JSON before it reaches the layout store. */
 export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
@@ -308,12 +331,14 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
       return ids.size <= maxPanes
     }
     if (row.type !== "split" || (row.axis !== "horizontal" && row.axis !== "vertical") || typeof row.weight !== "number" || !Number.isFinite(row.weight) || row.weight < 0.1 || row.weight > 0.9) return false
+    if (row.sizing !== undefined && row.sizing !== "weighted" && row.sizing !== "content-first" && row.sizing !== "content-second") return false
+    if ((row.sizing === "content-first" || row.sizing === "content-second") && row.axis !== "horizontal") return false
     return valid(row.first, depth + 1) && valid(row.second, depth + 1)
   }
   if (!valid(record.root, 0) || conversations !== 1 || !ids.has(record.active)) return undefined
   if (record.version === 3) {
     if (composers !== 1) return undefined
-    return normalizePaneFocus({ version: 3, root: record.root, active: record.active })
+    return normalizePaneFocus({ version: 3, root: migrateConversationDock(record.root), active: record.active })
   }
   if (composers !== 0) return undefined
   // Keep the old conversation id on the editor so saved shortcuts still target input.
@@ -330,8 +355,8 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     } }
   } else if (ids.size > maxPanes - 2) return undefined
   const conversation = paneLeaves(root).find((pane) => pane.kind === "conversation")!
-  root = mapPane(root, conversation.id, (pane) => ({ type: "split", axis: "horizontal", weight: 0.8,
-    first: leaf("conversation"), second: { type: "split", axis: "horizontal", weight: 0.2,
+  root = mapPane(root, conversation.id, (pane) => ({ type: "split", axis: "horizontal", sizing: "content-second", weight: 0.8,
+    first: leaf("conversation"), second: { type: "split", axis: "horizontal", sizing: "content-first", weight: 0.2,
       first: leaf("activity"), second: { ...pane, kind: "composer" },
     },
   }))

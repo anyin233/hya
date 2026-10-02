@@ -1,4 +1,5 @@
-# 0.43.48
+# 0.43.49
 
-- Reserve workspace pane boxes for selectable panes; render passive Todos, Context, and Status without enclosing borders.
-- Share eligibility-driven pane frames, including non-chat output in the passive conversation viewer, while retaining selectable focus highlights.
+- Size the default editor and activity dock to visible content, giving unused height back to the conversation viewer instead of leaving a large input gap.
+- Collapse idle activity rows and grow the dock for multiline input, completion, attachments and permission prompts.
+- Upgrade existing generated docks automatically while preserving custom weighted layouts and explicit resizing.

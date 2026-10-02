@@ -11,3 +11,7 @@ Verify browser rendering through packages/hya-tui-web. New regression: e2e/hya-t
 **Answer:** Yes. PaneFrame reads paneDefinitions[kind].selectable and draws an enclosing border only for selectable workspace panes. Passive Todos, Context and Status retain plain labels on the base background. MainPanel non-chat output is also passive and borderless. This avoids a visual promise of focus navigation on a passive pane. Content widgets inside panes retain their own rendering contracts.
 
 **OpenTUI pitfall:** `border: false` plus a `borderColor` auto-enables borders. Use `border: []` for passive frames, including reactive transitions from a selectable kind. Verify full frame edges in browser terminal cells, not only the absence of a title rule.
+
+## How does the default input avoid wasting transcript height?
+
+**Answer:** Horizontal PaneSplit supports optional sizing: weighted, content-first or content-second. The default viewer/activity/editor dock reserves only current editor content and zero/one activity row. Composer reports full height, including completion, attachments and secret input. Legacy generated 80/20 docks migrate automatically; custom ratios are preserved. Explicit split/resize edits restore weighted ancestors. Regression e2e/hya-tui-compact-dock.spec.ts covers narrow, tall, multiline, migration and active adjacency.
