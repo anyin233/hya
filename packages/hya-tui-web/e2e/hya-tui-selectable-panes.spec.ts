@@ -51,7 +51,7 @@ for (const width of [1100, 690]) {
   test(`adding passive Status keeps the editor active (${width}px)`, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await command(term, "/layout split vertical status")
+    await command(term, "/layout split left status")
     await term.waitForText("status · pane-8")
     await term.press("Alt+ArrowRight")
     await term.type("editor still owns this")

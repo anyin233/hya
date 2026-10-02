@@ -23,3 +23,7 @@ Verify browser rendering through packages/hya-tui-web. New regression: e2e/hya-t
 ## How can an agent edit the running layout through a file?
 
 **Answer:** Edit paneLayout in the frontend preferences JSON, then invoke `/layout reload`. The controller captures the same preferences path as startup; strict loadPaneLayout rejects missing/unreadable/invalid layouts without fallback. It validates/migrates with parsePaneLayout, applies only the tree, and never writes the file. Other preferences stay as currently running. The file is local to the TUI/PTY host, so a remote backend agent needs filesystem access. Tests: prefs/commands units and e2e/hya-tui-layout-reload.spec.ts (draft, layout, session, file preservation and invalid reload at normal/narrow widths).
+
+## What direction does a split command place its new pane?
+
+**Answer:** `/layout split up [job]` inserts above; `/layout split left [job]` inserts to the left. Both give half the selected rectangle to each leaf and preserve existing focus eligibility. Old axis command arguments are rejected. Saved axis fields remain horizontal/vertical; command passes before=true to splitPane so the added leaf is first. Existing internal callers retain default append behavior.

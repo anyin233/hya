@@ -132,7 +132,7 @@ function weightedPaneAncestors(node: PaneNode, id: string): PaneNode {
 }
 
 /** Split the active rectangle into two equal rectangles; the new pane gets focus. */
-export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs"): PaneLayout {
+export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", before = false): PaneLayout {
   const leaves = paneLeaves(layout.root)
   if (leaves.length >= maxPanes) throw new Error(`A layout supports at most ${maxPanes} panes`)
   if (kind === "conversation" || kind === "composer") throw new Error(`Use /layout assign ${kind} to move the ${kind} pane`)
@@ -140,7 +140,10 @@ export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "
   const id = `pane-${next}`
   return {
     ...layout,
-    root: mapPane(weightedPaneAncestors(layout.root, layout.active), layout.active, (pane) => ({ type: "split", axis, weight: 0.5, first: pane, second: { type: "pane", id, kind } })),
+    root: mapPane(weightedPaneAncestors(layout.root, layout.active), layout.active, (pane) => {
+      const added: PaneLeaf = { type: "pane", id, kind }
+      return { type: "split", axis, weight: 0.5, first: before ? added : pane, second: before ? pane : added }
+    }),
     active: paneDefinitions[kind].selectable ? id : layout.active,
   }
 }
