@@ -959,6 +959,7 @@ export function createAppStore() {
 
     completionContext(): CompletionContext {
       return {
+        panes: paneLeaves(state.paneLayout.root).map(({ id, kind }) => ({ id, kind })),
         backendCommands: state.backendCommands.map((command) => command.name),
         models: state.models.map((model) => model.id),
         sessions: state.sessions.map((session) => ({ id: session.id, title: session.title })),

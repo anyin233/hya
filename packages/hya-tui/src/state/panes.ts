@@ -157,10 +157,15 @@ export function setPaneKind(layout: PaneLayout, kind: PaneKind): PaneLayout {
   return normalizePaneFocus({ ...layout, root: mapPane(root, active.id, (pane) => ({ ...pane, kind })) })
 }
 
-/** Close the focused auxiliary pane and promote its sibling. The conversation remains mounted. */
-export function closePane(layout: PaneLayout): PaneLayout {
-  const active = paneLeaves(layout.root).find((pane) => pane.id === layout.active)
-  if (!active || active.kind === "conversation" || active.kind === "composer") throw new Error("Cannot close the conversation or composer pane; select an auxiliary pane")
+/** Close the selected pane or an explicit kind/id; preserve focus when removing another pane. */
+export function closePane(layout: PaneLayout, target?: string): PaneLayout {
+  const leaves = paneLeaves(layout.root)
+  const matches = target === undefined ? leaves.filter((pane) => pane.id === layout.active)
+    : leaves.filter((pane) => pane.id === target || pane.kind === target)
+  if (!matches.length) throw new Error(`Unknown pane: ${target ?? layout.active}`)
+  if (matches.length > 1) throw new Error(`Pane ${target} is ambiguous; use a pane id: ${matches.map((pane) => pane.id).join(", ")}`)
+  const active = matches[0]!
+  if (active.kind === "conversation" || active.kind === "composer") throw new Error("Cannot close the conversation or composer pane; choose an auxiliary pane")
   const remove = (node: PaneNode): PaneNode => {
     if (node.type === "pane") return node
     if (paneLeaves(node.first).some((pane) => pane.id === active.id)) {

@@ -1,5 +1,4 @@
-# 0.43.49
+# 0.43.50
 
-- Size the default editor and activity dock to visible content, giving unused height back to the conversation viewer instead of leaving a large input gap.
-- Collapse idle activity rows and grow the dock for multiline input, completion, attachments and permission prompts.
-- Upgrade existing generated docks automatically while preserving custom weighted layouts and explicit resizing.
+- Add `/layout close <pane-name|pane-id>` for passive or hidden auxiliary panes while preserving `/layout close` for the selected pane.
+- Complete live closable names and ids, preserve surviving input focus, and report ambiguous duplicate pane names with exact ids.

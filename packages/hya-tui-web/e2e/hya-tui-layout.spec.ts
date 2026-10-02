@@ -44,6 +44,36 @@ test.describe("layout", () => {
     await expect.poll(() => term.find("Projects")).toBeNull()
   })
 
+  test("close passive panes by name or id and restore the saved removal", async ({ tui, backend }, testInfo) => {
+    let term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await statusSessionId(term)
+    await term.waitForText("Todos")
+    await term.type("/layout close tod")
+    await term.waitForText("/layout close todos")
+    await term.press("Tab")
+    await term.press("Enter")
+    await expect.poll(() => term.find("Todos")).toBeNull()
+    await term.waitForText("Context")
+    await prompt(term, "/layout close pane-5")
+    await expect.poll(() => term.find("Context")).toBeNull()
+    await term.type("still editing here")
+    await term.waitForText("still editing here")
+    const input = (await term.find("still editing here"))!
+    expect((await term.cell(input.row - 1, input.col))?.fg).toBe(colors.accent)
+    await term.attach(testInfo, "named-close")
+    term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await statusSessionId(term)
+    expect(await term.find("Todos")).toBeNull()
+    expect(await term.find("Context")).toBeNull()
+    await term.resize(690, 640)
+    await prompt(term, "/layout close sessions") // hidden at this width
+    await term.resize(wideViewport.width, wideViewport.height)
+    await expect.poll(() => term.find("Sessions")).toBeNull()
+    await term.attach(testInfo, "named-close-restored")
+  })
+
   test("an open command survives a responsive pane reshape", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")

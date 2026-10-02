@@ -1137,6 +1137,9 @@ For example, open commands using `/` (Ctrl+X then `/` while drafting):
 /layout split vertical jobs       # new selectable Jobs pane gets focus
 /layout split horizontal status   # add passive Status; focus stays on Jobs
 /layout focus previous            # rotate through selectable panes only
+/layout close todos               # remove a passive pane without selecting it
+/layout close pane-5              # target an exact id (Context in the default)
+/layout close                     # remove the selected auxiliary pane
 /layout reset                     # restore the seven-pane default
 ```
 
@@ -1144,9 +1147,14 @@ For example, open commands using `/` (Ctrl+X then `/` while drafting):
 selectable pane gets focus; adding a passive pane preserves focus. The viewer
 and editor are singletons and cannot be duplicated or closed. Assigning either
 kind swaps it with the existing instance; if the target becomes passive,
-keyboard focus follows the normal editor fallback. Additional ways to target
-passive panes for layout editing are deferred; keyboard navigation does not
-select them.
+keyboard focus follows the normal editor fallback. Use `/layout close <pane-name>` to remove a passive pane without selecting it.
+Names are the lowercase job kinds, such as `todos`, `context`, or `activity`.
+Named closing also works on panes hidden by responsive layout. A duplicate
+name is refused with the matching ids; use `/layout close <pane-id>` to choose
+one. Unknown targets and extra arguments produce errors without changing the
+layout. Closing a different pane preserves focus; closing the selected pane
+returns focus to the editor. The command dropdown offers currently present
+closable ids and unambiguous names, updating after each layout edit.
 
 | Command | Effect |
 | --- | --- |
@@ -1155,7 +1163,7 @@ select them.
 | `/layout assign <job>` | Assign the focused rectangle; viewer/editor assignment swaps singleton instances. |
 | `/layout focus <left\|right\|up\|down\|next\|previous\|pane-id>` | Focus a visible selectable pane; passive/hidden/unknown ids are refused. |
 | `/layout resize <+N\|-N>` | Resize the focused pane against its nearest sibling, within 10–90%. |
-| `/layout close` | Close the focused auxiliary pane and promote its sibling; fall back to editor focus. |
+| `/layout close [pane-name\|pane-id]` | Without a target, close the selected auxiliary pane. With a target, close that leaf regardless of visibility or selectability; promote its sibling and preserve surviving focus. |
 | `/layout reset` | Restore the default arrangement. |
 
 Default ids are `pane-1` editor, `pane-2` Projects, `pane-3` Sessions,
@@ -1181,6 +1189,13 @@ requests from the existing TUI projection. Current-turn activity streams live;
 other sessions follow catalog refreshes.
 
 #### Pane interfaces and persistence
+
+The local close reducer contract is `closePane(layout: PaneLayout, target?: string): PaneLayout`.
+An omitted target means `layout.active`; an explicit target matches the exact
+`PaneKind` or `pane-N` id. It removes exactly one auxiliary leaf, refuses
+unknown/ambiguous targets and the viewer/editor, and normalizes focus only if
+necessary. Command completion receives `CompletionContext.panes?: {id: string;
+kind: string}[]` from the full saved layout. No backend RPC is added.
 
 The preferences contract is `paneLayout: {version: 3, root: PaneNode,
 active: string}`. `PaneNode` is either `{type: "pane", id: "pane-N",
