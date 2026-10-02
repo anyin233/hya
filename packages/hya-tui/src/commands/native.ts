@@ -5,7 +5,7 @@ import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from 
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
-import { insertPane, movePane, wrapPane, paneNodes, closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout, type LayoutDirection, type PaneNode } from "../state/panes"
+import { openLayoutPane, insertPane, movePane, wrapPane, closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout, type LayoutDirection } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -367,14 +367,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
       switch (command) {
         case "tree": {
           if (args.length !== 1) throw new Error("Usage: /layout tree")
-          const rows: { id: string; label: string; detail: string }[] = []
-          const visit = (node: PaneNode, depth: number, size = "root") => {
-            rows.push({ id: node.id, label: `${"  ".repeat(depth)}${node.id} · ${node.type === "pane" ? node.kind : node.direction}`, detail: `${size}${node.type === "pane" ? isSelectablePane(node) ? " · selectable" : " · passive" : " · container"}` })
-            if (node.type === "split") for (const child of node.children) visit(child.node, depth + 1, child.size.mode === "content" ? "content" : `weight ${child.size.value}`)
-          }
-          visit(current.root, 0)
-          actions.openPicker({ title: "Layout tree", rows, hint: "Ids for insert/move/wrap/remove · Esc closes", onSelect: () => undefined })
-          return
+          next = openLayoutPane(current)
+          break
         }
         case "show": break
         case "insert": {

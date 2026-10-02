@@ -9,6 +9,7 @@ test("inherited and contextual keys are inspectable, including Vim prefixes and 
   expect(rows.find((row) => row.shortcut === "Ctrl+W")?.label).toBe("delete-word-backward")
   expect(rows.some((row) => row.shortcut === "G" && row.label.includes("gg prefix"))).toBe(true)
   expect(rows.some((row) => row.shortcut === "F2" && row.label.includes("rename"))).toBe(true)
+  expect(rows.some((row) => row.shortcut === "Enter" && row.tag === "pane" && row.label.startsWith("Layout:"))).toBe(true)
   expect(validateCustomKeybindings({ KeypadEnter: null })).toEqual({ KeypadEnter: null })
 })
 

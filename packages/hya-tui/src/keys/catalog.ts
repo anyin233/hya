@@ -54,7 +54,7 @@ const actionInfo: Record<KeyAction, ActionInfo> = {
 const contexts: Record<BindingScope, string> = {
   workspace: "Workspace action across tiled panes. Open modals and command input take precedence; individual key conditions still apply.",
   conversation: "Conversation focus only. Other panes keep these keys; prompts, completion and Vim can take precedence.",
-  pane: "Scroll the focused pane, except Projects, which owns its navigation. In conversation focus, scroll the transcript; plain Home/End require an empty message input.",
+  pane: "Use the focused pane; Projects and Layout own their navigation. In conversation focus, scroll the transcript; plain Home/End require an empty message input.",
 }
 
 /** One entry per action; unassigned actions retain their command and scope metadata. */

@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya-extra/model-fallback
-  version: 0.43.53
+  version: 0.43.54
   publisher: hya-extra
 extensions:
   process:

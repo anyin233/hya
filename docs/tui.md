@@ -1106,7 +1106,7 @@ and pending-request controls.
 
 | Pane kind | Keyboard eligibility |
 | --- | --- |
-| `composer`, `projects`, `sessions`, `jobs`, `models`, `workflows`, `interactions`, `api` | Selectable |
+| `composer`, `projects`, `sessions`, `jobs`, `models`, `workflows`, `interactions`, `api`, `layout` | Selectable |
 | `conversation`, `activity`, `todos`, `context`, `status` | Unselectable |
 
 Alt+Left and Alt+Right visit the previous/next visible selectable pane in
@@ -1174,7 +1174,7 @@ closable ids and unambiguous names, updating after each layout edit.
 | `/layout resize <+N\|-N>` | Transfer percentage points of parent weight between the selected child and its next sibling (previous at the end), within 10–90% of the pair; converts that parent’s content slots to weights. |
 | `/layout close [pane-name\|node-id]` | Close the selected auxiliary pane or an explicit auxiliary pane/container, including hidden or passive content; preserve surviving focus. |
 | `/layout reload` | Read and validate `paneLayout` from this TUI’s preferences file and apply it immediately, without writing the file or loading other settings. |
-| `/layout tree` | Inspect pane/container ids, order, sizing and eligibility in a read-only modal; Esc closes. |
+| `/layout tree` | Open or focus a selectable Layout pane for editing the saved tree. Reuse the first existing `layout` pane; otherwise add one beside the whole workspace. |
 | `/layout insert <container-id\|root> <index> <job>` | Insert a new auxiliary pane at a zero-based child index (0 through child count); a selectable new pane gets focus. |
 | `/layout move <node-id\|pane-name> <container-id\|root> <index>` | Move an existing pane/subtree, retaining ids and focus. Index refers to destination children after removing the source. Cycles are refused. |
 | `/layout wrap <node-id\|pane-name\|root> <row\|column> <job> [before\|after]` | Wrap a target, including the whole root, with a new auxiliary pane; default position `before`. |
@@ -1198,6 +1198,79 @@ split ratios remain weighted. No reset or new shortcut is needed. An explicit `/
 weights. Splitting a weighted slot divides its weight equally; splitting a
 content slot along its parent’s direction replaces it with two equal weighted
 slots. An opposite-direction split wraps the slot and retains its outer sizing.
+
+### Layout editor pane
+
+The `layout` pane shows the entire saved tree and edits its nodes interactively.
+It is a regular selectable pane, like Projects: add it, move it, resize it, or
+close it using the same layout commands. It includes hidden and passive panes,
+so Todos, Context and the activity row can be edited without receiving keyboard
+focus. Each Layout pane keeps its own tree selection and form state.
+
+Open one with `/layout tree`. This focuses the first existing Layout pane or
+adds a pane beside the whole workspace. To place one yourself, use
+`/layout split left layout`, `/layout insert root 0 layout`, or
+`/layout assign layout` on an auxiliary pane. Opening the pane and every
+successful edit save the layout through the existing frontend preferences path.
+
+| In the Layout pane | Action |
+| --- | --- |
+| Up / Down | Select the previous/next tree node or action; scroll to keep it visible. |
+| Left / Right | Select the parent/first child in the tree. |
+| Home / End | Select the first/last row. |
+| Enter | Open the selected node's actions, choose a menu item, or save a weight. |
+| Esc | Cancel a form back to actions, or return from actions to the tree; keep the pane open. |
+| Backspace / Delete | In the weight form, clear the initially selected value or erase its last character. |
+| Click a tree row, then **Edit** | Select a node and open its actions. Click an action or choice to use it. |
+| **Save**, **Choose**, **Back** | Mouse equivalents of form submission, choice, and cancellation. |
+
+Alt+arrows still switch workspace panes; `/` still opens the global command
+input. These local keys appear in `/help` and `/keybind` and respect disabled
+keys. Unsupported typing in the tree never reaches the message draft. Weight
+entry accepts typing or paste without submitting pasted text; the first input
+replaces the existing value. Errors appear inside the Layout pane.
+
+Select a node and press Enter to see its applicable actions:
+
+- **Insert before / Insert after** adds an auxiliary pane beside the selected
+  node, in its parent container. **Add child** appends one to a selected container.
+- **Change weight** sets that node's positive finite relative weight within its
+  parent. In a column, enter `content` for content sizing. The root has no weight.
+  Other sibling slots retain their sizes; normal tree normalization still applies.
+- **Move** asks for a destination container, then a position before one of its
+  remaining children or at the end. A node cannot move into itself or a descendant.
+- **Change job** assigns another auxiliary kind to the selected auxiliary pane.
+- **Wrap in row / Wrap in column** adds a chosen pane to the left of / above the
+  selected node or subtree.
+- **Remove** asks for an explicit choice, with **Cancel** initially selected.
+  It removes the selected auxiliary node and its descendants. Nodes containing
+  the conversation or message editor are protected, with a visible explanation.
+
+For example, run `/layout tree`, select `pane-5 context`, and press Enter.
+Choose **Change weight**, type `2.5`, and press Enter. The tree now shows that
+node's saved weight in its detail area. Select `group-2 column`, choose **Add
+child**, then choose `jobs` to append a Jobs pane. Focus stays in the Layout
+pane during both edits. `/layout close layout` closes it; if there are several,
+use its exact pane id.
+
+The tree uses the same v4 `PaneLayout` reducers as slash commands. Saved leaves
+use `{type: "pane", id: "pane-N", kind: "layout"}`; no additional preference
+keys, backend routes, or events are introduced. Selection and unfinished forms
+are transient. Removing or reassigning the Layout pane itself returns focus to
+a surviving selectable pane. A failed save keeps the on-screen edit and reports
+`Layout changed, not saved: …`. Layout reloads and external command edits update
+the tree and repair selections whose nodes disappeared.
+
+Local interfaces are `openLayoutPane(layout: PaneLayout): PaneLayout` and
+`setPaneSize(layout: PaneLayout, target: string, size: PaneSize): PaneLayout`.
+The weight setter accepts a node id, unique pane name, or `root` (which is
+rejected because it has no parent), enforces a finite positive weight and finite
+container total, and accepts `{mode: "content"}` only in columns. The editor
+state machine in `state/layoutEditor.ts` exposes `layoutTreeRows`,
+`createLayoutEditor`, `layoutEditorRows`, `layoutEditorKey`, `layoutEditorChoose`,
+`layoutEditorPaste`, `layoutEditorBack`, and `reconcileLayoutEditor`. Its
+outcomes are `{state: LayoutEditorState, layout?: PaneLayout}`; the component
+applies an optional layout, retains editor focus when possible, and persists it.
 
 ### Editing layout with an agent
 
@@ -1251,7 +1324,7 @@ are retained. The old `horizontal`/`vertical` command arguments are replaced.
 For example, from the default arrangement:
 
 ```text
-/layout tree                           # root group-1; center group-2; right group-3
+/layout reset                          # root group-1; center group-2; right group-3
 /layout insert group-3 1 jobs           # pane-8 between Sessions and Todos
 /layout move pane-8 group-2 1           # move Jobs after the conversation viewer
 /layout wrap root column status before # add passive Status above the entire layout
@@ -1322,6 +1395,8 @@ wrapPane(layout, target: string, direction: "row" | "column", kind: PaneKind, be
 closePane(layout, target = layout.active)
 resizePane(layout, delta: number)
 setContainerBoundary(layout, container: string, index: number, ratio: number, secondIndex = index + 1)
+setPaneSize(layout, target: string, size: PaneSize)
+openLayoutPane(layout)
 ```
 
 `splitPane(layout, axis: "horizontal"|"vertical", kind = "jobs", before = false)`

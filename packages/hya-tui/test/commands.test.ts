@@ -881,9 +881,6 @@ test("/layout split up/left inserts on the named side and rejects axis keywords"
 
 test("layout tree commands expose container ids and share insert/move/wrap/remove operations", async () => {
   const h = harness()
-  await h.run("/layout tree")
-  expect(h.pickers.at(-1)?.title).toBe("Layout tree")
-  expect(h.pickers.at(-1)?.rows.some((row) => row.label.includes("group-1 · row"))).toBe(true)
   expect(h.registry.complete("/layout insert group-", h.store.completionContext())).toHaveLength(3)
   await h.run("/layout insert root 1 jobs")
   await h.run("/layout move pane-8 group-3 1")
@@ -894,6 +891,20 @@ test("layout tree commands expose container ids and share insert/move/wrap/remov
   expect(h.store.completionContext().panes?.some((pane) => pane.kind === "jobs")).toBe(false)
   await expect(h.run("/layout move root group-2 0")).rejects.toThrow("descendant")
   for (const command of ["/layout insert root -1 jobs", "/layout move pane-1 root", "/layout wrap root sideways jobs", "/layout remove", "/layout tree extra"]) await expect(h.run(command)).rejects.toThrow("Usage:")
+})
+
+test("/layout tree opens and reuses a selectable pane with saved focus", async () => {
+  const h = harness()
+  await h.run("/layout tree")
+  expect(h.pickers).toHaveLength(0)
+  const selected = h.store.state.paneLayout.active
+  expect(paneLeaves(h.store.state.paneLayout.root).find((pane) => pane.id === selected)?.kind).toBe("layout")
+  await h.run("/layout focus pane-1")
+  await h.run("/layout tree")
+  expect(h.store.state.paneLayout.active).toBe(selected)
+  expect(paneLeaves(h.store.state.paneLayout.root).filter((pane) => pane.kind === "layout")).toHaveLength(1)
+  expect(h.calls.some((call) => call.startsWith("prefs ") && call.includes('"kind":"layout"'))).toBe(true)
+  expect(h.registry.complete("/layout split left lay", h.store.completionContext())).toEqual(["/layout split left layout"])
 })
 
 test("focus commands consume native bounds and horizontal navigation forms one cycle", async () => {

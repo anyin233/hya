@@ -1,7 +1,7 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
 import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
-export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api"] as const
+export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "layout"] as const
 export type PaneKind = typeof paneKinds[number]
 export interface PaneDefinition {
   title: string
@@ -24,6 +24,7 @@ export const paneDefinitions: Record<PaneKind, PaneDefinition> = {
   workflows: { title: "Workflows", selectable: true, minColumns: 8, minRows: 5 },
   interactions: { title: "Interactions", selectable: true, minColumns: 8, minRows: 3 },
   api: { title: "API", selectable: true, minColumns: 8, minRows: 3 },
+  layout: { title: "Layout tree", selectable: true, minColumns: 24, minRows: 10 },
 }
 
 import { parseLegacyPaneLayout, type PaneNode as LegacyNode } from "./legacyPaneLayout"
@@ -197,6 +198,23 @@ export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
   const total = values.reduce((a, b) => a + b, 0), pair = values[index]! + values[sibling]!
   const chosen = Math.max(pair * .1, Math.min(pair * .9, values[index]! + delta * total))
   return finish(layout, mapNode(layout.root, parent.id, (node) => node.type === "split" ? { ...node, children: node.children.map((child, i) => weighted(child.node, i === index ? chosen : i === sibling ? pair - chosen : values[i]!)) } : node))
+}
+/** Set one child's relative allocation; unrelated sibling sizes are preserved. */
+export function setPaneSize(layout: PaneLayout, target: string, size: PaneSize): PaneLayout {
+  const selected = resolvePaneNode(layout, target)
+  const parent = paneNodes(layout.root).find((node): node is PaneSplit => node.type === "split" && node.children.some((child) => child.node.id === selected.id))
+  if (!parent) throw new Error("The root has no parent weight")
+  if (size.mode === "content" && parent.direction !== "column") throw new Error("Content sizing is available only in a column")
+  if (size.mode === "weight" && (!Number.isFinite(size.value) || size.value <= 0)) throw new Error("Weight must be a positive finite number")
+  const children = parent.children.map((child) => child.node.id === selected.id ? { ...child, size } : child)
+  if (!Number.isFinite(children.reduce((sum, child) => sum + (child.size.mode === "weight" ? child.size.value : 0), 0))) throw new Error("Total container weight must be finite")
+  return finish(layout, mapNode(layout.root, parent.id, (node) => node.type === "split" ? { ...node, children } : node))
+}
+
+/** Opening the editor reuses an existing instance, or adds a full-height column. */
+export function openLayoutPane(layout: PaneLayout): PaneLayout {
+  const existing = paneLeaves(layout.root).find((pane) => pane.kind === "layout")
+  return existing ? { ...layout, active: existing.id } : wrapPane(layout, "root", "row", "layout")
 }
 /** Change a visible pair's boundary, retaining its total weight and skipped slots. */
 export function setContainerBoundary(layout: PaneLayout, container: string, index: number, ratio: number, secondIndex = index + 1): PaneLayout {

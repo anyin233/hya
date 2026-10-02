@@ -32,7 +32,7 @@ export function inheritedBindingRows(): PickerRow[] {
       const key = /^(.)\1$/.test(token) ? token[0]! : token
       try {
         const shortcut = parseShortcut(/^[A-Z]$/.test(key) ? `Shift+${key}` : key).label
-        rows.push({ id: `context:${row.group}:${index}:${shortcut}`, shortcut, label: `${row.group}: ${token !== key ? `${token} prefix · ` : ""}${row.description}`, tag: row.group === "Vim" || row.group === "Prompts" || row.group === "Modes" ? "conversation" : "workspace", detail: `${row.group} only: ${row.description}. This view owns input before custom command bindings; unset disables the physical key outside the command input.` })
+        rows.push({ id: `context:${row.group}:${index}:${shortcut}`, shortcut, label: `${row.group}: ${token !== key ? `${token} prefix · ` : ""}${row.description}`, tag: row.group === "Layout" ? "pane" : row.group === "Vim" || row.group === "Prompts" || row.group === "Modes" ? "conversation" : "workspace", detail: `${row.group} only: ${row.description}. ${row.group === "Layout" ? "Workspace bindings run before pane input" : "This view owns input before custom command bindings"}; unset disables the physical key outside the command input.` })
       } catch { /* Prose, mouse actions and Vim sequences are not single shortcuts. */ }
     }
   }

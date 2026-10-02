@@ -1,7 +1,7 @@
 kind: WorkflowBundle
 identity:
   id: hya/argus-example
-  version: 0.43.53
+  version: 0.43.54
   publisher: hya
 workflow:
   id: argus
