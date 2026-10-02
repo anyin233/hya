@@ -66,10 +66,10 @@
  * changes that: after `stop` nothing is started and prompts are refused
  * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
- * Sessions (app/sessionKeeper.ts): a plain local start resumes the active
- * Project's latest durable session, preferring one with a waiting request;
- * with no history a new `ephemeral` session is created (as is every `/new`
- * one): the daemon deletes it while still unused once no client watches it
+ * Sessions (app/sessionKeeper.ts): a plain local start creates a new
+ * `ephemeral` session in the active Project; existing chats remain available
+ * through `/open` and `/resume` (as is every `/new` one): the daemon deletes it
+ * while still unused once no client watches it
  * (no session stream open on it), so leaving it (another session opened, any
  * exit, a kill) needs no request. `close("archive")` (a graceful exit:
  * `/exit`, Ctrl+C twice) archives the open session's root when it is used;
@@ -1226,8 +1226,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * skipped with `--remote`, which starts without an active Project),
    * catalogs, then the session `startup` names (`--session <id>`, or
    * `--continue`: the most recent nonarchived root of that Project). A
-   * plain local start reopens a saved chat, preferring one with a waiting
-   * request; with no history it creates a new ephemeral session.
+   * plain local start creates a new ephemeral session in the active Project.
    */
   async function start(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
@@ -1261,17 +1260,10 @@ export function createController({ client, store, directory, remote: startedRemo
       else if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
       else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
       else if (!remote && store.state.activeProjectId) {
-        const projectId = store.state.activeProjectId
-        const history = await client.listSessions({ includeArchived: true, projectId }).catch((error: unknown) => {
-          missing += ` · could not read earlier sessions: ${String(error)}`
-          return [] as SessionInfo[]
-        })
-        const durable = history.filter((session) => !session.ephemeral)
-        const waiting = durable.filter((session) => store.state.interactions.some((ask) => ask.session && treeSessionIds(session.id, history).has(ask.session)))
-        const prior = newestTopLevelSession(waiting, projectId, { includeArchived: true })
-          ?? newestTopLevelSession(durable, projectId, { includeArchived: true })
-        if (prior) await resumer.resume(prior.id).catch((error: unknown) => { missing += ` · could not resume ${prior.id}: ${String(error)}` })
-        if (!store.state.selected) await newSession().catch(() => undefined)
+        // A plain local start always opens a fresh session in the Project for --dir.
+        // Existing chats remain available through /open and /resume; avoiding their
+        // transcript load keeps startup fast and gives each invocation a clean draft.
+        await newSession().catch(() => undefined)
       }
       // With no local Project or model, no session is created until the first prompt.
       else if (!remote || store.state.activeProjectId) await newSession().catch(() => undefined)
@@ -1288,7 +1280,9 @@ export function createController({ client, store, directory, remote: startedRemo
       if (!resumed) status(webNotice(store.state.web) ?? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
-      store.setView("help")
+      // Keep the chat surface usable on startup failures; full-screen help is an
+      // explicit ? or /help action, not an error fallback.
+      store.setView("chat")
       store.markReady()
     }
   }

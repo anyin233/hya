@@ -201,16 +201,13 @@ switch this TUI to an HTTP relay bridge during the session.
 
 ### Sessions on start and exit
 
-Without `--continue`, `--session`, or `--resume`, a local TUI opens the
-active Project's most recently updated saved conversation, including one
-archived by `/exit`. A conversation with a pending permission or question
-request takes priority over a newer saved chat, so you see its transcript
-and the numbered answer choices immediately. The TUI unarchives the opened
-conversation. If this Project has no saved conversation, it creates a new
-session with the default agent and model (without any model, the first prompt
-creates it instead). A `--remote` start without an active Project creates
-none: it opens the [Project view](#project-view) instead. Type `/new` for a
-fresh conversation; `/sessions` shows prior chats, including archived ones.
+Without `--continue`, `--session`, or `--resume`, a local TUI ensures the
+Project containing `--dir` and creates a fresh ephemeral session in that
+Project. This avoids loading an existing transcript and gives each invocation
+a clean draft. Existing conversations remain available through `/open`,
+`/resume`, or `/sessions`; a `--remote` start without an active Project creates
+none and opens the [Project view](#project-view) instead. Type `/new` for another
+fresh conversation.
 
 The TUI code can live in a different checkout from the Project whose history
 you want. Set `--dir` to the **Project work directory**, not the directory
