@@ -55,7 +55,7 @@ hya --port 8000       # WebUI on another port
 hya serve status      # the daemon both use
 ```
 
-The sidebar's `Context` box and the explicitly opened `/status` view show the
+The sidebar's `Context` section and the explicitly opened `/status` view show the
 WebUI address. If the WebUI could not start (for example because its port is
 taken), `/status` shows the reason. Conversation has no persistent connection
 or metadata banner. `/status` shows the daemon as
@@ -190,7 +190,7 @@ switch this TUI to an HTTP relay bridge during the session.
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server` or `--grpc`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). Unlike a plain launch, it never reopens an archived session. |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
-| `--server-label <text>` | Show this text instead of the server URL in the sidebar `Context` box and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
+| `--server-label <text>` | Show this text instead of the server URL in the sidebar `Context` section and `/status` (`Server      <text> · via <url>`). Bare `hya --connect` passes `remote: <relay>/<room>`, because `--server` is then only the local relay bridge's loopback address ([relay.md](relay.md#connecting-from-a-client)). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
 | `--resume [id]` | Open that session and unarchive it (`PATCH {archived:false}`). Without an id (the next argument starts with `-`, or there is none), open a picker of the active Project's top-level sessions (every session without an active Project), archived ones included and tagged `[archived]`, newest first; Enter resumes (and unarchives) the highlighted one, Esc starts a new session instead. Cannot be combined with `--continue` or `--session`. |
 | `--web-tab` | This TUI runs in a WebUI tab: `/to-background` is not offered and Ctrl+D only shows `Close the tab to leave this session running` (closing the tab already leaves the session running). Bare `hya` adds it to its web host's tab command; pass it yourself in the command of a web host you start by hand (see [tui-web.md](tui-web.md#usage)). |
@@ -456,7 +456,7 @@ When the bridge prints its readiness line
    `401 unauthenticated` to a connection without it, so another local
    process cannot use the remote through it), and shows the label
    (`remote: <relay>/<room>`) instead of that URL in the sidebar
-   `Context` box and `/status` (`Server      <label> · via <url>`, `Backend
+   `Context` section and `/status` (`Server      <label> · via <url>`, `Backend
    remote · through this TUI's relay bridge …`),
 3. behaves like a `--remote` start: no Project is ensured for `--dir`, no
    session is created, and the [Project view](#project-view) opens so you
@@ -987,19 +987,22 @@ status is `No pending request in another session`. No wire contract changes.
 
 ## Layout
 
+Only selectable panes have enclosing boxes. For example:
+
 ```text
-┌─Projects───┐┌─Conversation──────────────────┐┌─Sessions──────┐
-│ ▸ hya     ││ hya · <session> · <model>      ││ ▸ 1. Review   │
-│   app     ││ thinking none · mode manual   ││              │
-│           ││ ┃ your prompt                 │├─Todos─────────┤
-│           ││ ● build · fake/model          ││ ○ write tests│
-│           ││ ◌ bash  awaiting approval     │├─Context───────┤
-│           ││ ┌─Permission───────────────┐ ││ Agent  build │
-│           ││ │ 1 Allow · 2 Always · 3 Deny│ ││ Model  fake/…│
-│           ││ └──────────────────────────┘ ││              │
-│           ││ ┌─Message or / commands────┐ ││              │
-│           ││ └──────────────────────────┘ ││              │
-└───────────┘└───────────────────────────────┘└──────────────┘
+┌─Projects───┐                                 ┌─Sessions─────┐
+│ ▸ hya     │  ┃ your prompt                   │ ▸ 1. Review  │
+│   app     │  Assistant response              │              │
+│           │                                 └──────────────┘
+│           │                                  Todos
+│           │                                  ○ write tests
+│           │
+│           │  ◌ Working · Running bash        Context
+│           │                                  Agent  build
+│           │ ┌─────────────────────────────┐  Model  fake/…
+│           │ │ Message                     │
+│           │ └─────────────────────────────┘
+└───────────┘
 ```
 
 ### Conversation without headings
@@ -1027,7 +1030,8 @@ plugin API, RPC route, or event type. Controller status state and the existing
 explicit information views remain available; the conversation split keeps its
 keyboard ownership and highlighted composer.
 
-- **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
+- **Sidebar.** Three sections on the right: a selectable Sessions box and
+  borderless Todos and Context sections. `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
   under its parent, `· running` while it works, `· ◌ waiting` while a
   permission or question of that session waits for an answer — opening a
@@ -1086,7 +1090,11 @@ The screen is one tree of nested rectangles. Every pane uses a common
 registration contract, and declares whether it is **selectable** (can own
 keyboard input) or **unselectable** (passive information). Layout membership
 is independent of focus: passive panes still occupy, render, and resize their
-rectangles. This separates message editing from viewing and provides the
+rectangles. **A pane box means it is selectable.** Passive panes have no
+bounding border or panel-colored frame; Todos, Context, and Status use plain
+headings. Non-chat output inside the passive conversation viewer follows the
+same rule. `PaneFrame` reads `PaneDefinition.selectable` rather than accepting
+an independent border setting, so shared frames cannot draw passive borders. This separates message editing from viewing and provides the
 foundation for additional built-in panes and a future pane plugin interface.
 
 The default arrangement is Projects on the left; a conversation viewer,
@@ -1180,6 +1188,8 @@ Saved split weights and auxiliary jobs survive migration.
 The built-in registry in `components/paneRegistry.tsx` exposes:
 
 ```ts
+// PaneFrame props: kind: PaneKind; title: string; focused?: boolean;
+// background?: string; children: JSX.Element. Borders follow kind eligibility.
 interface PaneDefinition {
   title: string;
   selectable: boolean;
@@ -1388,7 +1398,7 @@ panes. The existing Context pane can show usage when the backend reports it.
   `uint64` decimal strings on the wire; they show as `950`, `12.3k`, `123k`,
   `1.2M`. Hidden while the total is zero or unknown.
 
-The sidebar's `Context` box shows both when known: `Context  42% ·
+The sidebar's `Context` section shows both when known: `Context  42% ·
 42k/100k` (prompt tokens / window) and `Tokens   42.3k`. Under bare `hya` it
 ends with a `WebUI` row: the address without the scheme, or `unavailable`.
 
@@ -1401,7 +1411,7 @@ glyph and its text: pending `○` (muted), in progress `◐` (accent),
 completed `✓` (green), blocked `✗` (muted — the `TodoStatus` enum has no
 `cancelled` status, so `blocked` takes the glyph and color that status would
 otherwise use). The box shows at most 6 items, then a `+N more` row, so a
-long list cannot push the `Context` box below the visible area. `/todos`
+long list cannot push the `Context` section below the visible area. `/todos`
 still opens the full-panel view (same glyphs) for a longer list.
 
 ## Notices
@@ -2579,7 +2589,7 @@ copies the session into a new one, at its end or before a picked prompt.
   it and the prompt goes into the (empty) input. The TUI switches to the new
   session (`Forked before “<prompt>” · the prompt is in the input`, or
   `Forked at the latest message`); the backend titles it `<source title>
-  (fork)` (the source id when the source is untitled). The sidebar's `Context` box and `/status` show where it came
+  (fork)` (the source id when the source is untitled). The sidebar's `Context` section and `/status` show where it came
   from: `Forked   from <source title>`. Messages hidden by a pending revert
   are never copied.
 

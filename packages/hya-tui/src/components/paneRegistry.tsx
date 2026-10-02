@@ -7,6 +7,7 @@ import { useApp } from "../app/context"
 import { mainContent, modelReference, shownServer } from "../state/format"
 import type { AppState } from "../state/store"
 import { paneDefinitions, paneKinds, type PaneDefinition, type PaneKind, type PaneLeaf } from "../state/panes"
+import { PaneFrame } from "./PaneFrame"
 import { colors } from "../theme"
 import { ConversationPane } from "./ConversationPane"
 import { MessagePane } from "./MessagePane"
@@ -77,13 +78,12 @@ function paneText(state: AppState, kind: PaneKind, server: string): string {
 
 function TextPane(props: PaneRenderProps) {
   const { store, server } = useApp()
-  return <box width="100%" height="100%" flexDirection="column"
-    border borderColor={props.focused ? colors.accent : colors.border}
-    title={`${props.focused ? "▸ " : ""}${props.node.kind} · ${props.node.id}`} backgroundColor={colors.bg}>
-    <scrollbox ref={props.scrollRef} width="100%" flexGrow={1} paddingX={1} paddingY={1}>
+  return <PaneFrame kind={props.node.kind} focused={props.focused}
+    title={`${props.focused ? "▸ " : ""}${props.node.kind} · ${props.node.id}`} background={colors.bg}>
+    <scrollbox ref={props.scrollRef} width="100%" flexGrow={1} paddingY={1}>
       <text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>
     </scrollbox>
-  </box>
+  </PaneFrame>
 }
 const renderers: Record<PaneKind, Component<PaneRenderProps>> = {
   conversation: () => <ConversationPane />,

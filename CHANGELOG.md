@@ -1,6 +1,4 @@
-# 0.43.47
+# 0.43.48
 
-- Introduce common pane definitions and input handles with explicit selectable or passive eligibility.
-- Separate the passive conversation viewer and activity indicator from the selectable message editor.
-- Skip passive panes during directional focus and rotation; preserve one keyboard owner and prevent input fallthrough.
-- Migrate saved layouts to version 3, preserving existing editor ids, pane assignments and split weights.
+- Reserve workspace pane boxes for selectable panes; render passive Todos, Context, and Status without enclosing borders.
+- Share eligibility-driven pane frames, including non-chat output in the passive conversation viewer, while retaining selectable focus highlights.

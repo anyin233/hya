@@ -434,7 +434,7 @@ export async function statusField(term: Tui, field: string): Promise<string> {
 export async function showConversation(term: Tui): Promise<void> {
   await term.type("/layout show")
   await term.press("Enter")
-  await expect.poll(() => term.find("─Status")).toBeNull()
+  await expect.poll(() => term.find("Version     ")).toBeNull()
 }
 
 /** Read the untitled selected session, then return to Conversation. */
