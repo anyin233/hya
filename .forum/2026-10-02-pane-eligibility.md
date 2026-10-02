@@ -19,3 +19,7 @@ Verify browser rendering through packages/hya-tui-web. New regression: e2e/hya-t
 ## How can an unselectable or hidden pane be closed?
 
 **Answer:** `/layout close [pane-name|pane-id]` uses the full saved layout, independent of keyboard focus and responsive filtering. Omitted target retains selected-pane close. A duplicate kind raises an error listing its ids; explicit ids remove exactly one pane. Surviving focus is preserved, and conversation/composer remain protected. CompletionContext.panes carries live saved leaves; completion offers unique auxiliary kinds and ids only. Regression coverage in panes/commands tests and e2e/hya-tui-layout.spec.ts includes persistence and hidden panes.
+
+## How can an agent edit the running layout through a file?
+
+**Answer:** Edit paneLayout in the frontend preferences JSON, then invoke `/layout reload`. The controller captures the same preferences path as startup; strict loadPaneLayout rejects missing/unreadable/invalid layouts without fallback. It validates/migrates with parsePaneLayout, applies only the tree, and never writes the file. Other preferences stay as currently running. The file is local to the TUI/PTY host, so a remote backend agent needs filesystem access. Tests: prefs/commands units and e2e/hya-tui-layout-reload.spec.ts (draft, layout, session, file preservation and invalid reload at normal/narrow widths).

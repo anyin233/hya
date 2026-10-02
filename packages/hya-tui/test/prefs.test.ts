@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadPreferences, preferencesPath, savePreferences } from "../src/prefs"
+import { loadPaneLayout, loadPreferences, preferencesPath, savePreferences } from "../src/prefs"
 import { defaultPaneLayout, splitPane } from "../src/state/panes"
 
 const dirs: string[] = []
@@ -129,4 +129,23 @@ test("disabled default bindings persist as explicit null overrides", () => {
   const path = join(temp(), "tui.json")
   savePreferences(path, { keybindings: { "Ctrl+C": null, "Ctrl+W": { command: "/layout close", scope: "workspace" } } })
   expect(loadPreferences(path).preferences.keybindings).toEqual({ "Ctrl+C": null, "Ctrl+W": { command: "/layout close", scope: "workspace" } })
+})
+
+
+test("explicit layout loading refuses missing/corrupt/invalid layouts and never rewrites preferences", () => {
+  const path = join(temp(), "tui.json")
+  expect(() => loadPaneLayout(path)).toThrow("not found")
+  for (const [text, error] of [["bad json", "JSON object"], ["[]", "JSON object"], ["{}", "No paneLayout"], ['{"paneLayout":null}', "Invalid paneLayout"]]) {
+    writeFileSync(path, text!)
+    expect(() => loadPaneLayout(path)).toThrow(error!)
+    expect(readFileSync(path, "utf8")).toBe(text!)
+  }
+  const layout = splitPane(defaultPaneLayout(), "vertical", "jobs")
+  const text = JSON.stringify({ paneLayout: layout, theme: "light", unknown: 42 })
+  writeFileSync(path, text)
+  expect(loadPaneLayout(path)).toEqual(layout)
+  expect(readFileSync(path, "utf8")).toBe(text)
+  const legacy = { version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }
+  writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
+  expect(loadPaneLayout(path).version).toBe(3)
 })

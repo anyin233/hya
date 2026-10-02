@@ -96,7 +96,7 @@ import { initialSessionId } from "../launch"
 import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { editText } from "../composer/editor"
-import { savePreferences } from "../prefs"
+import { loadPaneLayout, savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
@@ -997,6 +997,10 @@ export function createController({ client, store, directory, remote: startedRemo
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
     savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
+    loadPaneLayout: () => {
+      if (!preferencesPath) throw new Error("No TUI preferences path configured")
+      return { layout: loadPaneLayout(preferencesPath), path: preferencesPath }
+    },
     deleteSession,
   }
 

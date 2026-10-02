@@ -1,4 +1,4 @@
-# 0.43.50
+# 0.43.51
 
-- Add `/layout close <pane-name|pane-id>` for passive or hidden auxiliary panes while preserving `/layout close` for the selected pane.
-- Complete live closable names and ids, preserve surviving input focus, and report ambiguous duplicate pane names with exact ids.
+- Add `/layout reload` to apply an agent-edited `paneLayout` from the frontend preferences file without restarting, rewriting the file, or loading unrelated settings.
+- Reject missing or invalid saved layouts without changing the active layout; document the edit-and-reload workflow.
