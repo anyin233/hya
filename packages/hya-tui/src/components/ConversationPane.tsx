@@ -16,7 +16,7 @@ export function ConversationPane(props: { width: number }) {
   const { store, server } = useApp()
   return (
     <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
-      <Show when={!sidebarVisible(store.state.sidebar, store.state.columns)}>
+      <Show when={store.state.ready && !sidebarVisible(store.state.sidebar, store.state.columns)}>
         <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{contextStatus(contextFields(store.state, shownServer(store.state, server)), props.width)}</text>
       </Show>
       <MainPanel />
