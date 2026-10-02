@@ -66,7 +66,7 @@ test.describe("layout", () => {
     expect(jobs.col).toBeGreaterThan(conversation.col)
     await term.press("Alt+ArrowLeft")
     await prompt(term, "/layout split horizontal todos")
-    await expect.poll(async () => (await term.lines()).filter((line) => line.includes("─Todos")).length).toBeGreaterThanOrEqual(2)
+    await expect.poll(async () => (await term.lines()).filter((line) => line.includes("Todos")).length).toBeGreaterThanOrEqual(2)
     const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.col
     await term.type("/")
     await term.waitForText("Commands")
@@ -93,7 +93,7 @@ test.describe("layout", () => {
     await prompt(term, "hello layout")
     await term.waitForText("layout reply marker l1", 20_000)
 
-    // Sidebar: three titled boxes stacked on the right, in the panel color.
+    // Sidebar: selectable Sessions stays boxed; passive sections use plain headings.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
     const sessions = (await term.find("Sessions"))!
     expect(sessions.col).toBeGreaterThan(cols / 2)

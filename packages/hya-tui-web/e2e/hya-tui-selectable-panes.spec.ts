@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { backendConfigDir, expect, hyaTui, test, textStep } from "./hya"
+import { backendConfigDir, expect, hyaTui, test, textStep, showStatusView } from "./hya"
 
 async function command(term: Tui, text: string) {
   await term.press("Control+x")
@@ -57,7 +57,7 @@ for (const width of [1100, 690]) {
     await term.type("editor still owns this")
     await term.waitForText("editor still owns this")
     const status = (await term.find("status · pane-8"))!
-    expect((await term.cell(status.row, status.col - 1))?.fg).toBe("#405366")
+    expect((await term.cell(status.row, status.col - 1))?.char).not.toMatch(/[┌─│]/)
     await term.attach(testInfo, `selectable-passive-${width}`)
   })
 }
@@ -83,3 +83,40 @@ test.describe("legacy pane layout", () => {
     await term.attach(testInfo, "migrated-viewer-editor")
   })
 })
+
+
+test("pane boxes are reserved for selectable panes; Todos and Context stay borderless", async ({ tui, backend }, testInfo) => {
+  const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await term.waitForText("Context")
+  const sessions = (await term.find("Sessions"))!
+  expect((await term.cell(sessions.row, sessions.col - 2))?.char).toBe("┌")
+  const todos = (await term.find("Todos"))!
+  const context = (await term.find("Context"))!
+  for (const title of [todos, context]) expect((await term.cell(title.row, title.col - 1))?.char).not.toMatch(/[┌─│]/)
+  // Scan the whole passive stack, including its former vertical and bottom borders.
+  const lines = await term.lines()
+  const right = sessions.col - 2
+  for (const line of lines.slice(todos.row)) expect(line.slice(right)).not.toMatch(/[┌┐└┘│─]/)
+  await term.press("Alt+ArrowRight")
+  await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
+  await click(term, "Todos")
+  await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
+  await term.attach(testInfo, "borderless-passive-wide")
+})
+
+for (const width of [1100, 690]) {
+  test(`non-chat output in the passive viewer has no enclosing box (${width}px)`, async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await showStatusView(term)
+    await term.waitForText("Status")
+    const title = (await term.find("Status"))!
+    expect((await term.cell(title.row, title.col - 1))?.char).not.toMatch(/[┌─│]/)
+    const input = (await term.find("Message, !shell, or @file · / commands"))!
+    for (const line of (await term.lines()).slice(0, input.row - 1)) expect(line).not.toMatch(/[┌┐└┘│─]/)
+    await term.type("editor remains active")
+    await term.waitForText("editor remains active")
+    await term.attach(testInfo, `borderless-passive-view-${width}`)
+  })
+}
