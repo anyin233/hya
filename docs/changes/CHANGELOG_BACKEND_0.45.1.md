@@ -1,8 +1,4 @@
-# 0.45.2
-
-## Runtime and tooling
-
-- Make `hya serve restart` wait for the successor generation to become healthy before returning, so a successful restart reports the new generation instead of an intermediate queued handoff.
+# 0.45.1
 
 ## Task execution
 
