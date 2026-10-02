@@ -408,16 +408,16 @@ pub(crate) async fn cmd_serve_action(
             }
             match daemon::restart_by_handoff(&db, &daemon_spec, &relay).await? {
                 daemon::HandoffRestart::Queued(queued) => {
-                    // The old generation owns the rest of the handoff (it
-                    // rolls back to its pinned generation if the successor
-                    // fails). The successor keeps this URL, so this return
-                    // value stays accurate; its pid is `hya serve status`'s.
+                    // The handoff is complete only after the successor is healthy.
+                    // Keep restart blocking so its success output names the new generation.
+                    let ready = daemon::wait_for_successor(&db, queued.pid).await?;
                     if json {
-                        let mut value = daemon::queued_json(&queued, &db);
+                        let mut value = daemon::ready_json(&ready, &db);
                         value["check"] = check;
+                        value["restarted"] = serde_json::json!(true);
                         println!("{value}");
                     } else {
-                        println!("{}", daemon::queued_line(&queued, &db));
+                        println!("{}", daemon::ready_line(&ready, &db));
                     }
                 }
                 daemon::HandoffRestart::NotApplicable => {
