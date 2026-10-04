@@ -46,6 +46,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedIns
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
+        tui: None,
     }))
 }
 

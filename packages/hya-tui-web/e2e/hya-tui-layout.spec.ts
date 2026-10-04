@@ -77,7 +77,8 @@ test.describe("layout", () => {
     await term.waitForText("Commands")
     await term.type("layout assign conversation")
     await term.press("Enter")
-    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.row).toBeGreaterThan(inputBeforeSwap)
+    // A frame caught mid-relayout may not show the placeholder yet; keep polling.
+    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))?.row ?? -1).toBeGreaterThan(inputBeforeSwap)
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
