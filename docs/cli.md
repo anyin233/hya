@@ -957,13 +957,17 @@ can follow a `hya serve stop --db s.db` while the old process is finishing
 shutdown.
 
 The `restart` command blocks until the successor generation has reached `ready`,
-answers its health check, and the predecessor has completed the handoff. If a
-resumed shell turn immediately runs `hya serve restart --db s.db` again, the
-second request waits up to 10 seconds for the previous handoff to reach `ready`
-and for its predecessor to exit. Then it records its own request and waits for
-that successor too. The handoff journal stages remain `requested`, `queued`,
-`released`, `ready`, and `transferred`; `hya serve status --db s.db` reports
-the current generation.
+answers its health check, and the predecessor has completed the handoff.
+Run by one of the daemon's own turns (a shell tool call; the command runs in
+the daemon's session), it returns as soon as the daemon has queued the
+handoff instead, printing `restart queued: …` (`--json`: the old generation
+with `"queued": true`): that turn reaches its handoff boundary only after the
+command returns, and the successor continues it. If a resumed shell turn
+immediately runs `hya serve restart --db s.db` again, the second request
+waits up to 10 seconds for the previous handoff to reach `ready` and for its
+predecessor to exit, then records its own request. The handoff journal stages
+remain `requested`, `queued`, `released`, `ready`, and `transferred`;
+`hya serve status --db s.db` reports the current generation.
 
 `start` and `restart` accept the relay flags of plain `hya serve`
 (`--relay`, `--relay-transport`, `--relay-ca`, `--relay-ephemeral`,

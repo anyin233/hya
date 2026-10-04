@@ -596,12 +596,23 @@ pub(crate) enum HandoffRestart {
     /// rest: it closes its turns at their durable boundaries, spawns the
     /// successor (the journal's recorded executable), releases the runtime,
     /// and waits for the successor's health — parking with the lock and the
-    /// listener if the successor never proves healthy. The restart command
-    /// returns here; the URL is the one the successor keeps.
+    /// listener if the successor never proves healthy. The URL is the one
+    /// the successor keeps.
     Queued(Discovery),
     /// There was nothing to hand off (no holder, or a holder that does not
     /// serve yet): the caller goes to the plain stop/start path quietly.
     NotApplicable,
+}
+
+/// Whether this process runs inside the session of the daemon `pid`: a
+/// command a turn of that daemon runs (its shell tool). A detached daemon is
+/// a session leader (`setsid`), so its session id is its pid. Such a restart
+/// must not wait for the successor: the turn can reach its handoff boundary
+/// only once this command has returned.
+pub(crate) fn inside_daemon_session(pid: u32) -> bool {
+    // SAFETY: `getsid` has no memory-safety preconditions.
+    let session = unsafe { libc::getsid(0) };
+    i32::try_from(pid).is_ok_and(|pid| pid == session)
 }
 
 /// Longest wait for the old generation's `queued` acknowledgement. A
@@ -829,6 +840,32 @@ pub(crate) fn human_duration(duration: Duration) -> String {
 /// Milliseconds since `started_at` (unix ms).
 pub(crate) fn uptime(started_at: u64) -> Duration {
     Duration::from_millis(unix_ms().saturating_sub(started_at))
+}
+
+/// The JSON `hya serve restart --json` prints from inside the daemon's own
+/// session, once the running daemon acknowledged the handoff (`queued`):
+/// `url` is the one the successor keeps and `pid` the generation that
+/// acknowledged (`hya serve status` shows the successor).
+pub(crate) fn queued_json(found: &Discovery, db: &str) -> serde_json::Value {
+    serde_json::json!({
+        "url": found.url,
+        "pid": found.pid,
+        "version": found.version,
+        "startedAt": found.started_at,
+        "db": db,
+        "log": log_path(db).map(|path| path.to_string_lossy().into_owned()),
+        "started": false,
+        "queued": true,
+    })
+}
+
+/// The human line `hya serve restart` prints at the `queued` ack.
+pub(crate) fn queued_line(found: &Discovery, db: &str) -> String {
+    format!(
+        "restart queued: hya server pid {} at {} hands off to a new generation once this turn \
+         reaches its boundary (same URL, db {}); `hya serve status` shows the successor",
+        found.pid, found.url, db
+    )
 }
 
 /// The JSON `hya serve start --json` / `restart --json` print.
