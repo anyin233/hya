@@ -12,12 +12,12 @@ use crate::model::{
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
     PreparedCheck, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
     PreparedPermissionMode, PreparedPluginBundle, PreparedProcessExtension, PreparedResource,
-    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
+    PreparedSchema, PreparedTuiExtension, PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
     SourceExtensions, SourceFile, SourceManifest, SourceMcpServer, SourcePluginManifest,
-    SourceResource, SourceResources, SourceWorkflowManifest,
+    SourceResource, SourceResources, SourceTuiExtension, SourceWorkflowManifest,
 };
 
 const AGENT_SOURCE_KIND: &str = "AgentBundle";
@@ -245,7 +245,11 @@ fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
         && resources_are_canonical(bundle, "mcp", bundle.mcp())
         && resources_are_canonical(bundle, "hook", bundle.hooks())
         && resources_are_canonical(bundle, "extension", bundle.extensions())
-        && bundle.agents().iter().all(agent_is_canonical);
+        && bundle.agents().iter().all(agent_is_canonical)
+        && bundle.tui().is_none_or(|tui| {
+            validate_tui(tui, bundle.extensions()).is_ok()
+                && is_strictly_sorted(tui.permissions.iter().map(String::as_str))
+        });
     if !common {
         return false;
     }
@@ -1541,6 +1545,7 @@ fn prepare_plugin_bundle(
     let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
     let permission_modes = validate_declared_permission_modes(
@@ -1555,6 +1560,7 @@ fn prepare_plugin_bundle(
         identity: manifest.identity,
         namespace,
         digest: String::new(),
+        tui,
         tools,
         skills,
         mcp,
@@ -1647,6 +1653,7 @@ fn prepare_agent_bundle(
     let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
     let permission_modes = validate_declared_permission_modes(
@@ -1669,6 +1676,7 @@ fn prepare_agent_bundle(
         identity: manifest.identity,
         namespace,
         digest: String::new(),
+        tui,
         agent,
         tools,
         skills,
@@ -1693,6 +1701,7 @@ fn prepare_agent_set_bundle(
     let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
     let permission_modes = validate_declared_permission_modes(
@@ -1745,6 +1754,7 @@ fn prepare_agent_set_bundle(
         identity: manifest.identity,
         namespace,
         digest: String::new(),
+        tui,
         agents,
         channels,
         tools,
@@ -1875,6 +1885,7 @@ fn prepare_workflow_bundle(
         manifest.resources,
         manifest.extensions,
     )?;
+    let tui = prepare_tui(&bundle_id, manifest.tui.as_ref(), &extensions)?;
     let schemas = validate_declared_schemas(&manifest.identity.id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(
         &manifest.identity.id,
@@ -1930,6 +1941,7 @@ fn prepare_workflow_bundle(
         identity: manifest.identity,
         namespace,
         digest: String::new(),
+        tui,
         workflow: PreparedWorkflow {
             id: compiled.definition().name().to_string(),
             source_path: workflow_path,
@@ -2646,4 +2658,84 @@ fn hex_digest(bytes: &[u8]) -> String {
         let _ = write!(encoded, "{byte:02x}");
     }
     encoded
+}
+
+fn prepare_tui(
+    bundle_id: &str,
+    source: Option<&SourceTuiExtension>,
+    extensions: &[PreparedResource],
+) -> Result<Option<PreparedTuiExtension>, BundleError> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let mut tui = PreparedTuiExtension {
+        api_version: source.api_version,
+        entry: normalize_source_path(bundle_id, &source.entry)?,
+        sdk: source.sdk.clone(),
+        permissions: source.permissions.clone(),
+    };
+    validate_tui(&tui, extensions).map_err(|detail| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    })?;
+    tui.permissions.sort();
+    Ok(Some(tui))
+}
+
+fn validate_tui(tui: &PreparedTuiExtension, extensions: &[PreparedResource]) -> Result<(), String> {
+    if tui.api_version != 1 {
+        return Err("tui.api_version must be 1".to_string());
+    }
+    let parts = tui.sdk.split('.').collect::<Vec<_>>();
+    if !(2..=3).contains(&parts.len())
+        || parts[0] != "1"
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+        })
+    {
+        return Err("tui.sdk must be major.minor[.patch] with major 1".to_string());
+    }
+    if normalize_source_path("tui", &tui.entry).as_deref() != Ok(tui.entry.as_str())
+        || tui.entry.contains(':')
+        || ![".ts", ".js", ".mjs"]
+            .iter()
+            .any(|suffix| tui.entry.ends_with(suffix))
+        || !extensions
+            .iter()
+            .any(|resource| resource.source_path == tui.entry && resource.binary_base64.is_none())
+    {
+        return Err("tui.entry must name a canonical TS/JS extension resource".to_string());
+    }
+    const PERMISSIONS: &[&str] = &[
+        "fs.read",
+        "tui.panel",
+        "tui.render",
+        "tui.status_item",
+        "tui.session.read",
+        "tui.transcript.read",
+        "tui.workspace.read",
+        "workspace.git.read",
+        "tui.action",
+        "tui.sessions.read",
+        "tui.projects.read",
+        "tui.todos.read",
+        "tui.status.read",
+        "tui.keys",
+        "tui.session.control",
+        "tui.project.control",
+    ];
+    let mut seen = BTreeSet::new();
+    for permission in &tui.permissions {
+        if permission.len() > 64
+            || !PERMISSIONS.contains(&permission.as_str())
+            || !seen.insert(permission)
+        {
+            return Err(format!(
+                "tui.permissions: unknown or duplicate permission `{permission}`"
+            ));
+        }
+    }
+    Ok(())
 }

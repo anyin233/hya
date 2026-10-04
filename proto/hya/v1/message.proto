@@ -358,6 +358,8 @@ message MemberInfo {
   string call_id = 7;
   // Depth in the subagent tree (children of a root session are 1).
   uint32 depth = 8;
+  // Readable team roster handle for the child session, when known.
+  string handle = 9;
 }
 
 // One file a session revert or unrevert wrote (or could not restore).

@@ -314,6 +314,9 @@ pub struct PreparedAgentBundle {
     pub hooks: Vec<PreparedResource>,
     /// Prepared JS/Rust extension entrypoints.
     pub extensions: Vec<PreparedResource>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tui: Option<PreparedTuiExtension>,
 }
 
 /// Fully prepared AgentSetBundle: multiple Agents sharing one resource plane.
@@ -347,6 +350,9 @@ pub struct PreparedAgentSetBundle {
     pub hooks: Vec<PreparedResource>,
     /// Prepared JS/Rust extension entrypoints.
     pub extensions: Vec<PreparedResource>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tui: Option<PreparedTuiExtension>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -375,6 +381,9 @@ pub struct PreparedPluginBundle {
     pub hooks: Vec<PreparedResource>,
     /// Extension resources.
     pub extensions: Vec<PreparedResource>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tui: Option<PreparedTuiExtension>,
 }
 
 /// One compiled Workflow source retained in a prepared WorkflowBundle.
@@ -426,6 +435,23 @@ pub struct PreparedWorkflowBundle {
     pub hooks: Vec<PreparedResource>,
     /// Prepared JS/Rust extension entrypoints.
     pub extensions: Vec<PreparedResource>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tui: Option<PreparedTuiExtension>,
+}
+
+/// Validated bundle-owned TUI entrypoint and requested frontend capabilities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedTuiExtension {
+    /// Extension API generation (currently 1).
+    pub api_version: u32,
+    /// Canonical relative TS/JS path in extension resources.
+    pub entry: String,
+    /// Independent SDK contract version (major 1).
+    pub sdk: String,
+    /// Allowlisted capability names in strictly sorted order.
+    pub permissions: Vec<String>,
 }
 
 /// Closed prepared payload union for one installable bundle.
@@ -442,6 +468,17 @@ pub enum PreparedInstallableBundle {
 }
 
 impl PreparedInstallableBundle {
+    /// Bundle-owned frontend extension declaration, if present.
+    #[must_use]
+    pub fn tui(&self) -> Option<&PreparedTuiExtension> {
+        match self {
+            Self::Agent(bundle) => bundle.tui.as_ref(),
+            Self::AgentSet(bundle) => bundle.tui.as_ref(),
+            Self::Workflow(bundle) => bundle.tui.as_ref(),
+            Self::Plugin(bundle) => bundle.tui.as_ref(),
+        }
+    }
+
     /// Resolved provider-facing namespace: the declared value, or the
     /// identity name segment when the prepared document predates namespaces.
     #[must_use]

@@ -1,3 +1,6 @@
+import { extensionManager, type HookTree } from "../extensions/manager"
+import { RenderTree } from "../extensions/renderTree"
+import type { RenderNode } from "../extensions/wire"
 import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, usePaste } from "@opentui/solid"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
@@ -76,7 +79,7 @@ interface FileMenu {
  * screen) and is otherwise ignored. Ctrl+C closes the open view and keeps
  * its quit meaning.
  */
-export function Composer(props: { width: number }) {
+function BaseComposer(props: { width: number }) {
   const { store, controller, ui } = useApp()
   const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
     === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "conversation")?.id
@@ -101,15 +104,14 @@ export function Composer(props: { width: number }) {
   let attachmentTimer: ReturnType<typeof setTimeout> | undefined
   let attachmentTicket = 0
   let hintTimer: ReturnType<typeof setTimeout> | undefined
-  /** The Provider View is open: keys and pastes go to it (the editor keeps its text). */
+  /** Full-screen management views take all key input. */
   const providersOpen = () => store.state.providerView !== undefined
-  /** The Diff / MCP / Saved Rules / Agents view is open (at most one at a time): keys go to it, the editor keeps its text. */
+  const bundlesOpen = () => store.state.bundlesView !== undefined
   const diffOpen = () => store.state.diffView !== undefined
   const mcpOpen = () => store.state.mcpView !== undefined
   const rulesOpen = () => store.state.rulesView !== undefined
   const agentsOpen = () => store.state.agentsView !== undefined
-  const projectViewOpen = () => store.state.projectView !== undefined
-  const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentsOpen() || projectViewOpen()
+  const overlayViewOpen = () => providersOpen() || bundlesOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentsOpen() || store.state.extensionOverlay !== undefined
   /** A subagent's session is open: prompts are disabled; the command pane stays available. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
@@ -288,6 +290,16 @@ export function Composer(props: { width: number }) {
     }, quitWindowMs)
   }
 
+  /** Ctrl+P: give the keyboard to the Projects pane's panel, or take it back. */
+  function toggleProjectsFocus(): void {
+    if (!store.state.projectsFocus) {
+      controller.focusProjects()
+      return
+    }
+    store.setProjectsFocus(false)
+    store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
+  }
+
   /** Up/Down: move in the file list, else walk message history from the first/last line. */
   function arrow(key: KeyEvent, consume: () => void): boolean {
     if (key.ctrl || key.meta || key.shift || (key.name !== "up" && key.name !== "down")) return false
@@ -317,24 +329,6 @@ export function Composer(props: { width: number }) {
     return false
   }
 
-  function toggleProjectsFocus(): void {
-    if (store.state.projectsSidebarFocus) {
-      store.setProjectsSidebarFocus(false)
-      store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
-    } else {
-      const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
-      if (!projects) {
-        store.setStatus("No Projects pane · /layout split vertical projects to add one")
-        return
-      }
-      if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
-      if (store.state.projects.length) store.setProjectSidebarHighlight(store.state.projectSidebarHighlight ?? store.state.activeProjectId ?? store.state.projects[0]?.id)
-      store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
-      store.setProjectsSidebarFocus(true)
-      store.setStatus("Projects sidebar shown, focused · Ctrl+P toggles")
-    }
-    return
-  }
 
   useKeyboard((key: KeyEvent) => {
     const consume = (): void => {
@@ -358,23 +352,27 @@ export function Composer(props: { width: number }) {
         return
       }
     }
-    // The Provider / Diff / MCP / Saved Rules / Agents view takes every
-    // key but Ctrl+C, which closes it and keeps its quit meaning.
+    // The Provider / Diff / MCP / Saved Rules / Agents view, or an extension
+    // overlay (the Project view), takes every key but Ctrl+C, which closes it
+    // and keeps its quit meaning.
     else if (overlayViewOpen()) {
+      const overlay = store.state.extensionOverlay
       if (key.ctrl && !key.meta && key.name === "c") {
         if (providersOpen()) controller.closeProviders()
+        else if (bundlesOpen()) controller.closeBundles()
         else if (diffOpen()) controller.closeDiff()
         else if (mcpOpen()) controller.closeMcp()
         else if (rulesOpen()) controller.closeRules()
-        else if (projectViewOpen()) controller.closeProjectView()
+        else if (overlay) extensionManager.close(overlay)
         else controller.closeAgents()
       } else {
         consume()
         if (providersOpen()) controller.providerKey(key)
+        else if (bundlesOpen()) controller.bundlesKey(key)
         else if (diffOpen()) controller.diffKey(key)
         else if (mcpOpen()) controller.mcpKey(key)
         else if (rulesOpen()) controller.rulesKey(key)
-        else if (projectViewOpen()) controller.projectViewKey(key)
+        else if (overlay) void extensionManager.key(overlay, key)
         else controller.agentsKey(key)
         return
       }
@@ -396,7 +394,7 @@ export function Composer(props: { width: number }) {
     }
     const inputEmpty = !(editor?.plainText ?? value())
     const commandPaneFocus = focusedPane(store.state)
-    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsSidebarFocus || commandPaneFocus?.kind !== "conversation" || inputEmpty, chord })
+    const commandShortcut = resolveBinding(key, { composerEmpty: commandPaneFocus?.kind !== "conversation" || inputEmpty, chord })
     if (commandShortcut === "openCommands") {
       consume()
       if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
@@ -412,22 +410,26 @@ export function Composer(props: { width: number }) {
       store.setStatus(chordHint)
       return
     }
-    // The left Projects sidebar has focus (Ctrl+P): Up/Down/Enter/Esc go to it.
+    // A focused pane takes its keys: the Projects pane's panel while it holds the keyboard (Ctrl+P), else the pane's scrolling.
     if (commandPaneFocus?.kind !== "conversation"
-      && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsSidebar"
+      && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsCapture"
       && commandShortcut !== "refresh" && commandShortcut !== "help" && commandShortcut !== "reviewPending"
       && commandShortcut !== "quit" && commandShortcut !== "eof") {
       chord = undefined
       consume()
-      if (commandPaneFocus?.kind === "projects") controller.projectsSidebarKey(key)
-      else {
-        const pane = commandPaneFocus && ui.panes?.get(commandPaneFocus.id)
-        if (key.name === "up" && !key.ctrl && !key.meta) pane?.line(-1)
-        else if (key.name === "down" && !key.ctrl && !key.meta) pane?.line(1)
-        else if (commandShortcut === "pageUp" || commandShortcut === "pageDown") pane?.page(commandShortcut === "pageUp" ? -1 : 1)
-        else if (commandShortcut === "scrollTop") pane?.top()
-        else if (commandShortcut === "scrollBottom") pane?.bottom()
+      // The focused Projects pane's keys go to the panel drawing it; while it is still starting they are dropped.
+      const projects = commandPaneFocus?.kind === "projects" ? extensionManager.replacement("projects") : undefined
+      if (projects?.keys) {
+        void extensionManager.key(projects.key, key)
+        return
       }
+      if (commandPaneFocus?.kind === "projects" && !projects && extensionManager.placeholder("projects") === undefined) return
+      const pane = commandPaneFocus && ui.panes?.get(commandPaneFocus.id)
+      if (key.name === "up" && !key.ctrl && !key.meta) pane?.line(-1)
+      else if (key.name === "down" && !key.ctrl && !key.meta) pane?.line(1)
+      else if (commandShortcut === "pageUp" || commandShortcut === "pageDown") pane?.page(commandShortcut === "pageUp" ? -1 : 1)
+      else if (commandShortcut === "scrollTop") pane?.top()
+      else if (commandShortcut === "scrollBottom") pane?.bottom()
       return
     }
     // Global workspace actions skip conversation-local prompts, history and Vim.
@@ -444,7 +446,7 @@ export function Composer(props: { width: number }) {
       }
       if (commandShortcut === "eof") { controller.toBackground(); return }
       if (commandShortcut === "toggleSidebar") store.toggleSidebar()
-      else if (commandShortcut === "toggleProjectsSidebar") toggleProjectsFocus()
+      else if (commandShortcut === "toggleProjectsCapture") toggleProjectsFocus()
       return
     }
     // The yolo confirmation line takes Enter, Esc, and Shift+Tab before the
@@ -596,7 +598,7 @@ export function Composer(props: { width: number }) {
         if (store.state.columns < layoutBreakpoints.sidebar) store.setStatus(sidebarTooNarrowNotice)
         else store.toggleSidebar()
         return
-      case "toggleProjectsSidebar":
+      case "toggleProjectsCapture":
         consume()
         toggleProjectsFocus()
         return
@@ -761,6 +763,35 @@ export function Composer(props: { width: number }) {
           }}
         />
       </box>
+    </box>
+  )
+}
+
+/**
+ * The composer with any extension decorations (extensions/manager.ts) above
+ * and below it. A composer decoration is a column around one slot: the rows
+ * before the slot go above, the rest below (outer decorations outermost). The
+ * built-in composer itself is never re-parented, so its input keeps focus.
+ */
+export function Composer(props: { width: number }) {
+  const parts = () => {
+    const above: HookTree[] = []
+    const below: HookTree[] = []
+    for (const decorator of extensionManager.composer(props.width).decorators) {
+      if (decorator.node.kind !== "column") continue
+      const at = decorator.node.children.findIndex((child) => child.kind === "slot")
+      const piece = (children: readonly RenderNode[]): HookTree => ({ ...decorator, node: { kind: "column", children } })
+      above.unshift(piece(decorator.node.children.slice(0, at)))
+      below.push(piece(decorator.node.children.slice(at + 1)))
+    }
+    return { above, below }
+  }
+  const part = (tree: HookTree) => <RenderTree node={tree.node} host={{ onAction: (action) => void extensionManager.action(tree.extension, { kind: "renderer", id: tree.renderer }, action) }} />
+  return (
+    <box width="100%" flexDirection="column" flexShrink={0}>
+      <For each={parts().above}>{part}</For>
+      <BaseComposer {...props} />
+      <For each={parts().below}>{part}</For>
     </box>
   )
 }

@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView,
+    PreparedInstallableBundle, PreparedResource, PreparedTuiExtension, ResourceView,
 };
 use hya_core::runtime_registry::RuntimeSourceSkill;
 use hya_core::{AgentCatalog, RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
@@ -104,6 +104,55 @@ pub fn agent_catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
     agent_catalog_of(&prepared_bundles(agents))
 }
 
+/// Build an agent catalog whose scoped test bundle carries a TUI extension.
+pub fn agent_catalog_with_tui(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
+    let mut bundles = prepared_bundles(agents);
+    let bundle = bundles
+        .iter_mut()
+        .find(|bundle| bundle.identity().id == "hya/server-tests-scoped")
+        .expect("scoped fixture bundle");
+    let resources = vec![
+        PreparedResource {
+            local_id: "entry".to_string(),
+            stable_id: "bundle:hya/server-tests-scoped/extension/entry".to_string(),
+            source_path: "extensions/main.ts".to_string(),
+            digest: "a44b832f74de68ff8c9af937829abd2298fa89faec27c3792e633904c2587e2c".to_string(),
+            content: "export default 42;\n".to_string(),
+            binary_base64: None,
+            aliases: Vec::new(),
+        },
+        PreparedResource {
+            local_id: "module".to_string(),
+            stable_id: "bundle:hya/server-tests-scoped/extension/module".to_string(),
+            source_path: "extensions/module.ts".to_string(),
+            digest: "a2098bd92b10bf8b816d24b7556b1ce8c49a879d130489065ef1051c17e042f6".to_string(),
+            content: "export const answer = 42;\n".to_string(),
+            binary_base64: None,
+            aliases: Vec::new(),
+        },
+        PreparedResource {
+            local_id: "native".to_string(),
+            stable_id: "bundle:hya/server-tests-scoped/extension/native".to_string(),
+            source_path: "extensions/native.node".to_string(),
+            digest: "binary-digest".to_string(),
+            content: String::new(),
+            binary_base64: Some("AA==".to_string()),
+            aliases: Vec::new(),
+        },
+    ];
+    if let PreparedInstallableBundle::Agent(bundle) = bundle {
+        bundle.digest = "a".repeat(64);
+        bundle.extensions = resources;
+        bundle.tui = Some(PreparedTuiExtension {
+            api_version: 1,
+            entry: "extensions/main.ts".to_string(),
+            sdk: "1.0.0".to_string(),
+            permissions: vec!["read".to_string()],
+        });
+    }
+    agent_catalog_of(&bundles)
+}
+
 fn agent_catalog_of(bundles: &[PreparedInstallableBundle]) -> Arc<AgentCatalog> {
     let catalog = BundleCatalog::from_prepared(bundles).expect("server test catalog");
     Arc::new(AgentCatalog::new(Arc::new(catalog)).expect("server agent catalog"))
@@ -178,6 +227,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<PreparedInstallableBundle> {
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+            tui: None,
         })))
         .collect()
 }

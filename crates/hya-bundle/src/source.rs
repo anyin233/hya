@@ -211,6 +211,9 @@ pub(crate) struct SourceAgentManifest {
     /// Session permission modes approved by the explicit `extensions.process`.
     #[serde(default)]
     pub permission_modes: Vec<SourcePermissionMode>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default)]
+    pub tui: Option<SourceTuiExtension>,
     /// The one Agent this bundle defines.
     pub agent: SourceAgent,
     /// Keys removed with the single-agent format. Captured only so prepare can
@@ -249,6 +252,9 @@ pub(crate) struct SourceAgentSetManifest {
     /// Session permission modes approved by the explicit `extensions.process`.
     #[serde(default)]
     pub permission_modes: Vec<SourcePermissionMode>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default)]
+    pub tui: Option<SourceTuiExtension>,
     /// The complete Agent set this bundle defines.
     #[serde(default)]
     pub agents: Vec<SourceAgent>,
@@ -282,6 +288,9 @@ pub(crate) struct SourcePluginManifest {
     /// Session permission modes approved by the explicit `extensions.process`.
     #[serde(default)]
     pub permission_modes: Vec<SourcePermissionMode>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default)]
+    pub tui: Option<SourceTuiExtension>,
 }
 
 /// Strict source manifest shape for a WorkflowBundle.
@@ -317,6 +326,9 @@ pub(crate) struct SourceWorkflowManifest {
     /// Session permission modes approved by the explicit `extensions.process`.
     #[serde(default)]
     pub permission_modes: Vec<SourcePermissionMode>,
+    /// Optional bundle-owned frontend extension.
+    #[serde(default)]
+    pub tui: Option<SourceTuiExtension>,
 }
 
 /// One `apis:` entry: an HTTP endpoint the bundle's explicit
@@ -500,4 +512,19 @@ pub(crate) struct ParsedSource {
     pub files: BTreeMap<String, Vec<u8>>,
     pub manifest: SourceManifest,
     pub markdown_prompt: Option<String>,
+}
+
+/// Bundle-owned TUI entrypoint declaration, independent of frontend releases.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceTuiExtension {
+    /// Extension API generation (currently 1).
+    pub api_version: u32,
+    /// Relative TS/JS entrypoint declared in extension resources.
+    pub entry: String,
+    /// SDK contract version, not the frontend release version.
+    pub sdk: String,
+    /// Requested frontend capabilities.
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }

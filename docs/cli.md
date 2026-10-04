@@ -228,7 +228,9 @@ or removed.
 | --- | --- |
 | `hya bundle install [--user\|--project] [-y] [--overwrite] <PACKAGE>` | Verify a `.hyabundle`, run its declared self-check, and install it into the scope. Asks for confirmation unless `-y`. Then, if a backend runs for `--db`, prove the bundle is active there ([Self-proof and activation](bundle-runtime.md#self-proof-and-activation)); exit 1 when it is not. |
 | `hya bundle install [--user\|--project] [-y] [--overwrite] --claude <SOURCE>` | Translate a Claude Code plugin and install it the same way. |
-| `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Remove a bundle from the scope. Asks for confirmation unless `-y`. Alias: `uninstall`. |
+| `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Remove a bundle from the scope. Asks for confirmation unless `-y`. Alias: `uninstall`. A running backend for `--db` refreshes at once. |
+| `hya bundle disable <BUNDLE_ID>` | Disable a bundle by id in every scope: it stays installed but publishes nothing (agents, skills, tools, MCP servers, workflows, APIs, permission modes, TUI extension). First-party bundles can be disabled; the trusted presets (`hya/core-agents`, the tool libraries, …) cannot. A running backend refreshes at once. `list` shows it `disabled`. |
+| `hya bundle enable <BUNDLE_ID>` | Enable a disabled bundle again. |
 | `hya bundle verify [--user\|--project] [--overwrite] <PACKAGE>` | Run every install check, including the bundle's declared self-check, against the scope and report what `install` would do. Writes nothing. |
 | `hya bundle list [--user\|--project]` | List bundles. All scopes by default; a flag narrows to one scope. |
 | `hya bundle info [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show metadata of a bundle by id (searching every scope unless narrowed) or of a package file. Declarations print one line each: `schema=…`, `process=<kind> command=…`, and `api=<METHOD> <scope> <path> id=<id>` (plus ` request_schema=<file>`, ` response_schema=<file>`, and ` description=…` when declared) for every [API endpoint](agent-bundle-authoring.md#api-endpoints-apis), for example `api=GET session /usage id=usage description=Per-model token usage of the session tree`. |
@@ -244,6 +246,7 @@ hya bundle list --project
 hya bundle info hya/docs-example
 hya bundle info example.hyabundle              # read a package file
 hya bundle remove --project -y hya/docs-example
+hya bundle disable hya/docs-example            # keep it installed, publish nothing
 hya bundle uninstall hya/docs-example          # same as remove, user scope
 hya bundle search --project docs               # search one scope
 hya bundle schema hya/schema-demo              # one bundle's schemes

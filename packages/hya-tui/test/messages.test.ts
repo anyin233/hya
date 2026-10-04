@@ -63,6 +63,21 @@ test("reasoning, tool, and attachment parts become typed blocks", () => {
   ])
 })
 
+test("an agent message is rendered as a received-message tool block", () => {
+  const view = messageView({
+    id: "m", role: "ROLE_TOOL", finish: "FINISH_REASON_STOP",
+    parts: [{ id: "p", text: { text: "hello from the team" } }],
+  }, fallback)
+  expect(view.blocks).toEqual([{
+    kind: "tool", id: "p",
+    card: {
+      tool: "msg received", status: "done", summary: "",
+      body: [{ text: "hello from the team", tone: "fg" }],
+      output: [{ text: "hello from the team", tone: "fg" }],
+    },
+  }])
+})
+
 test("reasoning is active while it is the streaming message's last part", () => {
   const streaming = messageView({ id: "a", role: "ROLE_ASSISTANT", parts: [{ id: "r", reasoning: { text: "hmm" } }] }, fallback)
   expect(streaming.blocks[0]).toMatchObject({ kind: "reasoning", active: true })

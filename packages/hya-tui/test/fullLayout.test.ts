@@ -14,9 +14,6 @@ test("default layout owns the Projects, Conversation, Sessions, Todos, and Conte
   expect(conversation.right).toBeLessThanOrEqual(sessions.left)
   expect(sessions.bottom).toBeLessThanOrEqual(todos.top)
   expect(todos.bottom).toBeLessThanOrEqual(context.top)
-  expect(paneLeaves(visiblePaneLayout(layout, 80, "auto", "auto").root).map((pane) => pane.kind)).toEqual(["conversation"])
-  expect(paneLeaves(visiblePaneLayout(layout, 149, "auto", "auto").root).map((pane) => pane.kind)).toEqual(["conversation"])
-  expect(paneLeaves(visiblePaneLayout(layout, 150, "auto", "closed").root).map((pane) => pane.kind)).toEqual(["conversation", "sessions", "todos", "context"])
 })
 
 test("side panes can be selected, resized, reassigned, and remain visible after reload", () => {

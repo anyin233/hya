@@ -114,3 +114,11 @@ test("a saved version-1 center split loads with editable outer side panes", () =
   expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
   expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')
 })
+
+test("extension enabled preferences round-trip and reject malformed maps", () => {
+  const path = join(temp(), "tui.json")
+  savePreferences(path, { extensionEnabled: { markdown: false, git: true } })
+  expect(loadPreferences(path).preferences.extensionEnabled).toEqual({ markdown: false, git: true })
+  writeFileSync(path, JSON.stringify({ extensionEnabled: { markdown: "no" } }))
+  expect(loadPreferences(path).preferences).toEqual({})
+})

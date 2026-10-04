@@ -85,8 +85,10 @@ test.describe("/theme", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThanOrEqual(84)
     await prompt(term, "/theme")
-    await term.waitForText(/Light\s+\[light\]/)
+    // Keys reach the picker once it highlights the current theme; then Down must land on Light.
+    await term.waitForText(/▸ ● hya/)
     await term.press("ArrowDown")
+    await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
     await expect.poll(() => term.find("Theme ·")).toBeNull()
     const { cols } = await term.size()
@@ -109,10 +111,12 @@ test.describe("/theme over a transcript", () => {
     await prompt(term, "show me code")
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/theme")
-    await term.waitForText(/Light\s+\[light\]/)
+    await term.waitForText(/▸ ● hya/)
     await term.press("ArrowDown")
+    await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
     await expect.poll(() => term.find("Theme ·")).toBeNull()
+    await term.waitForText("Done.")
     const user = (await term.find("show me code"))!
     expect(await term.cell(user.row, user.col)).toMatchObject({ fg: light.fg, bg: light.panel })
     const done = (await term.find("Done."))!

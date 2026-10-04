@@ -10,7 +10,6 @@
 //! tools and hooks over newline-delimited JSON on the child's stdio.
 
 mod activation_dispatcher;
-/// Per-process JSON-RPC client and child process lifecycle.
 pub mod client;
 /// Newline-delimited frame reader/writer over async stdio.
 pub mod codec;
@@ -32,7 +31,7 @@ pub mod permission_bridge;
 mod plugin_tool;
 /// JSON-RPC 2.0 frame types and standard error codes.
 pub mod protocol;
-
+/// Per-process JSON-RPC client and child process lifecycle.
 pub use activation_dispatcher::ActivationHookDispatcher;
 pub use client::{ChildGuard, DEFAULT_CALL_TIMEOUT, INITIALIZE_TIMEOUT, PluginClient};
 pub use error::PluginError;

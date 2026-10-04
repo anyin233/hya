@@ -31,11 +31,12 @@ async function drag(term: Tui, from: { row: number; col: number }, toCol: number
 }
 
 test.describe("right sidebar width", () => {
-  test("below 150 columns the sidebar stays closed without conversation metadata", async ({ tui, backend }) => {
+  test("below 150 columns the sidebar stays closed with compact conversation context", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThan(150)
-    expect(await term.find("mode manual")).toBeNull()
+    // The compact context line is drawn by hya/basic-tui-components, which starts after the composer shows.
+    await expect.poll(() => term.find("mode manual")).not.toBeNull()
     expect(await term.find("Sessions")).toBeNull()
     await term.press("Control+b")
     await expect.poll(() => term.find("Commands")).toBeNull()

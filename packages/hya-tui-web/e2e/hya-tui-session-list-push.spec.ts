@@ -24,11 +24,17 @@ async function otherSession(backend: Backend, title?: string): Promise<string> {
   if (title) await api(backend, "PATCH", `/v1/sessions/${created.id}`, { title })
   return created.id
 }
+async function currentSession(backend: Backend): Promise<string> {
+  const { sessions } = await api<{ sessions?: Array<{ id: string }> }>(backend, "GET", "/v1/sessions?includeArchived=true")
+  const id = sessions?.[0]?.id
+  if (!id) throw new Error("TUI did not create a session")
+  return id
+}
 
 test("a session created, renamed, and run by another client shows up live in the sidebar", async ({ tui, backend, fakeModel }, testInfo) => {
   const term = await tui(hyaTui(backend), { viewport: wideViewport })
   await term.waitForText("Message, !shell, or @file · / commands", 30_000)
-  await statusSessionId(term)
+  await currentSession(backend)
 
   // Created elsewhere (`sessionStarted`, no title yet): the raw id shows up, debounced.
   // The sidebar is narrow, so a long id is truncated on screen — match its start.
@@ -51,7 +57,7 @@ test("a session created, renamed, and run by another client shows up live in the
 test("a session deleted by another client drops its sidebar row; deleting the open one opens a new session", async ({ tui, backend }, testInfo) => {
   const term = await tui(hyaTui(backend), { viewport: wideViewport })
   await term.waitForText("Message, !shell, or @file · / commands", 30_000)
-  const openId = await statusSessionId(term)
+  const openId = await currentSession(backend)
 
   // Deleted elsewhere, not the open session: the row just disappears.
   const bystander = await otherSession(backend, "Bystander")

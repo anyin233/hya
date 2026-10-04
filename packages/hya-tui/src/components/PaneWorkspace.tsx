@@ -1,5 +1,5 @@
 import type { BoxRenderable, MouseEvent, ScrollBoxRenderable } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, Match, onCleanup, Show, Switch } from "solid-js"
 import { useApp } from "../app/context"
 import { mainContent, modelReference, shownServer } from "../state/format"
@@ -9,9 +9,9 @@ import { pageStep } from "../state/scroll"
 import { keyboardOwner } from "../state/focus"
 import { colors } from "../theme"
 import { tuiVersion } from "../version"
+import { ExtensionPanelBox, ExtensionSidebar, extensionColumnWidth } from "../extensions/Host"
+import { extensionManager } from "../extensions/manager"
 import { ConversationPane } from "./ConversationPane"
-import { ProjectsSidebar } from "./ProjectsSidebar"
-import { SidebarPane } from "./Sidebar"
 
 /** Jobs shown here are current projection facts: busy sessions, live members, queued prompts, and pending asks. */
 export function jobsText(state: AppState): string {
@@ -45,12 +45,15 @@ function paneText(state: AppState, kind: PaneKind, server: string): string {
       `Directory   ${state.selected?.workdir || "none"}`,
     ].join("\n")
     case "models": case "workflows": case "interactions": case "api": return mainContent(state, kind)
-    case "projects": case "conversation": case "sessions": case "todos": case "context": return ""
+    case "projects": case "conversation": case "sessions": case "todos": case "context": case "extension": return ""
   }
 }
 
 function PaneLeafView(props: { node: PaneLeaf; width: number }) {
   const { store, server, ui } = useApp()
+  const size = useTerminalDimensions()
+  /** The extension panel this pane shows: its own (`extension` panes) or one replacing its built-in kind. */
+  const extensionKey = () => props.node.kind === "extension" ? props.node.panel : props.node.kind === "conversation" ? undefined : extensionManager.replacement(props.node.kind)?.key
   let scroll: ScrollBoxRenderable | undefined
   const scroller = {
     line: (direction: -1 | 1) => { if (scroll) scroll.scrollBy(direction) },
@@ -63,21 +66,20 @@ function PaneLeafView(props: { node: PaneLeaf; width: number }) {
     ui.panes ??= new Map()
     if (registeredId && registeredId !== props.node.id && ui.panes.get(registeredId) === scroller) ui.panes.delete(registeredId)
     registeredId = props.node.id
-    if (props.node.kind === "conversation" || props.node.kind === "projects") ui.panes.delete(props.node.id)
+    if (props.node.kind === "conversation") ui.panes.delete(props.node.id)
     else ui.panes.set(props.node.id, scroller)
   })
   onCleanup(() => { if (registeredId && ui.panes?.get(registeredId) === scroller) ui.panes.delete(registeredId) })
   const active = () => store.state.paneLayout.active === props.node.id
   const highlighted = () => keyboardOwner(store.state, ui.command?.active() ?? false) === props.node.id
   const title = () => `${active() ? "▸ " : ""}${props.node.kind} · ${props.node.id}`
+  /** A click selects the pane; on the Projects pane it also gives it the keyboard (as Ctrl+P does). */
   const select = () => {
-    if (active()) {
-      if (props.node.kind === "projects") store.setProjectsSidebarFocus(true)
-      return
-    }
-    store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id })
-    store.setProjectsSidebarFocus(props.node.kind === "projects")
+    if (!active()) store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id })
+    store.setProjectsFocus(props.node.kind === "projects")
   }
+  const placeholderSurface = props.node.kind === "projects" || props.node.kind === "sessions" || props.node.kind === "todos" || props.node.kind === "context" ? props.node.kind : "projects"
+  const placeholderTitle = { projects: "Projects", sessions: "Sessions", todos: "Todos", context: "Context" }[placeholderSurface]
   return (
     <Switch>
       <Match when={props.node.kind === "conversation"}>
@@ -85,27 +87,27 @@ function PaneLeafView(props: { node: PaneLeaf; width: number }) {
           <ConversationPane width={props.width} />
         </box>
       </Match>
-      <Match when={props.node.kind === "projects"}>
-        <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <ProjectsSidebar width={props.width} active={highlighted()} />
-        </box>
+      <Match when={extensionKey()} keyed>
+        {(key) => (
+          <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
+            <ExtensionPanelBox panel={extensionManager.panels().find((panel) => panel.key === key)} panelKey={key} width={props.width} height={size().height} highlighted={highlighted()} scrollRef={(element) => (scroll = element)} />
+          </box>
+        )}
       </Match>
-      <Match when={props.node.kind === "sessions" || props.node.kind === "todos" || props.node.kind === "context"}>
-        <box width="100%" height="100%" flexGrow={1} flexBasis={0} onMouseDown={select}>
-          <SidebarPane kind={props.node.kind as "sessions" | "todos" | "context"} width={props.width} active={highlighted()} scrollRef={(element) => (scroll = element)} />
+      <Match when={props.node.kind === "projects" || props.node.kind === "sessions" || props.node.kind === "todos" || props.node.kind === "context"}>
+        <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" border borderColor={highlighted() ? colors.accent : colors.border} title={placeholderTitle} backgroundColor={colors.panel} paddingX={1} onMouseDown={select}>
+          <text width="100%" wrapMode="word" fg={colors.muted}>{extensionManager.placeholder(placeholderSurface) ?? "Loading…"}</text>
         </box>
       </Match>
       <Match when={true}>
-    <box
-      width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column"
-      border borderColor={highlighted() ? colors.accent : colors.border}
-      title={title()} backgroundColor={colors.bg}
-      onMouseDown={select}
-    >
-      <scrollbox ref={(element: ScrollBoxRenderable) => (scroll = element)} width="100%" flexGrow={1} paddingX={1} paddingY={1}>
-        <text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>
-      </scrollbox>
-    </box>
+        <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" border borderColor={highlighted() ? colors.accent : colors.border} title={title()} backgroundColor={colors.bg} onMouseDown={select}>
+          <scrollbox ref={(element: ScrollBoxRenderable) => (scroll = element)} width="100%" flexGrow={1} paddingX={1} paddingY={1}>
+            <text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>
+          </scrollbox>
+        </box>
+      </Match>
+      <Match when={false}>
+        <text />
       </Match>
     </Switch>
   )
@@ -182,19 +184,21 @@ function PaneNodeView(props: { node: PaneNode; width: number; drag: SplitDrag })
 export function PaneWorkspace() {
   const { store, controller } = useApp()
   const size = useTerminalDimensions()
+  const renderer = useRenderer()
   const visibleRoot = createMemo(() => visiblePaneRoot(store.state.paneLayout.root, size().width, store.state.sidebar, store.state.projectsSidebar))
   createEffect(() => {
     const leaves = paneLeaves(visibleRoot())
     if (!leaves.some((pane) => pane.id === store.state.paneLayout.active)) {
       const active = leaves.find((pane) => pane.kind === "conversation")?.id ?? leaves[0]!.id
       store.setPaneLayout({ ...store.state.paneLayout, active })
-      store.setProjectsSidebarFocus(false)
+      store.setProjectsFocus(false)
     }
   })
   const [live, setLive] = createSignal<{ key: string; weight: number }>()
   const drag: SplitDrag = { handles: new Set(), live }
   let dragging: SplitHandle | undefined
   // The boundary is the second side's first column (a sidebar's border) or the column before it; the innermost split wins.
+  let workspace: BoxRenderable | undefined
   const down = (event: MouseEvent) => {
     dragging = undefined
     if (event.button !== 0) return
@@ -207,10 +211,21 @@ export function PaneWorkspace() {
       if (!best || box.width < best.box.width) best = handle
     }
     dragging = best
+    if (!best || !workspace) return
+    // A press on text next to the border also starts a text selection (OpenTUI starts it before
+    // dispatching the press); while it drags, moves go to the hovered text, not here.
+    renderer.clearSelection()
+    // OpenTUI otherwise captures the drag on whatever is under its first move, and a pane re-renders
+    // its rows as the boundary moves (Sessions, Context): the captured row is destroyed and the drag
+    // stops. Capture on this box, which lives as long as the workspace. `setCapturedRenderable` is
+    // OpenTUI's own drag capture, private in its typings (@opentui/core 0.x renderer.d.ts).
+    const capture = renderer as unknown as { setCapturedRenderable(target: BoxRenderable): void }
+    capture.setCapturedRenderable(workspace)
   }
   const move = (event: MouseEvent) => {
     if (!dragging) return
-    setLive({ key: splitKey(dragging.node), weight: boundaryWeight(dragging.node, dragging.box.x, dragging.box.width, event.x) })
+    const weight = boundaryWeight(dragging.node, dragging.box.x, dragging.box.width, event.x)
+    setLive({ key: splitKey(dragging.node), weight })
   }
   const release = () => {
     const handle = dragging
@@ -225,8 +240,9 @@ export function PaneWorkspace() {
     catch (error) { store.setStatus(`Layout changed, not saved: ${error instanceof Error ? error.message : String(error)}`) }
   }
   return (
-    <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="row" onMouseDown={down} onMouseDrag={move} onMouseDragEnd={release}>
-      <PaneNodeView node={visibleRoot()} width={size().width} drag={drag} />
+    <box ref={(element: BoxRenderable) => (workspace = element)} width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="row" onMouseDown={down} onMouseDrag={move} onMouseDragEnd={release}>
+      <box width="100%" height="100%" flexGrow={1} flexBasis={0}><PaneNodeView node={visibleRoot()} width={size().width - extensionColumnWidth(store.state.paneLayout, size().width)} drag={drag} /></box>
+      <ExtensionSidebar />
     </box>
   )
 }

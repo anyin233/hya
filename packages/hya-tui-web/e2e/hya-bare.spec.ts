@@ -81,14 +81,24 @@ test.describe("bare hya", () => {
     await prompt(term, "hello from the terminal")
     await term.waitForText("No live provider is available", 20_000)
     const backend = await backendUrl(term)
+    let terminalSession = ""
+    await expect.poll(async () => {
+      const body = await (await fetch(`${backend}/v1/sessions`)).json() as { sessions?: { id: string; title?: string }[] }
+      terminalSession = body.sessions?.find((row) => row.title === "hello from the terminal")?.id ?? ""
+      return terminalSession
+    }, { timeout: 30_000 }).not.toBe("")
+
+    // A plain WebUI tab creates its own session. WebUI tabs cannot pass
+    // --continue/--resume flags; explicitly resume the terminal session.
+    // (docs/adr/0023-persistent-backend-daemon.md, "WebUI tabs".)
 
     // …appears in the WebUI: the same TUI, served on --port, connected to the same server.
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)
     await expect.poll(() => webPage.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    // A plain tab reopens the terminal's conversation, so it may show
-    // `Resumed …` rather than a generic connection message.
+    await web.waitForText("Message, !shell, or @file · / commands", 30_000)
+    await prompt(web, `/resume ${terminalSession}`)
     await web.waitForText("hello from the terminal", 30_000)
     // `/status` is the unambiguous server contract.
     await prompt(web, "/status")
@@ -237,11 +247,12 @@ test.describe("bare hya", () => {
     await prompt(term, "still works after the move")
     await term.waitForText("No live provider is available", 20_000)
     await term.attach(testInfo, "terminal-after")
-    // A new tab of the same host (its command still names the old URL) finds the new daemon too.
+    // A new WebUI tab opens its own fresh session; verify it attaches to the
+    // successor daemon rather than expecting the terminal's transcript.
     const late = await page.context().newPage()
     await late.goto(`http://127.0.0.1:${port}/`)
     const lateTui = new Tui(late, `http://127.0.0.1:${port}/`)
-    await lateTui.waitForText("still works after the move", 30_000)
+    await lateTui.waitForText("Message, !shell, or @file · / commands", 30_000)
     await prompt(lateTui, "/status")
     await lateTui.waitForText(new RegExp(`Backend\\s+daemon · pid ${after}`))
   })

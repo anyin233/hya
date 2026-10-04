@@ -772,15 +772,14 @@ pub(crate) async fn wait_for_successor(db: &str, old_pid: u32) -> anyhow::Result
                     state.error.as_deref().unwrap_or("no reason given")
                 );
             }
-            if state.stage() >= db_lock::HandoffStage::Ready {
-                if let Some(found) = running(db).await {
-                    if found.pid != old_pid {
-                        return Ok(Ready {
-                            discovery: found,
-                            started: true,
-                        });
-                    }
-                }
+            if state.stage() >= db_lock::HandoffStage::Ready
+                && let Some(found) = running(db).await
+                && found.pid != old_pid
+            {
+                return Ok(Ready {
+                    discovery: found,
+                    started: true,
+                });
             }
         }
         if tokio::time::Instant::now() >= deadline {

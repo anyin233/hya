@@ -386,6 +386,20 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | `libraries` | Raw dynamic-library bytes using `{id, path}`. No process declaration is required. First-party lockstep tool families load a single `runtime` library after package inspection and ABI validation; ordinary installed bundles do not execute these resources. |
 | `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Starts before runtime publication; `${BUNDLE_ROOT}` expands to the private materialized package root. |
 
+### Bundle-owned TUI extension (`tui:`)
+
+A bundle may declare one executable TUI extension independently of `extensions.process`: TypeScript the TUI runs in a sandboxed Bun process to add panels, Context rows, tool-card and composer renderers, tool-output formatters, and submit interceptors. See [Bundle-owned TUI extensions](tui-extensions.md). The top-level declaration is:
+
+```yaml
+tui:
+  api_version: 1
+  entry: tui/panel.ts
+  sdk: 1.0.0
+  permissions: [tui.panel, tui.render, tui.session.read]
+```
+
+`entry` must name a packaged relative `.ts`, `.js`, or `.mjs` extension resource (`extensions.files` or `extensions.js`). `sdk` is the independent semantic SDK version (`1.0.0` initially), and `permissions` is an allowlisted set; unknown fields, paths, SDKs, or permissions are rejected. All non-binary extension resources are served to the TUI with the extension, so the entry may import the bundle's other files.
+
 ### Schema extensions (`schemas:`)
 
 Any public bundle payload may declare external URI-scheme extensions —
@@ -990,6 +1004,7 @@ hya bundle list
 hya bundle info <bundle-id>
 hya bundle schema <bundle-id>
 hya bundle remove <bundle-id>
+hya bundle disable <bundle-id>   # stays installed, publishes nothing; `enable` undoes it
 ```
 
 `hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schema <bundle-id>` lists the schemes one bundle declares.

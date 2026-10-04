@@ -348,6 +348,7 @@ When changing a boundary, update the nearest docs page:
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 | OpenTUI frontend | [OpenTUI frontend](tui.md) |
 | Browser-rendered TUI, WebUI host, TUI browser tests | [Browser-rendered TUI](tui-web.md) |
+| Standalone TUI extension SDK | [TUI Extension SDK](tui-extension-sdk.md) |
 
 Every new or modified feature ships with its documentation in the same change.
 The feature's documentation must state, at minimum:

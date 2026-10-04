@@ -63,7 +63,7 @@ test("every binding is documented and reachable without a browser-reserved short
   reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   for (const name of ["u", "r", "f"]) reachable.add(resolveBinding(key(name, { sequence: name }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "focusPaneDown", "focusPaneLeft", "focusPaneRight", "focusPaneUp", "fork", "help", "interrupt", "openCommands", "pageDown", "pageUp", "quit", "redo", "refresh", "reviewPending", "scrollBottom", "scrollTop", "toggleProjectsSidebar", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
+    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "focusPaneDown", "focusPaneLeft", "focusPaneRight", "focusPaneUp", "fork", "help", "interrupt", "openCommands", "pageDown", "pageUp", "quit", "redo", "refresh", "reviewPending", "scrollBottom", "scrollTop", "toggleProjectsCapture", "toggleSidebar", "toggleThinking", "toggleTools", "undo"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

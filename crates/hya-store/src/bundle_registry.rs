@@ -187,6 +187,56 @@ impl BundleRegistry {
         let generation: i64 = row.try_get("generation")?;
         decode_generation(generation)
     }
+    /// Return the ids disabled for every catalog scope.
+    pub async fn disabled_bundle_ids(
+        &self,
+    ) -> Result<std::collections::BTreeSet<String>, StoreError> {
+        let rows = sqlx::query("SELECT bundle_id FROM bundle_disabled ORDER BY bundle_id")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                row.try_get::<String, _>("bundle_id")
+                    .map_err(StoreError::from)
+            })
+            .collect()
+    }
+
+    /// Persist whether a bundle is disabled and advance the watched generation.
+    pub async fn set_bundle_enabled(
+        &self,
+        bundle_id: &str,
+        enabled: bool,
+    ) -> Result<u64, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let current =
+            sqlx::query("SELECT generation FROM bundle_registry_generation WHERE singleton = 1")
+                .fetch_one(&mut *transaction)
+                .await?
+                .try_get::<i64, _>("generation")?;
+        let changed = if enabled {
+            sqlx::query("DELETE FROM bundle_disabled WHERE bundle_id = ?")
+                .bind(bundle_id)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected()
+                != 0
+        } else {
+            sqlx::query("INSERT OR IGNORE INTO bundle_disabled(bundle_id) VALUES (?)")
+                .bind(bundle_id)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected()
+                != 0
+        };
+        let generation = if changed {
+            advance_generation(&mut transaction, decode_generation(current)?).await?
+        } else {
+            decode_generation(current)?
+        };
+        transaction.commit().await?;
+        Ok(generation)
+    }
 
     /// Transactional snapshot of generation + all installed bundle rows.
     pub async fn snapshot(&self) -> Result<BundleRegistrySnapshot, StoreError> {

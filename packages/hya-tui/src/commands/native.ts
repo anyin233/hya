@@ -13,6 +13,9 @@ import { defaultModelRef, invalidEffortSuffix } from "../state/providers"
 import type { PickerAction } from "../state/picker"
 import type { BackendInfo } from "../state/store"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
+import { extensionManager } from "../extensions/manager"
+import { sandboxPolicies, type SandboxPolicy } from "../extensions/sandbox"
+import { loadPreferences, preferencesPath } from "../prefs"
 
 import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec, type Completion } from "./registry"
 import type { CompletionContext } from "../completion"
@@ -40,6 +43,16 @@ export const sessionPickerActions: readonly PickerAction[] = [
   { id: "archived", key: "a", ctrl: true, label: "Ctrl+A archived sessions (show or hide; opening one unarchives it)", prompt: "none" },
   { id: "allProjects", key: "f3", label: "F3 all projects", prompt: "none" },
 ]
+
+/**
+ * `/extensions trust|untrust` and the Bundles view's `t`: remember the choice
+ * (`extensionTrusted`) and move the extension to its tier now when it is loaded.
+ */
+export async function setExtensionTrust(id: string, trusted: boolean, save: (patch: { extensionTrusted: Record<string, boolean> }) => void): Promise<void> {
+  const current = loadPreferences(preferencesPath(process.env)).preferences.extensionTrusted ?? {}
+  save({ extensionTrusted: { ...current, [id]: trusted } })
+  if (extensionManager.list().some((extension) => extension.id === id)) await extensionManager.setTrusted(id, trusted)
+}
 
 /**
  * `/to-background` and Ctrl+D: quit at once and leave the session running on
@@ -330,6 +343,9 @@ export const nativeCommandSpecs: CommandSpec[] = [
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
       if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation"))
       if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
+      if ((words[0] === "split" && words.length === 4 && words[2] === "extension") || (words[0] === "assign" && words.length === 3 && words[1] === "extension")) {
+        return matchValues(head, current, extensionManager.panels().map((panel) => panel.key))
+      }
       if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down"])
       return []
     },
@@ -342,14 +358,14 @@ export const nativeCommandSpecs: CommandSpec[] = [
         case "split": {
           const axis = args[1]
           const kind = args[2] ?? "jobs"
-          if ((axis !== "horizontal" && axis !== "vertical") || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout split <horizontal|vertical> [job]")
-          next = splitPane(current, axis as PaneAxis, kind as PaneKind)
+          if ((axis !== "horizontal" && axis !== "vertical") || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout split <horizontal|vertical> [job] (extension <bundle>#<panel>)")
+          next = splitPane(current, axis as PaneAxis, kind as PaneKind, args[3])
           break
         }
         case "assign": {
           const kind = args[1]
-          if (!kind || !paneKinds.includes(kind as PaneKind)) throw new Error(`Usage: /layout assign <${paneKinds.join("|")}>`)
-          next = setPaneKind(current, kind as PaneKind)
+          if (!kind || !paneKinds.includes(kind as PaneKind)) throw new Error(`Usage: /layout assign <${paneKinds.join("|")}> (extension <bundle>#<panel>)`)
+          next = setPaneKind(current, kind as PaneKind, args[2])
           break
         }
         case "focus": {
@@ -372,7 +388,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
       }
       store.setView("chat")
       const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
-      store.setProjectsSidebarFocus(command === "focus" && active?.kind === "projects")
+      store.setProjectsFocus(command === "focus" && active?.kind === "projects")
       if (next !== current) {
         store.setPaneLayout(next)
         try { actions.savePreferences({ paneLayout: next }) }
@@ -382,6 +398,71 @@ export const nativeCommandSpecs: CommandSpec[] = [
         }
       }
       store.setStatus(`Layout · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reset`)
+    },
+  },
+  {
+    name: "/extensions",
+    description: "Bundle TUI extensions: list, enable, disable, reload, trust (JIT), or set the sandbox policy",
+    argumentHint: "[enable|disable|reload|trust|untrust <bundle id>|sandbox <required|best-effort|disabled>]",
+    complete: ({ words, current, head }) => {
+      if (words.length === 1) return matchValues(head, current, ["enable", "disable", "reload", "trust", "untrust", "sandbox"])
+      if (words.length === 2 && words[0] === "sandbox") return matchValues(head, current, [...sandboxPolicies])
+      if (words.length === 2) return matchValues(head, current, extensionManager.list().map((extension) => extension.id))
+      return []
+    },
+    run: async ({ store, actions }, { args }) => {
+      const [command, target] = args
+      const enabledPreferences = () => loadPreferences(preferencesPath(process.env)).preferences.extensionEnabled ?? {}
+      if (command === "enable" || command === "disable") {
+        if (!target) throw new Error(`Usage: /extensions ${command} <bundle id>`)
+        actions.savePreferences({ extensionEnabled: { ...enabledPreferences(), [target]: command === "enable" } })
+        await extensionManager.setEnabled(target, command === "enable")
+        store.setStatus(`Extension ${target} ${command}d`)
+        return
+      }
+      if (command === "reload") {
+        if (!target) throw new Error("Usage: /extensions reload <bundle id>")
+        await extensionManager.reload(target)
+        store.setStatus(`Extension ${target} reloaded`)
+        return
+      }
+      if (command === "trust" || command === "untrust") {
+        if (!target) throw new Error(`Usage: /extensions ${command} <bundle id>`)
+        await setExtensionTrust(target, command === "trust", actions.savePreferences)
+        store.setStatus(command === "trust" ? `Extension ${target} trusted: runs on the JIT (no VM memory cap)` : `Extension ${target} untrusted: runs in the VM`)
+        return
+      }
+      if (command === "sandbox") {
+        if (!sandboxPolicies.includes(target as SandboxPolicy)) throw new Error(`Usage: /extensions sandbox <${sandboxPolicies.join("|")}>`)
+        actions.savePreferences({ extensionSandbox: target as SandboxPolicy })
+        extensionManager.configure({ sandbox: target as SandboxPolicy })
+        for (const extension of extensionManager.list()) if (extension.state === "running" || extension.state === "failed") await extensionManager.reload(extension.id)
+        store.setStatus(`Extension sandbox policy: ${target}`)
+        return
+      }
+      if (command !== undefined) throw new Error("Usage: /extensions [enable|disable|reload|trust|untrust <bundle id>|sandbox <policy>]")
+      const lines = [`Bundle TUI extensions · SDK ${extensionManager.sdkVersion() ?? "not installed"} · OS sandbox ${extensionManager.sandboxPolicy()}`, ""]
+      const extensions = extensionManager.list()
+      if (extensions.length === 0) lines.push("None in this scope. A bundle declares one with a `tui:` manifest section (docs/tui-extensions.md).")
+      for (const extension of extensions) {
+        // Untrusted extensions run in the SDK's VM, trusted ones on the JIT; "OS sandbox" says whether the host is also confined by the OS.
+        const tier = extension.jit ? "JIT (trusted)" : "VM"
+        lines.push(`${extension.id} ${extension.version} · ${extension.state}${extension.reason ? ` · ${extension.reason}` : ""}${extension.state === "running" ? (extension.isolated ? ` · ${tier} + OS sandbox` : ` · ${tier} only (no OS sandbox)`) : ""}`)
+        lines.push(`  permissions  ${extension.permissions.join(", ") || "none"}`)
+        const contributions = extension.contributions
+        if (contributions) {
+          if (contributions.panels.length) lines.push(`  panels       ${contributions.panels.map((panel) => `${extension.id}#${panel.id} (${panel.replaces ? `replaces ${panel.replaces}` : panel.placement})`).join(", ")}`)
+          if (contributions.statusItems.length) lines.push(`  status       ${contributions.statusItems.map((item) => item.label).join(", ")}`)
+          if (contributions.renderers.length) lines.push(`  renderers    ${contributions.renderers.map((renderer) => `${renderer.id} → ${renderer.target} ${renderer.mode} p${renderer.priority}`).join(", ")}`)
+          if (contributions.formatters.length) lines.push(`  formatters   ${contributions.formatters.map((formatter) => `${formatter.id} p${formatter.priority}`).join(", ")}`)
+          if (contributions.interceptors.length) lines.push(`  intercepts   ${contributions.interceptors.map((interceptor) => `${interceptor.id} → ${interceptor.target} p${interceptor.priority}`).join(", ")}`)
+        }
+        for (const warning of extension.warnings) lines.push(`  ! ${warning}`)
+        for (const line of extension.log.slice(-3)) lines.push(`  log: ${line}`)
+      }
+      lines.push("", "/extensions enable|disable|reload|trust|untrust <id> · /extensions sandbox <required|best-effort|disabled> · /layout split vertical extension <bundle>#<panel>")
+      store.setStatusText(lines.join("\n"))
+      store.setView("status")
     },
   },
   {
@@ -420,7 +501,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
       else await actions.newSession(args[0], args[1])
       // A new session waits for its first prompt: typing goes to the composer, not
       // back to the Projects sidebar the command pane was opened from (CommandPane `close`).
-      store.setProjectsSidebarFocus(false)
+      store.setProjectsFocus(false)
     },
   },
   {
@@ -624,6 +705,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ actions }) => { actions.openMcp() },
   },
   {
+    name: "/bundles",
+    description: "Manage installed bundles: install, uninstall, enable, disable, trust",
+    run: ({ actions }) => { actions.openBundles() },
+  },
+  {
     name: "/rules",
     description: "Open the Saved Rules view: saved permission decisions, delete",
     run: ({ actions }) => { actions.openRules() },
@@ -631,12 +717,12 @@ export const nativeCommandSpecs: CommandSpec[] = [
   {
     name: "/project",
     description: "Open the Project view: list, open/switch, create, edit roots, rename, delete, or start a temporary session",
-    run: ({ actions }) => { actions.openProjectView() },
+    run: ({ actions }) => { actions.openProjectOverlay() },
   },
   {
     name: "/projects",
     description: "Alias for /project",
-    run: ({ actions }) => { actions.openProjectView() },
+    run: ({ actions }) => { actions.openProjectOverlay() },
   },
   {
     name: "/projects-sidebar",

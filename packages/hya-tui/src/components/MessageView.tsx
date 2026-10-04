@@ -1,3 +1,5 @@
+import { extensionManager, type ToolCallInput } from "../extensions/manager"
+import { hooked } from "../extensions/renderTree"
 /**
  * One transcript message, from its `MessageView` (state/messages.ts):
  *
@@ -222,7 +224,7 @@ function iconColor(status: ToolStatus | "waiting"): string {
  * card toggles it; a `task` card opens its child session instead (see
  * `TaskCard`).
  */
-function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
+function BaseToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
   const { store } = useApp()
   const card = () => props.block.card
   const expanded = () => toolExpanded(store.state, props.block)
@@ -254,6 +256,22 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
       </Match>
     </Switch>
   )
+}
+
+/** A tool card inside any extension renderers (extensions/manager.ts): they may replace or decorate it. */
+function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
+  const input = (): ToolCallInput => {
+    const card = props.block.card
+    let args: ToolCallInput["input"]
+    try { args = card.args ? JSON.parse(card.args) : undefined } catch { args = card.args }
+    const output = (card.output ?? card.body).map((line) => line.text).join("\n")
+    return {
+      id: props.block.id, tool: card.tool, summary: card.summary,
+      status: card.status === "done" ? "completed" : card.status === "failed" ? "error" : card.status,
+      ...(args === undefined ? {} : { input: args }), ...(output ? { output } : {}), ...(card.error ? { error: card.error } : {}),
+    }
+  }
+  return <>{hooked(extensionManager.toolCall(input()), () => <BaseToolCard {...props} />)}</>
 }
 
 function CardHeader(props: { status: ToolStatus | "waiting"; summary: string; duration?: string | undefined }) {

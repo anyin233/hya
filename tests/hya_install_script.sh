@@ -48,7 +48,8 @@ make_frontend_release() {
   rm -rf "$scratch/$package"
   mkdir -p "$scratch/$package/lib/hya/bin" "$scratch/$package/lib/hya/tui/src" \
     "$scratch/$package/lib/hya/tui/node_modules" "$scratch/$package/lib/hya/tui-web/src" \
-    "$scratch/$package/lib/hya/tui-web/web" "$scratch/$package/lib/hya/tui-web/node_modules"
+    "$scratch/$package/lib/hya/tui-web/web" "$scratch/$package/lib/hya/tui-web/node_modules" \
+    "$scratch/$package/lib/hya/tui-sdk/src"
   cat >"$scratch/$package/lib/hya/bin/bun" <<EOF
 #!/bin/sh
 if [ "\${1:-}" = --version ]; then printf '%s\\n' '$version'; else printf 'bun\\n'; fi
@@ -57,6 +58,7 @@ EOF
   printf 'export const frontendVersion = "%s"\n' "$version" >"$scratch/$package/lib/hya/tui/frontend-version.ts"
   printf '%s\n' tui >"$scratch/$package/lib/hya/tui/src/main.ts"
   printf '%s\n' web >"$scratch/$package/lib/hya/tui-web/src/main.ts"
+  printf '%s\n' sdk >"$scratch/$package/lib/hya/tui-sdk/src/main.ts"
   printf '%s\n' '<html></html>' >"$scratch/$package/lib/hya/tui-web/web/index.html"
   tar -czf "$archive" -C "$scratch" "$package"
   mkdir -p "$releases/download/frontend/$version"
@@ -89,7 +91,7 @@ printf keep >"$backend_prefix/lib/hya/claude-adapter/marker"
 printf mine >"$backend_prefix/bundles/my-own.hyabundle"
 out="$(backend_install 2>&1)" || fail "backend install failed: $out"
 [[ "$("$backend_prefix/bin/hya" --version)" == 'hya 9.9.1' ]] || fail 'backend version mismatch'
-[[ ! -e "$backend_prefix/lib/hya/tui" && ! -e "$backend_prefix/lib/hya/tui-web" ]] || fail 'backend installed frontend files'
+[[ ! -e "$backend_prefix/lib/hya/tui" && ! -e "$backend_prefix/lib/hya/tui-web" && ! -e "$backend_prefix/lib/hya/tui-sdk" ]] || fail 'backend installed frontend files'
 [[ "$(cat "$backend_prefix/lib/hya/claude-adapter/marker")" == keep ]] || fail 'foreign lib entry changed'
 [[ "$(cat "$backend_prefix/bundles/my-own.hyabundle")" == mine ]] || fail 'foreign bundle changed'
 
@@ -121,7 +123,7 @@ out="$(frontend_install 2>&1)" || fail "frontend install failed: $out"
 grep -q -- '--backend-only' <<<"$out" || fail "frontend-only install did not mention the missing backend: $out"
 [[ ! -e "$frontend_prefix/bin/hya" ]] || fail 'frontend-only install created hya'
 [[ -x "$frontend_prefix/lib/hya/bin/bun" ]] || fail 'frontend did not install Bun'
-[[ -f "$frontend_prefix/lib/hya/tui/src/main.ts" && -f "$frontend_prefix/lib/hya/tui-web/src/main.ts" ]] || fail 'frontend runtime missing'
+[[ -f "$frontend_prefix/lib/hya/tui/src/main.ts" && -f "$frontend_prefix/lib/hya/tui-web/src/main.ts" && -f "$frontend_prefix/lib/hya/tui-sdk/src/main.ts" ]] || fail 'frontend runtime missing'
 out="$(frontend_install 2>&1)" || fail "frontend repeat failed: $out"
 grep -q 'frontend 8.8.1 is already installed' <<<"$out" || fail "frontend no-op was not reported: $out"
 
