@@ -408,6 +408,19 @@ pub(crate) async fn cmd_serve_action(
             }
             match daemon::restart_by_handoff(&db, &daemon_spec, &relay).await? {
                 daemon::HandoffRestart::Queued(queued) => {
+                    // Run by one of the daemon's own turns (its shell tool): that turn reaches its
+                    // handoff boundary only after this command returns, so waiting for the
+                    // successor here would hold the handoff until the drain deadline rejects it.
+                    if daemon::inside_daemon_session(queued.pid) {
+                        if json {
+                            let mut value = daemon::queued_json(&queued, &db);
+                            value["check"] = check;
+                            println!("{value}");
+                        } else {
+                            println!("{}", daemon::queued_line(&queued, &db));
+                        }
+                        return Ok(());
+                    }
                     // The handoff is complete only after the successor is healthy.
                     // Keep restart blocking so its success output names the new generation.
                     let ready = daemon::wait_for_successor(&db, queued.pid).await?;
