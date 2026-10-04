@@ -108,6 +108,9 @@ const WORKFLOW_FRONTEND_VERSION_COPY: &str =
 const WORKFLOW_TUI_WEB_PAGE_COPY: &str =
     "cp -R packages/hya-tui-web/web/. \"dist/$package_dir/lib/hya/tui-web/web/\"";
 const WORKFLOW_TUI_WEB_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui-web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
+const WORKFLOW_TUI_SDK_SOURCE_COPY: &str =
+    "cp -R packages/hya-tui-sdk/src/. \"dist/$package_dir/lib/hya/tui-sdk/src/\"";
+const WORKFLOW_TUI_SDK_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui-sdk\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
 const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$VERSION\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
 const WORKFLOW_CHECKSUMS: &str =
     "(cd dist && shasum -a 256 \"$archive\" ./*.hyabundle > SHA256SUMS)";
@@ -160,8 +163,22 @@ const TUI_WEB_RUNTIME: BunRuntime = BunRuntime {
     directories: &["src", "web"],
 };
 
+/// The TUI extension SDK: the shared extension host the TUI starts, and the
+/// QuickJS VM bundle TUI extensions run in.
+const TUI_SDK_RUNTIME: BunRuntime = BunRuntime {
+    source: "packages/hya-tui-sdk",
+    destination: "lib/hya/tui-sdk",
+    files: &["package.json", "bun.lock", "tsconfig.json"],
+    directories: &["src"],
+};
+
 /// Every Bun program in the release archive, in staging order.
-const PACKAGED_RUNTIMES: [&BunRuntime; 3] = [&BUN_ADAPTER_RUNTIME, &TUI_RUNTIME, &TUI_WEB_RUNTIME];
+const PACKAGED_RUNTIMES: [&BunRuntime; 4] = [
+    &BUN_ADAPTER_RUNTIME,
+    &TUI_RUNTIME,
+    &TUI_WEB_RUNTIME,
+    &TUI_SDK_RUNTIME,
+];
 
 /// Production dependencies the staged TUI must contain (besides its native package).
 const TUI_DEPENDENCIES: [&str; 3] = ["@opentui/core", "@opentui/solid", "solid-js"];
@@ -185,6 +202,20 @@ const TUI_WEB_RUNTIME_FILES: [&str; 6] = [
     "web/style.css",
     "node_modules/@xterm/xterm/css/xterm.css",
 ];
+/// The extension host's entry points the TUI starts.
+const TUI_SDK_RUNTIME_FILES: [&str; 4] = [
+    "src/main.ts",
+    "src/host.ts",
+    "src/worker.ts",
+    "src/jitWorker.ts",
+];
+/// Production dependencies the staged SDK must contain (the QuickJS VM).
+const TUI_SDK_DEPENDENCIES: [&str; 2] = [
+    "quickjs-emscripten-core",
+    "@jitl/quickjs-wasmfile-release-sync",
+];
+/// Development-only packages a production SDK install must not contain.
+const TUI_SDK_DEV_ONLY: [&str; 2] = ["bun-types", "typescript"];
 
 /// Return the OpenTUI native package `bun install` selects on a release target.
 ///
@@ -544,6 +575,14 @@ fn validate_workflow(workflow: &Value, target: &str, _component: Component) -> R
         (
             WORKFLOW_TUI_WEB_INSTALL,
             "install the WebUI host's production dependencies",
+        ),
+        (
+            WORKFLOW_TUI_SDK_SOURCE_COPY,
+            "recursively copy the complete TUI extension SDK source tree",
+        ),
+        (
+            WORKFLOW_TUI_SDK_INSTALL,
+            "install the TUI extension SDK's production dependencies (the QuickJS VM)",
         ),
     ] {
         ensure_workflow_run_contract(&run_blocks, marker, purpose)?;
@@ -1282,7 +1321,7 @@ fn rehearse_frontend_package(root: &Path, version: &str, target: &str) -> Result
     let packaged_bun = package_root.join(PACKAGED_BUN);
     copy_file(&bun_on_path()?, &packaged_bun)?;
     set_executable(&packaged_bun)?;
-    for runtime in [&TUI_RUNTIME, &TUI_WEB_RUNTIME] {
+    for runtime in [&TUI_RUNTIME, &TUI_WEB_RUNTIME, &TUI_SDK_RUNTIME] {
         let destination = package_root.join(runtime.destination);
         stage_bun_runtime(root, runtime, &destination)?;
         install_runtime_dependencies(runtime, &destination)?;
@@ -1480,6 +1519,13 @@ fn verify_tui_layout(package_root: &Path, target: &str) -> Result<()> {
         &TUI_WEB_RUNTIME_FILES,
         &TUI_WEB_DEPENDENCIES,
         &TUI_WEB_DEV_ONLY,
+    )?;
+    verify_staged_program(
+        package_root,
+        &TUI_SDK_RUNTIME,
+        &TUI_SDK_RUNTIME_FILES,
+        &TUI_SDK_DEPENDENCIES,
+        &TUI_SDK_DEV_ONLY,
     )
 }
 
@@ -1548,6 +1594,11 @@ fn verify_archive_listing(
         require_listing_line(
             &listing,
             &format!("{package_name}/lib/hya/tui-web/web/index.html"),
+            "frontend release tar listing",
+        )?;
+        require_listing_line(
+            &listing,
+            &format!("{package_name}/lib/hya/tui-sdk/src/main.ts"),
             "frontend release tar listing",
         )?;
         ensure!(
@@ -2270,6 +2321,8 @@ mod tests {
         WORKFLOW_FRONTEND_VERSION_COPY,
         WORKFLOW_TUI_WEB_PAGE_COPY,
         WORKFLOW_TUI_WEB_INSTALL,
+        WORKFLOW_TUI_SDK_SOURCE_COPY,
+        WORKFLOW_TUI_SDK_INSTALL,
         WORKFLOW_FIRST_PARTY_STAGE,
         WORKFLOW_CHECKSUMS,
     ];
@@ -2444,6 +2497,17 @@ mod tests {
                     .join("package.json"),
             )?;
         }
+        let sdk = package_root.join(TUI_SDK_RUNTIME.destination);
+        for file in TUI_SDK_RUNTIME.files.iter().chain(&TUI_SDK_RUNTIME_FILES) {
+            copy_or_write(&sdk.join(file))?;
+        }
+        for dependency in TUI_SDK_DEPENDENCIES {
+            copy_or_write(
+                &sdk.join("node_modules")
+                    .join(dependency)
+                    .join("package.json"),
+            )?;
+        }
         Ok(())
     }
 
@@ -2474,6 +2538,16 @@ mod tests {
         let error = verify_tui_layout(root, target).expect_err("Playwright was accepted");
         assert!(error.to_string().contains("@playwright/test"), "{error:#}");
         fs::remove_dir_all(&playwright)?;
+
+        let quickjs = root.join("lib/hya/tui-sdk/node_modules/@jitl/quickjs-wasmfile-release-sync");
+        fs::remove_dir_all(&quickjs)?;
+        let error = verify_tui_layout(root, target)
+            .expect_err("an extension host without the QuickJS VM was accepted");
+        assert!(
+            error.to_string().contains("quickjs-wasmfile-release-sync"),
+            "{error:#}"
+        );
+        copy_or_write(&quickjs.join("package.json"))?;
 
         fs::remove_file(root.join("lib/hya/tui-web/web/index.html"))?;
         let error = verify_tui_layout(root, target).expect_err("a missing page was accepted");

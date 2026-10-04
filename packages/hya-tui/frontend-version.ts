@@ -2,7 +2,7 @@
 export const frontendVersion = "0.44.6"
 
 /** The oldest backend release this frontend can use. */
-export const minimumBackendVersion = "0.43.41"
+export const minimumBackendVersion = "0.45.3"
 
 type ReleaseVersion = readonly [number, number, number]
 

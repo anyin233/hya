@@ -15,3 +15,7 @@
 - Rendered received agent messages as tool cards and deferred pointer selection until after click layout updates.
 - Fixed dragging a sidebar border: the drag no longer stops once the pointer crosses rows the pane re-renders (it could not shrink the right sidebar back to its minimum), and a press on text next to the border no longer starts a text selection.
 - Fixed a prompt sent while startup was still opening the session: it was sent in an extra session the TUI then left; it now goes to the session startup opens.
+
+## Version management
+
+- This frontend requires backend `0.45.3` or newer through `minimumBackendVersion`: its Sessions, Todos, Projects, and Context panes come from the backend's TUI extension catalog (`ListTuiExtensions`), and `/bundles` uses the bundle management API.
