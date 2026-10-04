@@ -51,8 +51,12 @@ test.describe("Bundles view", () => {
     await term.waitForText("e2e/bundle-panel disabled")
     await term.waitForText(/e2e\/bundle-panel\s+1\.0\.0\s+user\s+disabled\s+off/)
     expect(await listed()).toBe("disabled")
+    // The first Esc clears the filter, the second closes the view. Wait for each
+    // effect: an Esc sent right after another reads as Alt+Esc and is lost.
     await term.press("Escape")
+    await expect.poll(() => term.find("Filter bundle-panel")).toBeNull()
     await term.press("Escape")
+    await term.waitForText("Message, !shell, or @file")
     await expect.poll(() => term.find(panel)).toBeNull()
 
     await openBundles(term)

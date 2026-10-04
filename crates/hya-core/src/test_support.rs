@@ -46,6 +46,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+            tui: None,
         })
         .collect::<Vec<_>>();
     let bundles = bundles

@@ -1923,6 +1923,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                     mcp: Vec::new(),
                     hooks: Vec::new(),
                     extensions: Vec::new(),
+                    tui: None,
                 },
             ))
         })
