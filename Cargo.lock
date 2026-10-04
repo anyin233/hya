@@ -1358,7 +1358,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.45.2"
+version = "0.45.3"
 dependencies = [
  "anyhow",
  "axum 0.7.9",

@@ -19,13 +19,6 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** The open session's id from the explicit status view while it has no title. */
-async function headerId(term: Tui): Promise<string> {
-  await prompt(term, "/status")
-  await term.waitForText(/Session\s+hysec_\S+/, 30_000)
-  return /Session\s+(hysec_\S+)/.exec(await term.text())![1]!
-}
-
 /** The workspace daemon as an API target. */
 async function backendOf(workspace: Workspace): Promise<Backend> {
   return { url: (await daemonStatus(workspace))!.url, dir: workspace.dir }
@@ -78,7 +71,7 @@ test.describe("archive on exit and resume", () => {
   test("/exit archives the session; --continue skips it; --resume <id> and the --resume picker unarchive", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Message, !shell, or @file · / commands", 30_000)
-    const id = await headerId(term)
+    const id = await statusSessionId(term)
     const backend = await backendOf(workspace)
     // An earlier session of the directory (another client's), for --continue to fall back to.
     const older = await otherSession(backend, "Older work")
@@ -125,7 +118,7 @@ test.describe("background exits keep the session running", () => {
     test(`${way} quits at once without archiving; the turn finishes on the daemon`, async ({ tui, workspace, fakeModel }) => {
       const term = await tui(...selfLaunch(workspace))
       await term.waitForText("Message, !shell, or @file · / commands", 30_000)
-      const id = await headerId(term)
+      const id = await statusSessionId(term)
       const backend = await backendOf(workspace)
       await prompt(term, "a long job")
       await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
@@ -164,8 +157,7 @@ test.describe("/sessions archived toggle", () => {
     await term.attach(testInfo, "archived-shown")
     await term.type("Shelved")
     await term.press("Enter")
-    await prompt(term, "/status")
-    await term.waitForText(/Session\s+Shelved work/, 20_000)
+    await expectStatus(term, "Session", "Shelved work")
     await expect.poll(async () => (await session(backend, hidden)).archived ?? false).toBe(false)
 
     // Another client archives the open session: the sidebar marks it live
@@ -189,7 +181,7 @@ test.describe("WebUI tabs (bare hya)", () => {
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
     await web.waitForText("Message, !shell, or @file · / commands", 30_000)
-    const id = await headerId(web)
+    const id = await statusSessionId(web)
     const backend = await backendOf(workspace)
 
     await prompt(web, "/to-background")
@@ -229,7 +221,7 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
-    const terminalId = await headerId(term)
+    const terminalId = await statusSessionId(term)
     await prompt(term, "terminal work")
     await term.waitForText("Terminal reply.", 20_000)
     await term.waitForIdle()
@@ -237,17 +229,12 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    // A plain tab now resumes the terminal's last conversation. Start a
-    // separate one explicitly so both directions of /resume remain covered.
-    await web.waitForText("Terminal reply.", 30_000)
-    const backend = await backendOf(workspace)
-    const before = await listed(backend, "?includeArchived=true")
-    await prompt(web, "/new")
-    let webId: string | undefined
-    await expect.poll(async () => {
-      webId = (await listed(backend, "?includeArchived=true")).find((id) => !before.includes(id))
-      return webId
-    }, { timeout: 20_000 }).not.toBeUndefined()
+    // Plain launches create a fresh Project session (docs/tui.md "Sessions on
+    // start"); the tab must not inherit the terminal's transcript.
+    await web.waitForText("Message, !shell, or @file · / commands", 30_000)
+    const webId = await statusSessionId(web)
+    expect(webId).not.toBe(terminalId)
+    expect(await web.text()).not.toContain("Terminal reply.")
     await prompt(web, "web work")
     await web.waitForText("Web reply.", 20_000)
     await web.waitForIdle()
@@ -261,8 +248,11 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
 
     await prompt(term, "/resume")
     await term.waitForText("Resume a session · archived ones included")
-    await term.type(webId!)
+    await term.type(webId)
     await term.press("Enter")
+    await term.waitForText("Web reply.", 20_000)
     await term.resize(690, 640)
+    expect(await statusSessionId(term)).toBe(webId)
+    await term.attach(testInfo, "terminal-resumed")
   })
 })

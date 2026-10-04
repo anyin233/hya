@@ -21,6 +21,7 @@ use axum::{Json, Router};
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod agent_model_control;
+mod bundle_control;
 mod ephemeral;
 mod host;
 mod mcp_control;
@@ -44,6 +45,11 @@ pub use agent_model_control::{
     AGENT_MODEL_INVALID_REQUEST, AGENT_MODEL_UNAVAILABLE, AGENT_MODEL_UNKNOWN_AGENT,
     AgentModelControl, AgentModelControlError, AgentModelControlFuture, AgentModelEffective,
     AgentModelIdentity, AgentModelSource, AgentModelState,
+};
+pub use bundle_control::{
+    BUNDLE_CONFLICT, BUNDLE_CONTROL_FAILURE, BUNDLE_CONTROL_UNAVAILABLE, BUNDLE_IMMUTABLE,
+    BUNDLE_INVALID_REQUEST, BUNDLE_NOT_FOUND, BundleControl, BundleControlError,
+    BundleControlFuture, BundleListing, BundleListingComponents,
 };
 pub use ephemeral::EphemeralGrace;
 pub use host::{GrpcHostGuard, GrpcHostLayer, HostPolicy, LOOPBACK_HOSTS};

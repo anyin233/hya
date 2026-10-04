@@ -1,3 +1,6 @@
+import { readdir, readFile, stat } from "node:fs/promises"
+import { join } from "node:path"
+import { extensionCacheRoot } from "./extensions/install"
 import type { PermissionModeInfo } from "./state/modes"
 import type { RespondBody } from "./state/prompts"
 /** Small HTTP/JSON client for the shared hya.v1 server contract. */
@@ -113,7 +116,10 @@ export interface TokenUsage {
 
 /** A subagent (member) spawned by a session (`MemberInfo`, docs/protocol/README.md "Subagents"). */
 export interface MemberInfo {
+  /** Internal stable member id within the parent session (not user-facing). */
   member: string
+  /** Stable human-readable handle when roster binding is available. */
+  handle?: string
   /** Child session id when known. */
   child?: string
   /** Subagent type (agent name). */
@@ -257,6 +263,39 @@ export interface ProviderSummary {
   /** `saved` (auth/<id>.yaml), `oauth`, `config` (inline api_key), or `none`. */
   keySource?: string
   modelCount?: number
+}
+/** `BundleComponents`: what a bundle contributes, by id (proto3 JSON omits empty lists and `false`). */
+export interface BundleComponents {
+  agents?: string[]
+  skills?: string[]
+  tools?: string[]
+  mcpServers?: string[]
+  workflows?: string[]
+  permissionModes?: string[]
+  apis?: string[]
+  hooks?: number
+  /** The bundle declares a TUI extension. */
+  tui?: boolean
+  tuiPermissions?: string[]
+}
+
+/** `BundleSummary` (`ListBundles`): one bundle as installed or shipped. */
+export interface BundleSummary {
+  id: string
+  version?: string
+  publisher?: string
+  /** `user`, `project`, or `first_party`. */
+  scope?: string
+  kind?: string
+  /** `active`, `shadowed`, `disabled`, or `unreadable`. */
+  state?: string
+  enabled?: boolean
+  /** `UninstallBundle` can remove it (not first-party). */
+  removable?: boolean
+  description?: string
+  preparedDigest?: string
+  error?: string
+  components?: BundleComponents
 }
 
 /** `ProviderInfo`: a provider with its effective models. */
@@ -842,6 +881,26 @@ export class HyaClient {
   async listProviders(): Promise<ProviderSummary[]> {
     return this.listAll("/v1/providers", "providers")
   }
+  /** `ListBundles`: the scope's bundles (user, the directory's project bundles, first-party). */
+  async listBundles(): Promise<BundleSummary[]> {
+    const result = await this.request<{ bundles?: BundleSummary[] }>("GET", this.scoped("/v1/bundles"))
+    return result.bundles ?? []
+  }
+
+  /** `InstallBundle`: a `.hyabundle` at an absolute path on the backend's machine; `project` installs into the scope directory's `.hya/bundles`. */
+  async installBundle(path: string, project: boolean, signal?: AbortSignal): Promise<void> {
+    await this.request("POST", "/v1/bundles:install", { directory: this.directory, path, project }, signal)
+  }
+
+  /** `UninstallBundle`: from the user registry, or (`project`) the scope directory's `.hya/bundles`. */
+  async uninstallBundle(bundleId: string, project: boolean, signal?: AbortSignal): Promise<void> {
+    await this.request("POST", "/v1/bundles:uninstall", { directory: this.directory, bundleId, project }, signal)
+  }
+
+  /** `SetBundleEnabled`: enable or disable a bundle id in every scope. */
+  async setBundleEnabled(bundleId: string, enabled: boolean, signal?: AbortSignal): Promise<void> {
+    await this.request("POST", "/v1/bundles:set-enabled", { directory: this.directory, bundleId, enabled }, signal)
+  }
 
   async listCommands(): Promise<CommandSummary[]> {
     return this.listAll("/v1/commands", "commands", "", true)
@@ -1002,6 +1061,35 @@ export class HyaClient {
 
   async deleteSession(session: string): Promise<void> {
     await this.request("DELETE", `/v1/sessions/${encodeURIComponent(session)}`)
+  }
+
+  /**
+   * `ListTuiExtensions` (`GET /v1/tui-extensions`): the scope's bundle TUI
+   * extensions with their files. Rows are untrusted until
+   * extensions/install.ts `parseCatalogEntry` checks them; `[]` on a backend without the route.
+   */
+  async listTuiExtensions(): Promise<unknown[]> {
+    try {
+      const root = extensionCacheRoot(process.env)
+      let known: string[] = []
+      try {
+        const dirs = await readdir(root, { withFileTypes: true })
+        known = (await Promise.all(dirs.filter((dir) => dir.isDirectory() && /^[0-9a-f]{64}$/.test(dir.name)).map(async (dir) => {
+          try {
+            const marker = join(root, dir.name, ".complete")
+            const value = (await readFile(marker, "utf8")).trim()
+            const markerStat = await stat(marker)
+            return markerStat.isFile() && value === dir.name ? dir.name : undefined
+          } catch { return undefined }
+        }))).filter((digest): digest is string => digest !== undefined).slice(0, 64)
+      } catch { /* cache directory may not exist yet */ }
+      const query = known.length ? `?known=${encodeURIComponent(known.join(","))}` : ""
+      const result = await this.request<{ extensions?: unknown }>("GET", this.scoped(`/v1/tui-extensions${query}`))
+      return Array.isArray(result.extensions) ? result.extensions : []
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return []
+      throw error
+    }
   }
 
   /** `ListPermissionModes` (`GET /v1/permission-modes`): built-ins first, then bundle modes; `[]` on a backend without the route. */

@@ -112,6 +112,10 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: crates/hya-plugin-bun/adapter
         run: bun install --frozen-lockfile
+      - name: hya-tui-sdk install
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-sdk
+        run: bun install --frozen-lockfile
       - name: hya-tui typecheck and unit tests
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui
@@ -123,6 +127,10 @@ jobs:
       - name: bun adapter typecheck and unit tests
         if: ${{ !cancelled() }}
         working-directory: crates/hya-plugin-bun/adapter
+        run: bun run typecheck && bun test
+      - name: hya-tui-sdk typecheck and unit tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-sdk
         run: bun run typecheck && bun test
       # e2e/hya-tui.spec.ts and e2e/hya-tui-launch.spec.ts start this binary as
       # the backend under test (see docs/tui-web.md#running-the-tests).

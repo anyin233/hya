@@ -141,11 +141,11 @@ test.describe("backend daemon", () => {
 
     const restarted = await daemon(workspace, ["restart", "--json"])
     expect(restarted.code).toBe(0)
-    const next = JSON.parse(restarted.stdout.trim()) as { pid: number; queued: boolean }
-    expect(next.queued).toBe(true)
-    expect(next.pid).toBe(before)
-    // Restart reports the queued request against the old owner. Poll until
-    // handoff publishes the actual successor generation.
+    const next = JSON.parse(restarted.stdout.trim()) as { pid: number; url: string; check?: unknown }
+    // `serve restart` now blocks until the successor is healthy and returns
+    // its ready record (hya-backend/src/serve.rs, restart handler).
+    expect(next.pid).toBeDefined()
+    expect(next.url).toBeDefined()
     let successorPid = before
     await expect.poll(async () => {
       successorPid = (await daemonStatus(workspace))?.pid ?? before

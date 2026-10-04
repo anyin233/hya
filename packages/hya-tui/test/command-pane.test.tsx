@@ -38,17 +38,6 @@ test("Backspace deleting the final command character closes the command pane", a
     await setup.renderOnce()
     expect(controller.ui.composerInput?.text).toBe("message")
     expect(controller.ui.commandInput?.text).toBe("")
-    store.setProjectsSidebar("open")
-    store.setProjectsSidebarFocus(true)
-    controller.ui.command?.open()
-    await setup.renderOnce()
-    expect(controller.ui.commandInput?.text).toBe("/")
-    expect(store.state.projectsSidebarFocus).toBe(false)
-    setup.mockInput.pressBackspace()
-    await setup.renderOnce()
-    expect(controller.ui.command?.active()).toBe(false)
-    expect(store.state.projectsSidebarFocus).toBe(true)
-    expect(controller.ui.composerInput?.text).toBe("message")
   } finally {
     setup.renderer.destroy()
   }

@@ -13,13 +13,14 @@ import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyActi
 import { agentsViewKeyRows } from "../state/agentsView"
 import { diffKeyRows } from "../state/diff"
 import { mcpKeyRows } from "../state/mcp"
+import { bundleKeyRows } from "../state/bundles"
 import type { PickerRow } from "../state/picker"
 import { providerKeyRows } from "../state/providers"
 import { rulesKeyRows } from "../state/rules"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Rules", "Agents", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -46,7 +47,7 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   reviewPending: "Prompts",
   refresh: "Views",
   toggleSidebar: "Views",
-  toggleProjectsSidebar: "Views",
+  toggleProjectsCapture: "Views",
   toggleThinking: "Views",
   toggleTools: "Views",
   pageUp: "Transcript",
@@ -180,11 +181,12 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   // The Diff / MCP / Saved Rules / Agents views' keys (also each view's footer line).
   const diffRows: HelpRow[] = diffKeyRows.map((row) => ({ group: "Diff", keys: row.keys, description: row.description }))
   const mcpRows: HelpRow[] = mcpKeyRows.map((row) => ({ group: "Mcp", keys: row.keys, description: row.description }))
+  const bundlesViewRows: HelpRow[] = bundleKeyRows.map((row) => ({ group: "Bundles", keys: row.keys, description: row.description }))
   const savedRuleRows: HelpRow[] = rulesKeyRows.map((row) => ({ group: "Rules", keys: row.keys, description: row.description }))
   const agentsViewRows: HelpRow[] = agentsViewKeyRows.map((row) => ({ group: "Agents", keys: row.keys, description: row.description }))
   const rows = [
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
-    ...providerRows, ...diffRows, ...mcpRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
+    ...providerRows, ...diffRows, ...mcpRows, ...bundlesViewRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
   ]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))

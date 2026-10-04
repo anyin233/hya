@@ -1629,6 +1629,7 @@ pub(crate) async fn prepare_server(
     let provider_manager = hya_app::ProviderManager::new(Arc::clone(&engine));
     let mut state = AppState::new(Arc::clone(&engine), Arc::clone(&agent))
         .with_provider_control(Arc::new(provider_manager.clone()))
+        .with_bundle_control(Arc::new(hya_app::bundle_admin::BundleManager))
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)

@@ -411,23 +411,49 @@ export function hyaTui(backend: Backend): string[] {
 /** A browser viewport wide enough for the right sidebar (150 columns minimum). */
 export const wideViewport = { width: 1500, height: 640 }
 
-/** Open the explicit metadata view; startup can finish after the first frame. */
+/** The `/status` view's rows: the bordered `─Status` box, borders stripped (a permanent Context pane also has a Version row). */
+async function statusRows(term: Tui): Promise<string[] | undefined> {
+  const lines = await term.lines()
+  const top = lines.findIndex((line) => line.includes("─Status"))
+  if (top < 0) return undefined
+  // The box's left border column: every row inside starts with `│` there.
+  const left = lines[top]!.lastIndexOf("┌", lines[top]!.indexOf("─Status"))
+  const rows: string[] = []
+  for (const line of lines.slice(top + 1)) {
+    if (line[left] !== "│") break
+    const right = line.indexOf("│", left + 1)
+    rows.push(line.slice(left + 1, right < 0 ? undefined : right).trimEnd())
+  }
+  return rows
+}
+
+/** Open the explicit metadata view (`/status`); startup can finish after the first frame. */
 export async function showStatusView(term: Tui): Promise<void> {
   await expect.poll(async () => {
-    if (!/Version\s+\d+\./.test(await term.text())) {
+    if (!(await statusRows(term))?.some((row) => /^Version\s+\d+\./.test(row))) {
       await term.type("/status")
       await term.press("Enter")
     }
-    return /Version\s+\d+\./.test(await term.text())
+    return (await statusRows(term))?.some((row) => /^Version\s+\d+\./.test(row)) ?? false
   }, { timeout: 30_000 }).toBe(true)
 }
 
-/** Read one field from /status without assuming a permanent conversation heading. */
+/**
+ * Read one field from /status; a value wrapped onto following rows (a long
+ * Directory) is joined back. `""` when the field is not on screen (a frame
+ * read mid-redraw): both callers poll.
+ */
 async function statusField(term: Tui, field: string): Promise<string> {
   await showStatusView(term)
-  const row = (await term.lines()).find((line) => new RegExp(`${field}\\s{2,}`).test(line))
-  if (!row) throw new Error(`/status has no ${field} field`)
-  return row.replace(new RegExp(`^.*?${field}\\s{2,}`), "").replace(/│.*$/, "").trim()
+  const rows = (await statusRows(term)) ?? []
+  const at = rows.findIndex((row) => new RegExp(`^${field}\\s{2,}`).test(row))
+  if (at < 0) return ""
+  let value = rows[at]!.replace(new RegExp(`^${field}\\s{2,}`), "").trim()
+  for (const next of rows.slice(at + 1)) {
+    if (!next.trim() || /^[A-Z][A-Za-z]*\s{2,}/.test(next)) break
+    value += next.trim()
+  }
+  return value
 }
 
 /** Return to the transcript without changing the split tree or message draft. */
@@ -477,13 +503,21 @@ export async function createSession(term: Tui): Promise<string> {
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 /**
- * A tool card (docs/tui.md "Tool calls"): its header row `<icon> <tool>[  <summary>]`
- * and, on the next row, its compact JSON arguments containing `args`
- * (for example `"command":"echo hi"`). `summary` is `awaiting approval` while a permission waits.
+ * A tool card (docs/tui.md "Tool calls"): the bordered box titled `tool`, its state row
+ * (`icon`, then `summary` such as `awaiting approval`), and the next row showing either the
+ * compact JSON arguments containing `args` or the card's display of the first argument value
+ * (`"command":"echo hi"` → `echo hi`).
  */
-export function toolCard(icon: "✓" | "✗" | "◌" | "○", tool: string, args: string, summary?: string): RegExp {
-  const header = `${escapeRegExp(icon)} ${escapeRegExp(tool)}${summary ? `\\s+${escapeRegExp(summary)}` : ""}`
-  return new RegExp(`${header}[^\\n]*\\n[^\\n]*\\{[^\\n]*${escapeRegExp(args)}`)
+export function outlinedToolCard(icon: "✓" | "✗" | "◌" | "○", tool: string, args: string, summary?: string): RegExp {
+  const state = `${escapeRegExp(icon)}${summary ? `\\s+${escapeRegExp(summary)}` : ""}`
+  let display = args
+  try {
+    const parsed = JSON.parse(`{${args}}`) as Record<string, unknown>
+    const first = Object.values(parsed)[0]
+    if (typeof first === "string") display = first
+    else if (first !== undefined) display = String(first)
+  } catch { /* compact argument fragment is not JSON on its own */ }
+  return new RegExp(`┌[^\\n]*${escapeRegExp(tool)}[^\\n]*\\n[^\\n]*${state}[^\\n]*\\n[^\\n]*(?:\\{[^\\n]*${escapeRegExp(args)}|${escapeRegExp(display)})`)
 }
 
 /**

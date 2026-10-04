@@ -15,6 +15,8 @@ test.describe("hya TUI commands and look", () => {
     expect((await term.cell(sessions.row + 1, sessions.col))?.bg).toBe("#1c2530")
 
     // The transcript (no box since the single-column layout) sits on the base background.
+    // Opening the startup session repaints it: wait for the placeholder instead of reading mid-redraw.
+    await term.waitForText("No messages yet")
     const transcript = (await term.find("No messages yet"))!
     expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
     expect(await term.find("mode manual")).toBeNull()
@@ -62,14 +64,14 @@ test.describe("hya TUI commands and look", () => {
     await expect.poll(() => term.find("Server      http://")).toBeNull()
   })
 
-  test("narrow terminals keep sidebars and conversation metadata hidden", async ({ tui, backend }) => {
+  test("narrow terminals keep sidebars hidden and show compact conversation context", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
     expect(cols).toBeLessThan(150)
     expect(cols).toBeGreaterThanOrEqual(58)
     await statusSessionId(term)
-    expect(await term.find("mode manual")).toBeNull()
+    expect(await term.find("mode manual")).not.toBeNull()
     expect(await term.text()).not.toContain("Sessions")
     await term.press("Control+b")
     await term.waitForText("Message, !shell, or @file · / commands")

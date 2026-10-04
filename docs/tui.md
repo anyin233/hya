@@ -9,8 +9,11 @@ with `--grpc`. It uses OpenTUI for
 display and input while the backend remains the owner of sessions, event
 history, tool execution, and permissions. The default screen places Projects
 on the left, the conversation and its input in the middle, and separate
-Sessions, Todos, and Context panes on the right. The full layout is editable,
-and the side panes follow terminal width unless pinned (see [Layout](#layout)).
+Sessions, Todos, and Context panes on the right. These panes, the compact
+Context line, and the full-screen `/project` view are provided by the trusted
+first-party `hya/basic-tui-components` bundle; behavior is unchanged when it is
+running. The full layout is editable, and the side panes follow terminal width
+unless pinned (see [Layout](#layout)).
 Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
 tool call is an outlined card with its tool name shown on the border in the
@@ -600,22 +603,22 @@ Controller actions: `newSession(agent?, model?)`,
 
 ### Project view
 
-`/project` (and its alias `/projects`) opens a full-screen list of every
-Project (the RulesView pattern: `state/projectView.ts` owns the state and
-keys, `app/projectView.ts` the calls, `components/ProjectView.tsx` the
-rendering). Up/Down move the highlight; the active Project is marked and, in
-`--remote` mode with none active yet, the view opens by itself (see
-"`--remote`" above) and a new-session attempt without an active Project
-opens it too, instead of only setting the controller status state.
+`/project` (and its alias `/projects`) opens the full-screen Projects panel
+provided by `hya/basic-tui-components`. It keeps a highlighted Project,
+busy/notice state, and create, rename, root-edit, and delete sub-flows.
+Up/Down move the highlight; the active Project is marked and, in `--remote`
+mode with none active yet, the view opens by itself (see "`--remote`" above)
+and a new-session attempt without an active Project opens it too, instead of
+only setting the controller status state.
 
 | Key | Effect |
 | --- | --- |
-| Enter | Open/switch to the highlighted Project (`switchProject`), then close the view. |
-| `n` | Create a Project: a name prompt, then one root per step (path completion from the backend filesystem, `GET /v1/fs/find` — remote workspaces live on the backend machine, not this one); Enter on an empty root finishes, at least one root is required, the first root is primary. `CreateProject`. |
-| `e` | Edit the highlighted Project's roots: Up/Down select a root, Shift+Up/Down reorders it (the first root is primary), `a` adds one (the same path-completing prompt as create), `d` removes the selected one (refused when it is the only root), Enter saves the whole list (`UpdateProject`), Esc cancels. |
-| `r` | Rename the highlighted Project (`UpdateProject`). |
-| `d` | Ask to delete the highlighted Project; Enter confirms (`DeleteProject`), Esc cancels. A live root session belonging to it fails the call with `failed_precondition`, shown on the notice line verbatim. |
-| `t` | Start a temporary session (`newTemporarySession`) and close the view; `/new --temp` does the same from the composer without opening it. |
+| Enter | Open/switch to the highlighted Project (`project.switch`), then close the view. |
+| `n` | Create a Project: type a name, then add one root per step. Tab asks the host to complete the current root (`fs.complete`) and shows candidates; Enter on an empty root finishes; at least one root is required and the first root is primary. |
+| `e` | Edit roots: Up/Down select, Shift+Up/Down reorder (first is primary), `a` adds a root with the same Tab completion, `d` removes it (refused when it is the only root), Enter saves, Esc cancels. |
+| `r` | Rename the highlighted Project. |
+| `d` | Ask to delete the highlighted Project; Enter confirms, Esc cancels. |
+| `t` | Start a temporary session and close the view. |
 | Esc | Close the view (cancels a sub-flow first, if one is open). |
 
 **Errors.** A failed call shows as one line on the view's notice line,
@@ -635,6 +638,13 @@ A second, narrower sidebar on the left lists every Project live
 (`state/projectsSidebar.ts`, `components/ProjectsSidebar.tsx`): see
 [Layout](#layout) for its visibility threshold, Ctrl+P, and
 `/projects-sidebar`.
+
+The Sessions, Todos, Projects sidebar, Context box and compact Context line,
+and this full-screen view are rendered by `hya/basic-tui-components`, not by
+the frontend itself. While the catalog is loading or that bundle is starting,
+surfaces show `Loading…` and the status line is empty. Afterwards, without a
+replacement, the TUI shows `<Pane> needs hya/basic-tui-components (<reason>)`,
+where the reason identifies installation, catalog unavailability, or extension state.
 
 ## Commands and keys
 
@@ -667,6 +677,8 @@ A second, narrower sidebar on the left lists every Project live
 | `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
 | `/diff` | Open the full-screen [Diff view](#diff-view): the working tree diff, split per file. |
 | `/mcp` | Open the full-screen [MCP servers](#mcp-servers) view: server status, tools, connect/disconnect, login. |
+| `/bundles` | Open the full-screen [Bundles](#bundles) view: every bundle of the scope with its components and TUI extension; install, uninstall, enable, disable, trust. |
+| `/extensions [enable\|disable\|reload\|trust\|untrust <bundle id>\|sandbox <policy>]` | List the scope's [bundle TUI extensions](tui-extensions.md) (state, tier, sandboxing, permissions, contributions, log), or enable, disable, reload, trust, untrust one, or set the sandbox policy. |
 | `/rules` | Open the full-screen [Saved Rules](#saved-rules) view: saved permission decisions, delete. |
 | `/workflows`, `/workflow select <name>`, `/workflow run [name]` | View sources and selected state; select or start a Workflow in the selected session. |
 | `/interactions` | View pending permissions and questions. |
@@ -805,11 +817,17 @@ plugin API, RPC route, or event type. Controller status state and the existing
 explicit information views remain available; the conversation split keeps its
 keyboard ownership and highlighted composer.
 
-- **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
+- **Sidebar.** The Sessions, Todos, and Context boxes are panels from
+  `hya/basic-tui-components` (or a replacement extension). If no panel is
+  running for one, its placeholder names the missing bundle. Three titled
+  boxes on the right: `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
   under its parent, `· running` while it works, `· ◌ waiting` while a
-  permission or question of that session waits for an answer — opening a
-  session syncs its row to the fresh `GetSession` read, so a stale `running`
+  permission or question of that session waits for an answer. Clicking any
+  session row opens that exact session (including subagents). Subsessions use
+  one compact row each, with their full minted member handle (for example
+  `hya-scout-skade`) rather than only the agent class — opening a session
+  syncs its row to the fresh `GetSession` read, so a stale `running`
   from before it was opened does not linger, and its own stream's turn-end
   frame clears it live if the turn was already running when it was opened;
   `state/store.ts` `openSession()` / `setSessionBusy()`; every root
@@ -828,10 +846,12 @@ keyboard ownership and highlighted composer.
   box (and the `/sessions` picker) is scoped to the active Project, with
   temporary sessions under their own `— Temporary —` heading (see
   [Projects](#projects) and [Pickers](#pickers)).
-- **Left Projects sidebar.** A narrower titled pane on
-  the left: one row per Project (`ListProjects`, live via `projectsUpdated`
-  the same as the Project view), with a separator between rows, the active one marked `▸`, a busy marker
-  `●` while a session of it runs a turn, and its session count. Clicking a
+- **Left Projects sidebar.** Its panel is supplied by
+  `hya/basic-tui-components`; Up/Down move the highlight and Enter switches
+  the selected Project; Esc releases capture. A narrower titled pane on the
+  left: one row per Project (`ListProjects`, live via `projectsUpdated`), with
+  a separator between rows, the active one marked `▸`, a busy marker `●`
+  while a session of it runs a turn, and its session count. Clicking a
   Project row switches to it just like clicking a session row opens that
   session. Right-clicking a Project opens Open, Rename, and Delete actions;
   Rename edits the displayed name and Delete asks for confirmation. Right-clicking
@@ -839,11 +859,15 @@ keyboard ownership and highlighted composer.
   Delete ask for confirmation. These use the same v1 Project and Session
   update/delete contracts as the Project view and session picker. It needs both sidebars and the chat column to fit, so it follows a threshold no
   lower than the right sidebar's (150 columns; an 80-column or even a
-  149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if it is
-  hidden — Up/Down move the highlight, Enter switches (`switchProject`),
-  Esc (or Ctrl+P again) returns focus to the composer without closing it;
-  `/projects-sidebar [on|off]` toggles visibility alone (and, unlike the
-  right sidebar, can pin it open at any width). See [Projects](#projects).
+  149-column terminal keeps it hidden). Ctrl+P focuses it, opening it first if
+  hidden; a click on the pane does the same. While it owns the keyboard,
+  Up/Down move the highlight, Enter switches (`switchProject`), and Esc or
+  Ctrl+P returns focus to Conversation without closing it. Global Ctrl+B,
+  Ctrl+P, refresh, help, pending-review, quit, EOF, and the command pane
+  continue to work; opening `/` takes focus back, and closing it restores the
+  Projects pane. `/new` leaves focus with the composer. `/projects-sidebar
+  [on|off]` toggles visibility alone (and can pin it open at any width). See
+  [Projects](#projects).
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
   above the message input; see
@@ -944,8 +968,8 @@ tree. `/layout show` returns Conversation to chat.
 | Command | Effect |
 | --- | --- |
 | `/layout` or `/layout show` | Show the pane count and selected pane; return from another main view. |
-| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to 16 panes. |
-| `/layout assign <job>` | Change the selected pane's job. Assigning `conversation` swaps it with the current conversation pane; the sole conversation cannot be removed. |
+| `/layout split <horizontal\|vertical> [job]` | Split the selected pane equally and assign the new pane `job` (default `jobs`). Up to 16 panes. Job `extension <bundle id>#<panel id>` shows a [bundle extension](tui-extensions.md) panel. |
+| `/layout assign <job>` | Change the selected pane's job (`extension <bundle id>#<panel id>` included). Assigning `conversation` swaps it with the current conversation pane; the sole conversation cannot be removed. |
 | `/layout focus <left\|right\|up\|down\|pane-id>` | Select a neighboring pane or a stable id such as `pane-2`. Alt+arrows use this action. |
 | `/layout resize <+N\|-N>` | Grow or shrink the selected pane against its nearest sibling by N percentage points, clamped to 10–90%. |
 | `/layout close` | Close the selected auxiliary pane and give its rectangle to its sibling. |
@@ -965,9 +989,10 @@ columns, Sessions, Todos, and Context are always hidden; at 150 or more,
 jobs in any layout; the saved tree remains intact. `Ctrl+P` opens and
 selects a Projects pane; `Ctrl+B` toggles panes assigned Sessions, Todos,
 and Context, wherever they are placed. Conversation stays free of metadata
-headings when Context is hidden; its compact top status line instead shows
-the available Context fields, including the frontend/backend version as
-`<frontend>/<backend>` (for example, `0.44.2/0.45.0`).
+headings when Context is hidden; the `hya/basic-tui-components` Context-line
+panel instead shows the available Context fields, including the
+frontend/backend version as `<frontend>/<backend>` (for example,
+`0.44.2/0.45.0`).
 Resizing the terminal or toggling a sidebar keeps unsent message and command
 drafts, including their in-process input histories.
 
@@ -1080,9 +1105,13 @@ interface TuiPreferences {
   notifications?: boolean // desktop notifications (/notifications); default true
   permissionMode?: string // default for sessions this TUI creates: "manual" (default), "yolo", or a bundle mode id
   paneLayout?: PaneLayout // versioned full-workspace split tree; see Tiled workspace above
+  extensionEnabled?: Record<string, boolean> // bundle TUI extensions by bundle id (/extensions enable|disable)
+  extensionSandbox?: "required" | "best-effort" | "disabled" // OS sandbox of the extension host (/extensions sandbox)
+  extensionTrusted?: Record<string, boolean> // bundle TUI extensions on the JIT tier (/extensions trust|untrust, /bundles t)
 }
 ```
 
+- `extensionEnabled`: `false` keeps an extension stopped; a remote backend's extension runs only with `true`. `extensionSandbox`: see [Bundle-owned TUI extensions](tui-extensions.md) "Security". `extensionTrusted`: `true` runs a bundle's extension on the JIT, `false` in the VM; unset, a local backend's first-party bundles run on the JIT ("Trust tiers" there).
 - The file is read once at start, before the first frame. A missing file
   means the defaults. An unreadable file, invalid JSON, or a JSON value that
   is not an object is ignored, and the controller status state says
@@ -1170,9 +1199,8 @@ with the whole new list, which replaces the box's rows at once (no re-read). Eac
 glyph and its text: pending `○` (muted), in progress `◐` (accent),
 completed `✓` (green), blocked `✗` (muted — the `TodoStatus` enum has no
 `cancelled` status, so `blocked` takes the glyph and color that status would
-otherwise use). The box shows at most 6 items, then a `+N more` row, so a
-long list cannot push the `Context` box below the visible area. `/todos`
-still opens the full-panel view (same glyphs) for a longer list.
+otherwise use). The bundle renders every item; `/todos` still opens the
+full-panel view for the same list.
 
 ## Notices
 
@@ -2764,6 +2792,50 @@ group `mcp`) lists the same keys.
 | `a` start login | `POST /v1/mcp/{name}/auth` | `{authorizationUrl}` |
 | Code pop-up Enter | `POST /v1/mcp/{name}/auth/complete` | `{code}` → `McpServerStatus` |
 
+## Bundles
+
+`/bundles` opens a full-screen view of every bundle of the current scope:
+installed ones (user registry), the scope directory's project bundles
+(`.hya/bundles`), and the ones shipped with hya (first-party). A row shows
+the bundle id, version, scope, state (`active`, `shadowed` by a same-id
+bundle of a higher scope, `disabled`, `unreadable`), its TUI extension
+(`VM running`, `JIT running`, `VM blocked`, `off`, `—` without one), and what
+it contributes (`2 agents · 1 skill · TUI`). A bundle can carry both backend
+components (agents, skills, tools, MCP servers, workflows, APIs, hooks,
+permission modes) and a TUI extension; the view manages both.
+
+### Keys
+
+Up/Down move the highlight; Enter opens the bundle's details (publisher,
+digest, every component id, the TUI extension's permissions, tier, sandbox,
+and state). `i` installs a `.hyabundle` package: type its path (a relative
+path is resolved against the TUI's working directory; the backend reads the
+file, so on a remote backend the path is on that machine), Enter, then choose
+`u` user or `p` project (the scope directory's `.hya/bundles`) and Enter. `x`
+uninstalls the highlighted bundle after a confirmation; first-party bundles
+cannot be uninstalled (`e` disables them instead). `e` enables or disables the
+bundle in every scope: a disabled bundle publishes nothing, TUI extension
+included; for a bundle with a TUI extension it also sets the TUI's own
+`extensionEnabled` switch, so a remote backend's extension is not left
+blocked. `t` trusts or untrusts the bundle's TUI extension (the same as
+`/extensions trust|untrust`: trusted extensions run on the JIT, without the VM
+memory cap; see [Bundle-owned TUI extensions](tui-extensions.md) "Trust
+tiers"). `r` reloads; `/` filters by id, scope, state, or contents. After
+every change the list and the TUI extension catalog reload, so panels appear
+and disappear at once. Esc cancels a running call, closes a pop-up, clears
+the filter, backs out of the details, then closes the view. The help overlay
+(`?`, group `Bundles`) lists the same keys.
+
+### Bundles view interfaces
+
+| Action | Call |
+| --- | --- |
+| Open, `r` reload | `GET /v1/bundles?directory=<dir>` (`ListBundles`) |
+| `i` install | `POST /v1/bundles:install` `{directory, path, project}` |
+| `x` uninstall | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` |
+| `e` enable/disable | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}`, then `extensionEnabled` |
+| `t` trust/untrust | `extensionTrusted` in the TUI preferences; the running extension restarts on its tier |
+
 ## Saved Rules
 
 `/rules` opens a full-screen list of saved permission decisions (the rules a
@@ -3024,6 +3096,9 @@ together.
 | `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
 | `src/state/providers.ts` | The [Provider View](#provider-view)'s pure state: `initialProviderView()`, `providerViewKey()` (screens, filter, busy), the pop-up forms (`addProviderForm()`, `setKeyForm()`, `addModelForm()`, `editModelForm()`, `formKey()`, `formPaste()`, `withSecretLength()`), validation (`validateProviderId()`, `validateBaseUrl()`), row text (`providerLine()`, `modelLine()`, `providerDetailHeader()`, `tokenCount()`, `discoveryNotice()`, `testResultText()`), `providerKeyRows` (footer hint and help), and `defaultModelRef()`. |
 | `src/app/providers.ts` | `createProviderController()`: the Provider View's calls (one at a time, Esc aborts), the `SecretEntry` behind key fields, the catalog re-read after every write, and the `/model` prompt after adding a provider while the next turn would run on `hya/offline`. |
+| `src/state/bundles.ts` | The [Bundles](#bundles) view's pure state: `bundleRows()` (backend bundles merged with the extension states), `bundlesViewKey()` (screens, filter, install and uninstall pop-ups, busy), row and detail text (`bundleLine()`, `bundleDetailLines()`), and `bundleKeyRows` (footer hint and help). |
+| `src/app/bundles.ts` | `createBundlesController()`: the Bundles view's calls (one at a time, Esc aborts), the `extensionEnabled`/`extensionTrusted` preferences, and the list and extension-catalog reload after every change. |
+| `src/components/BundlesView.tsx` | The full-screen Bundles view. |
 | `src/state/catalog.ts` | `/model`/`/effort`/`/sessions` picker row builders: `modelRows()`, `effortRows()`, `sessionRows()` (the `New session` row + `sessionTree()`), `relativeTime()`. |
 | `src/state/agentsView.ts`, `src/app/agentsView.ts`, `src/components/AgentsView.tsx` | The [Agents view](#agents-view) (`/agent`): pure state and keys (`agentsViewLines()` sections, `agentsViewKey()`), its calls and pickers (`createAgentsViewController()`), and its rendering. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
@@ -3032,10 +3107,9 @@ together.
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar visibility modes and width breakpoints, plus `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned full-screen split tree, visibility filtering, migration, focus geometry, assignment, close/resize reducers, and the recursive renderer. |
-| `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
-| `src/state/projectView.ts`, `src/app/projectView.ts` | The full-screen [Project view](#project-view) (the RulesView pattern): `state/projectView.ts` owns `initialProjectView()`, `settleProjectView()`, `projectViewKey()` (list, create, edit-roots, rename, delete-confirm sub-flows), `projectViewHint()`; `app/projectView.ts`'s `createProjectViewController()` makes the `CreateProject`/`UpdateProject`/`DeleteProject` calls and completes root paths from `findFiles()` (`GET /v1/fs/find`) on Tab. |
-| `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
-| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the metadata state (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
+| `bundles/first-party/basic-tui-components/tui/projects.ts` | The Projects sidebar panel: live rows, active/busy/session-count markers, click and context-menu actions, and Up/Down/Enter/Esc keyboard handling. |
+| `bundles/first-party/basic-tui-components/tui/projectView.ts` | The full-screen [Project view](#project-view): highlighted list, create, edit-roots (with `fs.complete` Tab completion), rename, delete confirmation, temporary-session flow, refresh errors, and host-command result handling. |
+| `src/state/format.ts` | Pure text for the conversation metadata, pending lines, metadata state (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), compaction divider, and non-chat views; bundle panels own Sessions, Todos, Projects, and Context presentation. |
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
@@ -3235,7 +3309,10 @@ with no interactions listing in between, and that an ask of a session run
 headless over the HTTP API (`hya.ts` `headlessTurn`) shows live in the
 pending block with its session, then F4 opens its numbered prompt (default
 and about 80 columns); `e2e/hya-tui-notifications.spec.ts` checks that ask's
-single desktop notification.
+single desktop notification. `e2e/hya-tui-bundles.spec.ts` covers the
+[Bundles](#bundles) view against a real backend: installing a package (its
+sidebar panel appears), disabling and enabling it (the panel goes and comes
+back), trusting it (JIT tier), uninstalling it, and the first-party refusal.
 
 ### Session pane mouse navigation
 

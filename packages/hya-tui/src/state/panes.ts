@@ -1,15 +1,19 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
 import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
-export const paneKinds = ["conversation", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api"] as const
+export const paneKinds = ["conversation", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "extension"] as const
 export type PaneKind = typeof paneKinds[number]
 export type PaneAxis = "horizontal" | "vertical"
 export type PaneDirection = "left" | "right" | "up" | "down"
+/** `<bundle id>#<panel id>` of a bundle TUI extension panel (extensions/manager.ts). */
+export const extensionPanelKey = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}#[a-z0-9][a-z0-9._-]{0,63}$/
 
 export interface PaneLeaf {
   type: "pane"
   id: string
   kind: PaneKind
+  /** Kind `extension` only: the panel key it shows. */
+  panel?: string
 }
 
 export interface PaneSplit {
@@ -80,8 +84,8 @@ function mapPane(node: PaneNode, id: string, change: (pane: PaneLeaf) => PaneNod
   return { ...node, first: mapPane(node.first, id, change), second: mapPane(node.second, id, change) }
 }
 
-/** Split the active rectangle into two equal rectangles; the new pane gets focus. */
-export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs"): PaneLayout {
+/** Split the active rectangle into two equal rectangles; the new pane gets focus. `panel`: the key of an `extension` pane. */
+export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", panel?: string): PaneLayout {
   const leaves = paneLeaves(layout.root)
   if (leaves.length >= maxPanes) throw new Error(`A layout supports at most ${maxPanes} panes`)
   if (kind === "conversation") throw new Error("Use /layout assign conversation to move the conversation pane")
@@ -89,23 +93,32 @@ export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "
   const id = `pane-${next}`
   return {
     ...layout,
-    root: mapPane(layout.root, layout.active, (pane) => ({ type: "split", axis, weight: 0.5, first: pane, second: { type: "pane", id, kind } })),
+    root: mapPane(layout.root, layout.active, (pane) => ({ type: "split", axis, weight: 0.5, first: pane, second: { type: "pane", id, ...paneJob(kind, panel) } })),
     active: id,
   }
 }
 
+function paneJob(kind: PaneKind, panel: string | undefined): Pick<PaneLeaf, "kind" | "panel"> {
+  if (kind !== "extension") return { kind }
+  if (!panel || !extensionPanelKey.test(panel)) throw new Error("An extension pane needs a panel: <bundle id>#<panel id> (see /extensions)")
+  return { kind, panel }
+}
+
 /** Assign a job. Assigning conversation swaps it with the sole conversation pane. */
-export function setPaneKind(layout: PaneLayout, kind: PaneKind): PaneLayout {
+export function setPaneKind(layout: PaneLayout, kind: PaneKind, panel?: string): PaneLayout {
   const leaves = paneLeaves(layout.root)
   const active = leaves.find((leaf) => leaf.id === layout.active)
   if (!active) return layout
-  if (active.kind === kind) return layout
+  if (active.kind === kind && active.panel === panel) return layout
   if (active.kind === "conversation") throw new Error("Move conversation to another pane before assigning this pane")
-  if (kind !== "conversation") return { ...layout, root: mapPane(layout.root, layout.active, (pane) => ({ ...pane, kind })) }
+  if (kind !== "conversation") {
+    const job = paneJob(kind, panel)
+    return { ...layout, root: mapPane(layout.root, layout.active, (pane) => ({ type: "pane", id: pane.id, ...job })) }
+  }
   const conversation = leaves.find((leaf) => leaf.kind === "conversation")
   if (!conversation) return layout
-  const swapped = mapPane(layout.root, conversation.id, (pane) => ({ ...pane, kind: active.kind }))
-  return { ...layout, root: mapPane(swapped, active.id, (pane) => ({ ...pane, kind: "conversation" })) }
+  const swapped = mapPane(layout.root, conversation.id, (pane) => ({ type: "pane", id: pane.id, kind: active.kind, ...(active.panel ? { panel: active.panel } : {}) }))
+  return { ...layout, root: mapPane(swapped, active.id, (pane) => ({ type: "pane", id: pane.id, kind: "conversation" })) }
 }
 
 /** Close the focused auxiliary pane and promote its sibling. The conversation remains mounted. */
@@ -242,6 +255,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     const row = node as Record<string, unknown>
     if (row.type === "pane") {
       if (typeof row.id !== "string" || !/^pane-[1-9]\d*$/.test(row.id) || ids.has(row.id) || !paneKinds.includes(row.kind as PaneKind)) return false
+      if (row.kind === "extension" ? typeof row.panel !== "string" || !extensionPanelKey.test(row.panel) : row.panel !== undefined) return false
       ids.add(row.id)
       if (row.kind === "conversation") conversations += 1
       return ids.size <= maxPanes

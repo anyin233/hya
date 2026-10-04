@@ -53,6 +53,35 @@ service Catalog {
   // hya.http: POST /v1/bundles:refresh
   rpc RefreshBundles(RefreshBundlesRequest) returns (RefreshBundlesResponse);
 
+  // Bundles of the directory's scope, as `hya bundle list` shows them:
+  // installed (user registry), the Project's (`<directory>/.hya/bundles`),
+  // and first-party, each with its components, scope, and state. Empty
+  // directory: user and first-party only.
+  //
+  // hya.http: GET /v1/bundles
+  rpc ListBundles(ListBundlesRequest) returns (ListBundlesResponse);
+
+  // Install a `.hyabundle` package from a path on the backend's machine
+  // (what `hya bundle install` does), then refresh the scope. `project`
+  // installs into `<directory>/.hya/bundles` instead of the user registry.
+  //
+  // hya.http: POST /v1/bundles:install
+  rpc InstallBundle(InstallBundleRequest) returns (BundleChange);
+
+  // Remove an installed bundle (`hya bundle remove`), then refresh the
+  // scope. First-party bundles cannot be removed.
+  //
+  // hya.http: POST /v1/bundles:uninstall
+  rpc UninstallBundle(UninstallBundleRequest) returns (BundleChange);
+
+  // Enable or disable a bundle by id in every scope (`hya bundle
+  // enable|disable`), then refresh. A disabled bundle publishes nothing:
+  // no agents, skills, tools, MCP servers, workflows, APIs, permission
+  // modes, or TUI extension.
+  //
+  // hya.http: POST /v1/bundles:set-enabled
+  rpc SetBundleEnabled(SetBundleEnabledRequest) returns (BundleChange);
+
   // Write one model's entry (with its metadata overrides) into the
   // provider's `models:` in `config.yaml` and apply it live. The model id
   // travels in the body because ids may contain `/` or `:`.
@@ -97,6 +126,9 @@ service Catalog {
   //
   // hya.http: GET /v1/permission-modes
   rpc ListPermissionModes(ListPermissionModesRequest) returns (ListPermissionModesResponse);
+  // Verified frontend extension declarations from prepared bundles. Metadata only.
+  // hya.http: GET /v1/tui-extensions
+  rpc ListTuiExtensions(ListTuiExtensionsRequest) returns (ListTuiExtensionsResponse);
 }
 
 // Provider/model identity pair. `model_id` is provider-local.
@@ -324,6 +356,88 @@ message BundleRefreshError {
   string message = 2;
 }
 
+message ListBundlesRequest {
+  // Directory scope: its `.hya/bundles` are listed too; empty: user and first-party only.
+  string directory = 1;
+}
+
+message ListBundlesResponse {
+  // Sorted by id, then scope (`project`, `user`, `first_party`).
+  repeated BundleSummary bundles = 1;
+}
+
+// One bundle as installed or shipped.
+message BundleSummary {
+  string id = 1;
+  string version = 2;
+  string publisher = 3;
+  // `user` (installed registry), `project` (`<directory>/.hya/bundles`), or
+  // `first_party` (shipped with hya).
+  string scope = 4;
+  // Manifest kind: `AgentBundle`, `AgentSetBundle`, `WorkflowBundle`, or `Plugin`.
+  string kind = 5;
+  // `active`, `shadowed` (a same-id bundle of a higher scope wins: project
+  // over user over first-party), `disabled`, or `unreadable`.
+  string state = 6;
+  // False after `SetBundleEnabled(false)`.
+  bool enabled = 7;
+  // `UninstallBundle` can remove it (not first-party).
+  bool removable = 8;
+  // Manifest description, if any.
+  string description = 9;
+  // Prepared bundle digest; empty when unreadable.
+  string prepared_digest = 10;
+  // Why it is unreadable; empty otherwise.
+  string error = 11;
+  BundleComponents components = 12;
+}
+
+// What a bundle contributes, by id.
+message BundleComponents {
+  repeated string agents = 1;
+  repeated string skills = 2;
+  repeated string tools = 3;
+  repeated string mcp_servers = 4;
+  repeated string workflows = 5;
+  repeated string permission_modes = 6;
+  repeated string apis = 7;
+  uint32 hooks = 8;
+  // The bundle declares a TUI extension (`tui:`).
+  bool tui = 9;
+  // The TUI extension's permissions.
+  repeated string tui_permissions = 10;
+}
+
+message InstallBundleRequest {
+  // Directory scope of the refresh, and the target of a `project` install.
+  string directory = 1;
+  // Absolute path of a `.hyabundle` package on the backend's machine.
+  string path = 2;
+  // Install into `<directory>/.hya/bundles` instead of the user registry.
+  bool project = 3;
+  // Replace an installed bundle with the same id even at a lower version.
+  bool overwrite = 4;
+}
+
+message UninstallBundleRequest {
+  string directory = 1;
+  string bundle_id = 2;
+  // Remove it from `<directory>/.hya/bundles` instead of the user registry.
+  bool project = 3;
+}
+
+message SetBundleEnabledRequest {
+  string directory = 1;
+  string bundle_id = 2;
+  bool enabled = 3;
+}
+
+// The bundle a management call changed and the refresh that followed.
+message BundleChange {
+  string bundle_id = 1;
+  RefreshBundlesResponse refresh = 2;
+}
+
 message SetProviderModelRequest {
   // Directory context (unused; providers are process-wide).
   string directory = 1;
@@ -527,4 +641,40 @@ message PermissionModeSummary {
 message ListPermissionModesResponse {
   // Built-in modes first, then bundle modes sorted by bundle and mode id.
   repeated PermissionModeSummary modes = 1;
+}
+
+// List verified, prepared frontend extension descriptors visible in a directory.
+message ListTuiExtensionsRequest {
+  // Directory scope (absolute). Empty lists the global view.
+  string directory = 1;
+}
+
+message TuiExtensionDescriptor {
+  string bundle_id = 1;
+  string bundle_version = 2;
+  string prepared_digest = 3;
+  uint32 api_version = 4;
+  // Canonical bundle-relative entry path; guaranteed to be present in `files`.
+  string entry = 5;
+  string sdk = 6;
+  repeated string permissions = 7;
+  // Every non-binary extension resource, sorted by canonical source path.
+  repeated TuiExtensionFile files = 8;
+  // True only when the loaded bundle came from the trusted first-party inventory.
+  bool first_party = 9;
+  // True when the client already has the prepared bundle cache.
+  bool cached = 10;
+}
+
+message TuiExtensionFile {
+  // Canonical bundle-relative source path.
+  string path = 1;
+  // Lowercase hex SHA-256 digest of content bytes.
+  string sha256 = 2;
+  // UTF-8 source text.
+  string content = 3;
+}
+
+message ListTuiExtensionsResponse {
+  repeated TuiExtensionDescriptor extensions = 1;
 }

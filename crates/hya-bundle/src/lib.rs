@@ -31,7 +31,7 @@ pub use model::{
     PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
     PreparedCheck, PreparedInstallableBundle, PreparedPermissionMode, PreparedPluginBundle,
     PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema,
-    PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
+    PreparedTuiExtension, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,
@@ -40,4 +40,4 @@ pub use package::{
     write_public_package,
 };
 pub use prepare::prepare_package;
-pub use source::{BundleSource, SourceFile};
+pub use source::{BundleSource, SourceFile, SourceTuiExtension};

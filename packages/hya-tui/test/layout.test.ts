@@ -1,11 +1,10 @@
 import { expect, test } from "bun:test"
 import {
   layoutBreakpoints, parseSwitch,
-  projectsSidebarVisible, sidebarMinColumns, toggledProjectsSidebar,
-  sidebarVisible, toggledSidebar, wrapLineCount,
+  sidebarMinColumns, sidebarVisible, toggledSidebar, wrapLineCount,
 } from "../src/state/layout"
-import { createAppStore } from "../src/state/store"
 
+import { createAppStore } from "../src/state/store"
 test("the sidebar needs the breakpoint width; a pin cannot show it below", () => {
   // At 149 columns the default sidebar was 18 columns; its minimum is 60% wider (29) and it is closed there.
   expect(layoutBreakpoints.sidebar).toBe(150)
@@ -59,37 +58,4 @@ test("the store tracks the sidebar mode and the terminal width", () => {
   expect(store.state.sidebar).toBe("closed")
   store.toggleSidebar()
   expect(store.state.sidebar).toBe("auto")
-})
-
-test("the left Projects sidebar needs both sidebars and the chat column to fit, not narrower than the right sidebar alone", () => {
-  expect(layoutBreakpoints.projectsSidebar).toBe(150)
-  expect(layoutBreakpoints.projectsSidebar).toBeGreaterThanOrEqual(layoutBreakpoints.sidebar)
-  expect(projectsSidebarVisible("auto", 150)).toBe(true)
-  expect(projectsSidebarVisible("auto", 149)).toBe(false)
-  // At ~80 columns (a narrow terminal) it stays hidden even though the right sidebar's own threshold is lower.
-  expect(projectsSidebarVisible("auto", 80)).toBe(false)
-  expect(projectsSidebarVisible("open", 80)).toBe(true)
-  expect(projectsSidebarVisible("closed", 200)).toBe(false)
-})
-
-test("toggling the left sidebar flips what is visible now, at any width", () => {
-  expect(toggledProjectsSidebar("auto", 80)).toBe("open")
-  expect(toggledProjectsSidebar("auto", 200)).toBe("closed")
-  expect(toggledProjectsSidebar("open", 80)).toBe("closed")
-  expect(toggledProjectsSidebar("closed", 200)).toBe("open")
-})
-
-test("the store tracks the left Projects sidebar mode and focus", () => {
-  const store = createAppStore()
-  expect(store.state.projectsSidebar).toBe("auto")
-  expect(store.state.projectsSidebarFocus).toBe(false)
-  store.setColumns(200)
-  store.toggleProjectsSidebar()
-  expect(store.state.projectsSidebar).toBe("closed")
-  store.toggleProjectsSidebar()
-  expect(store.state.projectsSidebar).toBe("open")
-  store.setProjectsSidebarFocus(true)
-  expect(store.state.projectsSidebarFocus).toBe(true)
-  store.setProjectSidebarHighlight("prj_1")
-  expect(store.state.projectSidebarHighlight).toBe("prj_1")
 })

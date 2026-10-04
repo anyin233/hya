@@ -69,11 +69,17 @@ function harness() {
   type SessionStream = { session: string; since: string; push: (frame: StreamFrame) => Promise<void>; end: () => void }
   const sessionStreams: SessionStream[] = []
   let streamOpened: ((stream: SessionStream) => void) | undefined
-  /** The next session stream that subscribes (the initial one, then the successor's). */
+  /** The next session stream that subscribes (the initial one, then the successor's), whether it opened before or after the call. */
+  let consumed = 0
   const nextStream = (): Promise<SessionStream> => {
-    const registered = sessionStreams[sessionStreams.length]
-    if (registered) return Promise.resolve(registered)
-    return new Promise<SessionStream>((resolve) => { streamOpened = resolve })
+    const registered = sessionStreams[consumed]
+    if (registered) {
+      consumed += 1
+      return Promise.resolve(registered)
+    }
+    const { promise, resolve } = Promise.withResolvers<SessionStream>()
+    streamOpened = (stream) => { consumed += 1; resolve(stream) }
+    return promise
   }
   const globalEnds: Array<() => void> = []
 

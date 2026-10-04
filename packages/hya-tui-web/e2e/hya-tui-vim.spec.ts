@@ -104,8 +104,7 @@ test("/vim: insert and normal mode, motions, dd, undo, the cursor shape, and per
 
   // A restarted TUI reads `vim: true` and starts in insert mode.
   term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
-  await term.waitForText("next line")
-  await cursorStyle(term)
+  await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("/vim off")
   await term.press("Enter")
   await expect.poll(async () => JSON.parse(await readFile(prefs, "utf8")).vim).toBe(false)

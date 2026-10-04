@@ -1,31 +1,10 @@
 import { expect, test } from "bun:test"
-import { askSessionLabel, compactionText, shownServer, currentModel, modelEffortLabel, modelReference, otherAskNotice, thinkingEffortLabel, webLabel, webNotice, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, truncate, truncateStart } from "../src/state/format"
+import { askSessionLabel, compactionText, shownServer, currentModel, modelEffortLabel, modelReference, otherAskNotice, thinkingEffortLabel, webLabel, webNotice, mainContent, mainTitle, pendingLines, sessionTree, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
 
-test("keeps the startup placeholders until the first data arrives", () => {
-  const store = createAppStore()
-  expect(sessionListText(store.state)).toBe("Loading…")
-  expect(pendingLines(store.state)).toEqual([])
-  expect(mainContent(store.state)).toBe("")
-})
 
-test("renders the sidebar session list and pending lines", () => {
-  const store = createAppStore()
-  const selected = { id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "hya", modelId: "offline" } }
-  store.applyCatalog({
-    sessions: [selected, { id: "hysec_2", agent: "hya-plan", workdir: "/w", title: "Second", busy: true }],
-    interactions: [{ id: "req_1", type: "INTERACTION_TYPE_QUESTION", title: "Pick one" }],
-    models: [], workflows: [], providers: [], commands: [],
-  })
-  store.openSession(selected)
-  expect(sessionListText(store.state)).toBe("▸ 1. hysec_1\n   hya-main\n\n  2. Second\n   hya-plan · running")
-  expect(sessionListText(store.state, 10)).toBe("▸ 1. hyse…\n   hya-ma…\n\n  2. Seco…\n   hya-pl…")
-  expect(pendingLines(store.state)).toEqual(["? Pick one"])
-  expect(pendingLines(store.state, 10)).toEqual(["? Pick one"])
-  expect(mainContent(store.state)).toBe("No messages yet. Type a prompt below.")
-})
 
 test("the model label carries the server-resolved effort right after the model name", () => {
   const withEffort = { id: "hysec_1", agent: "hya-main", workdir: "/w", effectiveEffort: "max", effortSource: "EFFORT_SOURCE_PREFERENCE", model: { providerId: "openai", modelId: "gpt-6-astra" } }
@@ -41,14 +20,6 @@ test("the model label carries the server-resolved effort right after the model n
   expect(thinkingEffortLabel(withoutEffort)).toBe("default")
 })
 
-test("renders empty panels and per-view titles", () => {
-  const store = createAppStore()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
-  expect(sessionListText(store.state)).toBe("No sessions. Type a prompt or /new.")
-  expect(mainTitle("api")).toBe("API commands")
-  store.setView("models")
-  expect(mainContent(store.state)).toBe("No models returned by server.")
-})
 
 test("a compaction divider reads the strategy; the payload carries no message count", () => {
   expect(compactionText({ strategy: "shake", untilSeq: "42" })).toBe("── context compacted · shake ──")
@@ -71,24 +42,6 @@ test("the chat view's text is only the empty-state hint; messages render per com
   expect(mainContent(store.state)).toBe("")
 })
 
-test("numbers only main sessions, with hierarchical child numbers", () => {
-  const store = createAppStore()
-  const parent = { id: "hysec_p", agent: "hya-main", workdir: "/w", title: "Parent" }
-  const child = { id: "hysec_c", agent: "hya-scout", workdir: "/w", parent: "hysec_p", busy: true }
-  const grandchild = { id: "hysec_g", agent: "hya-task", workdir: "/w", parent: "hysec_c" }
-  const sibling = { id: "hysec_s", agent: "hya-task", workdir: "/w", parent: "hysec_p" }
-  const other = { id: "hysec_o", agent: "hya-plan", workdir: "/w", title: "Other" }
-  const sessions = [grandchild, child, sibling, other, parent]
-  expect(sessionTree(sessions).map((row) => [row.session.id, row.number])).toEqual([
-    ["hysec_o", "1"], ["hysec_p", "2"], ["hysec_c", "2.1"], ["hysec_g", "2.1.1"], ["hysec_s", "2.2"],
-  ])
-  store.applyCatalog({ sessions, interactions: [], models: [], workflows: [], providers: [], commands: [] })
-  store.openSession(child)
-  const rendered = sessionListText(store.state)
-  expect(rendered).toContain("2.1 hya-scout")
-  expect(rendered).toContain("2.1.1 hya-task")
-  expect(rendered).toContain("2.2 hya-task")
-})
 
 test("keeps session numbers stable when a running session updates", () => {
   const sessions = [
@@ -102,27 +55,6 @@ test("keeps session numbers stable when a running session updates", () => {
   expect(after).toEqual(before)
 })
 
-test("asks of the open session tree are prompts, not pending lines; the sidebar marks sessions that wait", () => {
-  const store = createAppStore()
-  const parent = { id: "hysec_p", agent: "hya-main", workdir: "/w", title: "Parent" }
-  const child = { id: "hysec_c", agent: "hya-task", workdir: "/w", parent: "hysec_p", busy: true }
-  const other = { id: "hysec_o", agent: "hya-plan", workdir: "/w", title: "Other" }
-  store.applyCatalog({
-    sessions: [other, parent, child],
-    interactions: [
-      { id: "perm_c", session: "hysec_c", type: "INTERACTION_TYPE_PERMISSION", title: "bash ls" },
-      { id: "que_o", session: "hysec_o", type: "INTERACTION_TYPE_QUESTION", title: "Why?" },
-    ],
-    models: [], workflows: [], providers: [], commands: [],
-  })
-  store.openSession(parent)
-  expect(pendingLines(store.state)).toEqual(["? Why? · 1. Other"])
-  expect(sessionListText(store.state)).toBe([
-    "  1. Other", "   hya-plan · ◌ waiting", "",
-    "▸ 2. Parent", "   hya-main",
-    "   ↳ 2.1 hya-task · ◌ waiting",
-  ].join("\n"))
-})
 
 test("the WebUI notice names the reason and the --port remedy", () => {
   expect(webNotice(undefined)).toBeUndefined()

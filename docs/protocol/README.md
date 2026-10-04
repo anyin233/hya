@@ -798,8 +798,8 @@ A subagent spawn (the `task` tool, or a resident member) is recorded on the
 (`MemberInfo`): `member`, `child` (child session id), `agent` (subagent
 type), `description`, `status` (`MEMBER_STATUS_SPAWNING`, `_RUNNING`,
 `_DONE`, `_FAILED`, `_CANCELLED`), `summary` (bounded, on finish),
-`callId`, and `depth`. The spawn frame carries every field; a status
-change carries `member` and `status`; a finish adds `summary` and `child`.
+`callId`, `depth`, and `handle` (the readable team roster handle when known; for nested sessions, resolved from the root session roster). The initial spawn frame carries every field; later status
+frames carry `member` and `status`; a finish adds `summary` and `child`.
 Fold by `member`. `GET /v1/sessions/{id}` (`SessionInfo.members`) returns
 the folded rows, so a client that reconnects mid-task still has them, and
 `GET /v1/sessions?parent={id}` lists the child sessions.

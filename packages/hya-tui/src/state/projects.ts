@@ -70,7 +70,19 @@ export function sessionsInScope(sessions: readonly SessionInfo[], activeProjectI
       .filter((session) => !session.parent && (session.kind === "SESSION_KIND_TEMPORARY" || session.projectId === activeProjectId))
       .map((session) => session.id),
   )
-  return sessions.filter((session) => (session.parent ? kept.has(session.parent) : kept.has(session.id)))
+  // Retain the complete descendant closure, not only direct children: nested
+  // subagents must remain visible when their root belongs to this Project.
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const session of sessions) {
+      if (session.parent && kept.has(session.parent) && !kept.has(session.id)) {
+        kept.add(session.id)
+        changed = true
+      }
+    }
+  }
+  return sessions.filter((session) => kept.has(session.id))
 }
 
 /** The Project's most recently updated top-level session (list order breaks ties). */

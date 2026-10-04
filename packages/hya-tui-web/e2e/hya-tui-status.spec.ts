@@ -62,7 +62,8 @@ test.describe("working indicator", () => {
 })
 
 test.describe("streaming assistant header spinner", () => {
-  test.use({ model: { steps: [textStep("delayed answer text", { chunkSize: 4, delayMs: 200 })] } })
+  // A full second before the first chunk: a 200 ms window was missed by the screen poll under a parallel suite's load.
+  test.use({ model: { steps: [textStep("delayed answer text", { chunkSize: 8, delayMs: 1000 })] } })
 
   test("the assistant header spins while no body text has arrived yet", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
@@ -137,6 +138,9 @@ test.describe("live todo panel", () => {
     const proxy = await startProxy(backend.url)
     const term = await tui(hyaTui({ ...backend, url: proxy.url }), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
+    // The startup session is open (the Context box counts its messages): a prompt typed earlier
+    // would create a second session, with its own seed read.
+    await term.waitForText(/Messages\s+0/)
     await prompt(term, "track a todo")
     await term.waitForText("Added a todo.", 20_000)
     await term.waitForIdle()
@@ -150,7 +154,7 @@ test.describe("live todo panel", () => {
 
     // Hiding the sidebar removes its metadata without adding conversation headings.
     await term.press("Control+b")
-    await expect.poll(() => term.find("Todos")).toBeNull()
+    await expect.poll(() => term.find("─Todos")).toBeNull()
     expect(await term.find("○ write tests")).toBeNull()
   })
 })

@@ -20,7 +20,7 @@ not_contains() {
   [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
 }
 
-first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
+first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components)
 
 help=$(bash ./install.sh --help)
 [[ -x ./install.sh ]] || fail "install.sh must be executable"
@@ -88,9 +88,10 @@ not_contains "$dry_run" "--profile debug"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.bak"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.bun-adapter.tmp"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.{bun-adapter,tui,tui-web}.bak"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.{bun-adapter,tui,tui-web,tui-sdk}.bak"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui.tmp"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui-web.tmp"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui-sdk.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.bak"
 contains "$dry_run" "/tmp/hya-install-test/bin/hya"
@@ -187,6 +188,8 @@ if grep -Fq '"name": "@hya/tui",' package.json; then
   mkdir -p node_modules/@opentui/core
 elif grep -Fq '"name": "@hya/tui-web",' package.json; then
   mkdir -p node_modules/@xterm/xterm
+elif grep -Fq '"name": "@hya/tui-sdk",' package.json; then
+  : # no runtime dependencies
 else
   grep -Fq '"name": "@hya/bun-adapter",' package.json
 fi
@@ -227,7 +230,7 @@ bun_adapter="$install_root/lib/hya/bun-adapter"
 for path in package.json bun.lock src/main.ts node_modules; do
   [[ -e "$bun_adapter/$path" ]] || fail "missing installed Bun adapter path: $path"
 done
-for path in package.json bun.lock bunfig.toml tsconfig.json src/main.ts node_modules/@opentui/core; do
+for path in package.json bun.lock bunfig.toml tsconfig.json frontend-version.ts src/main.ts node_modules/@opentui/core; do
   [[ -e "$install_root/lib/hya/tui/$path" ]] || fail "missing installed TUI path: $path"
 done
 for path in package.json bun.lock tsconfig.json src/main.ts web/index.html node_modules/@xterm/xterm; do
