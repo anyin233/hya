@@ -82,7 +82,7 @@ function harness(options: { directory?: string; remote?: boolean; sessions?: Ses
   const client = {
     get directory() { return directory },
     setDirectory(next: string) { directory = next; calls.push(["setDirectory", next]) },
-    bootstrap: async () => ({ location: { version: "0.43.41" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] }),
+    bootstrap: async () => ({ location: { version: "0.45.3" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] }),
     ensureProjectForPath: async (path: string) => {
       calls.push(["ensureProjectForPath", path])
       return { project: work, created: false }
