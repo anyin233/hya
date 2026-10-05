@@ -117,7 +117,10 @@ fn member_status(status: MemberRunStatus) -> i32 {
 }
 
 /// Map a folded member row to the wire member view.
-pub(crate) fn member_info(member: &MemberProjection) -> pb::MemberInfo {
+pub(crate) fn member_info(
+    member: &MemberProjection,
+    roster: &std::collections::BTreeMap<String, hya_proto::RosterEntry>,
+) -> pb::MemberInfo {
     pb::MemberInfo {
         member: member.member.to_string(),
         child: member
@@ -135,6 +138,16 @@ pub(crate) fn member_info(member: &MemberProjection) -> pb::MemberInfo {
             .map(ToString::to_string)
             .unwrap_or_default(),
         depth: member.depth,
+        handle: member
+            .child
+            .as_ref()
+            .and_then(|child| {
+                roster
+                    .values()
+                    .find(|entry| entry.session == *child)
+                    .map(|entry| entry.handle.clone())
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -145,6 +158,7 @@ pub(crate) fn session_info(
     projection: &Projection,
     started_millis: i64,
     updated_millis: i64,
+    roster: &std::collections::BTreeMap<String, hya_proto::RosterEntry>,
 ) -> pb::SessionInfo {
     let session = &projection.session;
     pb::SessionInfo {
@@ -178,7 +192,11 @@ pub(crate) fn session_info(
         // Effective (root-inherited) mode; filled in by the caller, which
         // can walk the lineage.
         permission_mode: String::new(),
-        members: session.members.iter().map(member_info).collect(),
+        members: session
+            .members
+            .iter()
+            .map(|member| member_info(member, roster))
+            .collect(),
         usage: (!session.usage.is_empty()).then(|| usage_totals(&session.usage.total())),
         forked_from: session.forked_from.map(|source| pb::ForkSource {
             session: source.to_string(),
@@ -696,6 +714,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
                 .map(ToString::to_string)
                 .unwrap_or_default(),
             depth: *depth,
+            handle: String::new(),
         }),
         Event::MemberStatusChanged { member, status, .. } => P::MemberUpdated(pb::MemberInfo {
             member: member.to_string(),
@@ -867,5 +886,34 @@ mod tests {
             }
             other => panic!("expected MessageFinished, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn member_info_resolves_handle_from_roster_entry_by_child_session() {
+        let child = SessionId::new();
+        let member = hya_proto::MemberProjection {
+            member: hya_proto::MemberId::new(),
+            child: Some(child),
+            subagent_type: hya_proto::AgentName::new("explore"),
+            description: String::new(),
+            status: hya_proto::MemberRunStatus::Running,
+            summary: String::new(),
+            depth: 1,
+            directive: String::new(),
+            tool_call: None,
+        };
+        let entry = hya_proto::RosterEntry {
+            handle: "main/explorer-1".to_owned(),
+            session: child,
+            agent_type: hya_proto::AgentName::new("explore"),
+            mode: hya_proto::SubagentMode::Transient,
+            status: hya_proto::RosterStatus::Busy,
+            current_task: None,
+            resident_cursor: 0,
+            heartbeat_ms: 0,
+            resident_work: None,
+        };
+        let roster = std::collections::BTreeMap::from([("main/explorer-1".to_owned(), entry)]);
+        assert_eq!(member_info(&member, &roster).handle, "main/explorer-1");
     }
 }

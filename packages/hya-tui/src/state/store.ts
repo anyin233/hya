@@ -23,6 +23,7 @@ import type {
   AgentModelState,
   AgentSummary,
   Bootstrap,
+  BundleSummary,
   CommandSummary,
   Interaction,
   McpServerStatus,
@@ -37,6 +38,7 @@ import type {
   SessionInfo,
   TodoItem,
   TokenUsage,
+  VcsStatus,
   WorkflowSummary,
 } from "../client"
 import type { WebInfo } from "../cli"
@@ -54,9 +56,9 @@ import { compactionText } from "./format"
 import { manualMode, modeCycle, modeNotice, type ModeConfirm, type PermissionModeInfo } from "./modes"
 import type { ActivePicker, PickerState } from "./picker"
 import type { ProviderViewState } from "./providers"
+import type { BundleViewState } from "./bundles"
 import { sessionRow } from "./revert"
 import type { RulesViewState } from "./rules"
-import type { ProjectViewState } from "./projectView"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -107,6 +109,9 @@ export interface AppState {
   readonly providerView: ProviderViewState | undefined
   /** The full-screen Diff View (`/diff`, state/diff.ts), while open. */
   readonly diffView: DiffViewState | undefined
+  /** The full-screen Bundles View (`/bundles`), while open. */
+  readonly bundlesView: BundleViewState | undefined
+  readonly bundles: BundleSummary[]
   /** The full-screen MCP View (`/mcp`, state/mcp.ts), while open. */
   readonly mcpView: McpViewState | undefined
   /** `GetMcpStatus`: every configured MCP server, read when `/mcp` opens. */
@@ -182,6 +187,8 @@ export interface AppState {
   readonly draft: boolean
   /** Current git branch of the workspace directory (`GetVcsStatus`); "" when unknown or not a repository. */
   readonly gitBranch: string
+  /** The whole `GetVcsStatus` answer (extensions' `git` context); `undefined` when unknown. */
+  readonly vcs: VcsStatus | undefined
   /** The session event stream is connected (status bar "connection state"). */
   readonly connected: boolean
   /** The backend was stopped on purpose (`hya serve stop`, app/reconnect.ts): no server is started until `/reconnect`, and prompts are refused. */
@@ -208,22 +215,22 @@ export interface AppState {
   readonly web: WebInfo | undefined
   /** `ListProjects` (with `busy` per Project), re-read on `projectsUpdated` (app/controller.ts). */
   readonly projects: ProjectInfo[]
+  /** Why the last `ListProjects` failed (`errorLine`), until one succeeds; the Project view shows it. */
+  readonly projectsError: string | undefined
   /**
    * The Project new sessions go to and the directory scope follows
    * (state/projects.ts); `undefined` before one is chosen (`--remote`) or
    * when `EnsureProjectForPath` failed.
    */
   readonly activeProjectId: string | undefined
+  /** Left Projects sidebar mode; `auto` follows the terminal width. */
+  readonly projectsSidebar: SidebarMode
   /** `--remote`: started without a Project for `--dir`. */
   readonly remote: boolean
-  /** Left Projects sidebar mode (state/layout.ts): `auto` follows the terminal width (a wider threshold than the right sidebar). */
-  readonly projectsSidebar: SidebarMode
-  /** The left sidebar has focus: Up/Down move `projectSidebarHighlight`, Enter switches, Esc returns focus to the composer. */
-  readonly projectsSidebarFocus: boolean
-  /** Highlighted row of the left sidebar while it has focus (or the active Project, for a first Enter without moving). */
-  readonly projectSidebarHighlight: string | undefined
-  /** The full-screen Project view (`/project`, `/projects`; state/projectView.ts), while open. */
-  readonly projectView: ProjectViewState | undefined
+  /** Derived from the active layout leaf: keys go to the panel drawing Projects. */
+  readonly projectsFocus: boolean
+  /** The extension panel shown as the full-screen overlay (the Project view, `/project`), by panel key. */
+  readonly extensionOverlay: string | undefined
   /** The `/sessions` picker's "all projects" toggle (F3): shows every session instead of only the active Project's. */
   readonly sessionsPickerAllProjects: boolean
   /** This TUI runs in a WebUI tab (`--web-tab`): `/to-background` is not offered and Ctrl+D only shows a notice. */
@@ -319,6 +326,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     status: startupStatus,
     providerView: undefined,
     diffView: undefined,
+    bundlesView: undefined,
+    bundles: [],
     mcpView: undefined,
     mcpServers: [],
     rulesView: undefined,
@@ -352,6 +361,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     promptSelection: undefined,
     draft: false,
     gitBranch: "",
+    vcs: undefined,
     connected: true,
     backendStopped: false,
     dividers: [],
@@ -365,12 +375,12 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     backend: undefined,
     web: undefined,
     projects: [],
+    projectsError: undefined,
     activeProjectId: undefined,
     remote: false,
+    projectsFocus: false,
     projectsSidebar: "auto",
-    projectsSidebarFocus: false,
-    projectSidebarHighlight: undefined,
-    projectView: undefined,
+    extensionOverlay: undefined,
     sessionsPickerAllProjects: false,
     webTab: false,
   }
@@ -384,7 +394,7 @@ export function createAppStore() {
     Object.entries(initial).map(([key, value]) => [key, createSignal(value, { equals: false })]),
   ) as unknown as Signals
   const state = Object.defineProperties({} as AppState, Object.fromEntries(
-    Object.keys(initial).map((key) => [key, { enumerable: true, get: () => key === "projectsSidebarFocus"
+    Object.keys(initial).map((key) => [key, { enumerable: true, get: () => key === "projectsFocus"
       ? paneLeaves(signals.paneLayout[0]().root).some((pane) => pane.id === signals.paneLayout[0]().active && pane.kind === "projects")
       : signals[key as keyof AppState][0]() }]),
   ))
@@ -869,9 +879,11 @@ export function createAppStore() {
     setTodos(items: TodoItem[]): void { set("todos", items) },
     setStatusText(text: string): void { set("statusText", text) },
 
-    /** Current git branch of the workspace (`GetVcsStatus`); "" when unknown or not a repository. */
-    setGitBranch(branch: string): void {
+    /** The workspace's `GetVcsStatus` (branch and change counts); `undefined` when unknown or not a repository. */
+    setVcs(vcs: VcsStatus | undefined): void {
+      const branch = vcs?.branch ?? ""
       if (branch !== state.gitBranch) set("gitBranch", branch)
+      if (JSON.stringify(vcs) !== JSON.stringify(state.vcs)) set("vcs", vcs)
     },
     /** The session event stream's connection state (status bar). */
     setConnected(value: boolean): void {
@@ -927,6 +939,9 @@ export function createAppStore() {
     /** Open, update, or (`undefined`) close the Diff View (`/diff`). */
     setDiffView(view: DiffViewState | undefined): void { set("diffView", view) },
 
+    /** Open, update, or (`undefined`) close the Bundles View. */
+    setBundlesView(view: BundleViewState | undefined): void { set("bundlesView", view) },
+    setBundles(rows: BundleSummary[]): void { set("bundles", rows) },
     /** Open, update, or (`undefined`) close the MCP View (`/mcp`). */
     setMcpView(view: McpViewState | undefined): void { set("mcpView", view) },
     setMcpServers(servers: McpServerStatus[]): void { set("mcpServers", servers) },
@@ -939,8 +954,9 @@ export function createAppStore() {
     setAgentsView(view: AgentsViewState | undefined): void { set("agentsView", view) },
     setAgentModelRows(rows: AgentModelState[]): void { set("agentModelRows", rows) },
 
-    /** `ListProjects` rows (after a `projectsUpdated` frame or a Project write). */
-    setProjects(rows: ProjectInfo[]): void { set("projects", rows) },
+    /** `ListProjects` rows (after a `projectsUpdated` frame or a Project write); a successful read clears `projectsError`. */
+    setProjects(rows: ProjectInfo[]): void { set("projects", rows); set("projectsError", undefined) },
+    setProjectsError(error: string): void { set("projectsError", error) },
     /** The Project new sessions go to; `undefined` = none chosen. */
     setActiveProject(id: string | undefined): void {
       if (id !== state.activeProjectId) set("activeProjectId", id)
@@ -949,17 +965,14 @@ export function createAppStore() {
 
     setProjectsSidebar(mode: SidebarMode): void { set("projectsSidebar", mode) },
     toggleProjectsSidebar(): void { set("projectsSidebar", toggledProjectsSidebar(state.projectsSidebar, state.columns)) },
-    setProjectsSidebarFocus(focus: boolean): void {
+    setProjectsFocus(focus: boolean): void {
       const leaves = paneLeaves(state.paneLayout.root)
       const active = leaves.find((pane) => pane.id === state.paneLayout.active)
       const target = focus ? leaves.find((pane) => pane.kind === "projects")
         : active?.kind === "projects" ? leaves.find((pane) => pane.kind === "composer") : undefined
       if (target) set("paneLayout", { ...state.paneLayout, active: target.id })
     },
-    setProjectSidebarHighlight(id: string | undefined): void { set("projectSidebarHighlight", id) },
-
-    /** Open, update, or (`undefined`) close the full-screen Project view (`/project`). */
-    setProjectView(view: ProjectViewState | undefined): void { set("projectView", view) },
+    setExtensionOverlay(extension: string | undefined): void { set("extensionOverlay", extension) },
     setSessionsPickerAllProjects(value: boolean): void { set("sessionsPickerAllProjects", value) },
 
     completionContext(): CompletionContext {

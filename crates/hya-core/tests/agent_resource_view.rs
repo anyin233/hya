@@ -217,6 +217,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+            tui: None,
         }
     })
     .collect::<Vec<_>>();
@@ -467,6 +468,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
+        tui: None,
     };
     let catalog = agent_catalog(bundle);
     let provider = Arc::new(AliasProvider {
@@ -747,6 +749,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+            tui: None,
         };
         let runtime = Arc::new(RuntimeRegistry::new(
             ToolRegistry::builtins(),

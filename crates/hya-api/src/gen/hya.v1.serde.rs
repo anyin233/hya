@@ -2138,6 +2138,364 @@ impl<'de> serde::Deserialize<'de> for BundleApiResponse {
         deserializer.deserialize_struct("hya.v1.BundleApiResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for BundleChange {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.bundle_id.is_empty() {
+            len += 1;
+        }
+        if self.refresh.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.BundleChange", len)?;
+        if !self.bundle_id.is_empty() {
+            struct_ser.serialize_field("bundleId", &self.bundle_id)?;
+        }
+        if let Some(v) = self.refresh.as_ref() {
+            struct_ser.serialize_field("refresh", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BundleChange {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bundle_id",
+            "bundleId",
+            "refresh",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BundleId,
+            Refresh,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bundleId" | "bundle_id" => Ok(GeneratedField::BundleId),
+                            "refresh" => Ok(GeneratedField::Refresh),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BundleChange;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.BundleChange")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BundleChange, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bundle_id__ = None;
+                let mut refresh__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BundleId => {
+                            if bundle_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundleId"));
+                            }
+                            bundle_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Refresh => {
+                            if refresh__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("refresh"));
+                            }
+                            refresh__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(BundleChange {
+                    bundle_id: bundle_id__.unwrap_or_default(),
+                    refresh: refresh__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.BundleChange", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for BundleComponents {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.agents.is_empty() {
+            len += 1;
+        }
+        if !self.skills.is_empty() {
+            len += 1;
+        }
+        if !self.tools.is_empty() {
+            len += 1;
+        }
+        if !self.mcp_servers.is_empty() {
+            len += 1;
+        }
+        if !self.workflows.is_empty() {
+            len += 1;
+        }
+        if !self.permission_modes.is_empty() {
+            len += 1;
+        }
+        if !self.apis.is_empty() {
+            len += 1;
+        }
+        if self.hooks != 0 {
+            len += 1;
+        }
+        if self.tui {
+            len += 1;
+        }
+        if !self.tui_permissions.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.BundleComponents", len)?;
+        if !self.agents.is_empty() {
+            struct_ser.serialize_field("agents", &self.agents)?;
+        }
+        if !self.skills.is_empty() {
+            struct_ser.serialize_field("skills", &self.skills)?;
+        }
+        if !self.tools.is_empty() {
+            struct_ser.serialize_field("tools", &self.tools)?;
+        }
+        if !self.mcp_servers.is_empty() {
+            struct_ser.serialize_field("mcpServers", &self.mcp_servers)?;
+        }
+        if !self.workflows.is_empty() {
+            struct_ser.serialize_field("workflows", &self.workflows)?;
+        }
+        if !self.permission_modes.is_empty() {
+            struct_ser.serialize_field("permissionModes", &self.permission_modes)?;
+        }
+        if !self.apis.is_empty() {
+            struct_ser.serialize_field("apis", &self.apis)?;
+        }
+        if self.hooks != 0 {
+            struct_ser.serialize_field("hooks", &self.hooks)?;
+        }
+        if self.tui {
+            struct_ser.serialize_field("tui", &self.tui)?;
+        }
+        if !self.tui_permissions.is_empty() {
+            struct_ser.serialize_field("tuiPermissions", &self.tui_permissions)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BundleComponents {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "agents",
+            "skills",
+            "tools",
+            "mcp_servers",
+            "mcpServers",
+            "workflows",
+            "permission_modes",
+            "permissionModes",
+            "apis",
+            "hooks",
+            "tui",
+            "tui_permissions",
+            "tuiPermissions",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Agents,
+            Skills,
+            Tools,
+            McpServers,
+            Workflows,
+            PermissionModes,
+            Apis,
+            Hooks,
+            Tui,
+            TuiPermissions,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "agents" => Ok(GeneratedField::Agents),
+                            "skills" => Ok(GeneratedField::Skills),
+                            "tools" => Ok(GeneratedField::Tools),
+                            "mcpServers" | "mcp_servers" => Ok(GeneratedField::McpServers),
+                            "workflows" => Ok(GeneratedField::Workflows),
+                            "permissionModes" | "permission_modes" => Ok(GeneratedField::PermissionModes),
+                            "apis" => Ok(GeneratedField::Apis),
+                            "hooks" => Ok(GeneratedField::Hooks),
+                            "tui" => Ok(GeneratedField::Tui),
+                            "tuiPermissions" | "tui_permissions" => Ok(GeneratedField::TuiPermissions),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BundleComponents;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.BundleComponents")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BundleComponents, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut agents__ = None;
+                let mut skills__ = None;
+                let mut tools__ = None;
+                let mut mcp_servers__ = None;
+                let mut workflows__ = None;
+                let mut permission_modes__ = None;
+                let mut apis__ = None;
+                let mut hooks__ = None;
+                let mut tui__ = None;
+                let mut tui_permissions__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Agents => {
+                            if agents__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agents"));
+                            }
+                            agents__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Skills => {
+                            if skills__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skills"));
+                            }
+                            skills__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Tools => {
+                            if tools__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tools"));
+                            }
+                            tools__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::McpServers => {
+                            if mcp_servers__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mcpServers"));
+                            }
+                            mcp_servers__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Workflows => {
+                            if workflows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("workflows"));
+                            }
+                            workflows__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PermissionModes => {
+                            if permission_modes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("permissionModes"));
+                            }
+                            permission_modes__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Apis => {
+                            if apis__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("apis"));
+                            }
+                            apis__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Hooks => {
+                            if hooks__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hooks"));
+                            }
+                            hooks__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Tui => {
+                            if tui__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tui"));
+                            }
+                            tui__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::TuiPermissions => {
+                            if tui_permissions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tuiPermissions"));
+                            }
+                            tui_permissions__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(BundleComponents {
+                    agents: agents__.unwrap_or_default(),
+                    skills: skills__.unwrap_or_default(),
+                    tools: tools__.unwrap_or_default(),
+                    mcp_servers: mcp_servers__.unwrap_or_default(),
+                    workflows: workflows__.unwrap_or_default(),
+                    permission_modes: permission_modes__.unwrap_or_default(),
+                    apis: apis__.unwrap_or_default(),
+                    hooks: hooks__.unwrap_or_default(),
+                    tui: tui__.unwrap_or_default(),
+                    tui_permissions: tui_permissions__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.BundleComponents", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for BundleRefreshError {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -2245,6 +2603,285 @@ impl<'de> serde::Deserialize<'de> for BundleRefreshError {
             }
         }
         deserializer.deserialize_struct("hya.v1.BundleRefreshError", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for BundleSummary {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.version.is_empty() {
+            len += 1;
+        }
+        if !self.publisher.is_empty() {
+            len += 1;
+        }
+        if !self.scope.is_empty() {
+            len += 1;
+        }
+        if !self.kind.is_empty() {
+            len += 1;
+        }
+        if !self.state.is_empty() {
+            len += 1;
+        }
+        if self.enabled {
+            len += 1;
+        }
+        if self.removable {
+            len += 1;
+        }
+        if !self.description.is_empty() {
+            len += 1;
+        }
+        if !self.prepared_digest.is_empty() {
+            len += 1;
+        }
+        if !self.error.is_empty() {
+            len += 1;
+        }
+        if self.components.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.BundleSummary", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.version.is_empty() {
+            struct_ser.serialize_field("version", &self.version)?;
+        }
+        if !self.publisher.is_empty() {
+            struct_ser.serialize_field("publisher", &self.publisher)?;
+        }
+        if !self.scope.is_empty() {
+            struct_ser.serialize_field("scope", &self.scope)?;
+        }
+        if !self.kind.is_empty() {
+            struct_ser.serialize_field("kind", &self.kind)?;
+        }
+        if !self.state.is_empty() {
+            struct_ser.serialize_field("state", &self.state)?;
+        }
+        if self.enabled {
+            struct_ser.serialize_field("enabled", &self.enabled)?;
+        }
+        if self.removable {
+            struct_ser.serialize_field("removable", &self.removable)?;
+        }
+        if !self.description.is_empty() {
+            struct_ser.serialize_field("description", &self.description)?;
+        }
+        if !self.prepared_digest.is_empty() {
+            struct_ser.serialize_field("preparedDigest", &self.prepared_digest)?;
+        }
+        if !self.error.is_empty() {
+            struct_ser.serialize_field("error", &self.error)?;
+        }
+        if let Some(v) = self.components.as_ref() {
+            struct_ser.serialize_field("components", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for BundleSummary {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "version",
+            "publisher",
+            "scope",
+            "kind",
+            "state",
+            "enabled",
+            "removable",
+            "description",
+            "prepared_digest",
+            "preparedDigest",
+            "error",
+            "components",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Version,
+            Publisher,
+            Scope,
+            Kind,
+            State,
+            Enabled,
+            Removable,
+            Description,
+            PreparedDigest,
+            Error,
+            Components,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "version" => Ok(GeneratedField::Version),
+                            "publisher" => Ok(GeneratedField::Publisher),
+                            "scope" => Ok(GeneratedField::Scope),
+                            "kind" => Ok(GeneratedField::Kind),
+                            "state" => Ok(GeneratedField::State),
+                            "enabled" => Ok(GeneratedField::Enabled),
+                            "removable" => Ok(GeneratedField::Removable),
+                            "description" => Ok(GeneratedField::Description),
+                            "preparedDigest" | "prepared_digest" => Ok(GeneratedField::PreparedDigest),
+                            "error" => Ok(GeneratedField::Error),
+                            "components" => Ok(GeneratedField::Components),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = BundleSummary;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.BundleSummary")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<BundleSummary, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut version__ = None;
+                let mut publisher__ = None;
+                let mut scope__ = None;
+                let mut kind__ = None;
+                let mut state__ = None;
+                let mut enabled__ = None;
+                let mut removable__ = None;
+                let mut description__ = None;
+                let mut prepared_digest__ = None;
+                let mut error__ = None;
+                let mut components__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Version => {
+                            if version__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("version"));
+                            }
+                            version__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Publisher => {
+                            if publisher__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("publisher"));
+                            }
+                            publisher__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Scope => {
+                            if scope__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("scope"));
+                            }
+                            scope__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Kind => {
+                            if kind__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("kind"));
+                            }
+                            kind__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::State => {
+                            if state__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("state"));
+                            }
+                            state__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Enabled => {
+                            if enabled__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enabled"));
+                            }
+                            enabled__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Removable => {
+                            if removable__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("removable"));
+                            }
+                            removable__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Description => {
+                            if description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("description"));
+                            }
+                            description__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PreparedDigest => {
+                            if prepared_digest__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preparedDigest"));
+                            }
+                            prepared_digest__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Error => {
+                            if error__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("error"));
+                            }
+                            error__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Components => {
+                            if components__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("components"));
+                            }
+                            components__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(BundleSummary {
+                    id: id__.unwrap_or_default(),
+                    version: version__.unwrap_or_default(),
+                    publisher: publisher__.unwrap_or_default(),
+                    scope: scope__.unwrap_or_default(),
+                    kind: kind__.unwrap_or_default(),
+                    state: state__.unwrap_or_default(),
+                    enabled: enabled__.unwrap_or_default(),
+                    removable: removable__.unwrap_or_default(),
+                    description: description__.unwrap_or_default(),
+                    prepared_digest: prepared_digest__.unwrap_or_default(),
+                    error: error__.unwrap_or_default(),
+                    components: components__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.BundleSummary", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for CancelTurnRequest {
@@ -10677,6 +11314,148 @@ impl<'de> serde::Deserialize<'de> for InitProjectGitResponse {
         deserializer.deserialize_struct("hya.v1.InitProjectGitResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for InstallBundleRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.path.is_empty() {
+            len += 1;
+        }
+        if self.project {
+            len += 1;
+        }
+        if self.overwrite {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.InstallBundleRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.path.is_empty() {
+            struct_ser.serialize_field("path", &self.path)?;
+        }
+        if self.project {
+            struct_ser.serialize_field("project", &self.project)?;
+        }
+        if self.overwrite {
+            struct_ser.serialize_field("overwrite", &self.overwrite)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for InstallBundleRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+            "path",
+            "project",
+            "overwrite",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+            Path,
+            Project,
+            Overwrite,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "path" => Ok(GeneratedField::Path),
+                            "project" => Ok(GeneratedField::Project),
+                            "overwrite" => Ok(GeneratedField::Overwrite),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = InstallBundleRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.InstallBundleRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<InstallBundleRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                let mut path__ = None;
+                let mut project__ = None;
+                let mut overwrite__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Project => {
+                            if project__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("project"));
+                            }
+                            project__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Overwrite => {
+                            if overwrite__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("overwrite"));
+                            }
+                            overwrite__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(InstallBundleRequest {
+                    directory: directory__.unwrap_or_default(),
+                    path: path__.unwrap_or_default(),
+                    project: project__.unwrap_or_default(),
+                    overwrite: overwrite__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.InstallBundleRequest", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Interaction {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -12006,6 +12785,188 @@ impl<'de> serde::Deserialize<'de> for ListBundleApisResponse {
             }
         }
         deserializer.deserialize_struct("hya.v1.ListBundleApisResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListBundlesRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListBundlesRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListBundlesRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListBundlesRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListBundlesRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListBundlesRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListBundlesRequest {
+                    directory: directory__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListBundlesRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListBundlesResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.bundles.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListBundlesResponse", len)?;
+        if !self.bundles.is_empty() {
+            struct_ser.serialize_field("bundles", &self.bundles)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListBundlesResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bundles",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Bundles,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bundles" => Ok(GeneratedField::Bundles),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListBundlesResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListBundlesResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListBundlesResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bundles__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Bundles => {
+                            if bundles__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundles"));
+                            }
+                            bundles__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListBundlesResponse {
+                    bundles: bundles__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListBundlesResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ListCommandsRequest {
@@ -15624,6 +16585,188 @@ impl<'de> serde::Deserialize<'de> for ListToolsResponse {
         deserializer.deserialize_struct("hya.v1.ListToolsResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ListTuiExtensionsRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListTuiExtensionsRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListTuiExtensionsRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListTuiExtensionsRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListTuiExtensionsRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListTuiExtensionsRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListTuiExtensionsRequest {
+                    directory: directory__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListTuiExtensionsRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListTuiExtensionsResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.extensions.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListTuiExtensionsResponse", len)?;
+        if !self.extensions.is_empty() {
+            struct_ser.serialize_field("extensions", &self.extensions)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListTuiExtensionsResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "extensions",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Extensions,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "extensions" => Ok(GeneratedField::Extensions),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListTuiExtensionsResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListTuiExtensionsResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListTuiExtensionsResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut extensions__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Extensions => {
+                            if extensions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extensions"));
+                            }
+                            extensions__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListTuiExtensionsResponse {
+                    extensions: extensions__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListTuiExtensionsResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ListWorkflowsRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16520,6 +17663,9 @@ impl serde::Serialize for MemberInfo {
         if self.depth != 0 {
             len += 1;
         }
+        if !self.handle.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.MemberInfo", len)?;
         if !self.member.is_empty() {
             struct_ser.serialize_field("member", &self.member)?;
@@ -16547,6 +17693,9 @@ impl serde::Serialize for MemberInfo {
         if self.depth != 0 {
             struct_ser.serialize_field("depth", &self.depth)?;
         }
+        if !self.handle.is_empty() {
+            struct_ser.serialize_field("handle", &self.handle)?;
+        }
         struct_ser.end()
     }
 }
@@ -16566,6 +17715,7 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
             "call_id",
             "callId",
             "depth",
+            "handle",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16578,6 +17728,7 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
             Summary,
             CallId,
             Depth,
+            Handle,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16607,6 +17758,7 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                             "summary" => Ok(GeneratedField::Summary),
                             "callId" | "call_id" => Ok(GeneratedField::CallId),
                             "depth" => Ok(GeneratedField::Depth),
+                            "handle" => Ok(GeneratedField::Handle),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16634,6 +17786,7 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                 let mut summary__ = None;
                 let mut call_id__ = None;
                 let mut depth__ = None;
+                let mut handle__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Member => {
@@ -16686,6 +17839,12 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Handle => {
+                            if handle__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("handle"));
+                            }
+                            handle__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(MemberInfo {
@@ -16697,6 +17856,7 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                     summary: summary__.unwrap_or_default(),
                     call_id: call_id__.unwrap_or_default(),
                     depth: depth__.unwrap_or_default(),
+                    handle: handle__.unwrap_or_default(),
                 })
             }
         }
@@ -17621,7 +18781,7 @@ impl<'de> serde::Deserialize<'de> for ModelEffortPreference {
                             if updated_at__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("updatedAt"));
                             }
-                            updated_at__ =
+                            updated_at__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -21998,7 +23158,7 @@ impl<'de> serde::Deserialize<'de> for RefreshBundlesResponse {
                             if generation__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("generation"));
                             }
-                            generation__ =
+                            generation__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -26922,6 +28082,132 @@ impl<'de> serde::Deserialize<'de> for SetAgentModelRequest {
             }
         }
         deserializer.deserialize_struct("hya.v1.SetAgentModelRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SetBundleEnabledRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.bundle_id.is_empty() {
+            len += 1;
+        }
+        if self.enabled {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.SetBundleEnabledRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.bundle_id.is_empty() {
+            struct_ser.serialize_field("bundleId", &self.bundle_id)?;
+        }
+        if self.enabled {
+            struct_ser.serialize_field("enabled", &self.enabled)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SetBundleEnabledRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+            "bundle_id",
+            "bundleId",
+            "enabled",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+            BundleId,
+            Enabled,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "bundleId" | "bundle_id" => Ok(GeneratedField::BundleId),
+                            "enabled" => Ok(GeneratedField::Enabled),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SetBundleEnabledRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.SetBundleEnabledRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SetBundleEnabledRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                let mut bundle_id__ = None;
+                let mut enabled__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BundleId => {
+                            if bundle_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundleId"));
+                            }
+                            bundle_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Enabled => {
+                            if enabled__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enabled"));
+                            }
+                            enabled__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(SetBundleEnabledRequest {
+                    directory: directory__.unwrap_or_default(),
+                    bundle_id: bundle_id__.unwrap_or_default(),
+                    enabled: enabled__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.SetBundleEnabledRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SetModelEffortPreferenceRequest {
@@ -31858,6 +33144,382 @@ impl<'de> serde::Deserialize<'de> for ToolSummary {
         deserializer.deserialize_struct("hya.v1.ToolSummary", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for TuiExtensionDescriptor {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.bundle_id.is_empty() {
+            len += 1;
+        }
+        if !self.bundle_version.is_empty() {
+            len += 1;
+        }
+        if !self.prepared_digest.is_empty() {
+            len += 1;
+        }
+        if self.api_version != 0 {
+            len += 1;
+        }
+        if !self.entry.is_empty() {
+            len += 1;
+        }
+        if !self.sdk.is_empty() {
+            len += 1;
+        }
+        if !self.permissions.is_empty() {
+            len += 1;
+        }
+        if !self.files.is_empty() {
+            len += 1;
+        }
+        if self.first_party {
+            len += 1;
+        }
+        if self.cached {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.TuiExtensionDescriptor", len)?;
+        if !self.bundle_id.is_empty() {
+            struct_ser.serialize_field("bundleId", &self.bundle_id)?;
+        }
+        if !self.bundle_version.is_empty() {
+            struct_ser.serialize_field("bundleVersion", &self.bundle_version)?;
+        }
+        if !self.prepared_digest.is_empty() {
+            struct_ser.serialize_field("preparedDigest", &self.prepared_digest)?;
+        }
+        if self.api_version != 0 {
+            struct_ser.serialize_field("apiVersion", &self.api_version)?;
+        }
+        if !self.entry.is_empty() {
+            struct_ser.serialize_field("entry", &self.entry)?;
+        }
+        if !self.sdk.is_empty() {
+            struct_ser.serialize_field("sdk", &self.sdk)?;
+        }
+        if !self.permissions.is_empty() {
+            struct_ser.serialize_field("permissions", &self.permissions)?;
+        }
+        if !self.files.is_empty() {
+            struct_ser.serialize_field("files", &self.files)?;
+        }
+        if self.first_party {
+            struct_ser.serialize_field("firstParty", &self.first_party)?;
+        }
+        if self.cached {
+            struct_ser.serialize_field("cached", &self.cached)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TuiExtensionDescriptor {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bundle_id",
+            "bundleId",
+            "bundle_version",
+            "bundleVersion",
+            "prepared_digest",
+            "preparedDigest",
+            "api_version",
+            "apiVersion",
+            "entry",
+            "sdk",
+            "permissions",
+            "files",
+            "first_party",
+            "firstParty",
+            "cached",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BundleId,
+            BundleVersion,
+            PreparedDigest,
+            ApiVersion,
+            Entry,
+            Sdk,
+            Permissions,
+            Files,
+            FirstParty,
+            Cached,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bundleId" | "bundle_id" => Ok(GeneratedField::BundleId),
+                            "bundleVersion" | "bundle_version" => Ok(GeneratedField::BundleVersion),
+                            "preparedDigest" | "prepared_digest" => Ok(GeneratedField::PreparedDigest),
+                            "apiVersion" | "api_version" => Ok(GeneratedField::ApiVersion),
+                            "entry" => Ok(GeneratedField::Entry),
+                            "sdk" => Ok(GeneratedField::Sdk),
+                            "permissions" => Ok(GeneratedField::Permissions),
+                            "files" => Ok(GeneratedField::Files),
+                            "firstParty" | "first_party" => Ok(GeneratedField::FirstParty),
+                            "cached" => Ok(GeneratedField::Cached),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TuiExtensionDescriptor;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.TuiExtensionDescriptor")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TuiExtensionDescriptor, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bundle_id__ = None;
+                let mut bundle_version__ = None;
+                let mut prepared_digest__ = None;
+                let mut api_version__ = None;
+                let mut entry__ = None;
+                let mut sdk__ = None;
+                let mut permissions__ = None;
+                let mut files__ = None;
+                let mut first_party__ = None;
+                let mut cached__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BundleId => {
+                            if bundle_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundleId"));
+                            }
+                            bundle_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BundleVersion => {
+                            if bundle_version__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundleVersion"));
+                            }
+                            bundle_version__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::PreparedDigest => {
+                            if prepared_digest__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preparedDigest"));
+                            }
+                            prepared_digest__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ApiVersion => {
+                            if api_version__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("apiVersion"));
+                            }
+                            api_version__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Entry => {
+                            if entry__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("entry"));
+                            }
+                            entry__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Sdk => {
+                            if sdk__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sdk"));
+                            }
+                            sdk__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Permissions => {
+                            if permissions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("permissions"));
+                            }
+                            permissions__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Files => {
+                            if files__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("files"));
+                            }
+                            files__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FirstParty => {
+                            if first_party__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("firstParty"));
+                            }
+                            first_party__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Cached => {
+                            if cached__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cached"));
+                            }
+                            cached__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(TuiExtensionDescriptor {
+                    bundle_id: bundle_id__.unwrap_or_default(),
+                    bundle_version: bundle_version__.unwrap_or_default(),
+                    prepared_digest: prepared_digest__.unwrap_or_default(),
+                    api_version: api_version__.unwrap_or_default(),
+                    entry: entry__.unwrap_or_default(),
+                    sdk: sdk__.unwrap_or_default(),
+                    permissions: permissions__.unwrap_or_default(),
+                    files: files__.unwrap_or_default(),
+                    first_party: first_party__.unwrap_or_default(),
+                    cached: cached__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.TuiExtensionDescriptor", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TuiExtensionFile {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.path.is_empty() {
+            len += 1;
+        }
+        if !self.sha256.is_empty() {
+            len += 1;
+        }
+        if !self.content.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.TuiExtensionFile", len)?;
+        if !self.path.is_empty() {
+            struct_ser.serialize_field("path", &self.path)?;
+        }
+        if !self.sha256.is_empty() {
+            struct_ser.serialize_field("sha256", &self.sha256)?;
+        }
+        if !self.content.is_empty() {
+            struct_ser.serialize_field("content", &self.content)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TuiExtensionFile {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "path",
+            "sha256",
+            "content",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Path,
+            Sha256,
+            Content,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "path" => Ok(GeneratedField::Path),
+                            "sha256" => Ok(GeneratedField::Sha256),
+                            "content" => Ok(GeneratedField::Content),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TuiExtensionFile;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.TuiExtensionFile")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TuiExtensionFile, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut path__ = None;
+                let mut sha256__ = None;
+                let mut content__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Sha256 => {
+                            if sha256__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sha256"));
+                            }
+                            sha256__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Content => {
+                            if content__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("content"));
+                            }
+                            content__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(TuiExtensionFile {
+                    path: path__.unwrap_or_default(),
+                    sha256: sha256__.unwrap_or_default(),
+                    content: content__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.TuiExtensionFile", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for TurnInfo {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -32121,6 +33783,132 @@ impl<'de> serde::Deserialize<'de> for TurnState {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for UninstallBundleRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.bundle_id.is_empty() {
+            len += 1;
+        }
+        if self.project {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.UninstallBundleRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.bundle_id.is_empty() {
+            struct_ser.serialize_field("bundleId", &self.bundle_id)?;
+        }
+        if self.project {
+            struct_ser.serialize_field("project", &self.project)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for UninstallBundleRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+            "bundle_id",
+            "bundleId",
+            "project",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+            BundleId,
+            Project,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "bundleId" | "bundle_id" => Ok(GeneratedField::BundleId),
+                            "project" => Ok(GeneratedField::Project),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = UninstallBundleRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.UninstallBundleRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<UninstallBundleRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                let mut bundle_id__ = None;
+                let mut project__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BundleId => {
+                            if bundle_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundleId"));
+                            }
+                            bundle_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Project => {
+                            if project__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("project"));
+                            }
+                            project__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(UninstallBundleRequest {
+                    directory: directory__.unwrap_or_default(),
+                    bundle_id: bundle_id__.unwrap_or_default(),
+                    project: project__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.UninstallBundleRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for UpdateConfigRequest {

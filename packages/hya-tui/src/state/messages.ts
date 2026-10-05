@@ -78,8 +78,16 @@ function words(text: string): number {
  */
 export const shellMarker = "The following tool was executed by the user"
 
-function block(part: MessagePart, active: boolean, shell: string | undefined, shellTurn: boolean): Block | undefined {
-  if (part.text) return part.text.text ? { kind: "text", id: part.id, text: part.text.text } : undefined
+function block(part: MessagePart, active: boolean, shell: string | undefined, shellTurn: boolean, role?: Role): Block | undefined {
+  if (part.text) {
+    if (!part.text.text) return undefined
+    if (role === "tool") {
+      const body = [{ text: part.text.text, tone: "fg" as const }]
+      const card: ToolCardView = { tool: "msg received", status: "done", summary: "", body, output: body }
+      return { kind: "tool", id: part.id, card }
+    }
+    return { kind: "text", id: part.id, text: part.text.text }
+  }
   if (part.reasoning) {
     const text = part.reasoning.text ?? ""
     return { kind: "reasoning", id: part.id, text, words: words(text), active }
@@ -125,7 +133,7 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
   const parts = message.parts ?? []
   // A shell turn run from this TUI: its command is known even when the part has no input.
   const blocks = parts
-    .map((part, index) => block(part, streaming && index === parts.length - 1, shell, shellTurn))
+    .map((part, index) => block(part, streaming && index === parts.length - 1, shell, shellTurn, role))
     .filter((item): item is Block => item !== undefined)
     // A compaction summary: the divider above it already says so, so its internal marker line is not shown.
     .map((item) => role === "system" && item.kind === "text" && item.text.startsWith(compactedMarker)

@@ -1,6 +1,6 @@
 //! `/v1` session domain: lifecycle, fork, compact, summarize, revert.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -271,7 +271,20 @@ async fn projection_info_at(
     updated: i64,
 ) -> Result<pb::SessionInfo, V1Error> {
     let projection = st.engine.read_projection_shared(session).await?;
-    let mut info = session_info(&projection, started, updated);
+    // Team roster state is owned by the root session's projection. Child
+    // projections intentionally carry no roster, so resolve the lineage before
+    // converting member rows to the wire view.
+    let mut root_projection = projection.clone();
+    let mut current = session;
+    let mut visited = HashSet::new();
+    while let Some(parent) = root_projection.session.parent {
+        if !visited.insert(current) {
+            break;
+        }
+        root_projection = st.engine.read_projection_shared(parent).await?;
+        current = parent;
+    }
+    let mut info = session_info(&projection, started, updated, &root_projection.team.roster);
     if let Some(model) = projection.session.model.as_ref() {
         // Same resolver as the turn loop, including the session Agent's
         // runtime/configured effort. An authored bundle `model_policy`

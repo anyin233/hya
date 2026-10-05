@@ -17,8 +17,13 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::bundle_config::BundleConfigResolver;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
-/// First-party WorkflowBundle and AgentSetBundle payloads published with the runtime catalog.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 2] = ["hya/goal-loop", "hya/plan-impl-review"];
+/// First-party bundles published with the runtime catalog: WorkflowBundle and
+/// AgentSetBundle payloads, and the TUI extension of the built-in panes.
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] = [
+    "hya/goal-loop",
+    "hya/plan-impl-review",
+    "hya/basic-tui-components",
+];
 
 /// Load every first-party runtime bundle, in deterministic order.
 pub fn first_party_catalogs() -> Result<Vec<PreparedCatalog>, CoreError> {
@@ -160,6 +165,8 @@ pub(crate) struct BaseCatalogs {
     pub(crate) revision: u64,
     /// Readable installed registry rows, in registry order.
     pub(crate) installed: Vec<Arc<PreparedCatalog>>,
+    /// Bundle ids disabled in every scope.
+    pub(crate) disabled: BTreeSet<String>,
     /// Every first-party catalog, before any shadowing.
     pub(crate) first_party: Vec<Arc<PreparedCatalog>>,
 }
@@ -192,17 +199,27 @@ pub(crate) async fn compose(
     project: &[&PreparedCatalog],
     installed: &[&PreparedCatalog],
     first_party: &[&PreparedCatalog],
+    disabled: &BTreeSet<String>,
     resolver: &BundleConfigResolver,
     cache: &SourceCache,
     reads: Option<&Arc<dyn hya_core::HostSessionReads>>,
 ) -> Result<Composition, CoreError> {
-    let single = |catalog: &&PreparedCatalog| catalog.bundles().first().cloned();
+    let single = |catalog: &&PreparedCatalog| {
+        catalog
+            .bundles()
+            .first()
+            .filter(|bundle| !disabled.contains(&bundle.identity().id))
+            .cloned()
+    };
     let project_bundles = project.iter().filter_map(single).collect::<Vec<_>>();
     let mut prepared_catalog_refs: Vec<&PreparedCatalog> = Vec::new();
     for catalog in installed {
         let Some(bundle) = catalog.bundles().first() else {
             continue;
         };
+        if disabled.contains(&bundle.identity().id) {
+            continue;
+        }
         let id = &bundle.identity().id;
         let namespace = bundle.namespace();
         let shadowed = project_bundles
@@ -219,7 +236,12 @@ pub(crate) async fn compose(
         }
         prepared_catalog_refs.push(catalog);
     }
-    prepared_catalog_refs.extend(project.iter().copied());
+    prepared_catalog_refs.extend(project.iter().copied().filter(|catalog| {
+        catalog
+            .bundles()
+            .first()
+            .is_some_and(|bundle| !disabled.contains(&bundle.identity().id))
+    }));
     let higher_ids = prepared_catalog_refs
         .iter()
         .filter_map(|catalog| catalog.bundles().first())
@@ -235,7 +257,8 @@ pub(crate) async fn compose(
         .copied()
         .filter(|catalog| {
             catalog.bundles().first().is_some_and(|bundle| {
-                !higher_ids.contains(bundle.identity().id.as_str())
+                !disabled.contains(&bundle.identity().id)
+                    && !higher_ids.contains(bundle.identity().id.as_str())
                     && !higher_namespaces.contains(bundle.namespace())
             })
         })
@@ -354,6 +377,7 @@ impl InstalledBundleRefresh {
             base: std::sync::Mutex::new(Arc::new(BaseCatalogs {
                 revision: 0,
                 installed: Vec::new(),
+                disabled: BTreeSet::new(),
                 first_party: Vec::new(),
             })),
             host_reads: None,
@@ -469,12 +493,17 @@ impl InstalledBundleRefresh {
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
+        let disabled = match &self.registry.get() {
+            Some(registry) => registry.disabled_bundle_ids().await?,
+            None => BTreeSet::new(),
+        };
         let installed_refs = installed.iter().map(Arc::as_ref).collect::<Vec<_>>();
         let first_party_refs = first_party.iter().map(Arc::as_ref).collect::<Vec<_>>();
         let composition = compose(
             &[],
             &installed_refs,
             &first_party_refs,
+            &disabled,
             &config_resolver,
             &self.sources,
             self.host_reads.as_ref(),
@@ -497,6 +526,7 @@ impl InstalledBundleRefresh {
             *base = Arc::new(BaseCatalogs {
                 revision: base.revision + 1,
                 installed,
+                disabled,
                 first_party,
             });
         }

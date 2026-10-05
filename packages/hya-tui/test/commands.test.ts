@@ -5,7 +5,7 @@ import type { TuiPreferences } from "../src/prefs"
 import type { CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
-import { modelReference, sessionListText } from "../src/state/format"
+import { modelReference } from "../src/state/format"
 import { defaultPaneLayout, closePane, paneRects, paneNodes, paneLeaves, type Rect } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
@@ -28,9 +28,10 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     openProviders: () => { calls.push("providers") },
     openDiff: () => { calls.push("diff") },
     openMcp: () => { calls.push("mcp") },
+    openBundles: () => { calls.push("bundles") },
     openRules: () => { calls.push("rules") },
     openAgents: () => { calls.push("agents") },
-    openProjectView: () => { calls.push("projectView") },
+    openProjectOverlay: () => { calls.push("projectView") },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
     quit: (mode) => { calls.push(`quit ${mode}`) },
@@ -265,7 +266,6 @@ test("/open <number> counts the active Project's sessions, as the sidebar number
     interactions: [], models: [], workflows: [], providers: [], commands: [],
   })
   store.setActiveProject("prj_w")
-  expect(sessionListText(store.state)).toContain("2. hysec_w2")
   await run("/open 2")
   await run("/open 1.1")
   expect(calls).toEqual(["open hysec_w2", "open hysec_w1_kid"])
@@ -287,17 +287,6 @@ test("/open and /resume completions show a titled session as title (id) and inse
   expect(suggestCommandInput("/resume hy", () => [], complete).map((row) => row.label)).toEqual(["/resume Fix login (hysec_a)", "/resume hysec_b"])
 })
 
-test("/new hands keyboard focus from the Projects sidebar to the composer", async () => {
-  const { store, calls, run } = harness()
-  // The command pane restores the sidebar's focus when it closes (it was opened from there).
-  store.setProjectsSidebarFocus(true)
-  await run("/new")
-  expect(store.state.projectsSidebarFocus).toBe(false)
-  store.setProjectsSidebarFocus(true)
-  await run("/new --temp")
-  expect(store.state.projectsSidebarFocus).toBe(false)
-  expect(calls).toEqual(["new", "new temp"])
-})
 
 test("/diff, /mcp, /rules, /agent open their full-screen views", async () => {
   const { calls, run } = harness()

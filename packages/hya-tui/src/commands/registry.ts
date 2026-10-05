@@ -34,12 +34,14 @@ export interface AppActions {
   openDiff(): void
   /** Open the full-screen MCP view (`/mcp`; state/mcp.ts, app/mcp.ts). */
   openMcp(): void
+  /** Open the full-screen Bundles view (`/bundles`). */
+  openBundles(): void
   /** Open the full-screen Saved Rules view (`/rules`; state/rules.ts, app/rules.ts). */
   openRules(): void
   /** Open the full-screen Agents view (`/agent`; state/agentsView.ts, app/agentsView.ts). */
   openAgents(): void
-  /** Open the full-screen Project view (`/project`, `/projects`; state/projectView.ts, app/projectView.ts). */
-  openProjectView(): void
+  /** Open the full-screen `project_view` extension overlay (`/project`, `/projects`). */
+  openProjectOverlay(): void
   scheduleRefresh(): void
   /** Cancel the running turn (`CancelTurn`); throws `No active turn` when none runs. */
   cancelTurn(): Promise<void>

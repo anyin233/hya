@@ -934,3 +934,32 @@ async fn plan_install_reports_the_install_outcome_without_mutation() {
     assert_eq!(snapshot.bundles.len(), 1);
     assert_eq!(snapshot.bundles[0].version, "1.0.0");
 }
+
+/// Disabling is idempotent and only a change advances the registry generation
+/// (what a running daemon's refresh watches).
+#[tokio::test]
+async fn disabled_bundle_set_persists_and_advances_generation() {
+    let registry = &BundleRegistry::connect(&temp_db())
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let disabled = || async {
+        registry
+            .disabled_bundle_ids()
+            .await
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    let set = |enabled| async move {
+        registry
+            .set_bundle_enabled("hya/example", enabled)
+            .await
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    };
+    assert!(disabled().await.is_empty());
+    assert_eq!(set(false).await, 1);
+    assert_eq!(disabled().await, vec!["hya/example".to_string()]);
+    assert_eq!(set(false).await, 1, "disabling again changes nothing");
+    assert_eq!(set(true).await, 2);
+    assert!(disabled().await.is_empty());
+}

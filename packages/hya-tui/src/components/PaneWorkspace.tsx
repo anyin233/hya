@@ -1,12 +1,13 @@
 import type { BoxRenderable, MouseEvent, ScrollBoxRenderable } from "@opentui/core"
-import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import type { PaneInputHandle } from "../app/context"
 import { useApp } from "../app/context"
-import { isSelectablePane, layoutRects, paneDefinitions, paneLeaves, paneNodes, setContainerBoundary, visiblePaneRoot, type LayoutDirection, type PaneLeaf, type PaneNode, type Rect } from "../state/panes"
+import { isSelectablePane, layoutRects, paneDefinitions, paneLeaves, paneNodes, setContainerBoundary, visiblePaneRoot, wrapPane, setPaneSize, type LayoutDirection, type PaneLeaf, type PaneNode, type Rect } from "../state/panes"
 import { sidebarMinColumns } from "../state/layout"
 import { pageStep } from "../state/scroll"
 import { keyboardOwner } from "../state/focus"
+import { extensionManager } from "../extensions/manager"
 import { paneRegistry } from "./paneRegistry"
 import { workingLineText } from "../state/activity"
 import { currentPrompt } from "../state/prompts"
@@ -23,7 +24,7 @@ function PaneLeafView(props: { node: PaneLeaf; rect?: Rect }) {
     top: () => { if (scroll) scroll.scrollTop = 0 },
     bottom: () => { if (scroll) scroll.scrollTop = scroll.scrollHeight },
   }
-  const input = createMemo(() => paneRegistry[props.node.kind].input?.({ controller, scroll: scroller }))
+  const input = createMemo(() => paneRegistry[props.node.kind].input?.({ node: props.node, scroll: scroller }))
   let registeredInput: PaneInputHandle | undefined, registeredId: string | undefined
   const bounds = (): Rect => props.rect && box ? { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height } : { left: 0, top: 0, right: 0, bottom: 0 }
   const unregister = () => {
@@ -47,7 +48,7 @@ function PaneLeafView(props: { node: PaneLeaf; rect?: Rect }) {
     width={props.rect ? Math.max(0, props.rect.right - props.rect.left) : 1} height={props.rect ? Math.max(0, props.rect.bottom - props.rect.top) : 1}
     visible={!!props.rect && props.rect.right > props.rect.left && props.rect.bottom > props.rect.top} overflow="hidden"
     onMouseDown={() => { if (isSelectablePane(props.node) && store.state.paneLayout.active !== props.node.id) store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id }) }}>
-    <Show when={renderer()} keyed>{(render) => render({ get node() { return props.node }, get width() { return props.rect ? props.rect.right - props.rect.left : 1 }, get focused() { return highlighted() }, scrollRef: (element) => scroll = element })}</Show>
+    <Show when={renderer()} keyed>{(render) => render({ get node() { return props.node }, get width() { return props.rect ? props.rect.right - props.rect.left : 1 }, get height() { return props.rect ? props.rect.bottom - props.rect.top : 1 }, get focused() { return highlighted() }, scrollRef: (element) => scroll = element })}</Show>
   </box>
 }
 
@@ -57,6 +58,23 @@ export function PaneWorkspace() {
   useKeyboard((event) => ui.workspaceInput?.onKey(event))
   usePaste((event) => ui.workspaceInput?.onPaste(event))
   const size = useTerminalDimensions()
+  const renderer = useRenderer()
+  let workspace: BoxRenderable | undefined
+  // New sidebar contributions become ordinary, selectable leaves. Closing one stays closed.
+  const discoveredPanels = new Set<string>()
+  createEffect(() => {
+    for (const panel of extensionManager.panels().filter((entry) => entry.placement === "sidebar" && !entry.replaces)) {
+      if (discoveredPanels.has(panel.key)) continue
+      discoveredPanels.add(panel.key)
+      if (paneLeaves(store.state.paneLayout.root).some((pane) => pane.panel === panel.key)) continue
+      try {
+        const active = store.state.paneLayout.active
+        const added = wrapPane(store.state.paneLayout, "root", "row", "extension", false, panel.key)
+        const next = setPaneSize(added, added.active, { mode: "weight", value: 1 / 3 })
+        store.setPaneLayout({ ...next, active })
+      } catch (error) { store.setStatus(`Extension pane: ${error instanceof Error ? error.message : String(error)}`) }
+    }
+  })
   const [revision, setRevision] = createSignal(0)
   const invalidate = () => setRevision((value) => value + 1)
   ui.invalidateLayout = invalidate
@@ -117,6 +135,10 @@ export function PaneWorkspace() {
       const previous = dragging && (dragging.container.right - dragging.container.left) * (dragging.container.bottom - dragging.container.top)
       if (!dragging || area < previous!) dragging = edge
     }
+    if (dragging && workspace) {
+      renderer.clearSelection()
+      ;(renderer as unknown as { setCapturedRenderable(target: BoxRenderable): void }).setCapturedRenderable(workspace)
+    }
   }
   const move = (event: MouseEvent) => {
     if (!dragging) return
@@ -132,7 +154,7 @@ export function PaneWorkspace() {
     try { controller.savePreferences({ paneLayout: next }) }
     catch (error) { store.setStatus(`Layout changed, not saved: ${error instanceof Error ? error.message : String(error)}`) }
   }
-  return <box width="100%" height="100%" overflow="hidden" onMouseDown={down} onMouseDrag={move} onMouseDragEnd={release}>
+  return <box ref={(element: BoxRenderable) => workspace = element} width="100%" height="100%" overflow="hidden" onMouseDown={down} onMouseDrag={move} onMouseDragEnd={release}>
     <For each={ids()}>{(id) => <PaneLeafView node={nodes().get(id)!} rect={rects().get(id)} />}</For>
   </box>
 }

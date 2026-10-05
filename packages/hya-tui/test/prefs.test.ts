@@ -149,3 +149,11 @@ test("explicit layout loading refuses missing/corrupt/invalid layouts and never 
   writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
   expect(loadPaneLayout(path).version).toBe(4)
 })
+
+test("extension enabled preferences round-trip and reject malformed maps", () => {
+  const path = join(temp(), "tui.json")
+  savePreferences(path, { extensionEnabled: { markdown: false, git: true } })
+  expect(loadPreferences(path).preferences.extensionEnabled).toEqual({ markdown: false, git: true })
+  writeFileSync(path, JSON.stringify({ extensionEnabled: { markdown: "no" } }))
+  expect(loadPreferences(path).preferences).toEqual({})
+})

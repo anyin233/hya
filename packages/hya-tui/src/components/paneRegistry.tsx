@@ -1,7 +1,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
-import type { Component } from "solid-js"
+import { Show, type Component } from "solid-js"
 import type { DiffScroller, PaneInputHandle } from "../app/context"
-import type { Controller } from "../app/controller"
 import { resolveBinding } from "../keys/bindings"
 import { useApp } from "../app/context"
 import { mainContent, modelReference, shownServer } from "../state/format"
@@ -12,19 +11,20 @@ import { colors } from "../theme"
 import { ConversationPane } from "./ConversationPane"
 import { MessagePane } from "./MessagePane"
 import { WorkingIndicator } from "./WorkingIndicator"
-import { ProjectsSidebar } from "./ProjectsSidebar"
-import { SidebarPane } from "./Sidebar"
+import { ExtensionPanel } from "../extensions/Host"
+import { extensionManager } from "../extensions/manager"
 import { LayoutPane } from "./LayoutPane"
 import { tuiVersion } from "../version"
 
 export interface PaneRenderProps {
   node: PaneLeaf
   width: number
+  height: number
   focused: boolean
   scrollRef(element: ScrollBoxRenderable): void
 }
 export interface PaneInputContext {
-  controller: Pick<Controller, "projectsSidebarKey">
+  node: PaneLeaf
   scroll: DiffScroller
 }
 export interface RegisteredPane extends PaneDefinition {
@@ -74,7 +74,7 @@ function paneText(state: AppState, kind: PaneKind, server: string): string {
       `Directory   ${state.selected?.workdir || "none"}`,
     ].join("\n")
     case "models": case "workflows": case "interactions": case "api": return mainContent(state, kind)
-    case "composer": case "activity": case "projects": case "conversation": case "sessions": case "todos": case "context": case "layout": return ""
+    case "composer": case "activity": case "projects": case "conversation": case "sessions": case "todos": case "context": case "layout": case "extension": return ""
   }
 }
 
@@ -83,27 +83,46 @@ function TextPane(props: PaneRenderProps) {
   return <PaneFrame kind={props.node.kind} focused={props.focused}
     title={`${props.focused ? "▸ " : ""}${props.node.kind} · ${props.node.id}`} background={colors.bg}>
     <scrollbox ref={props.scrollRef} width="100%" flexGrow={1} paddingY={1}>
-      <text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>
+      <Show when={extensionManager.replacement(props.node.kind as "jobs" | "status" | "models" | "workflows" | "interactions" | "api")?.key} keyed
+        fallback={<text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>}>
+        {(key) => <ExtensionPanel panelKey={key} width={props.width - 4} height={props.height - 2} paddingX={0} />}
+      </Show>
     </scrollbox>
   </PaneFrame>
+}
+/** Built-ins and custom panels share the layout's border and keyboard ownership. */
+function BundledPane(props: PaneRenderProps) {
+  const panel = () => props.node.kind === "extension" ? props.node.panel : extensionManager.replacement(props.node.kind as "projects" | "sessions" | "todos" | "context")?.key
+  const title = () => extensionManager.panels().find((item) => item.key === panel())?.title ?? paneDefinitions[props.node.kind].title
+  return <PaneFrame kind={props.node.kind} focused={props.focused} title={title()}>
+    <Show when={panel()} keyed fallback={<text wrapMode="word" fg={colors.muted}>{extensionManager.placeholder(props.node.kind as "projects" | "sessions" | "todos" | "context") ?? "Loading…"}</text>}>
+      {(key) => <ExtensionPanel panelKey={key} width={props.width - (paneDefinitions[props.node.kind].selectable ? 4 : 2)}
+        height={props.height - (paneDefinitions[props.node.kind].selectable ? 2 : 1)} paddingX={0} scrollRef={props.scrollRef} />}
+    </Show>
+  </PaneFrame>
+}
+function bundledInput(context: PaneInputContext): PaneInputHandle {
+  const fallback = scrollInput(context)
+  return { onKey: (key) => {
+    const panel = context.node.kind === "extension" ? extensionManager.panels().find((entry) => entry.key === context.node.panel)
+      : extensionManager.replacement(context.node.kind as "projects" | "sessions")
+    if (panel?.keys) void extensionManager.key(panel.key, key)
+    else if (context.node.kind !== "projects") fallback.onKey(key)
+  } }
 }
 const renderers: Record<PaneKind, Component<PaneRenderProps>> = {
   conversation: () => <ConversationPane />,
   composer: (props) => <MessagePane width={props.width} />,
   activity: () => <WorkingIndicator />,
-  projects: (props) => <ProjectsSidebar width={props.width} active={props.focused} />,
-  sessions: (props) => <SidebarPane kind="sessions" width={props.width} active={props.focused} scrollRef={props.scrollRef} />,
-  todos: (props) => <SidebarPane kind="todos" width={props.width} active={props.focused} scrollRef={props.scrollRef} />,
-  context: (props) => <SidebarPane kind="context" width={props.width} active={props.focused} scrollRef={props.scrollRef} />,
+  projects: BundledPane, sessions: BundledPane, todos: BundledPane, context: BundledPane, extension: BundledPane,
   jobs: TextPane, status: TextPane, models: TextPane, workflows: TextPane, interactions: TextPane, api: TextPane,
   layout: LayoutPane,
 }
-/** Every built-in pane uses one registration shape. External loaders can build on this later. */
+/** Every pane uses the same registration and input ownership contract. */
 export const paneRegistry: Record<PaneKind, RegisteredPane> = Object.fromEntries(
   paneKinds.map((kind) => [kind, {
     ...paneDefinitions[kind], render: renderers[kind],
-    // Editors register their stateful handles from their own mount lifecycle.
     input: !paneDefinitions[kind].selectable || kind === "composer" || kind === "layout" ? undefined
-      : kind === "projects" ? ({ controller }: PaneInputContext) => ({ onKey: controller.projectsSidebarKey }) : scrollInput,
+      : bundledInput,
   }]),
 ) as Record<PaneKind, RegisteredPane>

@@ -2903,6 +2903,7 @@ impl HyaRuntime {
         let plugin_host = built.plugin_host();
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_provider_control(Arc::new(crate::ProviderManager::new(engine.clone())))
+            .with_bundle_control(Arc::new(crate::bundle_admin::BundleManager))
             .with_question_requests(questions)
             .with_mcp_control(mcp_control)
             .with_workflow_control(workflow_control)
@@ -4661,6 +4662,7 @@ You are the installed resident agent.
             .map(|stable_id| {
                 PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                     check: None,
+                    tui: None,
                     format_version: 2,
                     identity: BundleIdentity {
                         id: format!("hya/recovery-resolution-{stable_id}"),
@@ -4833,6 +4835,7 @@ You are the installed resident agent.
             };
             PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
                 check: None,
+                tui: None,
                 format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/spawn-model-precedence-{stable_id}"),
@@ -7756,6 +7759,7 @@ for line in sys.stdin:
         resource_view.allow.push("echo".to_string());
         PreparedAgentBundle {
             check: None,
+            tui: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
@@ -7859,6 +7863,7 @@ for line in sys.stdin:
         let beta_extension = materialized_resource(marker, "extension", "beta", beta_path);
         PreparedAgentBundle {
             check: None,
+            tui: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),

@@ -101,20 +101,24 @@ import { notificationBody, notificationSequence, shouldNotify, type NotifyKind }
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
 import { activeProject, newestTopLevelSession, noProjectStatus, projectScope, sessionPlacement } from "../state/projects"
-import { projectSidebarRows, projectsSidebarKey as projectsSidebarKeyOutcome } from "../state/projectsSidebar"
 import { sessionRow } from "../state/revert"
+import { extensionManager, type CommandOrigin } from "../extensions/manager"
+import type { HostCommand, JsonValue } from "../extensions/wire"
+import { projectsSidebarVisible } from "../state/layout"
+import { paneLeaves } from "../state/panes"
 import { createAgentsViewController } from "./agentsView"
 import type { UiHandles } from "./context"
 import { createDiffController } from "./diff"
 import { createMcpController } from "./mcp"
+import { createBundlesController } from "./bundles"
 import { createModeSwitcher } from "./modes"
+import { setExtensionTrust } from "../commands/native"
 import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
 import { createRevertController } from "./revert"
 import { createRulesController } from "./rules"
-import { createProjectViewController } from "./projectView"
 import type { AppStore } from "../state/store"
-import { errorLine } from "../state/projectView"
+import { errorLine } from "../state/projectCommands"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 import { createReconnector, type ServerSwitch } from "./reconnect"
@@ -162,6 +166,8 @@ export interface ControllerOptions {
   connectionHint?: string
   /** TUI preferences file (src/prefs.ts); unset = preference changes apply for this run only. */
   preferencesPath?: string
+  /** Reload the backend TUI extension catalog after bundle changes. */
+  refreshExtensions?: () => Promise<void>
   /** Saved default for newly created sessions; existing sessions retain their backend mode. */
   preferredPermissionMode?: string
   /** The terminal behind the renderer (app/run.tsx): clipboard and handing it to an external editor. */
@@ -192,6 +198,10 @@ export interface ControllerOptions {
    * none (started by bare `hya --connect`).
    */
   home?: () => Promise<ServerSwitch>
+  /** The backend scope changed (server, Project, or temporary session directory): reload the bundle TUI extensions (app/run.tsx). */
+  onScopeChanged?: () => void | Promise<void>
+  /** Bundle TUI extension submit interceptors (extensions/manager.ts `interceptSubmit`): a prompt may be rewritten or blocked before it is sent. */
+  interceptSubmit?: (text: string) => Promise<{ text: string } | { blocked: string }>
 }
 
 /** What the controller needs from the renderer (CliRenderer in app/run.tsx; a fake in tests). */
@@ -225,7 +235,7 @@ type FileRead = { size: number; data?: string } | { error: string }
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home }: ControllerOptions) {
+export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
   let remote = startedRemote
   let streamAbort: AbortController | undefined
@@ -311,9 +321,14 @@ export function createController({ client, store, directory, remote: startedRemo
     store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, commands, ...(permissionModes ? { permissionModes } : {}), ...(projects ? { projects } : {}) })
   }
 
-  /** `ListProjects` into the store (the Project list and its `busy` flags). */
+  /** `ListProjects` into the store (the Project list and its `busy` flags); a failure is kept as `projectsError` (the Project view shows it) and thrown. */
   async function refreshProjects(): Promise<void> {
-    store.setProjects(await client.listProjects())
+    try {
+      store.setProjects(await client.listProjects())
+    } catch (error) {
+      store.setProjectsError(errorLine(error))
+      throw error
+    }
   }
 
   /** `projectsUpdated` (live, global stream only): one `ListProjects` per burst. */
@@ -346,10 +361,9 @@ export function createController({ client, store, directory, remote: startedRemo
     store.setTodos(await client.getSessionTodo(selected.id).catch(() => store.state.todos))
   }
 
-  /** `GetVcsStatus` for the status bar's git branch (E22); refreshed on session open and after turns. */
+  /** `GetVcsStatus` for the status bar's git branch (E22) and extensions' git context; refreshed on session open and after turns. */
   async function refreshVcs(): Promise<void> {
-    const branch = await client.getVcsStatus().then((status) => status.branch ?? "").catch(() => "")
-    store.setGitBranch(branch)
+    store.setVcs(await client.getVcsStatus().catch(() => undefined))
   }
 
   /** Re-read the open session's row: `SessionInfo.usage` after a `tokensRecorded` (E22). */
@@ -748,6 +762,7 @@ export function createController({ client, store, directory, remote: startedRemo
     if (!store.state.projects.some((row) => row.id === project.id)) store.setProjects([project, ...store.state.projects])
     store.setActiveProject(project.id)
     client.setDirectory(projectScope(project, directory, remote))
+    void onScopeChanged?.()
   }
 
   /**
@@ -759,7 +774,7 @@ export function createController({ client, store, directory, remote: startedRemo
   function followSessionScope(session: SessionInfo): void {
     if (session.parent) return
     if (session.kind === "SESSION_KIND_TEMPORARY") {
-      if (session.workdir) client.setDirectory(session.workdir)
+      if (session.workdir) { client.setDirectory(session.workdir); void onScopeChanged?.() }
       return
     }
     const project = session.projectId ? store.state.projects.find((row) => row.id === session.projectId) : undefined
@@ -778,22 +793,6 @@ export function createController({ client, store, directory, remote: startedRemo
     if (target) await openSession(target.id)
     else await newSession()
     status(`Project ${project.name} · ${target ? "opened its latest session" : "new session"}`)
-  }
-
-  /** One key while the left Projects sidebar has focus: Up/Down move the highlight, Enter switches, Esc returns focus to the composer. */
-  function projectsSidebarKey(pressed: KeyLike): void {
-    const rows = projectSidebarRows(store.state.projects, store.state.activeProjectId)
-    const highlighted = store.state.projectSidebarHighlight ?? store.state.activeProjectId
-    const outcome = projectsSidebarKeyOutcome(pressed, rows, highlighted)
-    if (outcome.type === "move") store.setProjectSidebarHighlight(outcome.id)
-    else if (outcome.type === "switch") switchFromSidebar(outcome.id)
-    else if (outcome.type === "blur") store.setProjectsSidebarFocus(false)
-  }
-
-  /** Switch to Project from the left sidebar, used by keyboard Enter and mouse clicks. */
-  function switchFromSidebar(id: string): void {
-    store.setProjectsSidebarFocus(false)
-    void switchProject(id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`))
   }
 
   /** Leave a subagent's read-only view: open its parent session. */
@@ -815,7 +814,7 @@ export function createController({ client, store, directory, remote: startedRemo
       status(noProjectStatus)
       // Without a Project to place it in (a `--remote` start), open the
       // Project view instead of leaving only the status line to explain it.
-      projectView.open()
+      openProjectOverlay()
       throw new NoProjectError()
     }
     // Leave agent/model empty unless the user explicitly chose one. The server then
@@ -906,7 +905,7 @@ export function createController({ client, store, directory, remote: startedRemo
         { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
         { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: "Delete {label}? Enter confirms" },
       ],
-      onSelect: (row) => { if (point) { if (row.id === "open") switchFromSidebar(id); else if (row.id === "delete") void client.deleteProject(id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`)); return } switchFromSidebar(row.id) },
+      onSelect: (row) => { if (point) { if (row.id === "open") void switchProject(id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`)); else if (row.id === "delete") void client.deleteProject(id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`)); return } void switchProject(row.id).catch((error: unknown) => status(`Switch failed: ${errorLine(error)}`)) },
       onAction: (action, row, value) => {
         if (action === "rename") void client.updateProject(row.id, { name: value ?? "" }).then(refreshProjects).then(() => status("Project renamed")).catch((error: unknown) => status(`Rename failed: ${errorLine(error)}`))
         else if (action === "delete") void client.deleteProject(row.id).then(refreshProjects).then(() => status("Project deleted")).catch((error: unknown) => status(`Delete failed: ${errorLine(error)}`))
@@ -1013,15 +1012,66 @@ export function createController({ client, store, directory, remote: startedRemo
   const ui: UiHandles = {}
   const diffView = createDiffController({ store, client, ui })
   const mcp = createMcpController({ store, client, copyText: (text) => terminal?.copy(text) ?? false })
+  // Without a catalog refresher (no run.tsx: tests) there is no extension catalog to reload.
+  const bundles = createBundlesController({ store, client, directory, refreshExtensions: refreshExtensions ?? (() => Promise.resolve()), savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) } })
+  /**
+   * Ctrl+P: focus the left Projects pane, showing it first when it is hidden.
+   * Its keys go to the panel drawing it (hya/basic-tui-components, or a bundle
+   * replacing it; components/Composer.tsx).
+   */
+  function focusProjects(): void {
+    if (!paneLeaves(store.state.paneLayout.root).some((pane) => pane.kind === "projects")) {
+      status("No Projects pane · /layout split left projects to add one")
+      return
+    }
+    if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
+    store.setProjectsFocus(true)
+  }
+
+  /** Open the Project view (`/project`), drawn by the `project_view` extension; at startup, once that extension runs. */
+  async function openProjectOverlay(): Promise<void> {
+    await extensionManager.settled()
+    const panel = extensionManager.replacement("project_view")
+    if (!panel) {
+      status(extensionManager.placeholder("project_view") ?? "Projects are loading…")
+      return
+    }
+    store.setExtensionOverlay(panel.key)
+    // A failure reaches the view as `projects.error` (`Refresh failed: …`).
+    void refreshProjects().catch(() => undefined)
+  }
+
+  /**
+   * A host command an extension panel answered with (extensions/manager.ts;
+   * docs/tui-extensions.md "Host commands"). What it returns is the token's
+   * result value; what it throws, the result's error.
+   */
+  async function hostCommand(command: HostCommand, origin: CommandOrigin): Promise<JsonValue | undefined> {
+    switch (command.command) {
+      case "session.open": await openRootSession(command.id); return undefined
+      case "session.menu": openSessionContext(command.id, origin.point); return undefined
+      case "session.new_temporary": await actions.newTemporarySession(); return undefined
+      case "project.switch": await switchProject(command.id); return undefined
+      case "project.menu": openProjectContext(command.id, origin.point); return undefined
+      case "project.create": {
+        const project = await client.createProject({ name: command.name, roots: [...command.roots] })
+        await refreshProjects()
+        return { id: project.id, name: project.name }
+      }
+      case "project.rename": await client.updateProject(command.id, { name: command.name }); await refreshProjects(); return undefined
+      case "project.set_roots": await client.updateProject(command.id, { roots: [...command.roots] }); await refreshProjects(); return undefined
+      case "project.delete": await client.deleteProject(command.id); await refreshProjects(); return undefined
+      case "fs.complete": {
+        // A root path being typed: the backend filesystem's first match (`/v1/fs/find`).
+        const candidates = await client.findFiles(`${command.input.replace(/\/+$/, "")}*`, 1)
+        return { candidates, ...(candidates[0] ? { completion: candidates[0] } : {}) }
+      }
+      case "ui.release": case "ui.close": case "ui.open": return undefined
+    }
+  }
+
   const rules = createRulesController({ store, client })
   const agentsView = createAgentsViewController({ store, client, openPicker, selectAgent: (agent) => selectAgent({ store, client, actions }, agent) })
-  const projectView = createProjectViewController({
-    store,
-    client,
-    switchProject,
-    newTemporarySession: () => newSession(undefined, undefined, { temporary: true }),
-    refreshProjects,
-  })
   const revert = createRevertController({ store, client, composer: () => composer, openSession, refresh, openPicker })
   const resumer = createResumer({
     store, openSession, openPicker,
@@ -1046,9 +1096,10 @@ export function createController({ client, store, directory, remote: startedRemo
     openProviders: () => providers.open(),
     openDiff: () => diffView.open(),
     openMcp: () => mcp.open(),
+    openBundles: () => bundles.open(),
     openRules: () => rules.open(),
     openAgents: () => agentsView.open(),
-    openProjectView: () => projectView.open(),
+    openProjectOverlay: () => openProjectOverlay(),
     copyText: (text) => terminal?.copy(text) ?? false,
     undo: () => revert.undo(),
     redo: () => revert.redo(),
@@ -1191,6 +1242,9 @@ export function createController({ client, store, directory, remote: startedRemo
         await registry.dispatch(text, { store, client, actions })
         return
       }
+      // A prompt typed before startup has opened its session belongs to that session; creating one
+      // here as well would leave the prompt in a session startup then navigates away from.
+      if (!store.state.selected) await starting
       if (store.state.selected?.parent) {
         status(readOnlyStatus)
         return
@@ -1213,8 +1267,17 @@ export function createController({ client, store, directory, remote: startedRemo
         await turns.submit(command, { shell: true })
         return
       }
+      let prompt = text
+      if (interceptSubmit) {
+        const intercepted = await interceptSubmit(text)
+        if ("blocked" in intercepted) {
+          status(`Not sent · ${intercepted.blocked}`)
+          return
+        }
+        prompt = intercepted.text
+      }
       remotePreviews.clear()
-      const previews = await loadAttachments(text)
+      const previews = await loadAttachments(prompt)
       const failed = previews.filter((item) => item.error)
       if (failed.length) {
         status(`Not sent · ${failed.map((item) => `${item.name}: ${item.error}`).join(" · ")}`)
@@ -1228,7 +1291,7 @@ export function createController({ client, store, directory, remote: startedRemo
       store.followTranscript()
       // Subscribe before CreateTurn, so no frame of the new turn is missed.
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
-      await turns.submit(text, attachments.length ? { attachments } : {})
+      await turns.submit(prompt, attachments.length ? { attachments } : {})
     } catch (error) {
       // The refusal already says what to do.
       if (!(error instanceof NoProjectError)) status(`Error: ${String(error)}`)
@@ -1283,6 +1346,8 @@ export function createController({ client, store, directory, remote: startedRemo
     void refresh().then(refreshMessages).catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
   }
 
+  /** Set while `start()` runs; a prompt with no session yet waits for it (see `submit`). */
+  let starting: Promise<void> | undefined
   /**
    * Initial load: bootstrap, the Project of `--dir` (`EnsureProjectForPath`;
    * skipped with `--remote`, which starts without an active Project),
@@ -1290,7 +1355,11 @@ export function createController({ client, store, directory, remote: startedRemo
    * `--continue`: the most recent nonarchived root of that Project). A
    * plain local start restores a saved chat, prioritizing pending requests, or creates a new ephemeral session.
    */
-  async function start(): Promise<void> {
+  function start(): Promise<void> {
+    starting = startOnce().finally(() => { starting = undefined })
+    return starting
+  }
+  async function startOnce(): Promise<void> {
     unsubscribeFocus = terminal?.onFocusChange?.((focused) => store.setFocused(focused))
     try {
       // A remote backend has no use for this machine's --dir: no scope until a Project is chosen.
@@ -1339,7 +1408,7 @@ export function createController({ client, store, directory, remote: startedRemo
       if (remote && !store.state.selected) missing += ` · ${noProjectStatus}`
       // `--remote`: no Project was ensured; open the Project view so choosing or creating one is the first thing shown
       // (unless `--resume` already shows its picker).
-      if (remote && !store.state.activeProjectId && !startup.resume) projectView.open()
+      if (remote && !store.state.activeProjectId && !startup.resume) openProjectOverlay()
       const version = bootstrap.location?.version ?? ""
       const compatibilityError = backendVersionError(version)
       const mismatch = compatibilityError ? ` · ${compatibilityError}` : ""
@@ -1378,6 +1447,7 @@ export function createController({ client, store, directory, remote: startedRemo
       return
     }
     await refresh().catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
+    void onScopeChanged?.()
     startGlobalStream()
     const selected = store.state.selected
     if (!selected) return
@@ -1450,9 +1520,9 @@ export function createController({ client, store, directory, remote: startedRemo
       catalogStale = true
       detail += ` · ${String(error)}`
     }
-    if (ok) startGlobalStream()
+    if (ok) { startGlobalStream(); void onScopeChanged?.() }
     if (remote) {
-      if (!store.state.activeProjectId) projectView.open()
+      if (!store.state.activeProjectId) openProjectOverlay()
     } else if (ok) {
       void refreshVcs()
       await newSession().catch(() => undefined)
@@ -1561,7 +1631,7 @@ export function createController({ client, store, directory, remote: startedRemo
     bridgeDown = false
     status("Closing the relay bridge…")
     await child?.stop()
-    if (store.state.projectView) projectView.close()
+    if (store.state.extensionOverlay) store.setExtensionOverlay(undefined)
     remote = startedRemote
     store.setRemote(remote)
     store.setServerLabel(undefined)
@@ -1686,6 +1756,7 @@ export function createController({ client, store, directory, remote: startedRemo
     providers.dispose()
     diffView.dispose()
     mcp.dispose()
+    bundles.dispose()
     rules.dispose()
     agentsView.dispose()
     unsubscribeFocus?.()
@@ -1714,6 +1785,8 @@ export function createController({ client, store, directory, remote: startedRemo
   return {
     ...actions,
     openRootSession,
+    hostCommand,
+    focusProjects,
     openSessionContext,
     openProjectContext,
     /** Register the composer's input (components/Composer.tsx); returns the unregister function. */
@@ -1743,6 +1816,8 @@ export function createController({ client, store, directory, remote: startedRemo
     providerKey: (key: KeyLike) => providers.key(key),
     providerPaste: (text: string) => providers.paste(text),
     closeProviders: () => providers.close(),
+    bundlesKey: (key: KeyLike) => bundles.key(key),
+    closeBundles: () => bundles.close(),
     /** One key while the Diff / MCP / Saved Rules / Agents view is open (components/Composer.tsx routes them). */
     diffKey: (key: KeyLike) => diffView.key(key),
     closeDiff: () => diffView.close(),
@@ -1756,13 +1831,6 @@ export function createController({ client, store, directory, remote: startedRemo
     secretKey,
     secretPaste,
     closeSecretEntry: () => { closeSecretEntry(); status("Not connected · /connect-remote cancelled") },
-    /** One key while the Project view is open (components/Composer.tsx routes it with the other full-screen views). */
-    projectViewKey: (key: KeyLike) => projectView.key(key),
-    closeProjectView: () => projectView.close(),
-    /** One key while the left Projects sidebar has focus (components/Composer.tsx routes it). */
-    projectsSidebarKey,
-    /** Switch to a Project from the left sidebar (Enter or a click on its row). */
-    switchFromSidebar,
     ui,
     refreshAll,
     start,

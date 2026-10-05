@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
+use crate::bundle_control::{BundleControl, EmptyBundleControl};
 use crate::host::HostPolicy;
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::provider_control::{EmptyProviderControl, ProviderControl};
@@ -35,6 +36,7 @@ pub struct AppState {
     mcp_control: Arc<dyn McpControl>,
     agent_model_control: Arc<dyn AgentModelControl>,
     provider_control: Arc<dyn ProviderControl>,
+    bundle_control: Arc<dyn BundleControl>,
     workflow_control: Arc<dyn WorkflowControl>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
@@ -76,6 +78,7 @@ impl AppState {
             mcp_control: Arc::new(EmptyMcpControl),
             agent_model_control: Arc::new(EmptyAgentModelControl),
             provider_control: Arc::new(EmptyProviderControl),
+            bundle_control: Arc::new(EmptyBundleControl),
             workflow_control: Arc::new(EmptyWorkflowControl),
             formatter_status: Vec::new(),
             default_agent: None,
@@ -279,6 +282,14 @@ impl AppState {
         self.reconfigured()
     }
 
+    /// Install the app-owned bundle control (list, install, uninstall,
+    /// enable, disable) for the bundle management routes.
+    #[must_use]
+    pub fn with_bundle_control(mut self, control: Arc<dyn BundleControl>) -> Self {
+        self.bundle_control = control;
+        self.reconfigured()
+    }
+
     /// Install the app-owned Workflow control handle for native and Compat routes.
     #[must_use]
     pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
@@ -326,6 +337,7 @@ pub(crate) struct ServerState {
     pub(crate) mcp_control: Arc<dyn McpControl>,
     pub(crate) agent_model_control: Arc<dyn AgentModelControl>,
     pub(crate) provider_control: Arc<dyn ProviderControl>,
+    pub(crate) bundle_control: Arc<dyn BundleControl>,
     pub(crate) workflow_control: Arc<dyn WorkflowControl>,
     pub(crate) pty: support::pty_state::PtyState,
     pub(crate) formatter_status: Vec<FormatterStatus>,
@@ -355,6 +367,7 @@ impl ServerState {
             mcp_control: app.mcp_control,
             agent_model_control: app.agent_model_control,
             provider_control: app.provider_control,
+            bundle_control: app.bundle_control,
             workflow_control: app.workflow_control,
             pty: support::pty_state::PtyState::new(),
             formatter_status: app.formatter_status,

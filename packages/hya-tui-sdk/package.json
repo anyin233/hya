@@ -1,0 +1,22 @@
+{
+  "name": "@hya/tui-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "bun-types": "1.4.2",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0"
+  }
+}
