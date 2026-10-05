@@ -10,6 +10,9 @@ test("inherited and contextual keys are inspectable, including Vim prefixes and 
   expect(rows.some((row) => row.shortcut === "G" && row.label.includes("gg prefix"))).toBe(true)
   expect(rows.some((row) => row.shortcut === "F2" && row.label.includes("rename"))).toBe(true)
   expect(rows.some((row) => row.shortcut === "Enter" && row.tag === "pane" && row.label.startsWith("Layout:"))).toBe(true)
+  for (const shortcut of ["Shift+Enter", "Space", "Ctrl+J", "I", "W", "R", "C", "Delete", "Backspace"]) {
+    expect(rows.some((row) => row.shortcut === shortcut && row.tag === "pane" && row.label.startsWith("Layout:"))).toBe(true)
+  }
   expect(validateCustomKeybindings({ KeypadEnter: null })).toEqual({ KeypadEnter: null })
 })
 
