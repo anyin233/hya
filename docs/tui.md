@@ -1214,7 +1214,8 @@ The `layout` pane shows the entire saved tree and edits its nodes interactively.
 It is a regular selectable pane, like Projects: add it, move it, resize it, or
 close it using the same layout commands. It includes hidden and passive panes,
 so Todos, Context and the activity row can be edited without receiving keyboard
-focus. Each Layout pane keeps its own tree selection and form state.
+focus. Each Layout pane keeps its own cursor, optional marked target, and form state.
+Direct keys perform common edits without stepping through the action menu.
 
 Open one with `/layout tree`. This focuses the first existing Layout pane or
 adds a pane beside the whole workspace. To place one yourself, use
@@ -1224,18 +1225,31 @@ successful edit save the layout through the existing frontend preferences path.
 
 | In the Layout pane | Action |
 | --- | --- |
-| Up / Down | Select the previous/next tree node or action; scroll to keep it visible. |
+| Up / Down | Move the cursor to the previous/next tree node or action; scroll to keep it visible. |
 | Left / Right | Select the parent/first child in the tree. |
 | Home / End | Select the first/last row. |
 | Enter | Open the selected node's actions, choose a menu item, or save a weight. |
-| Esc | Cancel a form back to actions, or return from actions to the tree; keep the pane open. |
-| Backspace / Delete | In the weight form, clear the initially selected value or erase its last character. |
+| Shift+Enter / Space | Mark or unmark the cursor pane/group (`◆`); marking another node replaces the mark. The cursor (`▸`) can move independently. In WebUI, Shift+Enter arrives as line feed; Ctrl+J / Linefeed are equivalent. |
+| `i` | Insert immediately before the cursor node in its parent; show **Insert here** before choosing the new pane job. At the root, choose a child insertion position first. |
+| `w`, then `r` / `c` | Wrap the marked node, otherwise the cursor node, in a row / column; choose the new pane job. Default placement is after the target (right / below); Tab toggles before / after. |
+| Esc | Cancel a direct chooser or wrap prefix to the tree; cancel a menu form back to actions; return from actions to the tree; while browsing, clear the mark. Keep the pane open. |
+| Backspace / Delete | While browsing, immediately remove the marked auxiliary pane, otherwise the cursor pane. Removing a group requires confirmation with **Cancel** selected initially. In the weight form these keys erase text only. |
 | Click a tree row, then **Edit** | Select a node and open its actions. Click an action or choice to use it. |
 | **Save**, **Choose**, **Back** | Mouse equivalents of form submission, choice, and cancellation. |
 
 Alt+arrows still switch workspace panes; `/` still opens the global command
 input. These local keys appear in `/help` and `/keybind` and respect disabled
-keys. Unsupported typing in the tree never reaches the message draft. Weight
+keys. Unsupported typing in the tree never reaches the message draft.
+
+Direct insertion uses the cursor even when a different node is marked; wrapping
+and removal use the mark when present. Successful direct insertion/wrapping moves
+the tree cursor to the newly added pane and keeps keyboard focus in the Layout
+pane. After removal the cursor moves to a surviving next sibling, previous
+sibling, or parent (the root if normalization removes those containers). A
+removed mark is cleared. The conversation, editor, and groups containing either
+remain protected. Contextual hints show the next keys, including `r`/`c` after
+`w`; unsupported keys while waiting for that suffix do nothing. Space works in
+terminals that cannot distinguish Shift+Enter. Weight
 entry accepts typing or paste without submitting pasted text; the first input
 replaces the existing value. Errors appear inside the Layout pane.
 
@@ -1255,7 +1269,14 @@ Select a node and press Enter to see its applicable actions:
   It removes the selected auxiliary node and its descendants. Nodes containing
   the conversation or message editor are protected, with a visible explanation.
 
-For example, run `/layout tree`, select `pane-5 context`, and press Enter.
+For a direct edit, run `/layout tree`, move to `group-2 column`, and press
+Shift+Enter (or Space) to mark the conversation group. Press `w`, then `r`, then
+choose `jobs`: Jobs is added to the right of that group. Esc clears the mark;
+Backspace or Delete can then remove the new Jobs pane. To insert at a different
+position, move the cursor to that node and press `i`. Each chooser shows the
+target/placement before it changes the layout, and Esc cancels it.
+
+For the existing action menu, select `pane-5 context`, and press Enter.
 Choose **Change weight**, type `2.5`, and press Enter. The tree now shows that
 node's saved weight in its detail area. Select `group-2 column`, choose **Add
 child**, then choose `jobs` to append a Jobs pane. Focus stays in the Layout
@@ -1264,8 +1285,12 @@ use its exact pane id.
 
 The tree uses the same v4 `PaneLayout` reducers as slash commands. Saved leaves
 use `{type: "pane", id: "pane-N", kind: "layout"}`; no additional preference
-keys, backend routes, or events are introduced. Selection and unfinished forms
-are transient. Removing or reassigning the Layout pane itself returns focus to
+keys, backend routes, or events are introduced. The cursor, mark, pending wrap
+prefix and unfinished forms
+are transient and local to each Layout pane. Surviving marks remain across cursor
+navigation and pane switches; external removals clear stale marks and cancel
+forms whose targets or containers vanished. Removing or reassigning the Layout
+pane itself returns focus to
 a surviving selectable pane. A failed save keeps the on-screen edit and reports
 `Layout changed, not saved: …`. Layout reloads and external command edits update
 the tree and repair selections whose nodes disappeared.
@@ -1277,7 +1302,19 @@ rejected because it has no parent), enforces a finite positive weight and finite
 container total, and accepts `{mode: "content"}` only in columns. The editor
 state machine in `state/layoutEditor.ts` exposes `layoutTreeRows`,
 `createLayoutEditor`, `layoutEditorRows`, `layoutEditorKey`, `layoutEditorChoose`,
-`layoutEditorPaste`, `layoutEditorBack`, and `reconcileLayoutEditor`. Its
+`layoutEditorPaste`, `layoutEditorBack`, `layoutEditorPreview`, `layoutEditorHint`,
+and `reconcileLayoutEditor`. `LayoutEditorState` adds `marked?: string` to the
+existing `selected: string` cursor, `stage`, `index`, and `error?: string` fields.
+The pending wrap stage is `{type: "wrap", target: string}`; root insertion uses
+`{type: "insert-position", destination: string}`. Direct job choosers and removal
+confirmations carry the target/placement in their stage so navigation cannot
+retarget a pending edit. The kind-stage additions are `direct?: boolean`,
+`target?: string`, `before?: boolean`, `destination?: string`, and
+`position?: number` (zero-based child insertion index); removal adds
+`direct?: boolean` and `target?: string`. These fields are never saved in
+`PaneLayout`. `layoutEditorPreview(state): string | undefined` and
+`layoutEditorHint(state): string` expose the pending placement and applicable
+keys to the renderer. The state machine's
 outcomes are `{state: LayoutEditorState, layout?: PaneLayout}`; the component
 applies an optional layout, retains editor focus when possible, and persists it.
 

@@ -2,7 +2,7 @@ import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp, type PaneInputHandle } from "../app/context"
-import { createLayoutEditor, layoutEditorBack, layoutEditorChoose, layoutEditorHeading, layoutEditorKey, layoutEditorPaste, layoutEditorRows, reconcileLayoutEditor, type LayoutEditorOutcome } from "../state/layoutEditor"
+import { createLayoutEditor, layoutEditorBack, layoutEditorChoose, layoutEditorHeading, layoutEditorHint, layoutEditorKey, layoutEditorPaste, layoutEditorPreview, layoutEditorRows, reconcileLayoutEditor, type LayoutEditorOutcome } from "../state/layoutEditor"
 import { paneLeaves, visiblePaneRoot } from "../state/panes"
 import { colors } from "../theme"
 import { PaneFrame } from "./PaneFrame"
@@ -16,11 +16,11 @@ export function LayoutPane(props: PaneRenderProps) {
   let scroll: ScrollBoxRenderable | undefined
   createEffect(() => setState((current) => reconcileLayoutEditor(store.state.paneLayout, current)))
   const rows = createMemo(() => layoutEditorRows(store.state.paneLayout, state()))
-  const index = () => state().stage.type === "tree" ? rows().findIndex((row) => row.id === state().selected) : Math.min(state().index, rows().length - 1)
+  const treeVisible = () => state().stage.type === "tree" || state().stage.type === "wrap"
+  const index = () => treeVisible() ? rows().findIndex((row) => row.id === state().selected) : Math.min(state().index, rows().length - 1)
   const visible = createMemo(() => new Set(paneLeaves(visiblePaneRoot(store.state.paneLayout.root, store.state.columns, store.state.sidebar, store.state.projectsSidebar)).map((pane) => pane.id)))
   const detail = () => rows()[index()]?.detail ?? ""
-  const hint = () => state().stage.type === "tree" ? "↑↓ select · ← parent · → child · Enter edit"
-    : state().stage.type === "weight" ? "Number or content · Enter saves · Esc back" : "↑↓ select · Enter choose · Esc back"
+  const hint = () => layoutEditorHint(state())
   const apply = (outcome: LayoutEditorOutcome) => {
     setState(outcome.state)
     if (!outcome.layout) return
@@ -64,6 +64,7 @@ export function LayoutPane(props: PaneRenderProps) {
   }
   return <PaneFrame kind="layout" focused={props.focused} title={`Layout tree · ${props.node.id}`}>
     <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{layoutEditorHeading(state())}</text>
+    <Show when={layoutEditorPreview(state())}>{(preview) => <text width="100%" wrapMode="word" flexShrink={0} fg={colors.accent}>{`─ ${preview()}`}</text>}</Show>
     <Show when={state().stage.type !== "weight"} fallback={
       <box width="100%" flexGrow={1} flexDirection="column">
         <text height={1} wrapMode="none" fg={colors.accent}>{state().stage.type === "weight" ? `${(state().stage as { value: string }).value}▏` : ""}</text>
@@ -74,16 +75,16 @@ export function LayoutPane(props: PaneRenderProps) {
         <For each={rows()}>{(row, at) => <text height={1} flexShrink={0} wrapMode="none"
           onMouseDown={(event: MouseEvent) => mouse(event, () => apply(layoutEditorChoose(store.state.paneLayout, state(), row.id)))}
           fg={at() === index() ? colors.accent : colors.fg}>
-          {`${at() === index() ? "▸" : " "} ${"  ".repeat(Math.min(row.depth ?? 0, Math.max(0, Math.floor((props.width - 24) / 2))))}${row.label}${state().stage.type === "tree" && row.id.startsWith("pane-") && !visible().has(row.id) ? " (hidden)" : ""}`}
+          {`${at() === index() ? "▸" : " "}${treeVisible() && state().marked === row.id ? "◆" : " "}${"  ".repeat(Math.min(row.depth ?? 0, Math.max(0, Math.floor((props.width - 24) / 2))))}${row.label}${treeVisible() && row.id.startsWith("pane-") && !visible().has(row.id) ? " (hidden)" : ""}`}
         </text>}</For>
       </scrollbox>
     </Show>
     <text height={2} flexShrink={0} width="100%" wrapMode="word" fg={state().error ? colors.error : colors.muted}>
-      {state().error ?? `${state().selected} · ${detail()}`}
+      {state().error ?? `${state().marked ? `◆ Marked ${state().marked} · ` : ""}${state().selected} · ${detail()}`}
     </text>
-    <text height={2} flexShrink={0} width="100%" wrapMode="word" fg={colors.muted}>{hint()}</text>
+    <text height={Math.max(2, Math.ceil(Bun.stringWidth(hint()) / Math.max(1, props.width - 4)))} flexShrink={0} width="100%" wrapMode="word" fg={colors.muted}>{hint()}</text>
     <box height={1} flexShrink={0} flexDirection="row" gap={2}>
-      <text fg={colors.accent} onMouseDown={(event: MouseEvent) => mouse(event, () => key("return"))}>{state().stage.type === "tree" ? "[Edit]" : state().stage.type === "weight" ? "[Save]" : "[Choose]"}</text>
+      <text fg={colors.accent} onMouseDown={(event: MouseEvent) => mouse(event, () => key(state().stage.type === "wrap" ? "escape" : "return"))}>{state().stage.type === "tree" ? "[Edit]" : state().stage.type === "wrap" ? "[Cancel]" : state().stage.type === "weight" ? "[Save]" : "[Choose]"}</text>
       <Show when={state().stage.type !== "tree"}><text fg={colors.muted} onMouseDown={(event: MouseEvent) => mouse(event, () => setState(layoutEditorBack(state())))}>[Back]</text></Show>
     </box>
   </PaneFrame>

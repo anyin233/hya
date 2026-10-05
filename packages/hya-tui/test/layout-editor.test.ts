@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createLayoutEditor, layoutEditorBack, layoutEditorChoose, layoutEditorKey, layoutEditorPaste, layoutEditorRows, layoutTreeRows, reconcileLayoutEditor, type LayoutEditorState } from "../src/state/layoutEditor"
+import { createLayoutEditor, layoutEditorBack, layoutEditorChoose, layoutEditorKey, layoutEditorPaste, layoutEditorPreview, layoutEditorRows, layoutTreeRows, reconcileLayoutEditor, type LayoutEditorState } from "../src/state/layoutEditor"
 import { closePane, defaultPaneLayout, openLayoutPane, paneLeaves, parsePaneLayout, resolvePaneNode, setPaneSize, type PaneLayout } from "../src/state/panes"
 
 const key = (name: string, sequence = "") => ({ name, sequence, ctrl: false, meta: false, shift: false })
@@ -7,7 +7,7 @@ function editor(selected: string, layout = openLayoutPane(defaultPaneLayout())) 
   let state = createLayoutEditor(selected)
   const apply = (outcome: ReturnType<typeof layoutEditorKey>) => { state = outcome.state; layout = outcome.layout ?? layout; return outcome }
   return { get state() { return state }, get layout() { return layout },
-    key: (name: string, sequence = "") => apply(layoutEditorKey(layout, state, key(name, sequence))),
+    key: (name: string, sequence = "", shift = false) => apply(layoutEditorKey(layout, state, { ...key(name, sequence), shift })),
     choose: (id: string) => apply(layoutEditorChoose(layout, state, id)),
     paste: (text: string) => apply(layoutEditorPaste(state, text)),
   }
@@ -19,6 +19,133 @@ test("opening a layout pane adds one regular persisted leaf and reuses it", () =
   expect(parsePaneLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout)
   expect(paneLeaves(openLayoutPane(layout).root).filter((pane) => pane.kind === "layout")).toHaveLength(1)
   expect(layoutTreeRows(layout.root).some((row) => row.node.type === "pane" && row.node.kind === "todos")).toBe(true)
+})
+
+test("marking is independent of cursor navigation and Enter still opens cursor actions", () => {
+  for (const mark of [{ ...key("return"), shift: true }, key("space"), key("linefeed"), { ...key("j"), ctrl: true }]) {
+    const layout = openLayoutPane(defaultPaneLayout())
+    const marked = layoutEditorKey(layout, createLayoutEditor("group-3"), mark).state
+    expect(marked).toMatchObject({ selected: "group-3", marked: "group-3", stage: { type: "tree" } })
+    const moved = layoutEditorKey(layout, marked, key("end")).state
+    expect(moved).toMatchObject({ selected: "pane-5", marked: "group-3" })
+    const actions = layoutEditorKey(layout, moved, key("return")).state
+    expect(actions).toMatchObject({ selected: "pane-5", stage: { type: "actions" } })
+    expect(layoutEditorKey(layout, marked, mark).state.marked).toBeUndefined()
+    expect(layoutEditorKey(layout, marked, key("escape")).state.marked).toBeUndefined()
+    expect(layoutEditorKey(layout, moved, mark).state.marked).toBe("pane-5")
+  }
+})
+
+test("i inserts before the cursor despite another mark and selects the new pane", () => {
+  const e = editor("pane-3")
+  e.key("space"); e.key("down"); e.key("i")
+  expect(layoutEditorPreview(e.state)).toBe("Insert here · before pane-4")
+  const original = e.layout
+  e.key("escape")
+  expect(e.state).toMatchObject({ selected: "pane-4", marked: "pane-3", stage: { type: "tree" } })
+  expect(e.layout).toBe(original)
+  e.key("i"); e.choose("jobs")
+  const group = resolvePaneNode(e.layout, "group-3")
+  expect(group.type === "split" && group.children.map((child) => child.node.id)).toEqual(["pane-3", "pane-9", "pane-4", "pane-5"])
+  expect(e.state).toMatchObject({ selected: "pane-9", marked: "pane-3" })
+})
+
+test("root insertion chooses a child position before choosing the job", () => {
+  const e = editor("group-4")
+  e.key("i")
+  expect(e.state.stage.type).toBe("insert-position")
+  e.choose("1")
+  expect(layoutEditorPreview(e.state)).toBe("Insert here · group-4 position 1")
+  e.choose("status")
+  expect(e.state.selected).toBe("pane-9")
+  const root = e.layout.root
+  expect(root.type === "split" && root.children[1]?.node).toMatchObject({ id: "pane-9", kind: "status" })
+})
+
+test("w r/c wraps a frozen marked target, defaults after, and Tab toggles before", () => {
+  for (const [direction, chord] of [["row", "r"], ["column", "c"]] as const) {
+    for (const before of [false, true]) {
+      const e = editor("pane-5")
+      e.key("return", "", true); e.key("home"); e.key("w")
+      expect(e.state.stage).toEqual({ type: "wrap", target: "pane-5" })
+      e.key("x"); expect(e.state.stage.type).toBe("wrap")
+      e.key(chord)
+      if (before) e.key("tab")
+      expect(layoutEditorPreview(e.state)).toContain(`new pane ${before ? "before" : "after"}`)
+      e.choose("jobs")
+      const pane = layoutTreeRows(e.layout.root).find((row) => row.id === "pane-5")!
+      expect(pane.parent?.direction).toBe(direction)
+      const siblings = pane.parent!.children.map((child) => child.node.id)
+      expect(siblings.indexOf("pane-9") - siblings.indexOf("pane-5")).toBe(before ? -1 : 1)
+      expect(e.state.selected).toBe("pane-9")
+    }
+  }
+  const e = editor("pane-5")
+  e.key("w"); e.key("escape")
+  expect(e.state.stage.type).toBe("tree")
+  expect(paneLeaves(e.layout.root)).toHaveLength(8)
+})
+
+test("a marked conversation group wraps together while its original leaves and cursor survive", () => {
+  const e = editor("group-2")
+  const ids = paneLeaves(resolvePaneNode(e.layout, "group-2")).map((pane) => pane.id)
+  e.key("space"); e.key("end"); e.key("w"); e.key("r"); e.choose("jobs")
+  const group = layoutTreeRows(e.layout.root).find((row) => row.id === "group-2")!
+  expect(paneLeaves(group.node).map((pane) => pane.id)).toEqual(ids)
+  expect(group.parent?.children[group.index + 1]?.node).toMatchObject({ kind: "jobs", id: "pane-9" })
+  expect(e.state).toMatchObject({ selected: "pane-9", marked: "group-2" })
+})
+
+test("direct removal follows sibling order, honors a remote mark, and clears deleted marks", () => {
+  const e = editor("pane-4")
+  e.key("space"); e.key("home"); e.key("backspace")
+  expect(e.state).toMatchObject({ selected: "pane-5", stage: { type: "tree" } })
+  expect(e.state.marked).toBeUndefined()
+  expect(paneLeaves(e.layout.root).some((pane) => pane.id === "pane-4")).toBe(false)
+  e.key("delete")
+  expect(e.state.selected).toBe("pane-3")
+  e.key("delete")
+  expect(paneLeaves(e.layout.root).some((pane) => ["pane-3", "pane-4", "pane-5"].includes(pane.id))).toBe(false)
+  expect(paneNodesForTest(e.layout).includes(e.state.selected)).toBe(true)
+})
+
+function paneNodesForTest(layout: PaneLayout): string[] { return layoutTreeRows(layout.root).map((row) => row.id) }
+
+test("group deletion confirms with Cancel selected and protects viewer/editor groups", () => {
+  const e = editor("group-3")
+  e.key("space"); e.key("home"); e.key("delete")
+  expect(e.state.stage).toEqual({ type: "remove", target: "group-3", direct: true })
+  expect(layoutEditorRows(e.layout, e.state)[1]?.detail).toContain("3 pane(s)")
+  e.key("return") // Cancel; no tree mutation.
+  expect(resolvePaneNode(e.layout, "group-3")).toBeDefined()
+  e.key("delete"); e.key("down"); e.key("return")
+  expect(paneNodesForTest(e.layout)).not.toContain("group-3")
+  expect(e.state.marked).toBeUndefined()
+  for (const target of ["pane-1", "pane-6", "group-2", "root"]) {
+    const protectedEditor = editor(target === "root" ? "group-4" : target)
+    const before = protectedEditor.layout
+    protectedEditor.key("delete")
+    expect(protectedEditor.state.error).toContain("Cannot remove")
+    expect(protectedEditor.layout).toBe(before)
+  }
+})
+
+test("direct shortcuts stay inactive in forms and stale marks/targets reconcile after reload", () => {
+  const e = editor("pane-5")
+  e.key("space"); e.key("return"); e.choose("weight")
+  e.key("i", "i"); e.key("w", "w"); e.key("delete")
+  expect(e.state.stage).toMatchObject({ type: "weight", value: "i" })
+  expect(paneLeaves(e.layout.root)).toHaveLength(8)
+  e.key("escape"); e.key("escape"); e.key("w"); e.key("r")
+  const changed = closePane(e.layout, "pane-5")
+  expect(reconcileLayoutEditor(changed, e.state)).toMatchObject({ marked: undefined, stage: { type: "tree" } })
+  const mark = layoutEditorKey(e.layout, createLayoutEditor("pane-4"), key("space")).state
+  expect(reconcileLayoutEditor(closePane(e.layout, "pane-4"), mark).marked).toBeUndefined()
+  const cursorElsewhere = layoutEditorKey(e.layout, mark, key("home")).state
+  const pending = layoutEditorKey(e.layout, cursorElsewhere, key("w")).state
+  expect(reconcileLayoutEditor(closePane(e.layout, "pane-4"), pending)).toMatchObject({
+    selected: e.layout.root.id, marked: undefined, stage: { type: "tree" }, error: "The target no longer exists",
+  })
 })
 
 test("tree navigation selects passive/hidden nodes without changing workspace focus", () => {
