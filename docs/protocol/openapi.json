@@ -136,6 +136,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/bundles": {
+      "get": {
+        "operationId": "Catalog.ListBundles",
+        "summary": "Bundles of the directory's scope, as `hya bundle list` shows them:",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListBundles",
+        "x-server-streaming": false
+      }
+    },
     "/v1/bundles/{bundle}/api/{path}": {
       "get": {
         "operationId": "BundleApi.InvokeGlobalBundleApi.get",
@@ -188,6 +199,17 @@
         "x-hya-any-method": true
       }
     },
+    "/v1/bundles:install": {
+      "post": {
+        "operationId": "Catalog.InstallBundle",
+        "summary": "Install a `.hyabundle` package from a path on the backend's machine",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.InstallBundle",
+        "x-server-streaming": false
+      }
+    },
     "/v1/bundles:refresh": {
       "post": {
         "operationId": "Catalog.RefreshBundles",
@@ -196,6 +218,28 @@
           "Catalog"
         ],
         "x-grpc-method": "hya.v1.Catalog.RefreshBundles",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/bundles:set-enabled": {
+      "post": {
+        "operationId": "Catalog.SetBundleEnabled",
+        "summary": "Enable or disable a bundle by id in every scope (`hya bundle",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.SetBundleEnabled",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/bundles:uninstall": {
+      "post": {
+        "operationId": "Catalog.UninstallBundle",
+        "summary": "Remove an installed bundle (`hya bundle remove`), then refresh the",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.UninstallBundle",
         "x-server-streaming": false
       }
     },
@@ -1114,6 +1158,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/tui-extensions": {
+      "get": {
+        "operationId": "Catalog.ListTuiExtensions",
+        "summary": "Verified frontend extension declarations from prepared bundles. Metadata only.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListTuiExtensions",
+        "x-server-streaming": false
+      }
+    },
     "/v1/vcs": {
       "get": {
         "operationId": "Project.GetVcsStatus",
@@ -1981,6 +2036,190 @@
           }
         }
       },
+      "ListBundlesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "ListBundlesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "bundles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleSummary"
+            }
+          }
+        }
+      },
+      "BundleSummary": {
+        "type": "object",
+        "description": "One bundle as installed or shipped.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "removable": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "prepared_digest": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "components": {
+            "$ref": "#/components/schemas/BundleComponents"
+          }
+        }
+      },
+      "BundleComponents": {
+        "type": "object",
+        "description": "What a bundle contributes, by id.",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mcp_servers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "permission_modes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "apis": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hooks": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tui": {
+            "type": "boolean"
+          },
+          "tui_permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "InstallBundleRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "project": {
+            "type": "boolean"
+          },
+          "overwrite": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UninstallBundleRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "project": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SetBundleEnabledRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BundleChange": {
+        "type": "object",
+        "description": "The bundle a management call changed and the refresh that followed.",
+        "properties": {
+          "bundle_id": {
+            "type": "string"
+          },
+          "refresh": {
+            "$ref": "#/components/schemas/RefreshBundlesResponse"
+          }
+        }
+      },
       "SetProviderModelRequest": {
         "type": "object",
         "description": "",
@@ -2290,6 +2529,85 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PermissionModeSummary"
+            }
+          }
+        }
+      },
+      "ListTuiExtensionsRequest": {
+        "type": "object",
+        "description": "List verified, prepared frontend extension descriptors visible in a directory.",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "TuiExtensionDescriptor": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "bundle_id": {
+            "type": "string"
+          },
+          "bundle_version": {
+            "type": "string"
+          },
+          "prepared_digest": {
+            "type": "string"
+          },
+          "api_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "sdk": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TuiExtensionFile"
+            }
+          },
+          "first_party": {
+            "type": "boolean"
+          },
+          "cached": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TuiExtensionFile": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "ListTuiExtensionsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "extensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TuiExtensionDescriptor"
             }
           }
         }
@@ -3744,6 +4062,9 @@
           "depth": {
             "type": "integer",
             "format": "int64"
+          },
+          "handle": {
+            "type": "string"
           }
         }
       },

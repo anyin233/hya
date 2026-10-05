@@ -1,7 +1,7 @@
-# 0.44.7
+# Frontend 0.44.8
 
-## TUI
-
-- Add direct Layout editor keys: Shift+Enter/Space to mark a pane or group, i to insert at the cursor, and w then r/c to wrap in a row/column with before/after placement.
-- Let Backspace/Delete remove auxiliary panes directly; groups require confirmation and the conversation/editor remain protected.
-- Show marked targets, insertion/wrap previews and contextual key hints; preserve marks across navigation and keep all editing input inside the focused Layout pane.
+- Merge upstream main through d6637b58: bundle TUI extensions, shared SDK host, and bundle management.
+- Integrate first-party Projects, Sessions, Todos, and Context contributions with the ordered layout tree and stable pane mounts.
+- Keep direct layout editing, selectable/passive panes, strict keyboard ownership, configurable minimal keybindings, command overlays, and chat restoration.
+- Custom extension panes carry their exact bundle#panel key in the v4 layout and participate in focus, resizing, moves, and removal.
+- Require backend 0.45.3 for the extension catalog and bundle management API.

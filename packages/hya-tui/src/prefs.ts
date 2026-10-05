@@ -18,6 +18,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { parsePaneLayout, type PaneLayout } from "./state/panes"
+import { sandboxPolicies, type SandboxPolicy } from "./extensions/sandbox"
 import { validateCustomKeybindings, type CustomKeybindings } from "./keys/custom"
 
 /** The known preference keys. Every key is optional; unset means the built-in default. */
@@ -34,6 +35,12 @@ export interface TuiPreferences {
   permissionMode?: string
   /** Versioned whole-workspace split tree; exactly one conversation pane. */
   paneLayout?: PaneLayout
+  /** Bundle TUI extensions by bundle id (`/extensions enable|disable`): `false` keeps one stopped; a remote backend's extension runs only with `true`. */
+  extensionEnabled?: Record<string, boolean>
+  /** OS isolation of extension processes (`/extensions sandbox`); default `best-effort`. */
+  extensionSandbox?: SandboxPolicy
+  /** Bundle TUI extensions by bundle id (`/extensions trust|untrust`): `true` runs one on the JIT tier, `false` keeps it in the VM; unset: first-party bundles of a local backend run on the JIT tier. */
+  extensionTrusted?: Record<string, boolean>
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -47,6 +54,9 @@ const validators: Validators = {
   notifications: (value): value is boolean => typeof value === "boolean",
   permissionMode: (value): value is string => typeof value === "string" && value.trim().length > 0,
   paneLayout: (value): value is PaneLayout => parsePaneLayout(value) !== undefined,
+  extensionEnabled: (value): value is Record<string, boolean> => typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((enabled) => typeof enabled === "boolean"),
+  extensionSandbox: (value): value is SandboxPolicy => sandboxPolicies.includes(value as SandboxPolicy),
+  extensionTrusted: (value): value is Record<string, boolean> => typeof value === "object" && value !== null && !Array.isArray(value) && Object.values(value).every((trusted) => typeof trusted === "boolean"),
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */

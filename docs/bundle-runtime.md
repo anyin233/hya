@@ -62,11 +62,29 @@ A bundle update goes live in four steps, each of which can refuse it:
 
 `catalog.updated` is emitted when the refresh published a new generation.
 
+### Management API
+
+The TUI's Bundles view (`/bundles`, [tui.md](tui.md#bundles)) and other
+clients manage bundles with the same operations as `hya bundle`
+(`crates/hya-app/src/bundle_admin.rs` serves both). Each change refreshes the
+request's scope and returns that refresh in `BundleChange.refresh`.
+
+| RPC | HTTP | Does |
+| --- | --- | --- |
+| `ListBundles` | `GET /v1/bundles?directory=` | Every bundle: user registry, `<directory>/.hya/bundles`, and first-party, with `scope`, `state` (`active`, `shadowed`, `disabled`, `unreadable`), `enabled`, `removable`, and `components` (agent, skill, tool, MCP, workflow, permission-mode, and API ids, hook count, `tui` and its permissions). |
+| `InstallBundle` | `POST /v1/bundles:install` `{directory, path, project, overwrite}` | `hya bundle install` of an absolute package path on the backend's machine, self-check included; `project` installs into `<directory>/.hya/bundles`. |
+| `UninstallBundle` | `POST /v1/bundles:uninstall` `{directory, bundleId, project}` | `hya bundle remove`; first-party bundles fail with `failed_precondition`. |
+| `SetBundleEnabled` | `POST /v1/bundles:set-enabled` `{directory, bundleId, enabled}` | `hya bundle enable\|disable`: the disabled set (`bundle_disabled` in the registry database) applies to every scope; trusted presets cannot be disabled. |
+
+Errors: a relative path or an invalid package is `invalid_argument` (400), an
+unknown id `not_found` (404), an immutable bundle or a conflict that
+`overwrite` would resolve `failed_precondition` (409).
+
 ## First-party bundles
 
 Hya's own tools, agents, Skills, commands, channel policy and workflows are
 bundles that the backend loads when it starts. None of their content is
-compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the eleven
+compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the twelve
 trusted identities:
 
 | Identity | Source | Supplies |
@@ -77,6 +95,7 @@ trusted identities:
 | `hya/core-agents` | `bundles/presets/core-agents` | Builtin agent roster, prompts and reserved ids |
 | `hya/agent-channels` | `bundles/presets/agent-channels` | Default channel capabilities |
 | `hya/goal-loop`, `hya/plan-impl-review` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
+| `hya/basic-tui-components` | `bundles/first-party/basic-tui-components` | Built-in TUI Sessions, Todos, Projects and Context surfaces |
 
 The former `hya/subagents` bundle and `hya-release` agent have been removed.
 

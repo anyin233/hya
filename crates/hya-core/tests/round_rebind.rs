@@ -203,6 +203,7 @@ fn single_agent_catalog(stable_id: &str, prompt: &str) -> Arc<AgentCatalog> {
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
+        tui: None,
     };
     let prepared = PreparedInstallableBundle::Agent(Box::new(bundle));
     let Ok(bundles) = BundleCatalog::from_prepared(&[prepared]) else {

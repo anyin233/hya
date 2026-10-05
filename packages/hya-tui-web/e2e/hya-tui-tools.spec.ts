@@ -7,7 +7,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
+import { expect, hangStep, hyaTui, outlinedToolCard, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 
 const colors = {
   fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b",
@@ -53,13 +53,13 @@ test.describe("read card", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read my notes")
     await term.waitForText("Read the notes.", 20_000)
-    await term.waitForText("✓ read")
-    await term.waitForText('{"path":"notes.txt","offset":1,"limit":2}')
-    const icon = await at(term, "✓ read")
+    await term.waitForText(outlinedToolCard("✓", "read", '"path":"notes.txt","offset":1,"limit":2'))
+    const icon = await at(term, "✓")
     // A blank row separates the card from the reply text after it.
     expect((await at(term, "Read the notes.")).row).toBeGreaterThan(icon.row + 2)
     expect((await term.cell(icon.row, icon.col))?.fg).toBe(colors.done)
-    expect((await term.cell(icon.row, icon.col + 2))?.fg).toBe(colors.fg)
+    const title = await at(term, "read")
+    expect((await term.cell(title.row, title.col))?.fg).toBe(colors.fg)
     // Collapsed by default: the file content is not shown.
     expect(await term.find("alpha line")).toBeNull()
     await term.attach(testInfo, "read-collapsed")
@@ -87,8 +87,7 @@ test.describe("bash card", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run printf")
     await term.waitForText("Ran it.", 20_000)
-    await term.waitForText("✓ bash")
-    await term.waitForText('{"command":"printf \'first\\\\nsecond\\\\n\'"}')
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"printf \'first\\\\nsecond\\\\n\'"'))
     expect(await term.find("$ printf")).toBeNull()
 
     await term.press("Control+x")
@@ -107,7 +106,7 @@ test.describe("bash card", () => {
     await prompt(term, "/tools on")
     await term.waitForText("first")
     await prompt(term, "/tools")
-    await expect.poll(() => term.find("$ printf")).toBeNull()
+    await expect.poll(() => term.find("│ first")).toBeNull()
   })
 })
 
@@ -131,10 +130,8 @@ test.describe("edit and write cards", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "edit the poem")
     await term.waitForText("Edited.", 20_000)
-    await term.waitForText("✓ edit")
-    await term.waitForText('{"path":"poem.txt"')
-    await term.waitForText("✓ write")
-    await term.waitForText('{"path":"fresh.txt"')
+    await term.waitForText(outlinedToolCard("✓", "edit", '"path":"poem.txt"'))
+    await term.waitForText(outlinedToolCard("✓", "write", '"path":"fresh.txt"'))
     await prompt(term, "/tools on")
     await term.waitForText("- two")
     const removed = await at(term, "- two")
@@ -159,9 +156,8 @@ test.describe("failed tool", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read the missing file")
     await term.waitForText("It is missing.", 20_000)
-    await term.waitForText("✗ read")
-    await term.waitForText('{"path":"missing.txt"}')
-    const icon = await at(term, "✗ read")
+    await term.waitForText(outlinedToolCard("✗", "read", '"path":"missing.txt"'))
+    const icon = await at(term, "✗")
     expect((await term.cell(icon.row, icon.col))?.fg).toBe(colors.error)
     expect(await term.find("File not found")).toBeNull()
     await click(term, icon.row, icon.col + 2)
@@ -178,15 +174,14 @@ test.describe("running tool", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "sleep a bit")
-    await term.waitForText("bash", 20_000)
-    await term.waitForText('{"command":"sleep 2"}', 20_000)
-    const running = await at(term, "bash")
-    const spinner = await term.cell(running.row, running.col - 2)
+    await term.waitForText("sleep 2", 20_000)
+    const running = await match(term, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
+    const spinner = await term.cell(running.row, running.col)
     expect(spinner?.char).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
     expect(spinner?.fg).toBe(colors.accent)
     await term.waitForText("Slept.", 20_000)
-    await term.waitForText("✓ bash")
-    const done = await at(term, "✓ bash")
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"sleep 2"'))
+    const done = await at(term, "✓")
     expect((await term.lines())[done.row]).toMatch(/\d+(\.\d+)?(ms|s)/)
   })
 })
@@ -206,7 +201,8 @@ test.describe("subagents", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
-    await term.waitForText(/task\s+hya-task · survey the repo/)
+    // The bordered card: titled `task`, its next row names the subagent and the description.
+    await term.waitForText(/┌─task[^\n]*\n[^\n]*hya-task · survey the repo/)
     // The child is still working (its model request hangs): running, with its latest tool call.
     await term.waitForText(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running/, 15_000)
     await term.waitForText("↳ read notes.txt", 15_000)
@@ -223,8 +219,7 @@ test.describe("subagents", () => {
     await term.waitForText("Viewing subagent hya-task · Esc returns")
     await term.waitForText("Read-only subagent view · / opens commands · Esc returns")
     await term.waitForText("┃ list the files")
-    await term.waitForText("✓ read")
-    await term.waitForText('{"path":"notes.txt"')
+    await term.waitForText(outlinedToolCard("✓", "read", '"path":"notes.txt"'))
     await term.attach(testInfo, "child-view")
     await prompt(term, "can I type here")
     await term.waitForText("│ can I type here")
@@ -264,9 +259,7 @@ test.describe("narrow terminal", () => {
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/tools on")
     await term.waitForText(/│ narrow-output/)
-    const header = await at(term, "✓ bash")
-    await term.waitForText("✓ bash")
-    await term.waitForText('{"command":"echo narrow-output && ls"}')
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo narrow-output && ls"'))
     await term.attach(testInfo, "narrow")
   })
 })

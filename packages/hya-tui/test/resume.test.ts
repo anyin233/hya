@@ -7,7 +7,6 @@ import { completeCommand } from "../src/completion"
 import { createResumer } from "../src/app/resume"
 import { initialSessionId } from "../src/launch"
 import { resumeRows, sessionRows } from "../src/state/catalog"
-import { sessionListText } from "../src/state/format"
 import { pickerKey, createPicker, type PickerSpec } from "../src/state/picker"
 import { createAppStore } from "../src/state/store"
 import { sessionPickerActions, toBackground } from "../src/commands/native"
@@ -50,10 +49,8 @@ test("a sessionUpdated archived frame drops the sidebar row (the open one stays,
   store.applyEvent({ seq: "6", session: "new", sessionUpdated: { archived: true } })
   expect(store.state.sessions.find((row) => row.id === "new")?.archived).toBe(true)
   expect(store.state.selected?.archived).toBe(true)
-  expect(sessionListText(store.state)).toContain("archived")
   store.applyEvent({ seq: "7", session: "new", sessionUpdated: { archived: false } })
   expect(store.state.selected?.archived).toBe(false)
-  expect(sessionListText(store.state)).not.toContain("archived")
 })
 
 function harness(options: { webTab?: boolean } = {}) {

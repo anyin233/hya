@@ -4967,6 +4967,7 @@ agent:
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+            tui: None,
         }
     }
 

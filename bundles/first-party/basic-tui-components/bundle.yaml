@@ -1,0 +1,29 @@
+kind: Plugin
+version_ref: backend
+identity:
+  id: hya/basic-tui-components
+  version: 0.0.0
+  publisher: hya
+extensions:
+  files:
+    - { id: main, path: tui/main.ts }
+    - { id: sessions, path: tui/sessions.ts }
+    - { id: todos, path: tui/todos.ts }
+    - { id: projects, path: tui/projects.ts }
+    - { id: project-view, path: tui/projectView.ts }
+    - { id: context, path: tui/context.ts }
+    - { id: text, path: tui/text.ts }
+tui:
+  api_version: 1
+  entry: tui/main.ts
+  sdk: "1.0"
+  permissions:
+    - tui.panel
+    - tui.action
+    - tui.keys
+    - tui.sessions.read
+    - tui.projects.read
+    - tui.todos.read
+    - tui.status.read
+    - tui.session.control
+    - tui.project.control

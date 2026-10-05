@@ -38,6 +38,8 @@
  * draft (src/reload.ts) and exits with status 75, leaving the session as a
  * signal does. A supervisor that disappears ends the TUI (SIGHUP's status).
  */
+import { extensionManager } from "../extensions/manager"
+import { extensionCacheRoot } from "../extensions/install"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { render } from "@opentui/solid"
 import type { Options } from "../cli"
@@ -90,6 +92,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
     } catch {
       // The terminal is being torn down anyway.
     }
+    await extensionManager.stopAll().catch(() => undefined)
     await controller?.close(mode).catch(() => undefined)
     grpcClient?.close()
     process.exit(code)
@@ -154,6 +157,32 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   if (options.webTab) store.setWebTab(true)
   if (loaded.preferences.vim) store.setVim(true)
   if (loaded.preferences.paneLayout) store.setPaneLayout(loaded.preferences.paneLayout)
+  // Bundle TUI extensions of the backend scope (extensions/manager.ts); reloaded whenever the scope changes.
+  extensionManager.configure({
+    cacheRoot: extensionCacheRoot(process.env),
+    sandbox: loaded.preferences.extensionSandbox ?? "best-effort",
+    notice: (text) => store.setStatus(text),
+  })
+  // Code from a backend on another machine runs only after `/extensions enable <id>`.
+  const remoteBackend = (): boolean => {
+    let host = ""
+    try { host = new URL(client.baseUrl).hostname } catch { /* not a URL: treat as remote */ }
+    return store.state.remote || store.state.backend?.remoteBridge === true || Boolean(store.state.serverLabel) || !["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)
+  }
+  const refreshExtensions = async (): Promise<void> => {
+    try {
+      // The host starts while the catalog is in flight.
+      void extensionManager.prewarm()
+      const catalog = await client.listTuiExtensions()
+      const { extensionEnabled = {}, extensionTrusted = {} } = loadPreferences(prefsPath).preferences
+      const rejected = await extensionManager.load(catalog, { enabled: (id) => extensionEnabled[id], remote: remoteBackend(), trusted: (id) => extensionTrusted[id] })
+      if (rejected.length) store.setStatus(`TUI extensions rejected: ${rejected.join(" · ")}`)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      extensionManager.catalogFailed(reason)
+      store.setStatus(`TUI extensions unavailable: ${reason}`)
+    }
+  }
   // `hya serve restart` replaced the backend: start this TUI again from its files (src/reload.ts), on the open session with the unsent draft.
   const reload = supervision && db
     ? () => {
@@ -226,6 +255,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
       : {}),
     ...(reload ? { onRestarted: reload } : {}),
     preferencesPath: prefsPath,
+    refreshExtensions,
     preferredPermissionMode: loaded.preferences.permissionMode,
     // The renderer exists once the first frame is due; these run on user actions after that.
     terminal: {
@@ -250,6 +280,8 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
         }
       },
     },
+    onScopeChanged: refreshExtensions,
+    interceptSubmit: (text) => extensionManager.interceptSubmit(text),
   })
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
@@ -271,6 +303,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
     </AppContext.Provider>
   ), renderer)
   await controller.start()
+  void refreshExtensions()
   if (launch.reloaded) warnings.unshift(reloadedNotice)
   if (warnings.length) store.setStatus([store.state.status, ...warnings].filter(Boolean).join(" · "))
 }

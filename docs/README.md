@@ -20,6 +20,7 @@ architecture notes.
 - [OpenAPI](protocol/openapi.json) — generated HTTP schema.
 - [Browser-rendered TUI](tui-web.md) — serve a terminal frontend to a browser
   on a real PTY; the Playwright environment for TUI tests and the WebUI host.
+- [TUI Extension SDK](tui-extension-sdk.md) — `@hya/tui-sdk`: `defineTuiExtension`, panels, status items, renderers, formatters, interceptors.
 - [Secure relay](relay.md) — reach a backend through a third-party `hya proxy`
   with end-to-end encryption; the `hya.relay.v1` protocol and link grammar.
 
@@ -96,6 +97,7 @@ If you want to understand the codebase:
 | [Skills](skills.md) | Skill discovery, authoring, and the trusted `hya/core-skills` bundle. |
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
+| [Bundle-owned TUI extensions](tui-extensions.md) | `tui:` manifest, permissions, contributions, `/extensions`, wire contract, catalog files, sandbox and security. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |
 | [Bundle Runtime](bundle-runtime.md) | Packaged process/MCP startup, scoped tools/hooks, immutable bindings, and failure rollback. |
 | [Core agents](core-agents.md) | Trusted first-party agent preset and reserved-agent provenance. |

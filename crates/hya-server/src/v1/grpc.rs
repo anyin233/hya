@@ -415,6 +415,36 @@ impl pb::catalog_server::Catalog for V1Grpc {
     ) -> Result<GrpcResponse<pb::ListModelsResponse>, Status> {
         get_rpc!(self, "/v1/models", request)
     }
+    async fn list_bundles(
+        &self,
+        request: GrpcRequest<pb::ListBundlesRequest>,
+    ) -> Result<GrpcResponse<pb::ListBundlesResponse>, Status> {
+        get_rpc!(self, "/v1/bundles", request)
+    }
+
+    async fn install_bundle(
+        &self,
+        request: GrpcRequest<pb::InstallBundleRequest>,
+    ) -> Result<GrpcResponse<pb::BundleChange>, Status> {
+        let (ctx, inner) = split(request);
+        into_response(self.post(&ctx, "/v1/bundles:install", &inner).await?)
+    }
+
+    async fn uninstall_bundle(
+        &self,
+        request: GrpcRequest<pb::UninstallBundleRequest>,
+    ) -> Result<GrpcResponse<pb::BundleChange>, Status> {
+        let (ctx, inner) = split(request);
+        into_response(self.post(&ctx, "/v1/bundles:uninstall", &inner).await?)
+    }
+
+    async fn set_bundle_enabled(
+        &self,
+        request: GrpcRequest<pb::SetBundleEnabledRequest>,
+    ) -> Result<GrpcResponse<pb::BundleChange>, Status> {
+        let (ctx, inner) = split(request);
+        into_response(self.post(&ctx, "/v1/bundles:set-enabled", &inner).await?)
+    }
 
     async fn list_providers(
         &self,
@@ -555,6 +585,12 @@ impl pb::catalog_server::Catalog for V1Grpc {
         request: GrpcRequest<pb::ListPermissionModesRequest>,
     ) -> Result<GrpcResponse<pb::ListPermissionModesResponse>, Status> {
         get_rpc!(self, "/v1/permission-modes", request)
+    }
+    async fn list_tui_extensions(
+        &self,
+        request: GrpcRequest<pb::ListTuiExtensionsRequest>,
+    ) -> Result<GrpcResponse<pb::ListTuiExtensionsResponse>, Status> {
+        get_rpc!(self, "/v1/tui-extensions", request)
     }
 }
 

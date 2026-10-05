@@ -35,7 +35,7 @@ const actionInfo: Record<KeyAction, ActionInfo> = {
   cycleMode: { scope: "conversation", command: "/permissions" },
   refresh: { scope: "workspace", command: "/refresh" },
   toggleSidebar: { scope: "workspace", command: "/sidebar" },
-  toggleProjectsSidebar: { scope: "workspace", command: "/projects-sidebar" },
+  toggleProjectsCapture: { scope: "workspace", command: "/projects-sidebar" },
   toggleThinking: { scope: "conversation", command: "/thinking" },
   toggleTools: { scope: "conversation", command: "/tools" },
   pageUp: { scope: "pane" },

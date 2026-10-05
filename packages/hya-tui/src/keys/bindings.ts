@@ -26,7 +26,7 @@ export type KeyAction =
   | "cycleMode"
   | "refresh"
   | "toggleSidebar"
-  | "toggleProjectsSidebar"
+  | "toggleProjectsCapture"
   | "toggleThinking"
   | "toggleTools"
   | "pageUp"

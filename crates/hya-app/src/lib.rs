@@ -13,6 +13,7 @@ pub mod agent_model_control;
 /// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
 /// Per-bundle `config.yml` location, environment contract, and scope resolver.
+pub mod bundle_admin;
 pub mod bundle_config;
 mod bundle_runtime;
 /// `config.yaml` load, first-run bootstrap, and Compat import.

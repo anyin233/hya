@@ -1,3 +1,4 @@
+import { extensionManager } from "../extensions/manager"
 /** Canonical builtin names and their compatibility aliases. */
 const builtinTools = new Set([
   "bash", "shell", "read", "edit", "multiedit", "write", "apply_patch", "patch",
@@ -146,13 +147,13 @@ export function partialField(text: string, key: string): string | undefined {
   }
 }
 
-/** Readable output text: a JSON string, else its `output` / `stdout` / `text` / `content` string, else pretty JSON. */
-function outputText(output: unknown): string {
-  if (output === undefined || output === null) return ""
-  if (typeof output === "string") return output
-  const fields = record(output)
+/** Readable output text: a JSON string, else its common string field, else pretty JSON; then any extension formatters. */
+function outputText(value: unknown): string {
+  if (value === undefined || value === null) return ""
+  const fields = typeof value === "string" ? {} : record(value)
   const field = ["output", "stdout", "text", "content"].map((name) => fields[name]).find((item) => typeof item === "string")
-  return typeof field === "string" ? field : JSON.stringify(output, null, 2)
+  const base = typeof value === "string" ? value : typeof field === "string" ? field : JSON.stringify(value, null, 2)
+  return extensionManager.format(value, base)
 }
 
 /** Unified-diff rows, file headers skipped: `+` add, `-` remove, `@@` hunk, the rest context. */

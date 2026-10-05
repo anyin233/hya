@@ -1,7 +1,7 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
 import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
-export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "layout"] as const
+export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "layout", "extension"] as const
 export type PaneKind = typeof paneKinds[number]
 export interface PaneDefinition {
   title: string
@@ -25,6 +25,7 @@ export const paneDefinitions: Record<PaneKind, PaneDefinition> = {
   interactions: { title: "Interactions", selectable: true, minColumns: 8, minRows: 3 },
   api: { title: "API", selectable: true, minColumns: 8, minRows: 3 },
   layout: { title: "Layout tree", selectable: true, minColumns: 24, minRows: 10 },
+  extension: { title: "Extension", selectable: true, minColumns: 8, minRows: 3 },
 }
 
 import { parseLegacyPaneLayout, type PaneNode as LegacyNode } from "./legacyPaneLayout"
@@ -32,7 +33,7 @@ import { parseLegacyPaneLayout, type PaneNode as LegacyNode } from "./legacyPane
 export type PaneAxis = "horizontal" | "vertical"
 export type PaneDirection = "left" | "right" | "up" | "down"
 export type LayoutDirection = "row" | "column"
-export interface PaneLeaf { type: "pane"; id: string; kind: PaneKind }
+export interface PaneLeaf { type: "pane"; id: string; kind: PaneKind; panel?: string }
 export type PaneSize = { mode: "weight"; value: number } | { mode: "content" }
 export interface PaneChild { node: PaneNode; size: PaneSize }
 export interface PaneSplit { type: "split"; id: string; direction: LayoutDirection; children: PaneChild[] }
@@ -116,34 +117,40 @@ function nextId(root: PaneNode, prefix: "pane" | "group"): string {
   if (maximum >= Number.MAX_SAFE_INTEGER) throw new Error(`${prefix} id space exhausted`)
   return `${prefix}-${maximum + 1}`
 }
-function newPane(layout: PaneLayout, kind: PaneKind): PaneLeaf {
+export const extensionPanelKey = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}#[a-z0-9][a-z0-9._-]{0,63}$/
+function paneJob(kind: PaneKind, panel?: string): { kind: PaneKind; panel?: string } {
+  if (kind !== "extension") return { kind }
+  if (!panel || !extensionPanelKey.test(panel)) throw new Error("Extension panes require a <bundle>#<panel> key")
+  return { kind, panel }
+}
+function newPane(layout: PaneLayout, kind: PaneKind, panel?: string): PaneLeaf {
   if (paneLeaves(layout.root).length >= maxPanes) throw new Error(`A layout supports at most ${maxPanes} panes`)
   if (kind === "conversation" || kind === "composer") throw new Error(`Use /layout assign ${kind} to move the ${kind} pane`)
-  return { type: "pane", id: nextId(layout.root, "pane"), kind }
+  return { type: "pane", id: nextId(layout.root, "pane"), ...paneJob(kind, panel) }
 }
 function checkIndex(index: number, count: number): void { if (!Number.isInteger(index) || index < 0 || index > count) throw new Error(`Insertion index must be an integer from 0 to ${count}`) }
-export function insertPane(layout: PaneLayout, container: string, index: number, kind: PaneKind): PaneLayout {
+export function insertPane(layout: PaneLayout, container: string, index: number, kind: PaneKind, panel?: string): PaneLayout {
   const parent = resolvePaneNode(layout, container)
   if (parent.type !== "split") throw new Error(`Target ${container} is not a container`)
   checkIndex(index, parent.children.length)
-  const added = newPane(layout, kind)
+  const added = newPane(layout, kind, panel)
   const root = mapNode(layout.root, parent.id, (node) => node.type === "split" ? { ...node, children: [...node.children.slice(0, index), weighted(added), ...node.children.slice(index)] } : node)
   return finish(layout, root, isSelectablePane(added) ? added.id : layout.active)
 }
-export function wrapPane(layout: PaneLayout, target: string, direction: LayoutDirection, kind: PaneKind, before = true): PaneLayout {
+export function wrapPane(layout: PaneLayout, target: string, direction: LayoutDirection, kind: PaneKind, before = true, panel?: string): PaneLayout {
   const selected = resolvePaneNode(layout, target)
-  const added = newPane(layout, kind)
+  const added = newPane(layout, kind, panel)
   const children = before ? [weighted(added), weighted(selected)] : [weighted(selected), weighted(added)]
   const root = mapNode(layout.root, selected.id, () => ({ type: "split", id: nextId(layout.root, "group"), direction, children }))
   return finish(layout, root, isSelectablePane(added) ? added.id : layout.active)
 }
 /** Split inserts into a matching parent, otherwise wraps the selected leaf. */
-export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", before = false): PaneLayout {
+export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "jobs", before = false, panel?: string): PaneLayout {
   const direction = axis === "vertical" ? "row" : "column"
   const parent = paneNodes(layout.root).find((node): node is PaneSplit => node.type === "split" && node.children.some((child) => child.node.id === layout.active))
   if (parent?.direction === direction) {
     const index = parent.children.findIndex((child) => child.node.id === layout.active)
-    const added = newPane(layout, kind), selected = parent.children[index]!
+    const added = newPane(layout, kind, panel), selected = parent.children[index]!
     // Divide the selected slot, preserving the proportions of all its siblings.
     const value = selected.size.mode === "weight" ? selected.size.value / 2 : .5
     const pair = [weighted(added, value), weighted(selected.node, value)]
@@ -151,16 +158,17 @@ export function splitPane(layout: PaneLayout, axis: PaneAxis, kind: PaneKind = "
     const root = mapNode(layout.root, parent.id, (node) => node.type === "split" ? { ...node, children: [...node.children.slice(0, index), ...pair, ...node.children.slice(index + 1)] } : node)
     return finish(layout, root, isSelectablePane(added) ? added.id : layout.active)
   }
-  return wrapPane(layout, layout.active, direction, kind, before)
+  return wrapPane(layout, layout.active, direction, kind, before, panel)
 }
-export function setPaneKind(layout: PaneLayout, kind: PaneKind): PaneLayout {
+export function setPaneKind(layout: PaneLayout, kind: PaneKind, panel?: string): PaneLayout {
   const active = paneLeaves(layout.root).find((pane) => pane.id === layout.active)
-  if (!active || active.kind === kind) return layout
+  const job = paneJob(kind, panel)
+  if (!active || (active.kind === kind && active.panel === job.panel)) return layout
   const singleton = kind === "conversation" || kind === "composer"
   if (!singleton && (active.kind === "conversation" || active.kind === "composer")) throw new Error(`Move ${active.kind} to another pane before assigning this pane`)
   const existing = singleton ? paneLeaves(layout.root).find((pane) => pane.kind === kind) : undefined
-  let root = existing ? mapNode(layout.root, existing.id, (node) => node.type === "pane" ? { ...node, kind: active.kind } : node) : layout.root
-  root = mapNode(root, active.id, (node) => node.type === "pane" ? { ...node, kind } : node)
+  let root = existing ? mapNode(layout.root, existing.id, (node) => node.type === "pane" ? { type: "pane", id: node.id, ...paneJob(active.kind, active.panel) } : node) : layout.root
+  root = mapNode(root, active.id, (node) => node.type === "pane" ? { type: "pane", id: node.id, ...job } : node)
   return finish(layout, root)
 }
 function detach(node: PaneNode, id: string): PaneNode | undefined {
@@ -323,6 +331,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     ids.add(row.id)
     if (row.type === "pane") {
       if (!/^pane-[1-9]\d*$/.test(row.id) || !paneKinds.includes(row.kind as PaneKind) || ++leaves > maxPanes) return false
+      if (row.kind === "extension" ? typeof row.panel !== "string" || !extensionPanelKey.test(row.panel) : row.panel !== undefined) return false
       if (row.kind === "conversation") conversations++
       if (row.kind === "composer") composers++
       return true

@@ -74,7 +74,7 @@ export function CommandPane() {
 
   function open(): void {
     if (active()) return
-    originSidebar = store.state.projectsSidebarFocus
+    originSidebar = store.state.projectsFocus
     ui.commandInput = { text: editor?.plainText ?? "", active: true, originSidebar }
     setActive(true)
     if (!editor?.plainText.startsWith("/")) replace("/")
