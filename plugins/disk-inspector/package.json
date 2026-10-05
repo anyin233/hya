@@ -1,0 +1,17 @@
+{
+  "name": "@hya-plugins/disk-inspector",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "hya": { "version-reference": "backend" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./test",
+    "build": "bun build ./backend/main.ts --target=bun --outdir=${HOME}/data/hya-plugins/disk-inspector/build/backend && bun build ./tui/main.ts --target=browser --external=@hya/tui-sdk --outdir=${HOME}/data/hya-plugins/disk-inspector/build/tui"
+  },
+  "devDependencies": {
+    "@hya/tui-sdk": "file:../../packages/hya-tui-sdk",
+    "bun-types": "1.4.2",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,29 @@
+kind: Plugin
+version_ref: backend
+identity:
+  id: hya-extra/disk-inspector
+  version: 0.0.0
+  publisher: hya-extra
+extensions:
+  process:
+    kind: bun
+    command: [bun, run, '${BUNDLE_ROOT}/backend/main.ts']
+  files:
+    - { id: backend-main, path: backend/main.ts }
+    - { id: backend-provider, path: backend/provider.ts }
+    - { id: contract, path: shared/contracts.ts }
+    - { id: tui-main, path: tui/main.ts }
+    - { id: tui-panel, path: tui/panel.ts }
+    - { id: info-schema, path: schemas/info.json }
+tui:
+  api_version: 1
+  entry: tui/main.ts
+  sdk: "1.0.0"
+  permissions: [tui.panel]
+apis:
+  - id: info
+    method: GET
+    scope: global
+    path: /info
+    description: Disk inspector provider identity and implemented capabilities
+    response_schema: schemas/info.json

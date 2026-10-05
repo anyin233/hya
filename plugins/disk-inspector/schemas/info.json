@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Disk inspector provider info",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "machine", "capabilities"],
+  "properties": {
+    "contractVersion": { "const": 1 },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "platform"],
+      "properties": { "hostname": { "type": "string" }, "platform": { "type": "string" } }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["volumes", "scans", "cancel"],
+      "properties": { "volumes": { "const": false }, "scans": { "const": false }, "cancel": { "const": false } }
+    }
+  }
+}

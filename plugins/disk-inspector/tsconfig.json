@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@hya/tui-sdk": ["../../packages/hya-tui-sdk/src/index.ts"]
+    },
+    "typeRoots": ["./node_modules", "../../packages/hya-tui-sdk/node_modules"],
+    "types": ["bun-types"]
+  },
+  "include": ["backend/**/*.ts", "shared/**/*.ts", "tui/**/*.ts", "test/**/*.ts"]
+}
