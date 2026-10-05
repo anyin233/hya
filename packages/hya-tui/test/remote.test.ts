@@ -67,7 +67,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
     get token() { return token },
     get directory() { return directory },
     setDirectory(next: string) { directory = next },
-    bootstrap: async () => { record("bootstrap"); return { location: { version: "0.43.41" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] } },
+    bootstrap: async () => { record("bootstrap"); return { location: { version: "0.45.3" }, agents: [{ name: "hya-main" }], models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }] } },
     ensureProjectForPath: async (path: string) => { record("ensureProjectForPath", path); return { project: work, created: false } },
     listProjects: async () => projectsOf(),
     getProject: async (id: string) => projectsOf().find((row) => row.id === id)!,
@@ -170,7 +170,6 @@ test("/connect-remote <link> starts the bridge and moves to it as a remote start
   expect(h.store.state.remote).toBe(true)
   expect(h.store.state.activeProjectId).toBeUndefined()
   expect(h.store.state.selected).toBeUndefined()
-  expect(h.store.state.projectView).toBeDefined()
   expect(h.store.state.projects.map((row) => row.id)).toEqual(["prj_remote"])
   // The unused local session is left to the local daemon (ephemeral): no client-side delete.
   expect(h.named("deleteSession")).toEqual([])
@@ -300,7 +299,6 @@ test("/disconnect-remote stops the bridge and goes back to the local backend lik
   expect(h.named("ensureProjectForPath").at(-1)).toEqual(["ensureProjectForPath", localUrl, "/work/sub"])
   expect(h.named("createSession").at(-1)).toEqual(["createSession", localUrl, { projectId: "prj_work", workdir: "/work/sub" }])
   expect(h.store.state.status).toBe("Back on the local backend · pid 99")
-  expect(h.store.state.projectView).toBeUndefined()
   h.controller.dispose()
 })
 

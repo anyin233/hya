@@ -296,7 +296,7 @@ rollback_frontend() {
   if [ ! -e "$package_dir/lib/hya/bin/bun" ]; then
     rm -f "$prefix/lib/hya/bin/bun"
   fi
-  for name in tui tui-web; do
+  for name in tui tui-web tui-sdk; do
     if [ ! -e "$package_dir/lib/hya/$name" ]; then
       rm -rf "${prefix:?}/lib/hya/$name"
     fi
@@ -319,7 +319,7 @@ install_backend() {
   fetch_and_unpack backend
   mkdir -p "$prefix/bin" "$prefix/bundles" "$stage/old/bin" "$stage/old/lib" "$stage/old/bundles"
   [ -f "$package_dir/bin/hya" ] || die "$archive has no hya-backend-$release-$target/bin/hya"
-  for name in tui tui-web; do
+  for name in tui tui-web tui-sdk; do
     [ ! -e "$package_dir/lib/hya/$name" ] || die "$archive unexpectedly contains frontend lib/hya/$name"
   done
   (cd "$package_dir/lib/hya" && for name in *; do if [ -e "$name" ]; then printf '%s\n' "$name"; fi; done) >"$stage/lib.list"
@@ -371,7 +371,7 @@ install_frontend() {
   fetch_and_unpack frontend
   [ ! -e "$package_dir/bin/hya" ] || die "$archive unexpectedly contains backend bin/hya"
   [ -x "$package_dir/lib/hya/bin/bun" ] || die "$archive has no frontend lib/hya/bin/bun"
-  for name in tui tui-web; do
+  for name in tui tui-web tui-sdk; do
     [ -e "$package_dir/lib/hya/$name" ] || die "$archive has no frontend lib/hya/$name"
   done
 
@@ -379,14 +379,14 @@ install_frontend() {
   if [ -e "$prefix/lib/hya/bin/bun" ]; then
     mv -f "$prefix/lib/hya/bin/bun" "$stage/old/bun"
   fi
-  for name in tui tui-web; do
+  for name in tui tui-web tui-sdk; do
     if [ -e "$prefix/lib/hya/$name" ]; then
       mv "$prefix/lib/hya/$name" "$stage/old/$name"
     fi
   done
   mkdir -p "$prefix/lib/hya/bin"
   mv -f "$package_dir/lib/hya/bin/bun" "$prefix/lib/hya/bin/bun"
-  for name in tui tui-web; do
+  for name in tui tui-web tui-sdk; do
     mv "$package_dir/lib/hya/$name" "$prefix/lib/hya/$name"
   done
 

@@ -220,6 +220,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                 mcp: Vec::new(),
                 hooks: Vec::new(),
                 extensions: Vec::new(),
+                tui: None,
             }))
         })
         .collect::<Vec<_>>();

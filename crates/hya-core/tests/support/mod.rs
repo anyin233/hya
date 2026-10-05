@@ -57,6 +57,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             mcp: Vec::new(),
             hooks: Vec::new(),
             extensions: Vec::new(),
+            tui: None,
         })
         .collect::<Vec<_>>();
     let bundles = bundles

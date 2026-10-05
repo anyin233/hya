@@ -179,6 +179,10 @@ rebuilds that provider's route and the catalog, and emits
 | `UpsertProvider` | `PUT /v1/providers/{provider_id}` | `hya.v1.Catalog.UpsertProvider` | `UpsertProviderRequest` | `ProviderUpdate` |
 | `RefreshProvider` | `POST /v1/providers/{provider_id}/refresh` | `hya.v1.Catalog.RefreshProvider` | `RefreshProviderRequest` | `ProviderUpdate` |
 | `RefreshBundles` | `POST /v1/bundles:refresh` | `hya.v1.Catalog.RefreshBundles` | `RefreshBundlesRequest` | `RefreshBundlesResponse` |
+| `ListBundles` | `GET /v1/bundles` | `hya.v1.Catalog.ListBundles` | `ListBundlesRequest` | `ListBundlesResponse` |
+| `InstallBundle` | `POST /v1/bundles:install` | `hya.v1.Catalog.InstallBundle` | `InstallBundleRequest` | `BundleChange` |
+| `UninstallBundle` | `POST /v1/bundles:uninstall` | `hya.v1.Catalog.UninstallBundle` | `UninstallBundleRequest` | `BundleChange` |
+| `SetBundleEnabled` | `POST /v1/bundles:set-enabled` | `hya.v1.Catalog.SetBundleEnabled` | `SetBundleEnabledRequest` | `BundleChange` |
 | `SetProviderModel` | `PUT /v1/providers/{provider_id}/models` | `hya.v1.Catalog.SetProviderModel` | `SetProviderModelRequest` | `ProviderUpdate` |
 | `RemoveProviderModel` | `DELETE /v1/providers/{provider_id}/models` | `hya.v1.Catalog.RemoveProviderModel` | `RemoveProviderModelRequest` | `ProviderUpdate` |
 | `TestProviderModel` | `POST /v1/providers/{provider_id}/test` | `hya.v1.Catalog.TestProviderModel` | `TestProviderModelRequest` | `TestProviderModelResponse` |
@@ -186,6 +190,7 @@ rebuilds that provider's route and the catalog, and emits
 | `ListSkills` | `GET /v1/skills` | `hya.v1.Catalog.ListSkills` | `ListSkillsRequest` | `ListSkillsResponse` |
 | `ListTools` | `GET /v1/tools` | `hya.v1.Catalog.ListTools` | `ListToolsRequest` | `ListToolsResponse` |
 | `ListPermissionModes` | `GET /v1/permission-modes` | `hya.v1.Catalog.ListPermissionModes` | `ListPermissionModesRequest` | `ListPermissionModesResponse` |
+| `ListTuiExtensions` | `GET /v1/tui-extensions` | `hya.v1.Catalog.ListTuiExtensions` | `ListTuiExtensionsRequest` | `ListTuiExtensionsResponse` |
 
 ### `Catalog.ListAgents`
 
@@ -227,6 +232,35 @@ Refresh the installed-bundle catalog and the directory's Project
 overlay now instead of at the next bind, and report what is published.
 A generation that fails to prepare (for example a bundle process that
 does not start) keeps the previous one and is reported in `errors`.
+
+
+### `Catalog.ListBundles`
+
+Bundles of the directory's scope, as `hya bundle list` shows them:
+installed (user registry), the Project's (`<directory>/.hya/bundles`),
+and first-party, each with its components, scope, and state. Empty
+directory: user and first-party only.
+
+
+### `Catalog.InstallBundle`
+
+Install a `.hyabundle` package from a path on the backend's machine
+(what `hya bundle install` does), then refresh the scope. `project`
+installs into `<directory>/.hya/bundles` instead of the user registry.
+
+
+### `Catalog.UninstallBundle`
+
+Remove an installed bundle (`hya bundle remove`), then refresh the
+scope. First-party bundles cannot be removed.
+
+
+### `Catalog.SetBundleEnabled`
+
+Enable or disable a bundle by id in every scope (`hya bundle
+enable|disable`), then refresh. A disabled bundle publishes nothing:
+no agents, skills, tools, MCP servers, workflows, APIs, permission
+modes, or TUI extension.
 
 
 ### `Catalog.SetProviderModel`
@@ -273,6 +307,10 @@ scope: a session's own scope, else the directory's (its Project's
 bundles when it lies inside one), else the global view (installed and
 first-party bundles only; no Project bundle).
 
+
+### `Catalog.ListTuiExtensions`
+
+Verified frontend extension declarations from prepared bundles. Metadata only.
 
 ## Service `Events`
 
@@ -1347,6 +1385,93 @@ Provider detail with its model rows.
 | `bundle_id` (1) | `string` | Bundle the failure names; empty when the refresh cannot attribute it. |
 | `message` (2) | `string` |  |
 
+### `ListBundlesRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope: its `.hya/bundles` are listed too; empty: user and first-party only. |
+
+### `ListBundlesResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `bundles` (1) | `repeated BundleSummary` | Sorted by id, then scope (`project`, `user`, `first_party`). |
+
+### `BundleSummary`
+
+One bundle as installed or shipped.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` |  |
+| `version` (2) | `string` |  |
+| `publisher` (3) | `string` |  |
+| `scope` (4) | `string` | `user` (installed registry), `project` (`<directory>/.hya/bundles`), or `first_party` (shipped with hya). |
+| `kind` (5) | `string` | Manifest kind: `AgentBundle`, `AgentSetBundle`, `WorkflowBundle`, or `Plugin`. |
+| `state` (6) | `string` | `active`, `shadowed` (a same-id bundle of a higher scope wins: project over user over first-party), `disabled`, or `unreadable`. |
+| `enabled` (7) | `bool` | False after `SetBundleEnabled(false)`. |
+| `removable` (8) | `bool` | `UninstallBundle` can remove it (not first-party). |
+| `description` (9) | `string` | Manifest description, if any. |
+| `prepared_digest` (10) | `string` | Prepared bundle digest; empty when unreadable. |
+| `error` (11) | `string` | Why it is unreadable; empty otherwise. |
+| `components` (12) | `BundleComponents` |  |
+
+### `BundleComponents`
+
+What a bundle contributes, by id.
+
+| Field | Type | Description |
+|---|---|---|
+| `agents` (1) | `repeated string` |  |
+| `skills` (2) | `repeated string` |  |
+| `tools` (3) | `repeated string` |  |
+| `mcp_servers` (4) | `repeated string` |  |
+| `workflows` (5) | `repeated string` |  |
+| `permission_modes` (6) | `repeated string` |  |
+| `apis` (7) | `repeated string` |  |
+| `hooks` (8) | `uint32` |  |
+| `tui` (9) | `bool` | The bundle declares a TUI extension (`tui:`). |
+| `tui_permissions` (10) | `repeated string` | The TUI extension's permissions. |
+
+### `InstallBundleRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope of the refresh, and the target of a `project` install. |
+| `path` (2) | `string` | Absolute path of a `.hyabundle` package on the backend's machine. |
+| `project` (3) | `bool` | Install into `<directory>/.hya/bundles` instead of the user registry. |
+| `overwrite` (4) | `bool` | Replace an installed bundle with the same id even at a lower version. |
+
+### `UninstallBundleRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` |  |
+| `bundle_id` (2) | `string` |  |
+| `project` (3) | `bool` | Remove it from `<directory>/.hya/bundles` instead of the user registry. |
+
+### `SetBundleEnabledRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` |  |
+| `bundle_id` (2) | `string` |  |
+| `enabled` (3) | `bool` |  |
+
+### `BundleChange`
+
+The bundle a management call changed and the refresh that followed.
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle_id` (1) | `string` |  |
+| `refresh` (2) | `RefreshBundlesResponse` |  |
+
 ### `SetProviderModelRequest`
 
 
@@ -1522,6 +1647,46 @@ One selectable session permission mode.
 | Field | Type | Description |
 |---|---|---|
 | `modes` (1) | `repeated PermissionModeSummary` | Built-in modes first, then bundle modes sorted by bundle and mode id. |
+
+### `ListTuiExtensionsRequest`
+
+List verified, prepared frontend extension descriptors visible in a directory.
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope (absolute). Empty lists the global view. |
+
+### `TuiExtensionDescriptor`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle_id` (1) | `string` |  |
+| `bundle_version` (2) | `string` |  |
+| `prepared_digest` (3) | `string` |  |
+| `api_version` (4) | `uint32` |  |
+| `entry` (5) | `string` | Canonical bundle-relative entry path; guaranteed to be present in `files`. |
+| `sdk` (6) | `string` |  |
+| `permissions` (7) | `repeated string` |  |
+| `files` (8) | `repeated TuiExtensionFile` | Every non-binary extension resource, sorted by canonical source path. |
+| `first_party` (9) | `bool` | True only when the loaded bundle came from the trusted first-party inventory. |
+| `cached` (10) | `bool` | True when the client already has the prepared bundle cache. |
+
+### `TuiExtensionFile`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `path` (1) | `string` | Canonical bundle-relative source path. |
+| `sha256` (2) | `string` | Lowercase hex SHA-256 digest of content bytes. |
+| `content` (3) | `string` | UTF-8 source text. |
+
+### `ListTuiExtensionsResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `extensions` (1) | `repeated TuiExtensionDescriptor` |  |
 
 ### `Error`
 
@@ -2385,6 +2550,7 @@ A subagent (member) spawned by a session, as recorded on the parent's log.
 | `summary` (6) | `string` | Bounded finish summary; empty until the member finished. |
 | `call_id` (7) | `string` | Tool call (`ToolCallPart.call_id`) that spawned the member; empty for members started without a tool call. |
 | `depth` (8) | `uint32` | Depth in the subagent tree (children of a root session are 1). |
+| `handle` (9) | `string` | Readable team roster handle for the child session, when known. |
 
 ### `RevertedFile`
 

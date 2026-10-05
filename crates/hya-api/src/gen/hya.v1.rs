@@ -1285,6 +1285,124 @@ pub struct BundleRefreshError {
     pub message: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListBundlesRequest {
+    /// Directory scope: its `.hya/bundles` are listed too; empty: user and first-party only.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListBundlesResponse {
+    /// Sorted by id, then scope (`project`, `user`, `first_party`).
+    #[prost(message, repeated, tag = "1")]
+    pub bundles: ::prost::alloc::vec::Vec<BundleSummary>,
+}
+/// One bundle as installed or shipped.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BundleSummary {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub version: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub publisher: ::prost::alloc::string::String,
+    /// `user` (installed registry), `project` (`<directory>/.hya/bundles`), or
+    /// `first_party` (shipped with hya).
+    #[prost(string, tag = "4")]
+    pub scope: ::prost::alloc::string::String,
+    /// Manifest kind: `AgentBundle`, `AgentSetBundle`, `WorkflowBundle`, or `Plugin`.
+    #[prost(string, tag = "5")]
+    pub kind: ::prost::alloc::string::String,
+    /// `active`, `shadowed` (a same-id bundle of a higher scope wins: project
+    /// over user over first-party), `disabled`, or `unreadable`.
+    #[prost(string, tag = "6")]
+    pub state: ::prost::alloc::string::String,
+    /// False after `SetBundleEnabled(false)`.
+    #[prost(bool, tag = "7")]
+    pub enabled: bool,
+    /// `UninstallBundle` can remove it (not first-party).
+    #[prost(bool, tag = "8")]
+    pub removable: bool,
+    /// Manifest description, if any.
+    #[prost(string, tag = "9")]
+    pub description: ::prost::alloc::string::String,
+    /// Prepared bundle digest; empty when unreadable.
+    #[prost(string, tag = "10")]
+    pub prepared_digest: ::prost::alloc::string::String,
+    /// Why it is unreadable; empty otherwise.
+    #[prost(string, tag = "11")]
+    pub error: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "12")]
+    pub components: ::core::option::Option<BundleComponents>,
+}
+/// What a bundle contributes, by id.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BundleComponents {
+    #[prost(string, repeated, tag = "1")]
+    pub agents: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "2")]
+    pub skills: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "3")]
+    pub tools: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "4")]
+    pub mcp_servers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "5")]
+    pub workflows: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "6")]
+    pub permission_modes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "7")]
+    pub apis: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(uint32, tag = "8")]
+    pub hooks: u32,
+    /// The bundle declares a TUI extension (`tui:`).
+    #[prost(bool, tag = "9")]
+    pub tui: bool,
+    /// The TUI extension's permissions.
+    #[prost(string, repeated, tag = "10")]
+    pub tui_permissions: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InstallBundleRequest {
+    /// Directory scope of the refresh, and the target of a `project` install.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Absolute path of a `.hyabundle` package on the backend's machine.
+    #[prost(string, tag = "2")]
+    pub path: ::prost::alloc::string::String,
+    /// Install into `<directory>/.hya/bundles` instead of the user registry.
+    #[prost(bool, tag = "3")]
+    pub project: bool,
+    /// Replace an installed bundle with the same id even at a lower version.
+    #[prost(bool, tag = "4")]
+    pub overwrite: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UninstallBundleRequest {
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub bundle_id: ::prost::alloc::string::String,
+    /// Remove it from `<directory>/.hya/bundles` instead of the user registry.
+    #[prost(bool, tag = "3")]
+    pub project: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetBundleEnabledRequest {
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub bundle_id: ::prost::alloc::string::String,
+    #[prost(bool, tag = "3")]
+    pub enabled: bool,
+}
+/// The bundle a management call changed and the refresh that followed.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BundleChange {
+    #[prost(string, tag = "1")]
+    pub bundle_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub refresh: ::core::option::Option<RefreshBundlesResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetProviderModelRequest {
     /// Directory context (unused; providers are process-wide).
     #[prost(string, tag = "1")]
@@ -1550,6 +1668,57 @@ pub struct ListPermissionModesResponse {
     /// Built-in modes first, then bundle modes sorted by bundle and mode id.
     #[prost(message, repeated, tag = "1")]
     pub modes: ::prost::alloc::vec::Vec<PermissionModeSummary>,
+}
+/// List verified, prepared frontend extension descriptors visible in a directory.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListTuiExtensionsRequest {
+    /// Directory scope (absolute). Empty lists the global view.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TuiExtensionDescriptor {
+    #[prost(string, tag = "1")]
+    pub bundle_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub bundle_version: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub prepared_digest: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "4")]
+    pub api_version: u32,
+    /// Canonical bundle-relative entry path; guaranteed to be present in `files`.
+    #[prost(string, tag = "5")]
+    pub entry: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub sdk: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "7")]
+    pub permissions: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Every non-binary extension resource, sorted by canonical source path.
+    #[prost(message, repeated, tag = "8")]
+    pub files: ::prost::alloc::vec::Vec<TuiExtensionFile>,
+    /// True only when the loaded bundle came from the trusted first-party inventory.
+    #[prost(bool, tag = "9")]
+    pub first_party: bool,
+    /// True when the client already has the prepared bundle cache.
+    #[prost(bool, tag = "10")]
+    pub cached: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TuiExtensionFile {
+    /// Canonical bundle-relative source path.
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    /// Lowercase hex SHA-256 digest of content bytes.
+    #[prost(string, tag = "2")]
+    pub sha256: ::prost::alloc::string::String,
+    /// UTF-8 source text.
+    #[prost(string, tag = "3")]
+    pub content: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListTuiExtensionsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub extensions: ::prost::alloc::vec::Vec<TuiExtensionDescriptor>,
 }
 /// Authentication state of a provider route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -1878,6 +2047,114 @@ pub mod catalog_client {
                 .insert(GrpcMethod::new("hya.v1.Catalog", "RefreshBundles"));
             self.inner.unary(req, path, codec).await
         }
+        /// Bundles of the directory's scope, as `hya bundle list` shows them:
+        /// installed (user registry), the Project's (`<directory>/.hya/bundles`),
+        /// and first-party, each with its components, scope, and state. Empty
+        /// directory: user and first-party only.
+        ///
+        /// hya.http: GET /v1/bundles
+        pub async fn list_bundles(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListBundlesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListBundlesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/ListBundles",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "ListBundles"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Install a `.hyabundle` package from a path on the backend's machine
+        /// (what `hya bundle install` does), then refresh the scope. `project`
+        /// installs into `<directory>/.hya/bundles` instead of the user registry.
+        ///
+        /// hya.http: POST /v1/bundles:install
+        pub async fn install_bundle(
+            &mut self,
+            request: impl tonic::IntoRequest<super::InstallBundleRequest>,
+        ) -> std::result::Result<tonic::Response<super::BundleChange>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/InstallBundle",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "InstallBundle"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Remove an installed bundle (`hya bundle remove`), then refresh the
+        /// scope. First-party bundles cannot be removed.
+        ///
+        /// hya.http: POST /v1/bundles:uninstall
+        pub async fn uninstall_bundle(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UninstallBundleRequest>,
+        ) -> std::result::Result<tonic::Response<super::BundleChange>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/UninstallBundle",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "UninstallBundle"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Enable or disable a bundle by id in every scope (`hya bundle
+        /// enable|disable`), then refresh. A disabled bundle publishes nothing:
+        /// no agents, skills, tools, MCP servers, workflows, APIs, permission
+        /// modes, or TUI extension.
+        ///
+        /// hya.http: POST /v1/bundles:set-enabled
+        pub async fn set_bundle_enabled(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetBundleEnabledRequest>,
+        ) -> std::result::Result<tonic::Response<super::BundleChange>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/SetBundleEnabled",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "SetBundleEnabled"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Write one model's entry (with its metadata overrides) into the
         /// provider's `models:` in `config.yaml` and apply it live. The model id
         /// travels in the body because ids may contain `/` or `:`.
@@ -2067,6 +2344,32 @@ pub mod catalog_client {
                 .insert(GrpcMethod::new("hya.v1.Catalog", "ListPermissionModes"));
             self.inner.unary(req, path, codec).await
         }
+        /// Verified frontend extension declarations from prepared bundles. Metadata only.
+        /// hya.http: GET /v1/tui-extensions
+        pub async fn list_tui_extensions(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListTuiExtensionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTuiExtensionsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/ListTuiExtensions",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "ListTuiExtensions"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -2150,6 +2453,46 @@ pub mod catalog_server {
             tonic::Response<super::RefreshBundlesResponse>,
             tonic::Status,
         >;
+        /// Bundles of the directory's scope, as `hya bundle list` shows them:
+        /// installed (user registry), the Project's (`<directory>/.hya/bundles`),
+        /// and first-party, each with its components, scope, and state. Empty
+        /// directory: user and first-party only.
+        ///
+        /// hya.http: GET /v1/bundles
+        async fn list_bundles(
+            &self,
+            request: tonic::Request<super::ListBundlesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListBundlesResponse>,
+            tonic::Status,
+        >;
+        /// Install a `.hyabundle` package from a path on the backend's machine
+        /// (what `hya bundle install` does), then refresh the scope. `project`
+        /// installs into `<directory>/.hya/bundles` instead of the user registry.
+        ///
+        /// hya.http: POST /v1/bundles:install
+        async fn install_bundle(
+            &self,
+            request: tonic::Request<super::InstallBundleRequest>,
+        ) -> std::result::Result<tonic::Response<super::BundleChange>, tonic::Status>;
+        /// Remove an installed bundle (`hya bundle remove`), then refresh the
+        /// scope. First-party bundles cannot be removed.
+        ///
+        /// hya.http: POST /v1/bundles:uninstall
+        async fn uninstall_bundle(
+            &self,
+            request: tonic::Request<super::UninstallBundleRequest>,
+        ) -> std::result::Result<tonic::Response<super::BundleChange>, tonic::Status>;
+        /// Enable or disable a bundle by id in every scope (`hya bundle
+        /// enable|disable`), then refresh. A disabled bundle publishes nothing:
+        /// no agents, skills, tools, MCP servers, workflows, APIs, permission
+        /// modes, or TUI extension.
+        ///
+        /// hya.http: POST /v1/bundles:set-enabled
+        async fn set_bundle_enabled(
+            &self,
+            request: tonic::Request<super::SetBundleEnabledRequest>,
+        ) -> std::result::Result<tonic::Response<super::BundleChange>, tonic::Status>;
         /// Write one model's entry (with its metadata overrides) into the
         /// provider's `models:` in `config.yaml` and apply it live. The model id
         /// travels in the body because ids may contain `/` or `:`.
@@ -2222,6 +2565,15 @@ pub mod catalog_server {
             request: tonic::Request<super::ListPermissionModesRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ListPermissionModesResponse>,
+            tonic::Status,
+        >;
+        /// Verified frontend extension declarations from prepared bundles. Metadata only.
+        /// hya.http: GET /v1/tui-extensions
+        async fn list_tui_extensions(
+            &self,
+            request: tonic::Request<super::ListTuiExtensionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTuiExtensionsResponse>,
             tonic::Status,
         >;
     }
@@ -2622,6 +2974,186 @@ pub mod catalog_server {
                     };
                     Box::pin(fut)
                 }
+                "/hya.v1.Catalog/ListBundles" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListBundlesSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::ListBundlesRequest>
+                    for ListBundlesSvc<T> {
+                        type Response = super::ListBundlesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListBundlesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::list_bundles(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListBundlesSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/InstallBundle" => {
+                    #[allow(non_camel_case_types)]
+                    struct InstallBundleSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::InstallBundleRequest>
+                    for InstallBundleSvc<T> {
+                        type Response = super::BundleChange;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::InstallBundleRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::install_bundle(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = InstallBundleSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/UninstallBundle" => {
+                    #[allow(non_camel_case_types)]
+                    struct UninstallBundleSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::UninstallBundleRequest>
+                    for UninstallBundleSvc<T> {
+                        type Response = super::BundleChange;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UninstallBundleRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::uninstall_bundle(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UninstallBundleSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/SetBundleEnabled" => {
+                    #[allow(non_camel_case_types)]
+                    struct SetBundleEnabledSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::SetBundleEnabledRequest>
+                    for SetBundleEnabledSvc<T> {
+                        type Response = super::BundleChange;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SetBundleEnabledRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::set_bundle_enabled(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SetBundleEnabledSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/hya.v1.Catalog/SetProviderModel" => {
                     #[allow(non_camel_case_types)]
                     struct SetProviderModelSvc<T: Catalog>(pub Arc<T>);
@@ -2920,6 +3452,51 @@ pub mod catalog_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListPermissionModesSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/ListTuiExtensions" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListTuiExtensionsSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::ListTuiExtensionsRequest>
+                    for ListTuiExtensionsSvc<T> {
+                        type Response = super::ListTuiExtensionsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListTuiExtensionsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::list_tui_extensions(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListTuiExtensionsSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -5455,6 +6032,9 @@ pub struct MemberInfo {
     /// Depth in the subagent tree (children of a root session are 1).
     #[prost(uint32, tag = "8")]
     pub depth: u32,
+    /// Readable team roster handle for the child session, when known.
+    #[prost(string, tag = "9")]
+    pub handle: ::prost::alloc::string::String,
 }
 /// One file a session revert or unrevert wrote (or could not restore).
 #[derive(Clone, PartialEq, ::prost::Message)]

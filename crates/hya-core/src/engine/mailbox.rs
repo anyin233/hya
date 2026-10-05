@@ -939,6 +939,7 @@ mod tests {
                 mcp: Vec::new(),
                 hooks: Vec::new(),
                 extensions: Vec::new(),
+                tui: None,
             };
             extra.push(hya_bundle::PreparedInstallableBundle::Agent(Box::new(
                 bundle,

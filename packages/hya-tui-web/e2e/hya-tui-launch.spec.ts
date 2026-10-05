@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { daemonStatus, expect, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, tuiMain } from "./hya"
+import { daemonStatus, expect, launchTest as test, selfLaunch, showStatusView, statusSessionId, textStep, tuiInstances, tuiMain } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -30,7 +30,8 @@ const alive = (pid: number): boolean => {
 
 /** The daemon's pid, read from `/status`; also checks it is a running `hya serve`. */
 async function backendPid(term: Tui): Promise<number> {
-  await prompt(term, "/status")
+  // A /status typed while startup still runs can be lost; the helper retypes it until the view shows.
+  await showStatusView(term)
   await term.waitForText(/Backend\s+daemon · pid \d+ · db \//)
   // The row wraps in the status view, at a point that depends on the temp
   // path's length: the start time may be on the next line, behind the border.
@@ -42,7 +43,7 @@ async function backendPid(term: Tui): Promise<number> {
 }
 
 async function sessionId(term: Tui): Promise<string> {
-  await prompt(term, "/status")
+  await showStatusView(term)
   await term.waitForText(/Session\s+hysec_\w+/)
   return /Session\s+(hysec_\w+)/.exec(await term.text())![1]!
 }
@@ -88,8 +89,9 @@ test.describe("one-command launch", () => {
     expect(running?.pid).toBe(pid)
     expect(await healthy(running!.url)).toBe(true)
 
-    // A new TUI attaches to it instead of starting another.
+    // A new TUI attaches to the same daemon and restores the saved chat.
     const next = await tui(...selfLaunch(workspace))
+    await next.waitForText("Message, !shell, or @file · / commands", 30_000)
     await next.waitForText("Launched and replying.", 30_000)
     expect(await backendPid(next)).toBe(pid)
     await prompt(next, "/exit")

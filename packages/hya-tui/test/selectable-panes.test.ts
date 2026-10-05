@@ -56,12 +56,12 @@ test("there is one focus source, and overlays temporarily own the highlight", ()
   const store = createAppStore()
   const layout = store.state.paneLayout
   store.setPaneLayout({ ...layout, active: "pane-2" })
-  expect(store.state.projectsSidebarFocus).toBe(true)
+  expect(store.state.projectsFocus).toBe(true)
   expect(focusedPane(store.state)?.id).toBe("pane-2")
   expect(keyboardOwner(store.state, true)).toBe("commands")
   store.setPaneLayout({ ...layout, active: "pane-6" })
   expect(focusedPane(store.state)?.kind).toBe("composer")
-  expect(store.state.projectsSidebarFocus).toBe(false)
+  expect(store.state.projectsFocus).toBe(false)
 })
 
 

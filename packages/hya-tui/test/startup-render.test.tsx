@@ -31,7 +31,7 @@ test("initial workspace renders before any backend data arrives", async () => {
   expect(wide).toContain("Context")
   expect(wide).not.toContain("─Context")
   expect(wide).not.toContain("─Todos")
-  expect(wide).toContain("Session  ")
+  expect(wide).toContain("Loading…")
   expect(wide).not.toContain("mode manual")
   // Narrow: no sidebar and no restored metadata heading.
   const narrow = await firstFrame(90)

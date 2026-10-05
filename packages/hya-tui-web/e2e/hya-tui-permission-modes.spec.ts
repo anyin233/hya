@@ -9,7 +9,7 @@
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
-import { createSession, expectStatus, approverBundle, expect, hyaTui, statusSessionId, test, textStep, toolCard, toolStep, type Backend } from "./hya"
+import { createSession, expectStatus, approverBundle, expect, hyaTui, statusSessionId, test, textStep, outlinedToolCard, toolStep, type Backend } from "./hya"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
 const narrow = { width: 690, height: 640 }
@@ -85,7 +85,7 @@ test.describe("Permission command switching", () => {
     // Under yolo the bash call runs at once: no prompt.
     await prompt(term, "run it under yolo")
     await term.waitForText("Ran without asking.", 20_000)
-    await term.waitForText(toolCard("✓", "bash", '"command":"echo yolo-run"'))
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo yolo-run"'))
     expect(await term.text()).not.toContain("asked by")
 
     // Shift+Tab back to manual (no confirmation needed); the next bash asks.
@@ -115,7 +115,7 @@ test.describe("yolo with a pending ask", () => {
     await newSession(term)
     await prompt(term, "run the command")
     await term.waitForText("asked by hya-main", 20_000)
-    await term.waitForText(toolCard("◌", "bash", '"command":"echo pending-ask"', "awaiting approval"))
+    await term.waitForText(outlinedToolCard("◌", "bash", '"command":"echo pending-ask"', "awaiting approval"))
     // Shift+Tab works with the prompt shown; the confirmation takes Enter, not the prompt.
     await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
@@ -124,7 +124,7 @@ test.describe("yolo with a pending ask", () => {
     await expectStatus(term, "Mode", "yolo")
     await promptGone(term)
     await term.waitForText("Continued after yolo.", 20_000)
-    await term.waitForText(toolCard("✓", "bash", '"command":"echo pending-ask"'))
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo pending-ask"'))
     // The ask was allowed by the switch, not by the prompt's Enter (Allow once).
     expect(await term.text()).not.toContain("Allowed once")
   })
@@ -313,7 +313,7 @@ test.describe("bundle permission mode", () => {
     // The approver allows the echo command: no prompt.
     await prompt(term, "echo something")
     await term.waitForText("Echo went through.", 30_000)
-    await term.waitForText(toolCard("✓", "bash", '"command":"echo approved-by-plugin"'))
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo approved-by-plugin"'))
     expect(await term.text()).not.toContain("asked by")
 
     // It defers anything else: the user is asked.
@@ -338,7 +338,7 @@ test.describe("!command shell turns never ask", () => {
 
     // Manual: the user typed the command, so it runs without a prompt.
     await prompt(term, "!echo manual-shell")
-    await term.waitForText(toolCard("✓", "bash", '"command":"echo manual-shell"'), 20_000)
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo manual-shell"'), 20_000)
     await term.waitForText("manual-shell", 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt in manual").toBe(false)
     await term.attach(testInfo, "manual-shell")
@@ -348,13 +348,13 @@ test.describe("!command shell turns never ask", () => {
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await prompt(term, "!echo yolo-shell")
-    await term.waitForText(toolCard("✓", "bash", '"command":"echo yolo-shell"'), 20_000)
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo yolo-shell"'), 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt in yolo").toBe(false)
 
     // Back to manual: still no prompt.
     await prompt(term, "/permissions manual")
     await prompt(term, "!echo manual-again")
-    await term.waitForText(toolCard("✓", "bash", '"command":"echo manual-again"'), 20_000)
+    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo manual-again"'), 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt back in manual").toBe(false)
     await term.attach(testInfo, "manual-again")
   })

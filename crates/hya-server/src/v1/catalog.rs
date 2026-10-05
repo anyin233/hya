@@ -1,7 +1,7 @@
 //! `/v1` catalog domain: agents, models, providers, commands, skills,
 //! tools, permission modes, and saved permission rules.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -20,7 +20,8 @@ pub(crate) fn router() -> Router<ServerState> {
     Router::new()
         .route("/v1/agents", get(list_agents))
         .route("/v1/models", get(list_models))
-        .route("/v1/bundles:refresh", post(refresh_bundles))
+        .route("/v1/bundles", get(list_bundles))
+        .route("/v1/bundles:verb", post(bundle_verb))
         .route("/v1/providers", get(list_providers))
         .route(
             "/v1/providers/:provider_id",
@@ -43,9 +44,42 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/skills", get(list_skills))
         .route("/v1/tools", get(list_tools))
         .route("/v1/permission-modes", get(list_permission_modes))
+        .route("/v1/tui-extensions", get(list_tui_extensions))
         .route("/v1/runtime/schemas", get(list_runtime_schemas))
         .route("/v1/permissions/rules", get(list_saved_rules))
         .route("/v1/permissions/rules/:rule", delete(delete_saved_rule))
+}
+
+/// `POST /v1/bundles:<verb>`: the router reads `:refresh` in
+/// `/v1/bundles:refresh` as a path parameter, so every custom verb of
+/// `/v1/bundles` (`refresh`, `install`, `uninstall`, `set-enabled`) shares
+/// one route and is dispatched here.
+async fn bundle_verb(
+    State(st): State<ServerState>,
+    AxumPath(verb): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Result<axum::response::Response, V1Error> {
+    use axum::response::IntoResponse as _;
+    fn parse<T: serde::de::DeserializeOwned>(body: Value) -> Result<Json<T>, V1Error> {
+        serde_json::from_value(body)
+            .map(Json)
+            .map_err(|error| V1Error::invalid_argument(format!("invalid request body: {error}")))
+    }
+    let state = State(st);
+    Ok(match verb.trim_start_matches(':') {
+        "refresh" => refresh_bundles(state, parse(body)?).await?.into_response(),
+        "install" => install_bundle(state, parse(body)?).await?.into_response(),
+        "uninstall" => uninstall_bundle(state, parse(body)?).await?.into_response(),
+        "set-enabled" => set_bundle_enabled(state, parse(body)?)
+            .await?
+            .into_response(),
+        other => {
+            return Err(V1Error::new(
+                hya_api::error::Code::NotFound,
+                format!("no bundle method `{other}`"),
+            ));
+        }
+    })
 }
 
 /// `RefreshBundles`: refresh the installed-bundle base and the directory's
@@ -56,8 +90,16 @@ async fn refresh_bundles(
     State(st): State<ServerState>,
     Json(request): Json<pb::RefreshBundlesRequest>,
 ) -> Result<Json<pb::RefreshBundlesResponse>, V1Error> {
-    let place = catalog_scope(&st, &request.directory).await?;
-    let refreshed = place.refresh_bundles(&st).await?;
+    Ok(Json(refresh_scope(&st, &request.directory).await?))
+}
+
+/// Refresh `directory`'s scope and describe what is published (`RefreshBundles`).
+async fn refresh_scope(
+    st: &ServerState,
+    directory: &str,
+) -> Result<pb::RefreshBundlesResponse, V1Error> {
+    let place = catalog_scope(st, directory).await?;
+    let refreshed = place.refresh_bundles(st).await?;
     let binding = &refreshed.binding;
     let project = binding.project_bundle_dirs();
     let bundles = binding
@@ -80,9 +122,9 @@ async fn refresh_bundles(
         })
         .collect();
     if refreshed.changed {
-        super::providers::notify_catalog_updated(&st);
+        super::providers::notify_catalog_updated(st);
     }
-    Ok(Json(pb::RefreshBundlesResponse {
+    Ok(pb::RefreshBundlesResponse {
         scope: match place.scope() {
             hya_core::CatalogScope::Global => "global",
             hya_core::CatalogScope::Directory(_) => "directory",
@@ -107,7 +149,212 @@ async fn refresh_bundles(
                 },
             })
             .collect(),
+    })
+}
+
+/// Map a bundle control failure onto the stable v1 error model.
+fn bundle_error(error: crate::BundleControlError) -> V1Error {
+    match error.code.as_str() {
+        crate::BUNDLE_INVALID_REQUEST => V1Error::invalid_argument(error.message),
+        crate::BUNDLE_NOT_FOUND => V1Error::new(hya_api::error::Code::NotFound, error.message),
+        crate::BUNDLE_IMMUTABLE | crate::BUNDLE_CONFLICT => {
+            V1Error::new(hya_api::error::Code::FailedPrecondition, error.message)
+        }
+        crate::BUNDLE_CONTROL_UNAVAILABLE => V1Error::unavailable(error.message),
+        _ => V1Error::internal(error.message),
+    }
+}
+
+/// `<directory>/.hya/bundles`, where project bundles of `directory` live (as
+/// `hya bundle --project` run there uses); `None` for an empty directory.
+fn project_bundles_dir(directory: &str) -> Option<std::path::PathBuf> {
+    (!directory.is_empty()).then(|| std::path::Path::new(directory).join(".hya/bundles"))
+}
+
+/// The `.hya/bundles` directory a `project` change targets.
+fn change_target(directory: &str, project: bool) -> Result<Option<std::path::PathBuf>, V1Error> {
+    if !project {
+        return Ok(None);
+    }
+    project_bundles_dir(directory)
+        .map(Some)
+        .ok_or_else(|| V1Error::invalid_argument("a project bundle change needs a directory"))
+}
+
+/// `ListBundles`: every bundle of the directory's scope with its components and state.
+async fn list_bundles(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListBundlesResponse>, V1Error> {
+    let request: pb::ListBundlesRequest = super::query_request(&[], &query)?;
+    catalog_scope(&st, &request.directory).await?;
+    let listings = st
+        .bundle_control
+        .list(project_bundles_dir(&request.directory))
+        .await
+        .map_err(bundle_error)?;
+    Ok(Json(pb::ListBundlesResponse {
+        bundles: listings
+            .into_iter()
+            .map(|listing| pb::BundleSummary {
+                id: listing.id,
+                version: listing.version,
+                publisher: listing.publisher,
+                scope: listing.scope,
+                kind: listing.kind,
+                state: listing.state,
+                enabled: listing.enabled,
+                removable: listing.removable,
+                description: listing.description,
+                prepared_digest: listing.prepared_digest,
+                error: listing.error,
+                components: Some(pb::BundleComponents {
+                    agents: listing.components.agents,
+                    skills: listing.components.skills,
+                    tools: listing.components.tools,
+                    mcp_servers: listing.components.mcp_servers,
+                    workflows: listing.components.workflows,
+                    permission_modes: listing.components.permission_modes,
+                    apis: listing.components.apis,
+                    hooks: listing.components.hooks,
+                    tui: listing.components.tui,
+                    tui_permissions: listing.components.tui_permissions,
+                }),
+            })
+            .collect(),
     }))
+}
+
+/// `InstallBundle`: install a package from the backend's filesystem, then refresh.
+async fn install_bundle(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::InstallBundleRequest>,
+) -> Result<Json<pb::BundleChange>, V1Error> {
+    catalog_scope(&st, &request.directory).await?;
+    let path = std::path::PathBuf::from(&request.path);
+    if !path.is_absolute() {
+        return Err(V1Error::invalid_argument(format!(
+            "path must be absolute: `{}`",
+            request.path
+        )));
+    }
+    let target = change_target(&request.directory, request.project)?;
+    let bundle_id = st
+        .bundle_control
+        .install(path, target, request.overwrite)
+        .await
+        .map_err(bundle_error)?;
+    let refresh = refresh_scope(&st, &request.directory).await?;
+    Ok(Json(pb::BundleChange {
+        bundle_id,
+        refresh: Some(refresh),
+    }))
+}
+
+/// `UninstallBundle`: remove an installed bundle, then refresh.
+async fn uninstall_bundle(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::UninstallBundleRequest>,
+) -> Result<Json<pb::BundleChange>, V1Error> {
+    catalog_scope(&st, &request.directory).await?;
+    let target = change_target(&request.directory, request.project)?;
+    st.bundle_control
+        .uninstall(request.bundle_id.clone(), target)
+        .await
+        .map_err(bundle_error)?;
+    let refresh = refresh_scope(&st, &request.directory).await?;
+    Ok(Json(pb::BundleChange {
+        bundle_id: request.bundle_id,
+        refresh: Some(refresh),
+    }))
+}
+
+/// `SetBundleEnabled`: enable or disable a bundle id in every scope, then refresh.
+async fn set_bundle_enabled(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::SetBundleEnabledRequest>,
+) -> Result<Json<pb::BundleChange>, V1Error> {
+    catalog_scope(&st, &request.directory).await?;
+    st.bundle_control
+        .set_enabled(request.bundle_id.clone(), request.enabled)
+        .await
+        .map_err(bundle_error)?;
+    let refresh = refresh_scope(&st, &request.directory).await?;
+    Ok(Json(pb::BundleChange {
+        bundle_id: request.bundle_id,
+        refresh: Some(refresh),
+    }))
+}
+
+async fn list_tui_extensions(
+    State(st): State<ServerState>,
+    Query(mut query): Query<BTreeMap<String, String>>,
+) -> Result<Json<pb::ListTuiExtensionsResponse>, V1Error> {
+    let known = parse_known_digests(query.remove("known").as_ref())?;
+    let request: pb::ListTuiExtensionsRequest = super::query_request(&[], &query)?;
+    let place = catalog_scope(&st, &request.directory).await?;
+    let binding = place.bind(&st).await?;
+    let project = binding.project_bundle_dirs();
+    let extensions = binding
+        .bundle_catalog()
+        .bundles()
+        .iter()
+        .filter_map(|bundle| {
+            let tui = bundle.tui()?;
+            let identity = bundle.identity();
+            let prepared_digest = bundle.digest().to_string();
+            let cached = known.contains(&prepared_digest);
+            let mut files = if cached {
+                Vec::new()
+            } else {
+                bundle
+                    .extensions()
+                    .iter()
+                    .filter(|resource| resource.binary_base64.is_none())
+                    .map(|resource| pb::TuiExtensionFile {
+                        path: resource.source_path.clone(),
+                        sha256: resource.digest.clone(),
+                        content: resource.content.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            files.sort_by(|left, right| left.path.cmp(&right.path));
+            Some(pb::TuiExtensionDescriptor {
+                bundle_id: identity.id.clone(),
+                bundle_version: identity.version.clone(),
+                prepared_digest,
+                api_version: tui.api_version,
+                entry: tui.entry.clone(),
+                sdk: tui.sdk.clone(),
+                permissions: tui.permissions.clone(),
+                files,
+                first_party: hya_bundle::FIRST_PARTY_BUNDLES.contains(&identity.id.as_str())
+                    && !project.contains_key(&identity.id),
+                cached,
+            })
+        })
+        .collect();
+    Ok(Json(pb::ListTuiExtensionsResponse { extensions }))
+}
+
+fn parse_known_digests(value: Option<&String>) -> Result<BTreeSet<String>, V1Error> {
+    let Some(value) = value else {
+        return Ok(BTreeSet::new());
+    };
+    let digests = value.split(',').collect::<Vec<_>>();
+    if digests.len() > 64
+        || digests.iter().any(|digest| {
+            digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
+        return Err(V1Error::invalid_argument(
+            "known must contain at most 64 comma-separated 64-character hexadecimal digests",
+        ));
+    }
+    Ok(digests
+        .into_iter()
+        .map(|digest| digest.to_ascii_lowercase())
+        .collect())
 }
 
 async fn list_agents(

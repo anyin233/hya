@@ -72,6 +72,12 @@
     "streaming": false
   },
   {
+    "method": "GET",
+    "path": "/v1/bundles",
+    "operationId": "Catalog.ListBundles",
+    "streaming": false
+  },
+  {
     "method": "DELETE",
     "path": "/v1/bundles/{bundle}/api/{path}",
     "operationId": "BundleApi.InvokeGlobalBundleApi.delete",
@@ -103,8 +109,26 @@
   },
   {
     "method": "POST",
+    "path": "/v1/bundles:install",
+    "operationId": "Catalog.InstallBundle",
+    "streaming": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/bundles:refresh",
     "operationId": "Catalog.RefreshBundles",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/bundles:set-enabled",
+    "operationId": "Catalog.SetBundleEnabled",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/bundles:uninstall",
+    "operationId": "Catalog.UninstallBundle",
     "streaming": false
   },
   {
@@ -621,6 +645,12 @@
     "method": "GET",
     "path": "/v1/tools",
     "operationId": "Catalog.ListTools",
+    "streaming": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tui-extensions",
+    "operationId": "Catalog.ListTuiExtensions",
     "streaming": false
   },
   {

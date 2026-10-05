@@ -59,7 +59,7 @@ export function layoutEditorRows(layout: PaneLayout, state: LayoutEditorState): 
       { id: "column", label: "Wrap in column", detail: "Add a pane above this subtree" },
       { id: "remove", label: "Remove", detail: protectedNode(node) ? "Protected: contains the conversation or editor" : `Remove ${paneLeaves(node).length} pane(s) from the layout` },
     ]
-    case "kind": return paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer").map((kind) => ({ id: kind, label: kind, detail: paneDefinitions[kind].title }))
+    case "kind": return paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer" && kind !== "extension").map((kind) => ({ id: kind, label: kind, detail: paneDefinitions[kind].title }))
     case "destination": {
       const descendants = new Set(paneNodes(node).map((item) => item.id))
       return tree.filter((row) => row.node.type === "split" && !descendants.has(row.id)).map((row) => ({ id: row.id, label: `${row.id} ${row.node.type === "split" ? row.node.direction : ""}`, detail: "Move into this container" }))

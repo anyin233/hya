@@ -12,6 +12,7 @@ import { backendConfigDir, expect, hyaTui, test, textStep } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
+  await term.waitForText(text)
   await term.press("Enter")
 }
 
@@ -63,13 +64,14 @@ test.describe("hya TUI Agents view", () => {
     await term.press("Enter")
     await term.waitForText(/▸\s+hya-scout\s/)
     await term.press("Escape")
-    // Esc clears the filter first; wait for it so the next `/` is not read as Alt+/.
-    await expect.poll(() => term.find("Filter hya-scout")).toBeNull()
+    // Esc clears the filter first: every section shows again. Wait for it so the next `/` is not read as Alt+/.
+    await term.waitForText("── Primary agents")
     await filterTo(term, "hya-plan")
     await term.waitForText(/▸  hya-plan\s/)
     await term.press("Enter")
     await expect.poll(() => term.find("── Primary agents")).toBeNull()
-
+    // The session's agent switch lands (the compact context line names it) before the prompt goes out.
+    await term.waitForText(/· hya-plan ·/)
     await prompt(term, "hi")
     await term.waitForText("Reply one.", 20_000)
     await term.waitForText(/● hya-plan · fake\//)
@@ -82,6 +84,8 @@ test.describe("hya TUI Agents view", () => {
     await openAgents(term)
     await filterTo(term, "hya-plan")
     await term.press("Enter")
+    // The view closes on Enter; typing before that would land in its filter.
+    await expect.poll(() => term.find("── Primary agents")).toBeNull()
     await prompt(term, "hello")
     await term.waitForText("Reply one.", 20_000)
     await term.waitForText(/● hya-plan · fake\//)

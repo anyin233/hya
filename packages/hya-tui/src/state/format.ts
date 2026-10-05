@@ -4,7 +4,7 @@ import type { Interaction, ModelSummary, SessionInfo, TodoItem, TokenUsage } fro
 import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
-import { promptQueue, waitingKind } from "./prompts"
+import { promptQueue } from "./prompts"
 import { sessionsInScope } from "./projects"
 import { forkSourceText } from "./revert"
 import type { AppState } from "./store"
@@ -109,69 +109,9 @@ export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
   return rows
 }
 
-/**
- * The sidebar's session list; `width` cuts each line to the sidebar. Scoped
- * to the active Project (state/projects.ts `sessionsInScope`): temporary
- * sessions have no Project, so they always show, under their own
- * `— Temporary —` heading after the Project's sessions. A top-level session
- * is two lines (title, agent) with a blank line between groups; a subagent
- * session is one indented `↳ N. agent` line under it.
- */
-/** `/to-background` and Ctrl+D in a WebUI tab (`--web-tab`): closing the tab already leaves the session running. */
+
+/** `/to-background` and Ctrl+D in a WebUI tab. */
 export const webTabBackgroundNotice = "Close the tab to leave this session running"
-
-export interface SessionListEntry {
-  text: string
-  sessionId?: string
-  separator?: boolean
-}
-
-export function sessionListEntries(state: AppState, width?: number): SessionListEntry[] {
-  if (!state.ready) return [{ text: "Loading…" }]
-  const sessions = sessionsInScope(state.sessions, state.activeProjectId, false)
-  if (!sessions.length) return [{ text: "No sessions. Type a prompt or /new." }]
-  const entries: SessionListEntry[] = []
-  let announcedTemporary = false
-  sessionTree(sessions).forEach(({ session, depth, number }) => {
-    const mark = session.id === state.selected?.id ? "▸" : " "
-    const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
-    if (depth === 0) {
-      if (session.kind === "SESSION_KIND_TEMPORARY" && !announcedTemporary) {
-        announcedTemporary = true
-        entries.push({ text: truncate("— Temporary —", width) })
-      }
-      if (entries.length) entries.push({ text: truncate("─".repeat(Math.max(1, width ?? 1)), width), separator: true })
-      entries.push({ sessionId: session.id, text: truncate(`${mark} ${number}. ${session.title || session.id}`, width) })
-      entries.push({ sessionId: session.id, text: truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width) })
-    } else {
-      entries.push({ sessionId: session.id, text: truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.agent}${running}`, width) })
-    }
-  })
-  return entries
-}
-
-export function sessionListText(state: AppState, width?: number): string {
-  if (!state.ready) return "Loading…"
-  const sessions = sessionsInScope(state.sessions, state.activeProjectId, false)
-  if (!sessions.length) return "No sessions. Type a prompt or /new."
-  const groups: string[][] = []
-  let announcedTemporary = false
-  sessionTree(sessions).forEach(({ session, depth, number }) => {
-    const mark = session.id === state.selected?.id ? "▸" : " "
-    const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
-    if (depth === 0) {
-      if (session.kind === "SESSION_KIND_TEMPORARY" && !announcedTemporary) {
-        announcedTemporary = true
-        groups.push([truncate("— Temporary —", width)])
-      }
-      groups.push([truncate(`${mark} ${number}. ${session.title || session.id}`, width), truncate(`   ${session.agent}${running}${session.archived ? " · archived" : ""}`, width)])
-    } else {
-      groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${number} ${session.title || session.agent}${running}`, width))
-    }
-  })
-  return groups.map((lines) => lines.join("\n")).join("\n\n")
-}
-
 /**
  * One line per pending interaction the prompt does not show (asks of other
  * session trees): `! title · session · id` for permissions, `? title ·

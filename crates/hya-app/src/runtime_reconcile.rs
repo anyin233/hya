@@ -1857,6 +1857,7 @@ mod tests {
         };
         let bundle = PreparedAgentBundle {
             check: None,
+            tui: None,
             format_version: 2,
             identity: BundleIdentity {
                 id: bundle_id.to_string(),

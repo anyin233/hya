@@ -177,6 +177,7 @@ impl ProjectScopeRefresh {
             &project,
             &installed,
             &first_party,
+            &base.disabled,
             &resolver,
             self.installed.source_cache(),
             self.installed.host_reads(),

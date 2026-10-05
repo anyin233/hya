@@ -57,7 +57,7 @@ struct ProjectBundleRefresh;
 fn project_overlay() -> ScopeOverlay {
     let mut agents = support::test_agents();
     agents.push(AgentFixture::main("scoped"));
-    let mut overlay = ScopeOverlay::new(support::agent_catalog(&agents));
+    let mut overlay = ScopeOverlay::new(support::agent_catalog_with_tui(&agents));
     overlay.bundle_sources = vec![
         RuntimeSource::new(
             RuntimeSourceId::bundle(SCOPED_BUNDLE),
@@ -512,6 +512,98 @@ fn api_bundles(reply: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn tui_extensions_include_text_files_and_exclude_binary_resources() {
+    let app = router(state().await);
+    let f = fixture("tui-extensions");
+    create_project(&app, &[&f.a, &f.b]).await;
+
+    let plain = get(
+        &app,
+        &format!("/v1/tui-extensions?directory={}", encode(&f.c)),
+    )
+    .await;
+    assert_eq!(plain, json!({}));
+    let reply = get(
+        &app,
+        &format!("/v1/tui-extensions?directory={}", encode(&f.a)),
+    )
+    .await;
+    let extensions = reply["extensions"].as_array().unwrap();
+    assert_eq!(extensions.len(), 1, "{reply}");
+    let extension = &extensions[0];
+    assert_eq!(extension["entry"], "extensions/main.ts");
+    let files = extension["files"].as_array().unwrap();
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["extensions/main.ts", "extensions/module.ts"]
+    );
+    assert_eq!(files[0]["content"], "export default 42;\n");
+    assert_eq!(
+        files[0]["sha256"],
+        "a44b832f74de68ff8c9af937829abd2298fa89faec27c3792e633904c2587e2c"
+    );
+    assert!(
+        files
+            .iter()
+            .all(|file| file["path"] != "extensions/native.node")
+    );
+    let digest = extension["preparedDigest"].as_str().unwrap();
+    let cached = get(
+        &app,
+        &format!(
+            "/v1/tui-extensions?directory={}&known={digest}",
+            encode(&f.a)
+        ),
+    )
+    .await;
+    let cached_extension = &cached["extensions"][0];
+    assert_eq!(cached_extension["cached"], true);
+    assert_eq!(
+        cached_extension["files"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        Vec::<Value>::new()
+    );
+
+    let unknown = get(
+        &app,
+        &format!(
+            "/v1/tui-extensions?directory={}&known={}",
+            encode(&f.a),
+            "0".repeat(64)
+        ),
+    )
+    .await;
+    assert!(
+        !unknown["extensions"][0]["cached"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(
+        !unknown["extensions"][0]["files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let (status, _) = send(
+        &app,
+        Method::GET,
+        &format!(
+            "/v1/tui-extensions?directory={}&known=not-a-digest",
+            encode(&f.a)
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

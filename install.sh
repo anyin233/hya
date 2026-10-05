@@ -116,20 +116,22 @@ source_dir="$(pwd -P)"
 
 # Bun programs installed under lib/hya: name, source directory, top-level
 # files, and recursively copied directories (the release archive layout).
-lib_names=(bun-adapter tui tui-web)
+lib_names=(bun-adapter tui tui-web tui-sdk)
 lib_sources=(
   "$source_dir/crates/hya-plugin-bun/adapter"
   "$source_dir/packages/hya-tui"
   "$source_dir/packages/hya-tui-web"
+  "$source_dir/packages/hya-tui-sdk"
 )
 lib_files=(
   "package.json bun.lock"
-  "package.json bun.lock bunfig.toml tsconfig.json"
+  "package.json bun.lock bunfig.toml tsconfig.json frontend-version.ts"
+  "package.json bun.lock tsconfig.json"
   "package.json bun.lock tsconfig.json"
 )
-lib_dirs=("src" "src" "src web")
-had_lib=(0 0 0)
-placed_lib=(0 0 0)
+lib_dirs=("src" "src" "src web" "src")
+had_lib=(0 0 0 0)
+placed_lib=(0 0 0 0)
 
 lib_tmp() {
   printf '%s\n' "$lib_dir/.$1.tmp.$$"
@@ -254,8 +256,8 @@ stage_lib() {
 trap on_error ERR INT TERM
 say "Installing hya to $bin_dir"
 say "Installing first-party bundles to $bundles_dir"
-say "Installing Bun adapter, TUI, and WebUI host to $lib_dir/{bun-adapter,tui,tui-web}"
-say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '{bun-adapter,tui,tui-web}')"
+say "Installing Bun adapter, TUI, WebUI host, and TUI SDK to $lib_dir/{bun-adapter,tui,tui-web,tui-sdk}"
+say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '{bun-adapter,tui,tui-web,tui-sdk}')"
 say "Permission preflight: $bin_dir $bundles_dir $lib_dir"
 preflight_path "$bin_dir"
 preflight_path "$bundles_dir"
@@ -307,7 +309,7 @@ for index in "${!lib_names[@]}"; do
 done
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
-first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review)
+first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review basic-tui-components)
 if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya" --version >/dev/null
   "$bin_dir/hya" --help >/dev/null

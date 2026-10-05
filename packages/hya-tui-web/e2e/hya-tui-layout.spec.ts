@@ -24,6 +24,9 @@ test.describe("layout", () => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
     await term.waitForText("Projects")
+    // The panes are drawn by hya/basic-tui-components once it runs: measure the settled layout.
+    await term.waitForText(/work \(\d+\)/)
+    await term.waitForText("No messages yet")
     const initialConversation = (await term.find("No messages yet"))!
     const initialSessions = (await term.find("Sessions"))!
     await term.press("Alt+ArrowLeft")
@@ -33,7 +36,8 @@ test.describe("layout", () => {
     await term.press("Enter")
     await prompt(term, "/layout focus pane-2")
     await prompt(term, "/layout resize +5")
-    await expect.poll(async () => (await term.find("No messages yet"))!.col).toBeGreaterThan(initialConversation.col)
+    // The command popup can cover the line while the typed commands are processed: keep polling.
+    await expect.poll(async () => (await term.find("No messages yet"))?.col ?? -1).toBeGreaterThan(initialConversation.col)
     await prompt(term, "/layout focus pane-3")
     await prompt(term, "/layout assign jobs")
     await term.waitForText("No active")
@@ -170,7 +174,7 @@ test.describe("layout", () => {
     await expect.poll(() => sidebarShown(term)).toBe(true)
   })
 
-  test("about 80 columns keeps the sidebar hidden without a metadata heading", async ({ tui, backend }, testInfo) => {
+  test("about 80 columns keeps the sidebar hidden with compact context status", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: narrow })
     await term.waitForText("Message, !shell, or @file · / commands")
     const { cols } = await term.size()
