@@ -31,6 +31,10 @@ test("sidebar context menus coexist with strict pane focus and the keybinding co
   await term.press("Escape")
   await expect.poll(() => term.find("Click an action")).toBeNull()
 
+  await term.press("Control+x")
+  await term.type("/layout focus pane-3")
+  await term.press("Enter")
+  await expect.poll(() => term.find("Commands")).toBeNull()
   await term.type("no leak")
   await term.type("/keybind list")
   await term.press("Enter")
