@@ -496,6 +496,7 @@ fn resolve() -> anyhow::Result<Resolved> {
 /// Run bare `hya` on a terminal. Returns only on an error before or while
 /// starting; otherwise it exits the process with the TUI's status.
 pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
+    hya_app::startup_trace::mark("frontend_launch", None);
     // Everything that can fail cheaply fails here, before the terminal is touched.
     let resolved = resolve()?;
     let exe = std::env::current_exe().context("find the hya binary")?;
@@ -567,6 +568,7 @@ async fn run_frontends(
     signals: &mut StopSignals,
 ) -> anyhow::Result<i32> {
     let Resolved { bun, tui, web, cwd } = resolved;
+    hya_app::startup_trace::mark("frontend_backend_ready", None);
     let host_argv = web_host_argv(bun, web, tui, port, cwd, backend);
     let started = tokio::select! {
         started = start_web_host(&host_argv, cwd, port, backend) => started,
@@ -577,6 +579,7 @@ async fn run_frontends(
         Err(reason) => (None, WebStatus::Failed(reason)),
     };
     eprintln!("hya: WebUI {web_status:?}");
+    hya_app::startup_trace::mark("frontend_web_ready", None);
     let argv = tui_argv(bun, tui, backend, cwd, &web_status, resume);
     let code = match spawn_tui(&argv, cwd, terminal, backend) {
         Ok(mut child) => {
