@@ -109,8 +109,13 @@ test.describe("failed turn", () => {
     await term.waitForText("provider_error: http status 400", 20_000)
     // The failed assistant message carries the error line under its header.
     await term.waitForText("✗ provider_error: http status 400")
-    const header = (await term.find("● hya-main · fake/model"))!
-    expect((await term.find("✗ provider_error"))!.row).toBe(header.row + 1)
+    // Header and finish notice settle on separate renders. Read one buffer
+    // snapshot per attempt so a transient frame cannot yield a null header.
+    await expect.poll(async () => {
+      const lines = await term.lines()
+      const header = lines.findIndex((line) => line.includes("● hya-main · fake/model"))
+      return header >= 0 && lines[header + 1]?.includes("✗ provider_error: http status 400")
+    }).toBe(true)
     expect(await term.text()).not.toContain("Running ·")
   })
 })

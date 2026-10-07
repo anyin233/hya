@@ -21,6 +21,12 @@ export function LayoutPane(props: PaneRenderProps) {
   const visible = createMemo(() => new Set(paneLeaves(visiblePaneRoot(store.state.paneLayout.root, store.state.columns, store.state.sidebar, store.state.projectsSidebar)).map((pane) => pane.id)))
   const detail = () => rows()[index()]?.detail ?? ""
   const hint = () => layoutEditorHint(state())
+  // Keep at least two tree/menu rows when hints grow or the pane is narrow.
+  // Frame (2), heading (1), detail (2), actions (1) consume six rows.
+  const hintHeight = () => Math.min(
+    Math.max(2, Math.ceil(Bun.stringWidth(hint()) / Math.max(1, props.width - 4))),
+    Math.max(1, props.height - 8 - (layoutEditorPreview(state()) ? 1 : 0)),
+  )
   const apply = (outcome: LayoutEditorOutcome) => {
     setState(outcome.state)
     if (!outcome.layout) return
@@ -64,7 +70,7 @@ export function LayoutPane(props: PaneRenderProps) {
   }
   return <PaneFrame kind="layout" focused={props.focused} title={`Layout tree · ${props.node.id}`}>
     <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{layoutEditorHeading(state())}</text>
-    <Show when={layoutEditorPreview(state())}>{(preview) => <text width="100%" wrapMode="word" flexShrink={0} fg={colors.accent}>{`─ ${preview()}`}</text>}</Show>
+    <Show when={layoutEditorPreview(state())}>{(preview) => <text height={1} width="100%" wrapMode="none" flexShrink={0} fg={colors.accent}>{`─ ${preview()}`}</text>}</Show>
     <Show when={state().stage.type !== "weight"} fallback={
       <box width="100%" flexGrow={1} flexDirection="column">
         <text height={1} wrapMode="none" fg={colors.accent}>{state().stage.type === "weight" ? `${(state().stage as { value: string }).value}▏` : ""}</text>
@@ -82,7 +88,7 @@ export function LayoutPane(props: PaneRenderProps) {
     <text height={2} flexShrink={0} width="100%" wrapMode="word" fg={state().error ? colors.error : colors.muted}>
       {state().error ?? `${state().marked ? `◆ Marked ${state().marked} · ` : ""}${state().selected} · ${detail()}`}
     </text>
-    <text height={Math.max(2, Math.ceil(Bun.stringWidth(hint()) / Math.max(1, props.width - 4)))} flexShrink={0} width="100%" wrapMode="word" fg={colors.muted}>{hint()}</text>
+    <text height={hintHeight()} flexShrink={0} width="100%" wrapMode="word" fg={colors.muted}>{hint()}</text>
     <box height={1} flexShrink={0} flexDirection="row" gap={2}>
       <text fg={colors.accent} onMouseDown={(event: MouseEvent) => mouse(event, () => key(state().stage.type === "wrap" ? "escape" : "return"))}>{state().stage.type === "tree" ? "[Edit]" : state().stage.type === "wrap" ? "[Cancel]" : state().stage.type === "weight" ? "[Save]" : "[Choose]"}</text>
       <Show when={state().stage.type !== "tree"}><text fg={colors.muted} onMouseDown={(event: MouseEvent) => mouse(event, () => setState(layoutEditorBack(state())))}>[Back]</text></Show>
