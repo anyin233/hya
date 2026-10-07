@@ -1249,6 +1249,15 @@ adds a pane beside the whole workspace. To place one yourself, use
 `/layout assign layout` on an auxiliary pane. Opening the pane and every
 successful edit save the layout through the existing frontend preferences path.
 
+Compact panes reserve at least two scrolling tree/menu rows at the normal
+minimum height. Footer hints are limited to the remaining height and edit
+previews occupy one row; the complete key reference remains available in
+`/help` and the table below. For example, run `/layout split left layout`
+at about 80 columns, then press End to reach Context and Enter to open its
+actions. Long hints cannot cover the selected node or action menu. This changes
+only rendering; layout commands, `paneLayout` fields, and key contracts below
+are unchanged.
+
 | In the Layout pane | Action |
 | --- | --- |
 | Up / Down | Move the cursor to the previous/next tree node or action; scroll to keep it visible. |
