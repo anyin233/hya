@@ -4,7 +4,7 @@
 // preferences file (`HYA_TUI_CONFIG` points it at a temp path here), and a
 // restarted TUI starts in the saved theme.
 
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
@@ -37,6 +37,7 @@ test.afterEach(async () => { await rm(prefsDir, { recursive: true, force: true }
 test.describe("/theme", () => {
   test("previews the highlighted theme, Esc restores, Enter saves; a restarted TUI starts in the saved theme", async ({ tui, backend }, testInfo) => {
     const prefs = join(prefsDir, "prefs", "tui.json")
+    await mkdir(join(prefsDir, "prefs"), { recursive: true })
     const env = { HYA_TUI_CONFIG: prefs }
     let term = await tui(hyaTui(backend), { env })
     await term.waitForText("Message, !shell, or @file · / commands")
@@ -55,16 +56,17 @@ test.describe("/theme", () => {
     await term.attach(testInfo, "light-preview")
     // Esc restores the default theme and saves nothing.
     await term.press("Escape")
-    await expect.poll(() => term.find("Theme ·")).toBeNull()
-    await expect.poll(async () => (await screenColors(term)).bg).toBe(hya.bg)
+    await expect.poll(() => term.find("─Theme")).toBeNull()
+    await expect.poll(() => screenColors(term)).toEqual({ bg: hya.bg, focus: hya.accent })
     await expect(readFile(prefs, "utf8")).rejects.toThrow()
 
     // Enter keeps the highlighted theme and writes the preferences file.
     await prompt(term, "/theme")
     await term.waitForText(/▸ ● hya/)
     await term.press("ArrowDown")
+    await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
-    await expect.poll(() => term.find("Theme ·")).toBeNull()
+    await expect.poll(() => term.find("─Theme")).toBeNull()
     await expect.poll(() => screenColors(term)).toEqual({ bg: light.bg, focus: light.accent })
     expect(JSON.parse(await readFile(prefs, "utf8"))).toMatchObject({ theme: "light" })
 
@@ -90,7 +92,7 @@ test.describe("/theme", () => {
     await term.press("ArrowDown")
     await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
-    await expect.poll(() => term.find("Theme ·")).toBeNull()
+    await expect.poll(() => term.find("─Theme")).toBeNull()
     const { cols } = await term.size()
     // The right edge of the main column is themed too (no stale dark cells).
     const lines = await term.lines()
@@ -115,7 +117,7 @@ test.describe("/theme over a transcript", () => {
     await term.press("ArrowDown")
     await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
-    await expect.poll(() => term.find("Theme ·")).toBeNull()
+    await expect.poll(() => term.find("─Theme")).toBeNull()
     await term.waitForText("Done.")
     const user = (await term.find("show me code"))!
     expect(await term.cell(user.row, user.col)).toMatchObject({ fg: light.fg, bg: light.panel })

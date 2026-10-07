@@ -16,7 +16,7 @@ running. The full layout is editable, and the side panes follow terminal width
 unless pinned (see [Layout](#layout)).
 Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
-tool call is an outlined card with its tool name shown on the border in the
+tool call is a borderless block with its tool name shown as a plain heading in the
 normal foreground color, its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
 read-only (see [Messages](#messages)). When the agent or one of its subagents
@@ -1001,7 +1001,12 @@ status is `No pending request in another session`. No wire contract changes.
 
 ## Layout
 
-Only selectable panes have enclosing boxes. For example:
+Enclosing boxes identify selectable UI. Pending summaries, notifications,
+warning docks, transcript tool/task blocks, and passive extension containers are
+borderless. Headings, severity colors and text remain visible; a left gutter or
+an output divider can group transcript content without enclosing it. Permission
+choices still use the message editor's keys or mouse clicks, and `/pending`
+opens another session's request. For example:
 
 ```text
 ┌─Projects───┐                                 ┌─Sessions─────┐
@@ -1091,12 +1096,12 @@ keyboard ownership and highlighted composer.
   Up/Down move the highlight, Enter switches (`switchProject`), and Esc returns
   focus to Conversation without closing it. `/projects-sidebar off` hides it.
 - **Prompt.** A pending permission request or question of the open session
-  or one of its subagent sessions is a prompt box (warning-colored border)
+  or one of its subagent sessions is a borderless prompt (warning-colored heading)
   above the message input; see
   [Permission and question prompts](#permission-and-question-prompts).
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
-  `Pending (N)` box appears above the prompt with up to three of them
+  `Pending (N)` summary appears above the prompt with up to three of them
   (`! <title> · <n>. <session>` for a listed chat, or `saved session` when
   archived). Run **`/pending`** to reopen the oldest request's conversation; its
   normal prompt then shows numbered answer choices. They arrive live — see
@@ -1203,6 +1208,7 @@ closable ids and unambiguous names, updating after each layout edit.
 | `/layout tree` | Open or focus a selectable Layout pane for editing the saved tree. Reuse the first existing `layout` pane; otherwise add one beside the whole workspace. |
 | `/layout insert <container-id\|root> <index> <job>` | Insert a new auxiliary pane at a zero-based child index (0 through child count); a selectable new pane gets focus. |
 | `/layout move <node-id\|pane-name> <container-id\|root> <index>` | Move an existing pane/subtree, retaining ids and focus. Index refers to destination children after removing the source. Cycles are refused. |
+| `/layout bubble <node-id\|pane-name\|root> <previous\|next>` | Swap a pane or subtree with its adjacent sibling in the same container. Preserve its size, ids, contents and focus. Root and edge moves do nothing. |
 | `/layout wrap <node-id\|pane-name\|root> <row\|column> <job> [before\|after]` | Wrap a target, including the whole root, with a new auxiliary pane; default position `before`. |
 | `/layout remove <node-id\|pane-name>` | Remove an auxiliary pane or subtree; refuse any subtree containing the viewer/editor. |
 | `/layout reset` | Restore the default arrangement. |
@@ -1243,10 +1249,20 @@ adds a pane beside the whole workspace. To place one yourself, use
 `/layout assign layout` on an auxiliary pane. Opening the pane and every
 successful edit save the layout through the existing frontend preferences path.
 
+Compact panes reserve at least two scrolling tree/menu rows at the normal
+minimum height. Footer hints are limited to the remaining height and edit
+previews occupy one row; the complete key reference remains available in
+`/help` and the table below. For example, run `/layout split left layout`
+at about 80 columns, then press End to reach Context and Enter to open its
+actions. Long hints cannot cover the selected node or action menu. This changes
+only rendering; layout commands, `paneLayout` fields, and key contracts below
+are unchanged.
+
 | In the Layout pane | Action |
 | --- | --- |
 | Up / Down | Move the cursor to the previous/next tree node or action; scroll to keep it visible. |
 | Left / Right | Select the parent/first child in the tree. |
+| Shift+Up / Shift+Down | Bubble the cursor node to the previous/next sibling. In a row this moves left/right; in a column it moves up/down. |
 | Home / End | Select the first/last row. |
 | Enter | Open the selected node's actions, choose a menu item, or save a weight. |
 | Shift+Enter / Space | Mark or unmark the cursor pane/group (`◆`); marking another node replaces the mark. The cursor (`▸`) can move independently. In WebUI, Shift+Enter arrives as line feed; Ctrl+J / Linefeed are equivalent. |
@@ -1260,6 +1276,23 @@ successful edit save the layout through the existing frontend preferences path.
 Alt+arrows still switch workspace panes; `/` still opens the global command
 input. These local keys appear in `/help` and `/keybind` and respect disabled
 keys. Unsupported typing in the tree never reaches the message draft.
+
+Bubbling quickly reorders adjacent panes without choosing a destination. Select
+`pane-4 todos` and press Shift+Down to swap it with Context, or use Enter →
+**Bubble next**. `/layout bubble todos next` performs the same edit. The cursor
+stays on the moved node, the Layout pane keeps keyboard focus, and any mark stays
+unchanged; bubbling acts on the cursor even when another node is marked. A group
+moves with all its descendants, including the conversation/editor. It never
+crosses a parent boundary or wraps around. Sizes travel with their nodes: weight
+values and column `content` policies are preserved. Successful swaps save through
+the existing `paneLayout` preference and survive `/layout reload` and restart.
+
+**Bubble interface:** `bubblePane(layout: PaneLayout, target: string, direction:
+"previous" | "next"): PaneLayout` resolves the same unique pane names, node IDs
+and `root` alias as other layout reducers. It exchanges two complete `PaneChild`
+entries in one parent, keeping tree IDs and `active` unchanged. Root/edge operations
+return the original layout; an unknown or ambiguous target raises the normal
+layout resolution error. There are no new config fields or backend RPCs.
 
 Direct insertion uses the cursor even when a different node is marked; wrapping
 and removal use the mark when present. Successful direct insertion/wrapping moves
@@ -1871,7 +1904,7 @@ bottom. The transcript shows the newest 200 messages.
 
 
 
-Every tool call of an assistant message is a transparent, outlined card. The
+Every tool call of an assistant message is a transparent, borderless block. The
 header names the canonical tool and shows its state icon and duration. The
 first content row is a display-ready argument block: builtin tools use their
 semantic summary (for example `src/main.rs · lines 1-40`) rather than raw JSON;
@@ -1879,12 +1912,11 @@ generic namespaced/MCP tools use pretty-printed JSON. The raw argument JSON is
 still retained for compatibility and expanded output is shown below a divider.
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│ ✓ read                                                                  │
-│ src/main.rs · lines 1-40                                              │
-│ ──────────────────────────────────────────────────────────────────────── │
-│ 1  fn main() {                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+read
+✓
+src/main.rs · lines 1-40
+│ ────────────────
+│ 1  fn main() {
 ```
 
 - **State icon.** `○` pending, a spinner (`⠋⠙⠹…`) while running, `◌` while a
@@ -1960,6 +1992,63 @@ again (status `Back to the parent session`); the text you typed stays, and a
 second Esc clears it. Opening another session this way resets the parent's
 overlay and prompt queue like any session switch; the parent's turn keeps
 running on the server, and its transcript is re-read on return.
+
+
+### Subagent selector and viewer panes
+
+`subagents` is a selectable layout pane for the open conversation's descendants.
+`subagent-viewer` is a passive, read-only transcript pane. They let you monitor
+helpers alongside the parent conversation without replacing its transcript,
+changing its session, or sending the parent's draft to a child. Completed children
+stay in the list; nested children are indented, and pending requests show `waiting`.
+The existing parent permission/question prompt remains the place to answer asks.
+
+Run `/subagents` to add missing selector and viewer panes beside the workspace and
+focus the selector. Existing panes are reused. In the selector, Up/Down previews a
+child in every following viewer; Enter pins it to the first following viewer (or
+replaces the first pin if all are pinned); `n` adds a new pinned viewer. Unsupported
+keys stay in the selector. Alt+arrows navigate selectable panes as usual. A viewer
+has no border and does not take keyboard focus; use its mouse wheel to scroll.
+Each viewer scrolls independently, even when two show the same child.
+
+Commands (arguments are exact session and pane IDs, with dropdown completion):
+
+| Command | Contract |
+| --- | --- |
+| `/subagents` | Add missing `subagents` and `subagent-viewer` panes, persist the layout, focus the selector. Requires an open session. |
+| `/subagents select <session>` | Preview a descendant of the open session; keep the main session and composer unchanged. |
+| `/subagents pin <viewer-pane> [session]` | Persist a pin on that viewer; omitted session uses the current preview or first child. |
+| `/subagents follow <viewer-pane>` | Remove that viewer's pin and follow the selector again. |
+| `/subagents view <session>` | Add a separate pinned viewer, preserving keyboard focus. |
+
+For example, run `/subagents`, use Down to choose a helper, press Enter to pin it,
+then choose another helper and press `n` to watch both. Use `/layout show` to find
+pane IDs, `/subagents follow pane-9` to resume previewing there, and `/layout close
+pane-9` to remove it. IDs depend on your layout. Both jobs also work through the
+normal tree editor and `/layout split up|left <job>` commands; the convenience
+command does not impose a fixed layout.
+
+**Layout interface:** version 4 `PaneLeaf` accepts the additional jobs
+`kind: "subagents" | "subagent-viewer"`. Only a `subagent-viewer` leaf may have
+`session?: string`, a nonempty child-session ID. Absent `session` means following;
+present means pinned. Pins are saved in `paneLayout` in TUI preferences and survive
+`/layout reload` and restart. Preview selection is ephemeral and resets when the
+main session changes. A pin outside the current conversation shows an unavailable
+placeholder instead of another conversation's transcript. Removing the last
+viewer for a child releases its watch; hidden viewers release theirs too.
+
+**Backend interface:** these panes use the existing `hya.v1` session projection:
+`GetSession` (`GET /v1/sessions/{session}`) for `SessionInfo`, `ListMessages` for
+`MessageInfo[]`, `ListEvents` for replay, and `StreamSessionEvents` for live
+`StreamFrame` events/resync. HTTP/SSE and direct gRPC share this implementation;
+there are no new RPCs or durable frontend read models. Each server/root/child
+combination has one reference-counted watch. Reconnect gap-fills from its durable
+sequence and refreshes the authoritative projection; transient live parts use the
+same overlay and Markdown/tool rendering as the main conversation. Viewer errors
+appear within that viewer and do not replace the parent's connection status.
+Live deltas are transient: joining a response after its part-start frame may
+show that part only once its durable completed text is available. Keeping a
+following viewer open before spawning a helper shows its response as it streams.
 
 ## Streaming, queued prompts, and turn status
 
@@ -2699,10 +2788,9 @@ Example: this TUI views session 1 while another tab's session 2 asks to run
 a command:
 
 ```text
-╭Pending (1)──────────────────────────────────────────────────────────╮
-│ ! bash echo hi · 2. Fix the build                                   │
-│ `/pending` review request · /sessions past chats · /interactions details   │
-╰─────────────────────────────────────────────────────────────────────╯
+Pending (1)
+! bash echo hi · 2. Fix the build
+/pending review request · /sessions past chats · /interactions details
 Permission needed in 2. Fix the build · `/pending` to review
 ```
 

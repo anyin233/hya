@@ -245,3 +245,46 @@ test("external edits repair removed selections and pending destinations; forms c
   expect(layoutEditorBack(e.state).stage.type).toBe("tree")
   expect(layoutEditorKey(layout, e.state, { ...key("x", "x"), ctrl: true }).state).toBe(e.state)
 })
+
+test("Shift arrows bubble the cursor within row/column siblings, preserving the mark and editor focus", () => {
+  for (const [id, before, after] of [["pane-4", "pane-3", "pane-5"], ["group-2", "pane-2", "group-3"]]) {
+    const e = editor(id!)
+    const original = layoutTreeRows(e.layout.root).find((row) => row.id === id)!
+    const slot = original.parent!.children[original.index]
+    const active = e.layout.active
+    e.key("space"); e.key("up") // Mark target but put cursor elsewhere.
+    const cursor = e.state.selected
+    e.key("down") // Cursor returns to target.
+    expect(e.state.selected).toBe(id)
+    e.key("up", "", true)
+    let row = layoutTreeRows(e.layout.root).find((row) => row.id === id)!
+    expect(row.parent!.children[row.index + 1]?.node.id).toBe(before)
+    expect(row.parent!.children[row.index]).toBe(slot)
+    expect(e.state.selected).toBe(id)
+    expect(e.state.marked).toBe(id)
+    expect(e.layout.active).toBe(active)
+    e.key("down", "", true); e.key("down", "", true)
+    row = layoutTreeRows(e.layout.root).find((row) => row.id === id)!
+    expect(row.parent!.children[row.index - 1]?.node.id).toBe(after)
+    expect(parsePaneLayout(JSON.parse(JSON.stringify(e.layout)))).toEqual(e.layout)
+    expect(cursor).not.toBe(id)
+  }
+})
+
+test("bubble menu matches direct keys; edge/root moves do nothing and an unrelated mark does not move", () => {
+  const e = editor("pane-3")
+  e.key("space"); e.key("down")
+  e.key("up", "", true)
+  expect(e.state).toMatchObject({ selected: "pane-4", marked: "pane-3", stage: { type: "tree" } })
+  let row = layoutTreeRows(e.layout.root).find((row) => row.id === "pane-4")!
+  expect(row.index).toBe(0)
+  expect(e.key("up", "", true).layout).toBeUndefined()
+  e.key("return")
+  expect(layoutEditorRows(e.layout, e.state).map((row) => row.id)).toContain("bubble-next")
+  e.choose("bubble-next")
+  row = layoutTreeRows(e.layout.root).find((row) => row.id === "pane-4")!
+  expect(row.index).toBe(1)
+  e.key("home")
+  expect(e.key("down", "", true).layout).toBeUndefined()
+  expect(e.state.error).toBeUndefined()
+})

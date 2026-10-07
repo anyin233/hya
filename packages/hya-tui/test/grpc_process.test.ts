@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { SessionViews } from "../src/app/sessionViews"
 import { GrpcHyaClient } from "../src/grpc_client"
 import type { StreamFrame } from "../src/client"
 
@@ -90,6 +91,19 @@ test.skipIf(!backendBin)("OpenTUI gRPC transport drives a real hya backend", asy
     expect(liveFrames.some((frame) => frame.event?.messageStarted)).toBe(true)
     expect(liveFrames.some((frame) => frame.event?.messageFinished)).toBe(true)
     expect(liveFrames.every((frame) => !frame.event?.seq || Number(frame.event.seq) > Number(replay.nextSeq ?? "0"))).toBe(true)
+    // Viewer watches use the same projection/replay/stream contract over direct gRPC.
+    const views = new SessionViews(client)
+    const first = views.acquire("grpc/root", session.id), second = views.acquire("grpc/root", session.id)
+    try {
+      for (let attempt = 0; attempt < 100 && !first.store.state.connected; attempt++) await Bun.sleep(20)
+      expect(first.store.state.connected).toBe(true)
+      expect(first.store).toBe(second.store)
+      expect(first.store.state.messages.length).toBeGreaterThan(0)
+      await client.createTurn(session.id, "viewer grpc live marker")
+      for (let attempt = 0; attempt < 100 && !JSON.stringify(first.store.state.messages).includes("viewer grpc live marker"); attempt++) await Bun.sleep(20)
+      expect(JSON.stringify(first.store.state.messages)).toContain("viewer grpc live marker")
+    } finally { first.release(); second.release(); views.dispose() }
+
   } finally {
     client.close()
     processHandle.kill("SIGKILL")

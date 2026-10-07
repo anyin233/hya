@@ -171,6 +171,39 @@ Locally, run the specs that cover your change: the new or changed spec and the
 specs for the screens it touches. The whole suite is the CI gate; run it
 locally only when asked or when a change affects every screen.
 
+#### Full local TUI CI gate
+
+From the repository root, run:
+
+```sh
+./scripts/check-tui.sh
+```
+
+This runs frozen installs, type checks and unit tests for the TUI, WebUI,
+Bun adapter and TUI SDK, builds `hya` and `xtask`, installs Chromium if needed,
+and runs the complete browser suite with two workers. Use the CI-pinned Bun
+version (currently 1.4.2) and the repository Rust toolchain. Linux may need
+`bunx playwright install --with-deps chromium` once to install system libraries.
+The script stops at the first failed command and returns its nonzero status;
+assertions and browser retries use the normal Playwright configuration.
+
+`HYA_TUI_CHECK_DIR` sets the artifact directory (default
+`~/data/hya-tui-check`): temporary workspaces go in `tmp/`, browser artifacts
+in `results/`, the HTML report in `report/`, Chromium in `browsers/`, and Bun's
+download cache in `bun-cache/`. `HYA_TUI_TEST_WORKERS` is a
+positive integer worker count (default `2`, matching the GitHub runner).
+Existing `PLAYWRIGHT_BROWSERS_PATH` and `BUN_INSTALL_CACHE_DIR` overrides are
+honored. Cargo uses the repository's
+normal target configuration; keep `target` on the data disk as in this
+workspace. For example:
+
+```sh
+HYA_TUI_CHECK_DIR="$HOME/data/hya-tui-prepush" ./scripts/check-tui.sh
+```
+
+Run this gate before pushing when requested or when validating a broad TUI
+integration. Focused specs remain the normal development loop.
+
 #### Keeping the browser gate aligned with the TUI
 
 Update the browser specs in the same change as a UI contract change. The

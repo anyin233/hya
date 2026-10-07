@@ -76,6 +76,7 @@
  * `background` (`/to-background`, Ctrl+D) and `signal` leave it running.
  * `/resume` and `--resume` unarchive and open one (app/resume.ts).
  */
+import { SessionViews } from "./sessionViews"
 import { HttpError, type HyaClient, type Interaction, type MessageInfo, type ProjectInfo, type PromptAttachment, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
 import { completeCommand } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, openModelPicker, selectAgent, toBackground, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
@@ -237,6 +238,7 @@ export const fileSuggestionLimit = 8
 
 export function createController({ client, store, directory, remote: startedRemote = false, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, preferredPermissionMode, terminal, env = process.env, reconnect, find, onRestarted, refreshExtensions, probe = (url) => probeHealth(url, fetch, undefined, url.replace(/\/+$/, "") === client.baseUrl ? client.token : undefined), bridge: startRemoteBridge, home, onScopeChanged, interceptSubmit }: ControllerOptions) {
   /** No `EnsureProjectForPath`; new sessions need a chosen Project: `--remote`, or connected through `/connect-remote`. */
+  const sessionViews = new SessionViews(client)
   let remote = startedRemote
   let streamAbort: AbortController | undefined
   let globalAbort: AbortController | undefined
@@ -1745,6 +1747,7 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   function dispose(): void {
+    sessionViews.dispose()
     closing = true
     streamAbort?.abort()
     globalAbort?.abort()
@@ -1784,6 +1787,7 @@ export function createController({ client, store, directory, remote: startedRemo
 
   return {
     ...actions,
+    sessionViews,
     openRootSession,
     hostCommand,
     focusProjects,

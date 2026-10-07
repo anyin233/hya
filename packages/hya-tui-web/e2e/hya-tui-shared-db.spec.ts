@@ -14,7 +14,13 @@ import { expectStatus, expect, hyaBin, launchTest as test, selfLaunch, showStatu
 const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
 async function prompt(term: Tui, text: string): Promise<void> {
-  await term.type(text)
+  if (text.startsWith("/")) {
+    await term.type("/")
+    await term.waitForText("Commands")
+    await term.type(text.slice(1))
+  } else {
+    await term.type(text)
+  }
   await term.waitForText(text)
   await term.press("Enter")
 }

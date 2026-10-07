@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import {
   closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves, paneNodes,
   resizePane, setPaneKind, splitPane, visiblePaneRoot, layoutRects, normalizePaneNode,
-  insertPane, movePane, wrapPane, setContainerBoundary, rotatePaneFocus,
+  bubblePane, insertPane, movePane, wrapPane, setContainerBoundary, rotatePaneFocus,
   type PaneLayout, type PaneNode, type PaneSplit, type Rect,
 } from "../src/state/panes"
 const leaf = (id: number, kind: "conversation" | "composer" | "jobs" | "sessions" | "status" = "jobs"): PaneNode => ({ type: "pane", id: `pane-${id}`, kind })
@@ -196,4 +196,19 @@ test("all-content containers do not stretch their last child into unused space",
   const rects = layoutRects(root, { left: 0, top: 0, right: 80, bottom: 40 }, () => 3)
   expect(rects.get("pane-1")?.bottom).toBe(3)
   expect(rects.get("pane-2")?.bottom).toBe(6)
+})
+
+
+test("bubbling retains content/weight slots and group identity without mutation", () => {
+  const layout = defaultPaneLayout(), snapshot = JSON.stringify(layout)
+  const before = paneNodes(layout.root).find((node) => node.id === "group-2")!
+  const next = bubblePane(layout, "composer", "previous")
+  const after = paneNodes(next.root).find((node) => node.id === "group-2")!
+  expect(before.type === "split" && after.type === "split" && after.children.map((slot) => slot.node.id)).toEqual(["pane-6", "pane-1", "pane-7"])
+  if (before.type === "split" && after.type === "split") expect(after.children[1]).toBe(before.children[2])
+  expect(JSON.stringify(layout)).toBe(snapshot)
+  expect(next.active).toBe(layout.active)
+  expect(bubblePane(layout, "root", "next")).toBe(layout)
+  expect(bubblePane(layout, "projects", "previous")).toBe(layout)
+  expect(() => bubblePane(layout, "missing", "next")).toThrow()
 })

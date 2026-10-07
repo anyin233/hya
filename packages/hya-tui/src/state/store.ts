@@ -1,5 +1,5 @@
 /**
- * The TUI's single state store.
+ * The TUI workspace state; child viewers also use ephemeral projection mirrors.
  *
  * It holds a copy of the server projection read over the v1 API (sessions,
  * transcript, interactions, catalogs) plus local UI state (view, status line,
@@ -16,6 +16,7 @@
  * mask length here; the key itself stays in the controller's `SecretEntry`
  * (see completion.ts, state/providers.ts).
  */
+import { subagentRows } from "./subagents"
 import { batch, createSignal, type Accessor, type Setter } from "solid-js"
 import { apiOperationNames, operations } from "../api"
 import type { VimMode } from "../composer/vim"
@@ -101,6 +102,8 @@ export interface AppState {
   /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
+  /** Ephemeral child preview, independent of the main session and composer. */
+  readonly subagentSelection: string | undefined
   /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
   readonly apiOutput: string
@@ -321,6 +324,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     turnStartedAt: undefined,
     cursor: "0",
     view: "chat",
+    subagentSelection: undefined,
     paneLayout: defaultPaneLayout(),
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
@@ -564,10 +568,12 @@ export function createAppStore() {
      * previous session and are dropped.
      */
     openSession(session: SessionInfo): void {
+      const changedSession = state.selected?.id !== session.id
       fold.reset(session.lastSeq ?? "0")
       noticedMode = session.permissionMode || manualMode
       batch(() => {
         set("selected", session)
+        if (changedSession) set("subagentSelection", undefined)
         set("view", "chat")
         set("cursor", fold.lastSeq)
         set("messages", [])
@@ -804,6 +810,7 @@ export function createAppStore() {
     },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
+    selectSubagent(id: string | undefined): void { set("subagentSelection", id) },
     setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
@@ -977,6 +984,7 @@ export function createAppStore() {
 
     completionContext(): CompletionContext {
       return {
+        subagents: subagentRows(state).map((row) => row.id),
         panes: paneLeaves(state.paneLayout.root).map(({ id, kind }) => ({ id, kind })),
         layoutContainers: paneNodes(state.paneLayout.root).flatMap((node) => node.type === "pane" ? [] : [{ id: node.id, children: node.children.map((child) => child.node.id), removable: paneLeaves(node).every((pane) => pane.kind !== "conversation" && pane.kind !== "composer") }]),
         backendCommands: state.backendCommands.map((command) => command.name),

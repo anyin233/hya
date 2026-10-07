@@ -53,11 +53,12 @@ export function ExtensionOverlay() {
   )
 }
 
-/** A bordered extension panel box in the sidebar look, as panes and the extension column draw it. */
+/** An unplaced sidebar panel is passive; selectable layout panels use PaneFrame. */
 export function ExtensionPanelBox(props: { panel: PanelEntry | undefined; panelKey: string; width: number; height: number; highlighted?: boolean; scrollRef?: (element: ScrollBoxRenderable) => void }) {
   return (
-    <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" border borderColor={props.highlighted ? colors.accent : colors.border} title={props.panel?.title ?? props.panelKey} backgroundColor={colors.panel}>
-      <ExtensionPanel panelKey={props.panelKey} width={props.width - 4} height={props.height - 2} {...(props.scrollRef ? { scrollRef: props.scrollRef } : {})} />
+    <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
+      <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{props.panel?.title ?? props.panelKey}</text>
+      <ExtensionPanel panelKey={props.panelKey} width={props.width - 2} height={props.height - 1} {...(props.scrollRef ? { scrollRef: props.scrollRef } : {})} />
     </box>
   )
 }
