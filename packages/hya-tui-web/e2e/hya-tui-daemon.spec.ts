@@ -21,18 +21,27 @@ async function prompt(term: Tui, text: string): Promise<void> {
   await term.press("Enter")
 }
 
-/** The daemon pid `/status` names. */
-async function statusPid(term: Tui): Promise<number> {
-  await prompt(term, "/status")
-  await term.waitForText(/Backend\s+daemon · pid \d+/)
-  return Number(/Backend\s+daemon · pid (\d+)/.exec(await term.text())![1])
+/** Read one status snapshot, reopening the view if reconnect restores chat. */
+async function statusField(term: Tui, pattern: RegExp, expected?: string): Promise<string> {
+  let value: string | undefined
+  await expect.poll(async () => {
+    await prompt(term, "/status")
+    // Do not read the previous status through the still-open command overlay.
+    await expect.poll(() => term.find("Commands")).toBeNull()
+    value = pattern.exec(await term.text())?.[1]
+    return value !== undefined && (expected === undefined || value === expected)
+  }, { timeout: 30_000, message: `status never showed ${expected ?? pattern}` }).toBe(true)
+  return value!
+}
+
+/** The daemon pid `/status` names, optionally waiting for the successor. */
+async function statusPid(term: Tui, expected?: number): Promise<number> {
+  return Number(await statusField(term, /Backend\s+daemon · pid (\d+)/, expected?.toString()))
 }
 
 /** The untitled open session's id from `/status`. */
 async function statusSessionId(term: Tui): Promise<string> {
-  await prompt(term, "/status")
-  await term.waitForText(/Session\s+hysec_\w+/)
-  return /Session\s+(hysec_\w+)/.exec(await term.text())![1]!
+  return statusField(term, /Session\s+(hysec_\w+)/)
 }
 
 function appPids(workspace: Workspace): number[] {
@@ -158,7 +167,7 @@ test.describe("backend daemon", () => {
     await prompt(term, "after the restart")
     await term.waitForText("After the new server.", 20_000)
     expect(await statusPid(term)).toBe(successorPid)
-    await expect.poll(() => statusPid(term), { timeout: 30_000 }).toBe(successorPid)
+    expect(await statusPid(term, successorPid)).toBe(successorPid)
     await expect.poll(() => servePids(workspace)).toEqual([successorPid])
   })
 
@@ -228,8 +237,8 @@ test.describe("backend daemon", () => {
         return pid
       }, { timeout: 30_000 }).not.toBe(before)
       expect(pid).not.toBe(before)
-      await expect.poll(() => statusPid(first), { timeout: 30_000 }).toBe(pid)
-      await expect.poll(() => statusPid(second), { timeout: 30_000 }).toBe(pid)
+      expect(await statusPid(first, pid)).toBe(pid)
+      expect(await statusPid(second, pid)).toBe(pid)
       await second.attach(testInfo, "second-after")
 
       // Both still share live state: the second follows the first's session.
