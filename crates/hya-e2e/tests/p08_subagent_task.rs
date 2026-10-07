@@ -124,3 +124,78 @@ async fn t2_1_task_tool_spawns_general_subagent() {
         env.diagnostics()
     );
 }
+
+#[tokio::test]
+async fn task_batch_creates_two_children_with_independent_outputs() {
+    let env = E2eEnvBuilder::new()
+        .route("You are hya", vec![
+            tool_step("task", json!({
+                "context":"Batch shared contract",
+                "tasks":[
+                    {"description":"First child", "prompt":"First assignment", "inline_agent":{"prompt":"BATCH_CHILD_ONE"}},
+                    {"description":"Second child", "prompt":"Second assignment", "inline_agent":{"prompt":"BATCH_CHILD_TWO"}}
+                ]
+            })),
+            text_step("BATCH_PARENT_CONTINUED"),
+        ])
+        .route("BATCH_CHILD_ONE", vec![text_step("BATCH_FIRST_RESULT")])
+        .route("BATCH_CHILD_TWO", vec![text_step("BATCH_SECOND_RESULT")])
+        .build().await.expect("environment");
+    let parent = env.create_session().await.unwrap();
+    env.prompt(parent, "Launch the independent batch")
+        .await
+        .unwrap();
+    let tree = env.session_tree(&parent).await.unwrap();
+    let ids: Vec<_> = tree_session_ids(&tree)
+        .into_iter()
+        .filter(|id| id != &parent.to_string())
+        .collect();
+    assert_eq!(ids.len(), 2, "two distinct child sessions: {tree}");
+    assert_ne!(ids[0], ids[1]);
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let mut outputs = Vec::new();
+            for id in &ids {
+                let events = env.events(id.parse().unwrap(), None).await.unwrap();
+                outputs.push(
+                    events
+                        .into_iter()
+                        .filter_map(|envelope| match envelope.event {
+                            Event::TextDelta { delta, .. } => Some(delta),
+                            Event::TextReplace { text, .. } => Some(text),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                );
+            }
+            if outputs
+                .iter()
+                .any(|text| text.contains("BATCH_FIRST_RESULT"))
+                && outputs
+                    .iter()
+                    .any(|text| text.contains("BATCH_SECOND_RESULT"))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("both child sessions must produce their own output");
+    let events = env.events(parent, None).await.unwrap();
+    let results: Vec<_> = events
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::ToolResult { output, .. } if output["metadata"]["members"].is_array() => {
+                Some(output)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 1, "one batch tool result");
+    assert_eq!(
+        results[0]["metadata"]["members"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(results[0]["metadata"]["status"], "running");
+}

@@ -176,7 +176,9 @@ pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
     };
     ToolSchema {
         name: hya_proto::ToolName::new("wait"),
-        description: description.to_string(),
+        description: format!(
+            "Launch independent siblings together in one task tasks[] batch before waiting. Continue useful independent work first; wait when blocked on reports. {description}"
+        ),
         input_schema: json!({
             "type": "object",
             "properties": {

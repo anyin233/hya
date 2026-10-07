@@ -85,6 +85,12 @@ their id, kind, version, digest, exported ids, and
 `immutable: true, installable: false`. They do not enter the installed bundle
 catalog and cannot be upgraded or uninstalled through public bundle commands.
 
+The `hya-main` and `hya-task` prompts guide delegation toward one `task`
+call containing independent `tasks[]`, with shared `context` and per-member
+scope, ownership and acceptance criteria. They distinguish running handles
+from completed reports and encourage useful parent work before `wait`.
+See the [task input and worked example](architecture/agent-tool-surface.md#task).
+
 ## Interface definitions
 
 The source payload is an `AgentSetBundle` with identity `hya/core-agents` and
