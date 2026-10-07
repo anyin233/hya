@@ -1215,8 +1215,11 @@ Sessions, Todos, and Context are hidden below 150 columns. At wider sizes
 layout remains intact. Resizing and toggling preserve drafts and histories.
 The default editor dock sizes to its visible content: three rows for an empty
 input, more for multiline drafts, file completion, attachments, pending prompts,
-and permission controls. The activity pane takes one row while visible and zero
-rows while idle. The viewer receives all remaining height, keeping the input
+and permission controls. Empty extension decoration containers are omitted and
+reserve no rows. Decorators still render above and below the editor, and their
+measured row counts contribute to its content size. The activity pane takes one
+row while visible and zero rows while idle. The viewer receives all remaining
+height, keeping the input
 adjacent to the transcript rather than reserving an empty percentage of the
 screen. This also applies after resizing the terminal. Existing generated
 80%/20% viewer/activity/editor arrangements upgrade automatically; custom

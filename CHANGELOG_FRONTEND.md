@@ -1,3 +1,3 @@
-# 0.44.9
+# 0.44.10
 
-- Inherit the terminal background and transparency for the screen, panes, input, popups and code blocks across all themes. Preserve foreground, border and selection colors.
+- Collapse unused composer decoration containers so the transcript, activity row, and message input remain adjacent and their resize boundary matches the visible input border.

@@ -69,6 +69,14 @@ test.describe("TUI extension process integration", () => {
     // The Context row: label, then the (width-cut) value.
     await term.waitForText(/E2E\s+E2E_STAT/)
     await term.waitForText("E2E_COMPOSER_BANNER")
+    // A decoration with content only above its slot must not reserve a blank
+    // container below the editor. Its banner stays adjacent to the border.
+    await expect.poll(async () => {
+      const banner = await term.find("E2E_COMPOSER_BANNER")
+      const input = await term.find("Message, !shell, or @file")
+      return banner && input ? input.row - banner.row : -1
+    }).toBe(2)
+    await expect.poll(async () => (await term.find("Message, !shell, or @file"))?.row).toBe((await term.size()).rows - 2)
 
     // Submit interceptors: a blocked prompt is never sent; a rewritten one is sent as rewritten.
     await term.type("this is forbidden")
