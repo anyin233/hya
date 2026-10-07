@@ -16,7 +16,7 @@ running. The full layout is editable, and the side panes follow terminal width
 unless pinned (see [Layout](#layout)).
 Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
-tool call is an outlined card with its tool name shown on the border in the
+tool call is a borderless block with its tool name shown as a plain heading in the
 normal foreground color, its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
 read-only (see [Messages](#messages)). When the agent or one of its subagents
@@ -1001,7 +1001,12 @@ status is `No pending request in another session`. No wire contract changes.
 
 ## Layout
 
-Only selectable panes have enclosing boxes. For example:
+Enclosing boxes identify selectable UI. Pending summaries, notifications,
+warning docks, transcript tool/task blocks, and passive extension containers are
+borderless. Headings, severity colors and text remain visible; a left gutter or
+an output divider can group transcript content without enclosing it. Permission
+choices still use the message editor's keys or mouse clicks, and `/pending`
+opens another session's request. For example:
 
 ```text
 ┌─Projects───┐                                 ┌─Sessions─────┐
@@ -1091,12 +1096,12 @@ keyboard ownership and highlighted composer.
   Up/Down move the highlight, Enter switches (`switchProject`), and Esc returns
   focus to Conversation without closing it. `/projects-sidebar off` hides it.
 - **Prompt.** A pending permission request or question of the open session
-  or one of its subagent sessions is a prompt box (warning-colored border)
+  or one of its subagent sessions is a borderless prompt (warning-colored heading)
   above the message input; see
   [Permission and question prompts](#permission-and-question-prompts).
 - **Pending block.** While permission requests (`!`) or questions (`?`) of
   *other* sessions wait (sessions not in the open session's tree), a
-  `Pending (N)` box appears above the prompt with up to three of them
+  `Pending (N)` summary appears above the prompt with up to three of them
   (`! <title> · <n>. <session>` for a listed chat, or `saved session` when
   archived). Run **`/pending`** to reopen the oldest request's conversation; its
   normal prompt then shows numbered answer choices. They arrive live — see
@@ -1890,7 +1895,7 @@ bottom. The transcript shows the newest 200 messages.
 
 
 
-Every tool call of an assistant message is a transparent, outlined card. The
+Every tool call of an assistant message is a transparent, borderless block. The
 header names the canonical tool and shows its state icon and duration. The
 first content row is a display-ready argument block: builtin tools use their
 semantic summary (for example `src/main.rs · lines 1-40`) rather than raw JSON;
@@ -1898,12 +1903,11 @@ generic namespaced/MCP tools use pretty-printed JSON. The raw argument JSON is
 still retained for compatibility and expanded output is shown below a divider.
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│ ✓ read                                                                  │
-│ src/main.rs · lines 1-40                                              │
-│ ──────────────────────────────────────────────────────────────────────── │
-│ 1  fn main() {                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+read
+✓
+src/main.rs · lines 1-40
+│ ────────────────
+│ 1  fn main() {
 ```
 
 - **State icon.** `○` pending, a spinner (`⠋⠙⠹…`) while running, `◌` while a
@@ -2775,10 +2779,9 @@ Example: this TUI views session 1 while another tab's session 2 asks to run
 a command:
 
 ```text
-╭Pending (1)──────────────────────────────────────────────────────────╮
-│ ! bash echo hi · 2. Fix the build                                   │
-│ `/pending` review request · /sessions past chats · /interactions details   │
-╰─────────────────────────────────────────────────────────────────────╯
+Pending (1)
+! bash echo hi · 2. Fix the build
+/pending review request · /sessions past chats · /interactions details
 Permission needed in 2. Fix the build · `/pending` to review
 ```
 

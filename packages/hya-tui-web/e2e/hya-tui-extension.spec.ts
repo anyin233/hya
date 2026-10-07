@@ -33,6 +33,7 @@ export default defineTuiExtension({
     api.registerPanel({
       id: "hello", title: "E2E Panel",
       render: ({ context }) => ({ kind: "column", children: [
+        { kind: "box", title: "E2E_PASSIVE_NOTICE", border: true, children: [{ kind: "text", text: "Plain plugin facts" }] },
         { kind: "text", text: "E2E_EXTENSION_PANEL " + (context.session ? "with-session" : "no-session") },
         { kind: "text", text: "CLICKS " + clicks, action: { name: "click" } },
         { kind: "text", text: "KEYS " + keys },
@@ -55,6 +56,10 @@ test.describe("TUI extension process integration", () => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport, env: { XDG_CACHE_HOME: join(dirname(backend.dir), "cache") } })
     await term.waitForText("Message, !shell, or @file")
     await term.waitForText("E2E_EXTENSION_PANEL with-session", 20_000)
+    await term.waitForText("E2E_PASSIVE_NOTICE")
+    const notice = (await term.find("E2E_PASSIVE_NOTICE"))!
+    expect((await term.lines())[notice.row]).not.toMatch(/[┌┐╭╮─]/)
+    await term.waitForText("Plain plugin facts")
     // The TUI ensured the Project of --dir: its project bundles are in scope, next to the first-party panes.
     const catalog = await (await fetch(`${backend.url}/v1/tui-extensions?directory=${encodeURIComponent(backend.dir)}`)).json() as { extensions?: { bundleId: string; firstParty?: boolean; files: { path: string }[] }[] }
     expect(catalog.extensions?.map((row) => [row.bundleId, row.firstParty === true, row.files.map((file) => file.path)]), JSON.stringify(catalog)).toEqual([
