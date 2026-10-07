@@ -581,19 +581,7 @@ async fn run_frontends(
     eprintln!("hya: WebUI {web_status:?}");
     hya_app::startup_trace::mark("frontend_web_ready", None);
     let argv = tui_argv(bun, tui, backend, cwd, &web_status, resume);
-    let code = match spawn_tui(&argv, cwd, terminal, backend) {
-        Ok(mut child) => {
-            tokio::select! {
-                status = child.wait() => status.map(exit_code).context("wait for the TUI"),
-                signal = signals.recv() => {
-                    eprintln!("hya: signal {signal}; stopping the TUI");
-                    stop_child(&mut child, "TUI").await;
-                    Ok(128 + signal)
-                }
-            }
-        }
-        Err(error) => Err(error),
-    };
+    let code = run_tui(&argv, cwd, terminal, backend, signals).await;
     if let Some(mut host) = host {
         stop_child(&mut host, "web host").await;
     }
@@ -690,11 +678,92 @@ async fn start_web_host(
     }
 }
 
+/// Reuse the TUI's existing reload protocol (src/reload.ts) directly instead
+/// of starting an additional Bun supervisor under this native supervisor.
+struct TuiReloadFile(PathBuf);
+
+impl Drop for TuiReloadFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn parse_tui_reload(text: &str) -> Option<(Vec<OsString>, String)> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let argv = value
+        .get("argv")?
+        .as_array()?
+        .iter()
+        .map(|arg| arg.as_str().map(OsString::from))
+        .collect::<Option<Vec<_>>>()?;
+    let mut state = serde_json::json!({});
+    if let Some(draft) = value.get("draft")
+        && draft.get("text").is_some_and(serde_json::Value::is_string)
+        && draft
+            .get("cursor")
+            .is_some_and(serde_json::Value::is_number)
+    {
+        state["draft"] = draft.clone();
+    }
+    Some((argv, state.to_string()))
+}
+
+async fn run_tui(
+    argv: &[OsString],
+    cwd: &Path,
+    terminal: &Terminal,
+    backend: &BackendLink,
+    signals: &mut StopSignals,
+) -> anyhow::Result<i32> {
+    anyhow::ensure!(argv.len() >= 2, "TUI command needs Bun and an entry script");
+    let reload = TuiReloadFile(std::env::temp_dir().join(format!(
+        "hya-tui-reload-{}-{}.json",
+        std::process::id(),
+        hya_proto::SessionId::new()
+    )));
+    let mut command = argv.to_vec();
+    let mut state = None;
+    loop {
+        let mut child = spawn_tui(
+            &command,
+            cwd,
+            terminal,
+            backend,
+            &reload.0,
+            state.as_deref(),
+        )?;
+        let code = tokio::select! {
+            biased;
+            signal = signals.recv() => {
+                eprintln!("hya: signal {signal}; stopping the TUI");
+                stop_child(&mut child, "TUI").await;
+                return Ok(128 + signal);
+            }
+            status = child.wait() => status.map(exit_code).context("wait for the TUI")?,
+        };
+        if code != 75 {
+            return Ok(code);
+        }
+        let request = std::fs::read_to_string(&reload.0)
+            .ok()
+            .and_then(|text| parse_tui_reload(&text));
+        let _ = std::fs::remove_file(&reload.0);
+        let Some((args, next_state)) = request else {
+            return Ok(code);
+        };
+        command = argv[..2].to_vec();
+        command.extend(args);
+        state = Some(next_state);
+    }
+}
+
 fn spawn_tui(
     argv: &[OsString],
     cwd: &Path,
     terminal: &Terminal,
     backend: &BackendLink,
+    reload_file: &Path,
+    reload_state: Option<&str>,
 ) -> anyhow::Result<Child> {
     let Some((program, args)) = argv.split_first() else {
         anyhow::bail!("empty TUI command");
@@ -702,6 +771,13 @@ fn spawn_tui(
     let (stdin, stdout, stderr) = terminal.stdio().context("pass the terminal to the TUI")?;
     let mut command = Command::new(program);
     frontend_env(command.as_std_mut(), backend);
+    command
+        .env("HYA_TUI_RELOAD_FILE", reload_file)
+        .env("HYA_TUI_SUPERVISOR", std::process::id().to_string())
+        .env_remove("HYA_TUI_RELOAD");
+    if let Some(state) = reload_state {
+        command.env("HYA_TUI_RELOAD", state);
+    }
     command
         .args(args)
         .current_dir(cwd)
@@ -835,6 +911,27 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+
+    #[test]
+    fn native_tui_reload_matches_the_frontend_protocol() {
+        let (args, state) = super::parse_tui_reload(
+            r#"{"argv":["--session","hysec_demo"],"draft":{"text":"unsent 漢字","cursor":4}}"#,
+        )
+        .expect("valid reload");
+        assert_eq!(args, ["--session", "hysec_demo"]);
+        let state: serde_json::Value = serde_json::from_str(&state).expect("state JSON");
+        assert_eq!(state["draft"]["text"], "unsent 漢字");
+        assert_eq!(state["draft"]["cursor"], 4);
+        assert_eq!(
+            super::parse_tui_reload(r#"{"argv":[],"draft":{"text":"x","cursor":"bad"}}"#)
+                .expect("ignore invalid draft")
+                .1,
+            "{}"
+        );
+        for invalid in ["null", "{}", r#"{"argv":[1]}"#, "not JSON"] {
+            assert!(super::parse_tui_reload(invalid).is_none(), "{invalid}");
+        }
+    }
 
     struct Scratch(PathBuf);
 

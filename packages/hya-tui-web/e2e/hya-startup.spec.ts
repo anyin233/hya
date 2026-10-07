@@ -1,7 +1,7 @@
 // Real PTY through the browser; timings are process phase marks, not polling latency.
 import { readFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { daemon, daemonStatus, expect, hyaBin, launchTest as test, test as backendTest, tuiMain } from "./hya"
+import { daemon, daemonStatus, expect, hyaBin, launchTest as test, test as backendTest, tuiMain, statusSessionId, textStep } from "./hya"
 
 test("records cold and warm all-bundle startup and accepts input", async ({ tui, workspace }, info) => {
   test.setTimeout(60_000)
@@ -47,4 +47,36 @@ backendTest("compiled gRPC startup resolves bundled definitions in a narrow brow
   await term.press("Enter")
   await term.waitForText("No live provider is available", 20_000)
   await term.attach(info, "narrow-grpc")
+})
+
+
+test.describe("native TUI supervision", () => {
+  test.use({ model: { steps: [textStep("Before native reload."), textStep("After native reload.")] } })
+  test("bare hya reloads the same session and unsent draft without a Bun supervisor", async ({ tui, workspace }, info) => {
+    const trace = join(workspace.dir, "reload.jsonl")
+    const term = await tui([hyaBin, "--port", "0"], {
+      cwd: workspace.dir,
+      env: { ...workspace.env, HYA_TUI_DIR: resolve("../hya-tui"), HYA_TUI_WEB_DIR: resolve("."), HYA_STARTUP_TRACE_FILE: trace },
+    })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await term.type("first prompt")
+    await term.press("Enter")
+    await term.waitForText("Before native reload.")
+    await term.waitForIdle()
+    const session = await statusSessionId(term)
+    await term.type("preserved draft")
+    await term.waitForText("preserved draft")
+    expect((await daemon(workspace, ["restart", "--json"])).code).toBe(0)
+    await expect.poll(async () => (await readFile(trace, "utf8")).match(/tui_app_entry/g)?.length, { timeout: 30_000 }).toBe(2)
+    expect(await readFile(trace, "utf8")).not.toContain("tui_supervisor_entry")
+    await term.waitForText("preserved draft")
+    await term.waitForText("Before native reload.")
+    await term.press("Enter")
+    await term.waitForText("After native reload.")
+    expect(await statusSessionId(term)).toBe(session)
+    await term.attach(info, "native-reloaded")
+    await term.press("Control+d")
+    expect(await term.waitForExit()).toBe(0)
+    expect(await daemonStatus(workspace)).toBeDefined()
+  })
 })

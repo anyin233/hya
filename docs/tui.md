@@ -405,11 +405,11 @@ stop` plus another client's start, or through `/reconnect` does not, and
 neither does a remote backend (`/connect-remote`, `hya --connect`), a
 `--grpc` start, or a fixed `--server` without `--db`.
 
-How it works: the process a host starts (`bun <tui>/src/main.ts …`, run by
-bare `hya`, by each WebUI tab of the web host, or by hand) is a small
-supervisor (`src/supervisor.ts`). It runs the same entry again as the app
-(`src/tui.ts`) on the same terminal, with stdin, stdout, and stderr
-inherited, and forwards SIGINT, SIGTERM, and SIGHUP to it. To reload, the app
+How it works: bare `hya` supervises the terminal app directly, saving an
+extra Bun process at startup. Direct TUI starts and each WebUI tab still use
+the small Bun supervisor (`src/supervisor.ts`). Both use the same reload
+protocol and run `src/main.ts` as the app on the inherited terminal.
+To reload, the app
 restores the terminal, writes `{"argv": [...], "draft": {"text", "cursor"}}`
 to the file the supervisor named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the
 temporary directory), and exits with status **75**; the supervisor starts a
