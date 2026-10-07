@@ -212,9 +212,11 @@ open `index.html` to inspect individual failures. No test is excluded to
 accommodate a UI change.
 
 `e2e/hya-tui.spec.ts` needs a built backend. Run
-`cargo build -p hya-backend --bin hya` first, or set `HYA_BIN` to another
-`hya` binary. The `backend` fixture (`e2e/hya.ts`) starts `hya serve` on a
-free port. It uses a throwaway `--db` and a temporary `HOME` and `XDG_*`
+`cargo build -p hya-backend --bin hya -p xtask --bin xtask` first, or set
+`HYA_BIN` to another `hya` binary. The disk-inspector install spec also invokes
+`target/debug/xtask package-bundle <source> <archive>` to test the real package;
+building only `hya` does not provide that executable. The `backend` fixture
+(`e2e/hya.ts`) starts `hya serve` on a free port. It uses a throwaway `--db` and a temporary `HOME` and `XDG_*`
 directories, so your own config and keys are never read. `hyaTui(backend)`
 returns the argv that runs `packages/hya-tui` against that backend. The TUI
 dependencies must be installed (`bun install` in `packages/hya-tui`).
@@ -230,7 +232,8 @@ pinned Bun (the same `bun-v1.4.2` install used by the release workflow), runs
 `bun install --frozen-lockfile` in `packages/hya-tui`, `packages/hya-tui-web`,
 and `crates/hya-plugin-bun/adapter`, then `bun run typecheck && bun test` in
 `hya-tui` and the adapter and `bun run typecheck && bun test ./test` in
-`hya-tui-web`. It builds `hya` (`cargo build --locked -p hya-backend --bin hya`)
+`hya-tui-web`. It builds `hya` and the bundle packager
+(`cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask`)
 with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
 that binary, installs Chromium (`bunx playwright install --with-deps chromium`),
 and runs `bun run test:e2e` from `packages/hya-tui-web`, retrying a failed

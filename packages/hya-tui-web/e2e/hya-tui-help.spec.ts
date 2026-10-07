@@ -24,7 +24,7 @@ test.describe("key help", () => {
     await term.attach(testInfo, "help-open")
     // Filter by a group name: the views keys.
     await term.type("views")
-    await term.waitForText(/Alt\+Left\s+\[views\]\s+Focus the left tiled pane/)
+    await term.waitForText(/Alt\+Left\s+\[views\]\s+Previous pane in visual reading order \(wrap\)/)
     await term.waitForText(/\?\s+\[views\]\s+Show every key and command/)
     expect(await term.find("[composer]")).toBeNull()
     await term.attach(testInfo, "help-filtered")
