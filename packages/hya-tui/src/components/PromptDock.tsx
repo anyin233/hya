@@ -41,13 +41,11 @@ export function PromptDock() {
           <box
             width="100%"
             flexShrink={0}
-            border
-            borderColor={colors.warning}
-            title={heading()}
             backgroundColor={colors.panel}
             flexDirection="column"
             paddingX={1}
           >
+            <text height={1} wrapMode="none" fg={colors.warning}>{heading()}</text>
             <text height={1} wrapMode="none">
               <b style={{ fg: colors.fg }}>{view().headline}</b>
             </text>
