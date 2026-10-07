@@ -8,11 +8,9 @@ for (const width of [1100, 700]) {
     await term.press("Enter")
     await expect.poll(() => term.find("Commands")).toBeNull()
     await term.waitForText("No messages yet. Type a prompt below.")
-    // The compact context line (docs/tui.md "Layout") appears once the backend is ready; it is the
-    // only row above the transcript, followed by one blank row.
-    // Startup re-renders the conversation while it settles: read the rows once they hold.
-    await expect.poll(async () => (await term.find("mode manual"))?.row).toBe(0)
-    await expect.poll(async () => (await term.find("No messages yet. Type a prompt below."))?.row).toBe(2)
+    // Session context belongs in optional panes and /status, never above the transcript.
+    expect(await term.find("mode manual")).toBeNull()
+    await expect.poll(async () => (await term.find("No messages yet. Type a prompt below."))?.row).toBe(1)
     expect(await term.find("hya ·")).toBeNull()
     expect(await term.find("Layout · 5 panes")).toBeNull()
     expect(await term.find("Alt+arrows select pane")).toBeNull()
@@ -35,6 +33,6 @@ for (const width of [1100, 700]) {
     await term.waitForText("┃ clean input draft")
     await term.waitForText("No live provider is available", 20_000)
     expect(await term.find("hya ·")).toBeNull()
-    expect(await term.find("mode manual")).not.toBeNull()
+    expect(await term.find("mode manual")).toBeNull()
   })
 }

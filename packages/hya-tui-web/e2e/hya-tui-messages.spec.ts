@@ -7,7 +7,7 @@ import type { Tui } from "./harness"
 import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep } from "./hya"
 
 const colors = {
-  bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
+  bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
   error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#a5d6a7", inlineCode: "#f2a97a",
 }
 
