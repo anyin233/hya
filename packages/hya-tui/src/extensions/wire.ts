@@ -71,6 +71,7 @@ export interface NodeAction { readonly name: string; readonly data: JsonValue }
 export type RenderNode =
   | { readonly kind: "text"; readonly text: string; readonly style?: TextStyle; readonly action?: NodeAction }
   | { readonly kind: "row" | "column"; readonly children: readonly RenderNode[]; readonly gap?: number }
+  /** Structural container. Legacy border is accepted; the host renders a plain title without an outline. */
   | { readonly kind: "box"; readonly children: readonly RenderNode[]; readonly title?: string; readonly border?: boolean; readonly padding?: number }
   | { readonly kind: "table"; readonly columns: readonly string[]; readonly rows: readonly (readonly string[])[] }
   | { readonly kind: "progress"; readonly value: number; readonly total: number; readonly label?: string }

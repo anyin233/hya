@@ -10,7 +10,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { createSession, expect, hangStep, headlessTurn, hyaTui, showStatusView, statusSessionId, test, textStep, outlinedToolCard, toolStep, wideViewport } from "./hya"
+import { createSession, expect, hangStep, headlessTurn, hyaTui, showStatusView, statusSessionId, test, textStep, toolCardBlock, toolStep, wideViewport } from "./hya"
 import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
@@ -52,18 +52,18 @@ test.describe("bash permission prompt", () => {
     await term.waitForText(/2 {2}Always allow {2}bash: /)
     await term.waitForText(/3 {2}Deny/)
     await term.waitForText(/1-3 or ↑↓ Enter · Esc denies · perm_\w+ · mode manual/)
-    // The box is drawn in the warning color; the highlighted option in the accent color.
+    // The heading is drawn in the warning color; the highlighted option in the accent color.
     const box = await at(term, "Permission")
-    expect((await term.cell(box.row, box.col - 1))?.fg).toBe(colors.warning)
+    expect((await term.cell(box.row, box.col))?.fg).toBe(colors.warning)
     const first = await at(term, "▸ 1  Allow once")
     expect((await term.cell(first.row, first.col))?.fg).toBe(colors.accent)
     // The tool card waits meanwhile.
-    await term.waitForText(outlinedToolCard("◌", "bash", '"command":"echo prompt-once"', "awaiting approval"))
+    await term.waitForText(toolCardBlock("◌", "bash", '"command":"echo prompt-once"', "awaiting approval"))
     await term.attach(testInfo, "bash-prompt")
 
     await term.press("1")
     await term.waitForText("Ran it once.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo prompt-once"'))
+    await term.waitForText(toolCardBlock("✓", "bash", '"command":"echo prompt-once"'))
     await promptGone(term)
   })
 
@@ -110,7 +110,7 @@ test.describe("always allow", () => {
     // The same command again: no prompt (the turn would block on it), the reply arrives.
     await prompt(term, "run it again")
     await term.waitForText("Second run.", 20_000)
-    const cards = (await term.text()).match(new RegExp(outlinedToolCard("✓", "bash", '"command":"echo always-allowed"').source, "g")) ?? []
+    const cards = (await term.text()).match(new RegExp(toolCardBlock("✓", "bash", '"command":"echo always-allowed"').source, "g")) ?? []
     expect(cards.length).toBe(2)
   })
 })
@@ -125,7 +125,7 @@ test.describe("deny", () => {
     await promptShown(term)
     await term.press("3")
     await term.waitForText("It was denied.", 20_000)
-    await term.waitForText(outlinedToolCard("✗", "bash", '"command":"echo never"'))
+    await term.waitForText(toolCardBlock("✗", "bash", '"command":"echo never"'))
     const failed = await at(term, "✗")
     expect((await term.cell(failed.row, failed.col))?.fg).toBe(colors.error)
     await promptGone(term)
@@ -139,7 +139,7 @@ test.describe("deny", () => {
     await promptShown(term)
     await term.press("Escape")
     await term.waitForText("It was denied.", 20_000)
-    await term.waitForText(outlinedToolCard("✗", "bash", '"command":"echo never"'))
+    await term.waitForText(toolCardBlock("✗", "bash", '"command":"echo never"'))
     await promptGone(term)
   })
 })
@@ -168,7 +168,7 @@ test.describe("edit permission prompt", () => {
     await term.attach(testInfo, "edit-prompt")
     await term.press("1")
     await term.waitForText("Edited the poem.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "edit", '"path":"poem.txt"'))
+    await term.waitForText(toolCardBlock("✓", "edit", '"path":"poem.txt"'))
   })
 })
 
@@ -196,7 +196,7 @@ test.describe("queued asks", () => {
     await term.press("1")
     await promptGone(term)
     await term.waitForText("Parent done.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo parent-ask"'))
+    await term.waitForText(toolCardBlock("✓", "bash", '"command":"echo parent-ask"'))
   })
 })
 
@@ -321,7 +321,7 @@ test.describe("shell turns", () => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "!echo shell-prompt")
-    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo shell-prompt"'), 20_000)
+    await term.waitForText(toolCardBlock("✓", "bash", '"command":"echo shell-prompt"'), 20_000)
     await term.waitForText("│ shell-prompt")
     expect(await term.text()).not.toMatch(/asked by /)
   })

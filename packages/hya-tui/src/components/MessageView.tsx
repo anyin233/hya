@@ -6,7 +6,7 @@ import { hooked } from "../extensions/renderTree"
  * - user: a panel-colored block with a heavy accent bar on the left; queued
  *   prompts use a muted bar and text and a `queued` tag.
  * - assistant (and other roles): an `● agent · provider/model` header, the
- *   blocks (Markdown text, collapsible reasoning, transparent outlined tool
+ *   blocks (Markdown text, collapsible reasoning, transparent borderless tool
  *   cards with complete arguments and expandable output — a `task` card links
  *   to its subagent), and at most one finish notice (error,
  *   cancelled, length limit).
@@ -218,8 +218,8 @@ function iconColor(status: ToolStatus | "waiting"): string {
 }
 
 /**
- * A tool call card is transparent and outlined: the header shows state and the
- * canonical tool name, the complete arguments occupy the first row, and the
+ * A tool call card is transparent and borderless: a plain heading names the
+ * canonical tool, the header shows state, the next row holds arguments, and the
  * output/error is separated by a divider in the expanded state. A click on the
  * card toggles it; a `task` card opens its child session instead (see
  * `TaskCard`).
@@ -236,13 +236,14 @@ function BaseToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
         {(task) => <TaskCard block={props.block} task={task()} />}
       </Match>
       <Match when={!card().task}>
-        <box width="100%" flexDirection="column" border borderColor={colors.border} title={card().tool} titleColor={colors.fg} paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
+        <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
+          <text height={1} wrapMode="none" fg={colors.fg}>{card().tool}</text>
           <CardHeader status={waiting() ? "waiting" : card().status} summary={waiting() ? "awaiting approval" : ""} duration={card().duration} />
           <Show when={!expanded()} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{card().displayArgs || card().args || "{}"}</text>}>
             <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{card().displayArgs || card().args || "{}"}</text>
           </Show>
           <Show when={expanded() && ((card().output ?? card().body).length > 0 || Boolean(card().error))}>
-            <box width="100%" flexDirection="column">
+            <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
               <text width="100%" height={1} wrapMode="none" fg={colors.border}>────────────────</text>
               <For each={card().output ?? card().body}>
                 {(line) => <text width="100%" wrapMode="none" fg={toneColor(line.tone)}>{line.text || " "}</text>}
@@ -324,7 +325,8 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
     }
   }
   return (
-    <box width="100%" flexDirection="column" border borderColor={colors.border} title={props.block.card.tool} titleColor={colors.fg} onMouseDown={open}>
+    <box width="100%" flexDirection="column" onMouseDown={open}>
+      <text height={1} wrapMode="none" fg={colors.fg}>{props.block.card.tool}</text>
       <CardHeader status={props.block.card.status} summary={props.block.card.summary} duration={props.block.card.duration} />
       <Show when={props.block.card.error}>
         <box width="100%" paddingLeft={2}>

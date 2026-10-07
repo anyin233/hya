@@ -7,7 +7,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, outlinedToolCard, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
+import { expect, hangStep, hyaTui, toolCardBlock, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 
 const colors = {
   fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b",
@@ -53,7 +53,7 @@ test.describe("read card", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read my notes")
     await term.waitForText("Read the notes.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "read", '"path":"notes.txt","offset":1,"limit":2'))
+    await term.waitForText(toolCardBlock("✓", "read", '"path":"notes.txt","offset":1,"limit":2'))
     const icon = await at(term, "✓")
     // A blank row separates the card from the reply text after it.
     expect((await at(term, "Read the notes.")).row).toBeGreaterThan(icon.row + 2)
@@ -87,7 +87,7 @@ test.describe("bash card", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "run printf")
     await term.waitForText("Ran it.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"printf \'first\\\\nsecond\\\\n\'"'))
+    await term.waitForText(toolCardBlock("✓", "bash", '"command":"printf \'first\\\\nsecond\\\\n\'"'))
     expect(await term.find("$ printf")).toBeNull()
 
     await term.press("Control+x")
@@ -130,8 +130,8 @@ test.describe("edit and write cards", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "edit the poem")
     await term.waitForText("Edited.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "edit", '"path":"poem.txt"'))
-    await term.waitForText(outlinedToolCard("✓", "write", '"path":"fresh.txt"'))
+    await term.waitForText(toolCardBlock("✓", "edit", '"path":"poem.txt"'))
+    await term.waitForText(toolCardBlock("✓", "write", '"path":"fresh.txt"'))
     await prompt(term, "/tools on")
     await term.waitForText("- two")
     const removed = await at(term, "- two")
@@ -156,7 +156,7 @@ test.describe("failed tool", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "read the missing file")
     await term.waitForText("It is missing.", 20_000)
-    await term.waitForText(outlinedToolCard("✗", "read", '"path":"missing.txt"'))
+    await term.waitForText(toolCardBlock("✗", "read", '"path":"missing.txt"'))
     const icon = await at(term, "✗")
     expect((await term.cell(icon.row, icon.col))?.fg).toBe(colors.error)
     expect(await term.find("File not found")).toBeNull()
@@ -180,7 +180,7 @@ test.describe("running tool", () => {
     expect(spinner?.char).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
     expect(spinner?.fg).toBe(colors.accent)
     await term.waitForText("Slept.", 20_000)
-    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"sleep 2"'))
+    await term.waitForText(toolCardBlock("✓", "bash", '"command":"sleep 2"'))
     const done = await at(term, "✓")
     expect((await term.lines())[done.row]).toMatch(/\d+(\.\d+)?(ms|s)/)
   })
@@ -201,8 +201,8 @@ test.describe("subagents", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "delegate the survey")
     await term.waitForText("Spawned a helper.", 20_000)
-    // The bordered card: titled `task`, its next row names the subagent and the description.
-    await term.waitForText(/┌─task[^\n]*\n[^\n]*hya-task · survey the repo/)
+    // The borderless card: headed `task`, its next row names the subagent and the description.
+    await term.waitForText(/task[^\n]*\n[^\n]*hya-task · survey the repo/)
     // The child is still working (its model request hangs): running, with its latest tool call.
     await term.waitForText(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running/, 15_000)
     await term.waitForText("↳ read notes.txt", 15_000)
@@ -219,7 +219,7 @@ test.describe("subagents", () => {
     await term.waitForText("Viewing subagent hya-task · Esc returns")
     await term.waitForText("Read-only subagent view · / opens commands · Esc returns")
     await term.waitForText("┃ list the files")
-    await term.waitForText(outlinedToolCard("✓", "read", '"path":"notes.txt"'))
+    await term.waitForText(toolCardBlock("✓", "read", '"path":"notes.txt"'))
     await term.attach(testInfo, "child-view")
     await prompt(term, "can I type here")
     await term.waitForText("│ can I type here")
@@ -259,7 +259,7 @@ test.describe("narrow terminal", () => {
     await term.waitForText("Done.", 20_000)
     await prompt(term, "/tools on")
     await term.waitForText(/│ narrow-output/)
-    await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo narrow-output && ls"'))
+    await term.waitForText(toolCardBlock("✓", "bash", '"command":"echo narrow-output && ls"'))
     await term.attach(testInfo, "narrow")
   })
 })

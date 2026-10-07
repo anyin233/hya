@@ -498,12 +498,12 @@ export async function createSession(term: Tui): Promise<string> {
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 /**
- * A tool card (docs/tui.md "Tool calls"): the bordered box titled `tool`, its state row
+ * A tool card (docs/tui.md "Tool calls"): the borderless block headed `tool`, its state row
  * (`icon`, then `summary` such as `awaiting approval`), and the next row showing either the
  * compact JSON arguments containing `args` or the card's display of the first argument value
  * (`"command":"echo hi"` → `echo hi`).
  */
-export function outlinedToolCard(icon: "✓" | "✗" | "◌" | "○", tool: string, args: string, summary?: string): RegExp {
+export function toolCardBlock(icon: "✓" | "✗" | "◌" | "○", tool: string, args: string, summary?: string): RegExp {
   const state = `${escapeRegExp(icon)}${summary ? `\\s+${escapeRegExp(summary)}` : ""}`
   let display = args
   try {
@@ -512,7 +512,7 @@ export function outlinedToolCard(icon: "✓" | "✗" | "◌" | "○", tool: stri
     if (typeof first === "string") display = first
     else if (first !== undefined) display = String(first)
   } catch { /* compact argument fragment is not JSON on its own */ }
-  return new RegExp(`┌[^\\n]*${escapeRegExp(tool)}[^\\n]*\\n[^\\n]*${state}[^\\n]*\\n[^\\n]*(?:\\{[^\\n]*${escapeRegExp(args)}|${escapeRegExp(display)})`)
+  return new RegExp(`[^\\n]*${escapeRegExp(tool)}[^\\n]*\\n[^\\n]*${state}[^\\n]*\\n[^\\n]*(?:\\{[^\\n]*${escapeRegExp(args)}|${escapeRegExp(display)})`)
 }
 
 /**

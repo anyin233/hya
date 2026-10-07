@@ -1,3 +1,4 @@
-# 0.44.12
+# 0.44.13
 
-- Bubble a pane or group between adjacent siblings in the layout tree with Shift+Up/Down, the actions menu, or `/layout bubble <node> <previous|next>`. Preserve subtree contents, size policies, selection and keyboard focus, and save the reordered layout.
+- Reserve enclosing borders for selectable UI. Pending summaries, permission/question warnings, transcript tool/task blocks and passive extension containers now use plain headings and text; input and pane focus frames remain available.
+- Remove obsolete notice border rows from composer sizing. RenderNode boxes keep their title/padding contracts while accepting the legacy border flag without drawing an outline.
