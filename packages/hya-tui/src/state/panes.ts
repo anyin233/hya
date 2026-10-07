@@ -1,7 +1,7 @@
 /** Local split tree for the whole workspace. Backend projections are shared by its panes. */
 import { projectsSidebarVisible, sidebarMinColumns, sidebarVisible, type SidebarMode } from "./layout"
 
-export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "layout", "extension"] as const
+export const paneKinds = ["conversation", "composer", "activity", "projects", "jobs", "sessions", "todos", "context", "models", "workflows", "interactions", "status", "api", "layout", "extension", "subagents", "subagent-viewer"] as const
 export type PaneKind = typeof paneKinds[number]
 export interface PaneDefinition {
   title: string
@@ -11,6 +11,8 @@ export interface PaneDefinition {
 }
 /** Layout and input eligibility share one definition for each pane kind. */
 export const paneDefinitions: Record<PaneKind, PaneDefinition> = {
+  subagents: { title: "Subagents", selectable: true, minColumns: 16, minRows: 5 },
+  "subagent-viewer": { title: "Subagent viewer", selectable: false, minColumns: 16, minRows: 5 },
   conversation: { title: "Conversation", selectable: false, minColumns: 12, minRows: 3 },
   composer: { title: "Message editor", selectable: true, minColumns: 12, minRows: 3 },
   activity: { title: "Agent activity", selectable: false, minColumns: 8, minRows: 1 },
@@ -33,7 +35,7 @@ import { parseLegacyPaneLayout, type PaneNode as LegacyNode } from "./legacyPane
 export type PaneAxis = "horizontal" | "vertical"
 export type PaneDirection = "left" | "right" | "up" | "down"
 export type LayoutDirection = "row" | "column"
-export interface PaneLeaf { type: "pane"; id: string; kind: PaneKind; panel?: string }
+export interface PaneLeaf { type: "pane"; id: string; kind: PaneKind; panel?: string; session?: string }
 export type PaneSize = { mode: "weight"; value: number } | { mode: "content" }
 export interface PaneChild { node: PaneNode; size: PaneSize }
 export interface PaneSplit { type: "split"; id: string; direction: LayoutDirection; children: PaneChild[] }
@@ -332,6 +334,7 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
     if (row.type === "pane") {
       if (!/^pane-[1-9]\d*$/.test(row.id) || !paneKinds.includes(row.kind as PaneKind) || ++leaves > maxPanes) return false
       if (row.kind === "extension" ? typeof row.panel !== "string" || !extensionPanelKey.test(row.panel) : row.panel !== undefined) return false
+      if (row.session !== undefined && (row.kind !== "subagent-viewer" || typeof row.session !== "string" || !row.session.trim())) return false
       if (row.kind === "conversation") conversations++
       if (row.kind === "composer") composers++
       return true
@@ -351,4 +354,15 @@ export function parsePaneLayout(value: unknown): PaneLayout | undefined {
   }
   if (!valid(record.root, 0) || conversations !== 1 || composers !== 1 || !paneLeaves(record.root).some((pane) => pane.id === record.active)) return undefined
   return finish({ version: 4, root: record.root, active: record.active }, record.root)
+}
+
+/** A viewer without a session follows the selector; a session pins this instance. */
+export function pinSubagentViewer(layout: PaneLayout, id: string, session?: string): PaneLayout {
+  if (session !== undefined && !session.trim()) throw new Error("Subagent session must not be empty")
+  const target = paneLeaves(layout.root).find((pane) => pane.id === id)
+  if (target?.kind !== "subagent-viewer") throw new Error(`Not a subagent viewer: ${id}`)
+  return { ...layout, root: mapNode(layout.root, id, (node) => {
+    const { session: previous, ...leaf } = node as PaneLeaf
+    return session ? { ...leaf, session } : leaf
+  }) }
 }

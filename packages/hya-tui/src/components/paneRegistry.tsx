@@ -1,3 +1,4 @@
+import { SubagentsPane, SubagentViewer } from "./SubagentPanes"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { Show, type Component } from "solid-js"
 import type { DiffScroller, PaneInputHandle } from "../app/context"
@@ -74,7 +75,7 @@ function paneText(state: AppState, kind: PaneKind, server: string): string {
       `Directory   ${state.selected?.workdir || "none"}`,
     ].join("\n")
     case "models": case "workflows": case "interactions": case "api": return mainContent(state, kind)
-    case "composer": case "activity": case "projects": case "conversation": case "sessions": case "todos": case "context": case "layout": case "extension": return ""
+    case "composer": case "activity": case "projects": case "conversation": case "sessions": case "todos": case "context": case "layout": case "extension": case "subagents": case "subagent-viewer": return ""
   }
 }
 
@@ -117,12 +118,13 @@ const renderers: Record<PaneKind, Component<PaneRenderProps>> = {
   projects: BundledPane, sessions: BundledPane, todos: BundledPane, context: BundledPane, extension: BundledPane,
   jobs: TextPane, status: TextPane, models: TextPane, workflows: TextPane, interactions: TextPane, api: TextPane,
   layout: LayoutPane,
+  subagents: SubagentsPane, "subagent-viewer": SubagentViewer,
 }
 /** Every pane uses the same registration and input ownership contract. */
 export const paneRegistry: Record<PaneKind, RegisteredPane> = Object.fromEntries(
   paneKinds.map((kind) => [kind, {
     ...paneDefinitions[kind], render: renderers[kind],
-    input: !paneDefinitions[kind].selectable || kind === "composer" || kind === "layout" ? undefined
+    input: !paneDefinitions[kind].selectable || kind === "composer" || kind === "layout" || kind === "subagents" ? undefined
       : bundledInput,
   }]),
 ) as Record<PaneKind, RegisteredPane>
