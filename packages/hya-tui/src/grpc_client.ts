@@ -1,3 +1,4 @@
+import { packageRoot } from "./packageRoot"
 /** Native hya.v1 gRPC transport for the shared OpenTUI workflows. */
 import * as grpc from "@grpc/grpc-js"
 import * as protoLoader from "@grpc/proto-loader"
@@ -102,7 +103,7 @@ class NativeGrpcWire implements GrpcWire {
   private readonly definitions: protoLoader.PackageDefinition
 
   constructor(endpoint: string) {
-    const protoRoot = resolve(import.meta.dir, "proto")
+    const protoRoot = resolve(packageRoot, "src/proto")
     const protoDir = resolve(protoRoot, "hya/v1")
     this.definitions = protoLoader.loadSync(
       readdirSync(protoDir).filter((name) => name.endsWith(".proto")).map((name) => resolve(protoDir, name)),
