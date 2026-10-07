@@ -224,6 +224,11 @@ dependencies must be installed (`bun install` in `packages/hya-tui`).
 runs the specs against that TUI instead (for example an older revision, to
 show that a new spec fails without the change it covers).
 
+Daemon reconnect specs read each `/status` field from one terminal-buffer
+snapshot and reopen the status view while waiting for the successor PID.
+Reconnection restores the conversation asynchronously, so a prior successful
+text wait does not guarantee a later screen read still contains the field.
+
 ### CI
 
 `.github/workflows/ci.yml`'s `tui` job runs this suite on every push and pull
