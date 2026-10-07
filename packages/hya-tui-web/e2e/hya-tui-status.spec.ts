@@ -10,7 +10,14 @@ const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
 const colors = { fg: "#e8edf3", muted: "#9caab9", warning: "#e5c07b", error: "#f07878" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
-  await term.type(text)
+  if (text.startsWith("/")) {
+    await term.type("/")
+    await term.waitForText("Commands")
+    await term.type(text.slice(1))
+  } else {
+    await term.type(text)
+  }
+  await term.waitForText(text)
   await term.press("Enter")
 }
 

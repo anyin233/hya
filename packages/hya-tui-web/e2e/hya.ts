@@ -367,7 +367,13 @@ export const test = withOptions.extend<Fixtures>({
   tui: async ({ tui, backend }, use, testInfo) => {
     let last: Tui | undefined
     const isolated = { HYA_TUI_CONFIG: join(dirname(backend.dir), "config", "hya", "tui.json") }
-    await use(async (command, options = {}) => (last = await tui(command, { ...options, env: { ...isolated, ...options.env } })))
+    await use(async (command, options = {}) => {
+      last = await tui(command, { ...options, env: { ...isolated, ...options.env } })
+      // Plain v1 TUI starts create their initial session asynchronously.
+      // Wait for admission before tests immediately issue commands or API reads.
+      if (command.includes("--server") && !command.includes("--continue") && !command.includes("--remote") && !command.includes("--session")) await waitForSession(backend)
+      return last
+    })
     if (last) await last.attach(testInfo, "final-screen").catch(() => {})
   },
 })
@@ -390,6 +396,14 @@ export async function api<T>(backend: Backend, method: string, path: string, bod
   const text = await response.text()
   if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status} ${text}`)
   return text ? (JSON.parse(text) as T) : (undefined as T)
+}
+
+/** Wait until a plain TUI start has created its initial session. */
+export async function waitForSession(backend: Backend, timeout = 15_000): Promise<void> {
+  await expect.poll(async () => {
+    const result = await api<{ sessions?: unknown[] }>(backend, "GET", "/v1/sessions")
+    return result.sessions?.length ?? 0
+  }, { timeout }).toBeGreaterThan(0)
 }
 
 /**
