@@ -1,4 +1,5 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
+import { subagentsCommand } from "./subagents"
 import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
 import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
@@ -336,6 +337,7 @@ const runEffort = (context: CommandContext, { args }: CommandInvocation): Promis
 
 export const nativeCommandSpecs: CommandSpec[] = [
   keybindingsCommand,
+  subagentsCommand,
   {
     name: "/layout",
     description: "Edit workspace panes: split, insert, move, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",

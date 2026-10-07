@@ -22,7 +22,7 @@ import { pageStep, ScrollFollow } from "../state/scroll"
 import { colors } from "../theme"
 import { KeyedFor, MessageItem } from "./MessageView"
 
-export function Transcript() {
+export function Transcript(props: { secondary?: boolean } = {}) {
   const { store, ui } = useApp()
   const renderer = useRenderer()
   const views = createMemo(() => transcriptViews(store.state))
@@ -43,7 +43,7 @@ export function Transcript() {
       if (scroll) scroll.scrollTop = scroll.scrollHeight
     },
   }
-  ui.transcript = scroller
+  if (!props.secondary) ui.transcript = scroller
 
   // Once per rendered frame: raise or clear the "new messages below" hint.
   const onFrame = async (): Promise<void> => {
@@ -67,7 +67,7 @@ export function Transcript() {
 
   return (
     <box width="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
-      <Show when={store.state.selected?.parent}>
+      <Show when={!props.secondary && store.state.selected?.parent}>
         <box width="100%" height={1} flexShrink={0} backgroundColor={colors.panel} paddingX={1}>
           <text height={1} wrapMode="none">
             <span style={{ fg: colors.warning }}>{`Viewing subagent ${store.state.selected?.agent ?? ""}`}</span>

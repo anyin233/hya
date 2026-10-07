@@ -6,6 +6,7 @@ import { matchValues, type CommandRegistry, type Completion } from "./commands/r
 
 export interface CompletionContext {
   /** Saved layout leaves, including passive and currently hidden panes. */
+  subagents?: string[]
   panes?: { id: string; kind: string }[]
   layoutContainers?: { id: string; children: string[]; removable: boolean }[]
   backendCommands: string[]
