@@ -806,23 +806,32 @@ export function Composer(props: { width: number }) {
       if (decorator.node.kind !== "column") continue
       const at = decorator.node.children.findIndex((child) => child.kind === "slot")
       const piece = (children: readonly RenderNode[]): HookTree => ({ ...decorator, node: { kind: "column", children } })
-      above.unshift(piece(decorator.node.children.slice(0, at)))
-      below.push(piece(decorator.node.children.slice(at + 1)))
+      if (at > 0) above.unshift(piece(decorator.node.children.slice(0, at)))
+      if (at + 1 < decorator.node.children.length) below.push(piece(decorator.node.children.slice(at + 1)))
     }
     return { above, below }
   }
+  createEffect(() => {
+    const decorations = parts()
+    if (!decorations.above.length) setAboveRows(0)
+    if (!decorations.below.length) setBelowRows(0)
+  })
   const part = (tree: HookTree) => <RenderTree node={tree.node} host={{ onAction: (action) => void extensionManager.action(tree.extension, { kind: "renderer", id: tree.renderer }, action) }} />
   return (
     <box width="100%" flexDirection="column" flexShrink={0}>
-      <box ref={(element: BoxRenderable) => above = element} width="100%" flexDirection="column" flexShrink={0}
-        onSizeChange={() => setAboveRows(above?.height ?? 0)}>
-        <For each={parts().above}>{part}</For>
-      </box>
+      <Show when={parts().above.length > 0}>
+        <box ref={(element: BoxRenderable) => above = element} width="100%" flexDirection="column" flexShrink={0}
+          onSizeChange={() => setAboveRows(above?.height ?? 0)}>
+          <For each={parts().above}>{part}</For>
+        </box>
+      </Show>
       <BaseComposer {...props} decorationRows={() => aboveRows() + belowRows()} />
-      <box ref={(element: BoxRenderable) => below = element} width="100%" flexDirection="column" flexShrink={0}
-        onSizeChange={() => setBelowRows(below?.height ?? 0)}>
-        <For each={parts().below}>{part}</For>
-      </box>
+      <Show when={parts().below.length > 0}>
+        <box ref={(element: BoxRenderable) => below = element} width="100%" flexDirection="column" flexShrink={0}
+          onSizeChange={() => setBelowRows(below?.height ?? 0)}>
+          <For each={parts().below}>{part}</For>
+        </box>
+      </Show>
     </box>
   )
 }
