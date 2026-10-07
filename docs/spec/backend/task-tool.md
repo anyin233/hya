@@ -7,86 +7,33 @@
 - Trigger: changes to the `task` tool schema, resume IDs, member normalization,
   or `SpawnerPlane` dispatch.
 
-### 2. Signatures
+### 2. Signatures and validation
 
-- Single mode uses top-level `description`, `prompt`, `subagent_type`, and an
-  optional `task_id` parsed by the shared `SessionId` parser.
-- A non-empty `members` array selects batch mode. Each listed member supplies
-  its own description, prompt, and subagent type.
-- `subagent_type` is the only way to choose the agent; empty or omitted
-  normalizes to `general`. The handle is derived from it: the runtime passes
-  the resolved agent id to `ResidentSupervisor::spawn_resident_typed`, which
-  sanitizes it with `hya_tool::sanitize_handle_prefix` and mints the leaf
-  `<prefix>-<operator>` (`hya_core::handle_naming`). `SpawnMember` has no
-  name field.
-- The runtime passes a `hya_core::TaskSpawnOrigin` (resolved agent id, the
-  member's `description`, and the operation's source tool call id); the
-  parent-log `MemberSpawned` records that description and
-  `tool_call: Some(call)`, so v1 `memberUpdated.callId` links the member row
-  to the `task` tool card.
-- `name` (top level or per member) was removed in 0.41.0. The input structs
-  still deserialize it only to reject it.
+- Preferred input: `{context?: string, tasks: TaskMember[]}`. `tasks` must be
+  non-empty; `members` is a compatibility alias and cannot coexist with it.
+- Each task requires a non-blank `prompt`; optional `description`,
+  `subagent_type`, `category`, `model`, `effort` and `inline_agent` belong to
+  that task. Empty or omitted agent selects `hya-task`.
+- Legacy single mode requires top-level non-blank `description` and `prompt`.
+  Batch mode does not require or consume those single-task fields.
+- Non-blank `context` is prepended to every normalized prompt with two newlines.
+- `name` remains rejected (top-level or member); runtime derives handles from
+  the resolved agent type. `task_id`, `background`, `resident` are obsolete;
+  every spawn is non-blocking and follow-up uses mail.
+- Validate all prompts and all permissions before one `SpawnerPlane` request.
+  Runtime roster/model preflight and admission govern the entire batch.
+- Runtime registers members concurrently with ordered `join_all` outcomes.
+  Batch response stays a batch even for one task. Running members must never
+  be rendered as completed; include individual handles, sessions and errors in
+  model-visible output. Partial registration failure does not erase siblings.
 
-### 3. Contracts
+### 3. Verification
 
-- `members.is_empty()` selects single mode; validate and forward top-level
-  `task_id` only in this branch.
-- Non-empty `members` selects batch mode; top-level `task_id` is unused and must
-  not block dispatch. Every normalized batch member has `task_id: None`.
-- Validate compatibility-shaped fields only when the selected mode consumes
-  them. Do not globally normalize malformed resume IDs into new tasks.
-
-### 4. Validation & Error Matrix
-
-- Single mode with malformed `task_id` -> `ToolError::Input("invalid task_id: ...")`.
-- Single mode with missing required top-level fields -> input error before spawn.
-- Batch mode with any top-level `task_id` -> ignore it and validate the members.
-- Background mode with more than one normalized member -> input error.
-- Any `name` key (top level or on any member, any value, even empty) ->
-  `ToolError::Input("`name` was removed; the handle is derived from
-  `subagent_type`. …")`, before anything reaches `SpawnerPlane`. The schema
-  is not strict (`additionalProperties` is unset), so without this check the
-  key would be silently ignored.
-
-### 5. Good / Base / Bad Cases
-
-- Good: two members plus `task_id: ""` reach `SpawnerPlane`; both member IDs are
-  `None`.
-- Base: omitted `task_id` creates a new single task; a valid ID resumes one.
-- Bad: parsing top-level `task_id` before checking whether `members` selected
-  batch mode.
-
-### 6. Tests Required
-
-- A `TaskTool` integration test must capture the batch request at `SpawnerPlane`
-  and assert every member ID is `None`.
-- Keep coverage for valid and malformed single-mode resume IDs.
-- Run `cargo test -p hya-tool --test task` after changing this contract.
-
-### 7. Wrong vs Correct
-
-#### Wrong
-
-```rust
-if let Some(task_id) = task_id.as_deref() {
-    task_id
-        .parse::<SessionId>()
-        .map_err(|e| ToolError::Input(format!("invalid task_id: {e}")))?;
-}
-// Batch members are built afterward and discard the top-level task ID.
-```
-
-#### Correct
-
-```rust
-if members.is_empty() {
-    if let Some(task_id) = task_id.as_deref() {
-        task_id
-            .parse::<SessionId>()
-            .map_err(|e| ToolError::Input(format!("invalid task_id: {e}")))?;
-    }
-}
-```
+`cargo test -p hya-tool --test task` covers schema, context propagation, input
+validation, legacy inputs, permission and typed errors, and result shapes.
+`hya-app/tests/spawn_admission.rs` proves multiple children enter provider work
+before either is released. Track P `p08_subagent_task` proves the batched tool
+creates distinct child sessions and produces independent child outputs.
 
 ## Scenario: Durable Spawn Admission
 

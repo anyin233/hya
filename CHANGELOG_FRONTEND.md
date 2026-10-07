@@ -1,4 +1,5 @@
-# 0.44.14
+# 0.44.15
 
-- Keep tree rows and action menus visible in compact Layout panes by limiting footer hint height and rendering the edit preview on one row. Long hints no longer consume the scrolling viewport.
-- Stabilize the browser provider-error assertion by checking the assistant heading and error together in one terminal-buffer snapshot.
+## TUI
+
+- Recognize `task` calls using `tasks[]` as batch cards with the member label and count, retaining `members[]` compatibility and ignoring unused single-task labels in batch mode.

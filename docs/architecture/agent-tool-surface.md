@@ -78,7 +78,10 @@ The wire enum gained `TODO_STATUS_BLOCKED`.
 
 ### Task
 
-`task` launches one subagent or a multi-member batch. Under the unified
+`task` launches independent subagents concurrently in one `tasks[]` batch. Use a
+batch to avoid serialized spawn/wait loops; continue independent work while the
+children run, then use `wait` when blocked on their reports. Single-task calls
+remain supported. Under the unified
 lifecycle ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md))
 every spawn is a **non-blocking resident**: the call returns immediately with
 the agent's handle and session; results arrive later as the agent's `report`
@@ -101,7 +104,38 @@ fall back to `hya-task`.
 | `effort` | Thinking effort for this spawn (also per member): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, as the child's model accepts. Wins over a `model` suffix and over the agent's default effort (`list_agents` shows it). A level the child's model does not accept fails the call with `INVALID_EFFORT: \`<level>\` for \`<model>\`` and spawns nothing. The result names the child's model, suffix included: `<task id="…" model="provider/model#level" state="…">`. |
 | `command` | Optional command that triggered the task. |
 | `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
-| `members[]` | Fan one call out to several subagents concurrently (each needs `prompt`; optional per-member overrides). Registration runs in parallel and returns all handles together. |
+| `context` | Optional string prepended to each prompt, separated by two newlines; shared goal, interfaces and constraints. Works in single and batch forms. |
+| `tasks[]` | Non-empty array of tasks; each requires a non-empty string `prompt`. Optional fields: `description`, `subagent_type`, `category`, `model`, `effort` (strings), `inline_agent` (object as above). Registration runs concurrently and returns all handles together. |
+| `members[]` | Compatibility alias for `tasks[]`; supplying both is an input error. |
+
+Batch calls require no top-level `description` or `prompt`. Top-level single-task
+fields (`description`, `prompt`, `subagent_type`, `category`, `model`, `effort`,
+`inline_agent`) are ignored in batch mode; set overrides on each item. Empty
+arrays and blank member prompts fail before permission checks or dispatch.
+Permissions, roster authorization and governor limits still apply to the whole
+request. Shared context is task input, not inherited conversation history.
+
+```json
+{
+  "context": "Map routing behavior. Read only; report evidence with paths.",
+  "tasks": [
+    {"description": "Map entry points", "subagent_type": "hya-scout", "prompt": "Find request dispatch and error mapping."},
+    {"description": "Inspect tests", "subagent_type": "hya-scout", "prompt": "Find routing tests and missing cases."}
+  ]
+}
+```
+
+Batch responses (including a one-item batch) carry `title`, `output`, and
+`metadata: {parentSessionId, status, members}`. Each `members` entry has string
+fields `member` (handle), `session`, `sessionId`, `status`, `summary`,
+`description`, `subagent_type`, plus nullable string `model`. Entries preserve
+input order. Aggregate `status` is `running` if any member is running, `error`
+if none run and any failed, otherwise `completed`. The textual output includes
+every entry, so handles and per-member failures are visible to the model.
+`running` acknowledges launch only; completion arrives through report mail.
+A failed registration does not cancel siblings that launched successfully;
+inspect individual statuses before retrying. Single-form responses retain
+`metadata.sessionId`, `subagent_type`, `status` and now include `member`.
 
 Handles are never reused within a team (live or archived members), so a bare
 leaf always names one member and mail to an archived member's handle wakes
