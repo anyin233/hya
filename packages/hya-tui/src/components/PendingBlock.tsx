@@ -1,7 +1,7 @@
 /**
  * Pending permission requests (!) and questions (?) of other session trees
  * (the open session's own asks and its subagents' are the prompt,
- * components/PromptDock.tsx), as a compact titled box above the status line
+ * components/PromptDock.tsx), as a compact borderless summary above the status line
  * while any are waiting. Each line names the session it belongs to (its
  * `/open` number and title, state/format.ts `pendingLines`); asks of any
  * session arrive live over the global stream (app/controller.ts). Shows up
@@ -19,7 +19,7 @@ const shown = 3
 export function PendingBlock(props: { width?: number }) {
   const { store } = useApp()
   const size = useTerminalDimensions()
-  const inner = () => Math.max(10, (props.width ?? size().width) - 4)
+  const inner = () => Math.max(10, (props.width ?? size().width) - 2)
   const lines = () => pendingLines(store.state, inner())
   const more = () => lines().length - shown
   return (
@@ -27,13 +27,11 @@ export function PendingBlock(props: { width?: number }) {
       <box
         width="100%"
         flexShrink={0}
-        border
-        borderColor={colors.border}
-        title={`Pending (${lines().length})`}
         backgroundColor={colors.panel}
         flexDirection="column"
         paddingX={1}
       >
+        <text height={1} wrapMode="none" fg={colors.warning}>{`Pending (${lines().length})`}</text>
         <For each={lines().slice(0, shown)}>
           {(line) => <text height={1} wrapMode="none" fg={colors.fg}>{line}</text>}
         </For>

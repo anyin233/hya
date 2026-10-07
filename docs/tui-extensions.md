@@ -234,11 +234,19 @@ captured keys are delivered through `tui/key`. A handler can return
 { "kind": "text", "text": "Review complete", "style": { "color": "accent", "bold": true }, "action": { "name": "open", "data": 3 } }
 { "kind": "row", "children": [], "gap": 1 }
 { "kind": "column", "children": [] }
-{ "kind": "box", "title": "Summary", "children": [], "border": true, "padding": 1 }
+{ "kind": "box", "title": "Summary", "children": [], "padding": 1 }
 { "kind": "table", "columns": ["File", "Status"], "rows": [["a.rs", "M"]] }
 { "kind": "progress", "value": 3, "total": 4, "label": "Tests" }
 { "kind": "slot" }
 ```
+
+A `box` is a structural, passive container: its `title?: string` is a plain
+heading, and `padding?: number` still applies. The legacy `border?: boolean`
+field remains accepted for compatibility but draws no outline. Only a selectable
+host pane or an input-owning overlay supplies an enclosing frame; render trees
+cannot create additional focusable boxes by requesting borders. For example, a
+warning can use `{ "kind": "text", "text": "Disk nearly full", "style": {
+"color": "warning" } }` inside a titled box and remains borderless.
 
 `style.color` and `style.background` are `#rrggbb` or a theme token (`fg`,
 `accent`, `muted`, `error`, `warning`, `success`, `border`). `gap` and `padding` are integers 0–100.

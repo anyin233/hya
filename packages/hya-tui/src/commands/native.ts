@@ -1,11 +1,12 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
+import { subagentsCommand } from "./subagents"
 import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
 import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from "../state/catalog"
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
-import { openLayoutPane, insertPane, movePane, wrapPane, closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout, type LayoutDirection } from "../state/panes"
+import { bubblePane, openLayoutPane, insertPane, movePane, wrapPane, closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout, type LayoutDirection } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -336,12 +337,13 @@ const runEffort = (context: CommandContext, { args }: CommandInvocation): Promis
 
 export const nativeCommandSpecs: CommandSpec[] = [
   keybindingsCommand,
+  subagentsCommand,
   {
     name: "/layout",
-    description: "Edit workspace panes: split, insert, move, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
-    argumentHint: "[split|insert|move|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]",
+    description: "Edit workspace panes: split, insert, move, bubble, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
+    argumentHint: "[split|insert|move|bubble|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]",
     complete: ({ words, current, head }, context) => {
-      if (words.length === 1) return matchValues(head, current, ["split", "insert", "move", "wrap", "remove", "assign", "focus", "resize", "close", "reload", "reset", "tree", "show"])
+      if (words.length === 1) return matchValues(head, current, ["split", "insert", "move", "bubble", "wrap", "remove", "assign", "focus", "resize", "close", "reload", "reset", "tree", "show"])
       if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["up", "left"])
       if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
       if ((words[0] === "close" || words[0] === "remove") && words.length === 2) {
@@ -362,6 +364,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
         return target ? matchValues(head, current, Array.from({ length: target.children.length + (target.children.includes(words[1] ?? "") ? 0 : 1) }, (_, i) => String(i))) : []
       }
       if (words[0] === "insert" && words.length === 4) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer" && kind !== "extension"))
+      if (words[0] === "bubble" && words.length === 2) return matchValues(head, current, targets)
+      if (words[0] === "bubble" && words.length === 3) return matchValues(head, current, ["previous", "next"])
       if (words[0] === "move" && words.length === 2) return matchValues(head, current, targets)
       if (words[0] === "move" && words.length === 3) return matchValues(head, current, groups)
       if (words[0] === "wrap" && words.length === 2) return matchValues(head, current, targets)
@@ -389,6 +393,12 @@ export const nativeCommandSpecs: CommandSpec[] = [
           const [_, container, index, kind] = args
           if (args.length !== 4 || !container || !index || !/^\d+$/.test(index) || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout insert <container-id|root> <index> <job>")
           next = insertPane(current, container, Number(index), kind as PaneKind)
+          break
+        }
+        case "bubble": {
+          const [_, target, direction] = args
+          if (args.length !== 3 || !target || (direction !== "previous" && direction !== "next")) throw new Error("Usage: /layout bubble <node-id|pane-name|root> <previous|next>")
+          next = bubblePane(current, target, direction)
           break
         }
         case "move": {
@@ -449,7 +459,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
           break
         }
         case "reset": next = defaultPaneLayout(); break
-        default: throw new Error("Usage: /layout [split|insert|move|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]")
+        default: throw new Error("Usage: /layout [split|insert|move|bubble|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]")
       }
       store.setView("chat")
       const active = paneLeaves(next.root).find((pane) => pane.id === next.active)

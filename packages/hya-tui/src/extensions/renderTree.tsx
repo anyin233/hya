@@ -47,7 +47,8 @@ export function RenderTree(props: { node: RenderNode; host?: TreeHost; inRow?: b
       return <box flexDirection={node.kind} gap={node.gap ?? 0} width="100%"><For each={node.children}>{child}</For></box>
     case "box":
       return (
-        <box flexDirection="column" width="100%" border={node.border ?? false} borderColor={colors.border} padding={node.padding ?? 0} {...(node.title ? { title: node.title } : {})}>
+        <box flexDirection="column" width="100%" padding={node.padding ?? 0}>
+          {node.title ? <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{node.title}</text> : null}
           <For each={node.children}>{child}</For>
         </box>
       )

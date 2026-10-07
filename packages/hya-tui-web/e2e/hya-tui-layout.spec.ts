@@ -235,7 +235,7 @@ test.describe("pending interactions", () => {
     const block = (await term.find("Pending (1)"))!
     expect(block.row).toBeLessThan((await term.find("Message, !shell, or @file · / commands"))!.row)
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
-    expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
+    expect((await term.lines())[block.row]).not.toMatch(/[┌┐╭╮─]/)
     await term.waitForText(/! .*bash/)
     await term.waitForText("/pending review request")
     expect(await term.find("asked by hya-main")).toBeNull()

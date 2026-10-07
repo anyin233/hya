@@ -39,6 +39,7 @@ export default defineTuiExtension({
 - `ExtensionContext` has permission-scoped `sessions`, `projects`, `todos`, and
   redesigned `status` sections. Sessions and Projects expose the host's shared
   `ready` flag; Projects also expose a last-read `error`.
+- `RenderNode` boxes are passive and borderless; titles render as plain headings. The legacy `border` field is accepted but ignored by the host.
 - `RenderNode` style colors include the `success` and `border` theme tokens.
 - Row text never wraps, other text wraps at words, and clickable text is an
   underlined accent link unless an explicit style is supplied.
