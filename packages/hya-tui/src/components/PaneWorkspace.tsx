@@ -95,8 +95,8 @@ export function PaneWorkspace() {
     if (node.kind !== "composer") return paneDefinitions[node.kind].minRows
     void store.state.draft; void store.state.secretEntry
     const prompt = currentPrompt(store.state)?.view, pending = pendingLines(store.state, size().width).length
-    return (ui.composerHeight?.() ?? 3) + (prompt ? 5 + prompt.body.length + prompt.options.length : 0)
-      + (pending ? Math.min(3, pending) + 3 : 0) + (store.state.modeConfirm ? 1 : 0)
+    return (ui.composerHeight?.() ?? 3) + (prompt ? 4 + prompt.body.length + prompt.options.length : 0)
+      + (pending ? Math.min(3, pending) + 2 : 0) + (store.state.modeConfirm ? 1 : 0)
   }
   const rects = createMemo(() => { revision(); return layoutRects(visibleRoot(), { left: 0, top: 0, right: size().width, bottom: size().height }, minimum) })
   createEffect(() => {
