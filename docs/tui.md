@@ -3935,3 +3935,47 @@ back), trusting it (JIT tier), uninstalling it, and the first-party refusal.
 ### Session pane mouse navigation
 
 The `Sessions` pane is mouse-aware: clicking either line of a session row opens that session. Clicking a subagent row opens its top-level parent session, so the pane always switches the main session tab rather than entering a read-only child. Top-level session groups are separated by horizontal divider lines; these are visual separators and are not clickable.
+
+## Precompiled startup
+
+Release frontends ship precompiled JSX in `dist/app.js` and its sibling chunks.
+This avoids loading Babel and transforming the entire UI on every launch. The
+HTTP path imports the gRPC implementation only when `--grpc` selects it.
+
+For a source checkout, run `bun install --frozen-lockfile` and `bun run build`
+in `packages/hya-tui`, then start `bun src/main.ts` as usual. Rebuild after source
+edits; remove `dist/` to return to live source execution. A build writes hashed
+chunks first and replaces `dist/app.js` last. Source files, protobuf definitions,
+and the adjacent TUI SDK remain required; the bundle is not a standalone binary.
+The release workflow and `release-rehearsal` both run this build.
+
+`HYA_STARTUP_TRACE_FILE=<absolute path>` appends JSONL startup diagnostics to a
+file rather than the terminal. Each row has `hya_startup: true`, `mark: string`,
+`wall_ms: number` (Unix milliseconds), `pid: number`, and optional `detail: string`.
+Backend marks use integer milliseconds; frontend marks preserve fractions.
+`frontend_launch` starts at the native launch handler, before daemon discovery;
+`tui_tree_mounted` records the mounted UI, `tui_controller_ready` records the
+completion of the initial controller load, and `tui_extensions_loaded` records
+a successful catalog load with every listed extension running. A controller
+error appears in the ready mark's detail and must not count as a successful
+performance sample. Marks do not assert that a browser has painted the frame.
+
+For repeatable browser verification, build a release backend and all tool-family
+libraries, stage all first-party bundles with `xtask stage-first-party-bundles`,
+and run the dedicated spec from `packages/hya-tui-web`:
+
+```sh
+HYA_BIN=/absolute/package/bin/hya \
+  HYA_STARTUP_BUDGET_COLD_MS=100 HYA_STARTUP_BUDGET_WARM_MS=50 \
+  bunx playwright test e2e/hya-startup.spec.ts --workers=1
+```
+
+The spec launches bare `hya` on a real PTY through the browser, measures a cold
+daemon, a subsequent connection to that same daemon, and a stopped daemon
+restarted with its existing native cache (`cold_cached`). It verifies commands and
+attaches phase timings and screenshots. The two optional positive-number
+budget variables enforce milliseconds from the test wrapper’s `frontend_spawn`
+(immediately before spawning the executable) to controller
+readiness. With neither variable set it verifies correctness without asserting
+hardware-dependent timing. Record whether the package/native cache and database
+were fresh; do not confuse repeated daemon starts with first-install latency.

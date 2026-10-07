@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "bun src/main.ts",
+    "build": "bun build.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "bench": "bun bench/extensions.ts"

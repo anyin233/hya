@@ -2120,3 +2120,8 @@ Example bag fragment:
   }
 }
 ```
+
+Startup diagnostics also accept `HYA_STARTUP_TRACE_FILE` (an optional file path).
+The backend and TUI append the JSONL phase marks documented in
+[tui.md](tui.md#precompiled-startup); an unwritable diagnostic file never prevents
+startup. `HYA_STARTUP_TRACE=1|true` continues to emit backend marks on stderr.

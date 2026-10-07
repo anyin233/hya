@@ -1,3 +1,4 @@
+import { packageRoot } from "../packageRoot"
 /**
  * OS hardening of an extension process. The extension itself always runs in
  * the SDK's QuickJS-WASM VM (packages/hya-tui-sdk/src/host.ts); this adds the
@@ -44,7 +45,7 @@ export interface SandboxRequest {
 export class SandboxUnavailableError extends Error {}
 
 /** The launcher script (run with the same bun as the extension). */
-export const confineScript = join(import.meta.dir, "confine.ts")
+export const confineScript = join(packageRoot, "src/extensions/confine.ts")
 
 /**
  * Probes per launcher command: whether this machine can sandbox does not change

@@ -394,3 +394,27 @@ The process E2E suite exercises native tools, MCP tools, scoped hooks, package
 removal, schema reads, bundle API endpoints (`p34_bundle_apis`), and uninstall.
 Startup rollback and binding lifetime are also covered by the installed-bundle
 refresh integration suite.
+
+### Native tool startup cache
+
+Installed first-party tool packages are validated before their native libraries
+run. The five independent family policies are prepared concurrently, preserving
+the declared order for exposure and override resolution. Per-identity catalog
+locks prevent duplicate preparation while allowing different packages to load
+concurrently.
+
+On Unix, verified library bytes are materialized at
+`$XDG_CACHE_HOME/hya/native-tools/<sha256>/<library filename>` (default
+`$HOME/.cache/hya/native-tools/...`). Reusing the immutable inode avoids repeated
+OS image validation caused by extracting and deleting a fresh library on every
+daemon start. Every cache hit is checked byte-for-byte against the freshly
+validated package; library ABI validation still runs at load time. Changed
+payloads get a different digest directory. A corrupt or symlinked cache entry
+is atomically replaced, never followed for writing. Unavailable or non-private
+cache directories fall back to private temporary extraction. There is no new
+CLI flag or configuration key, and this cache is disposable.
+
+To benchmark the first materialization, use a fresh `XDG_CACHE_HOME`. To measure
+a subsequent cold daemon start after installation, reuse that directory while
+stopping the daemon between samples. `hya serve stop --db <db>` stops the daemon;
+changing `XDG_CACHE_HOME` alone does not stop an already running one.
