@@ -1203,6 +1203,7 @@ closable ids and unambiguous names, updating after each layout edit.
 | `/layout tree` | Open or focus a selectable Layout pane for editing the saved tree. Reuse the first existing `layout` pane; otherwise add one beside the whole workspace. |
 | `/layout insert <container-id\|root> <index> <job>` | Insert a new auxiliary pane at a zero-based child index (0 through child count); a selectable new pane gets focus. |
 | `/layout move <node-id\|pane-name> <container-id\|root> <index>` | Move an existing pane/subtree, retaining ids and focus. Index refers to destination children after removing the source. Cycles are refused. |
+| `/layout bubble <node-id\|pane-name\|root> <previous\|next>` | Swap a pane or subtree with its adjacent sibling in the same container. Preserve its size, ids, contents and focus. Root and edge moves do nothing. |
 | `/layout wrap <node-id\|pane-name\|root> <row\|column> <job> [before\|after]` | Wrap a target, including the whole root, with a new auxiliary pane; default position `before`. |
 | `/layout remove <node-id\|pane-name>` | Remove an auxiliary pane or subtree; refuse any subtree containing the viewer/editor. |
 | `/layout reset` | Restore the default arrangement. |
@@ -1247,6 +1248,7 @@ successful edit save the layout through the existing frontend preferences path.
 | --- | --- |
 | Up / Down | Move the cursor to the previous/next tree node or action; scroll to keep it visible. |
 | Left / Right | Select the parent/first child in the tree. |
+| Shift+Up / Shift+Down | Bubble the cursor node to the previous/next sibling. In a row this moves left/right; in a column it moves up/down. |
 | Home / End | Select the first/last row. |
 | Enter | Open the selected node's actions, choose a menu item, or save a weight. |
 | Shift+Enter / Space | Mark or unmark the cursor pane/group (`◆`); marking another node replaces the mark. The cursor (`▸`) can move independently. In WebUI, Shift+Enter arrives as line feed; Ctrl+J / Linefeed are equivalent. |
@@ -1260,6 +1262,23 @@ successful edit save the layout through the existing frontend preferences path.
 Alt+arrows still switch workspace panes; `/` still opens the global command
 input. These local keys appear in `/help` and `/keybind` and respect disabled
 keys. Unsupported typing in the tree never reaches the message draft.
+
+Bubbling quickly reorders adjacent panes without choosing a destination. Select
+`pane-4 todos` and press Shift+Down to swap it with Context, or use Enter →
+**Bubble next**. `/layout bubble todos next` performs the same edit. The cursor
+stays on the moved node, the Layout pane keeps keyboard focus, and any mark stays
+unchanged; bubbling acts on the cursor even when another node is marked. A group
+moves with all its descendants, including the conversation/editor. It never
+crosses a parent boundary or wraps around. Sizes travel with their nodes: weight
+values and column `content` policies are preserved. Successful swaps save through
+the existing `paneLayout` preference and survive `/layout reload` and restart.
+
+**Bubble interface:** `bubblePane(layout: PaneLayout, target: string, direction:
+"previous" | "next"): PaneLayout` resolves the same unique pane names, node IDs
+and `root` alias as other layout reducers. It exchanges two complete `PaneChild`
+entries in one parent, keeping tree IDs and `active` unchanged. Root/edge operations
+return the original layout; an unknown or ambiguous target raises the normal
+layout resolution error. There are no new config fields or backend RPCs.
 
 Direct insertion uses the cursor even when a different node is marked; wrapping
 and removal use the mark when present. Successful direct insertion/wrapping moves

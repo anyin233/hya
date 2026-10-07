@@ -1,6 +1,6 @@
 /** Per-instance, transient tree editor state. All edits use the shared layout reducers. */
 import type { KeyLike } from "../keys/bindings"
-import { closePane, insertPane, movePane, paneDefinitions, paneKinds, paneLeaves, paneNodes, resolvePaneNode, setPaneKind, setPaneSize, wrapPane, type PaneKind, type PaneLayout, type PaneNode, type PaneSize, type PaneSplit } from "./panes"
+import { bubblePane, closePane, insertPane, movePane, paneDefinitions, paneKinds, paneLeaves, paneNodes, resolvePaneNode, setPaneKind, setPaneSize, wrapPane, type PaneKind, type PaneLayout, type PaneNode, type PaneSize, type PaneSplit } from "./panes"
 
 export interface LayoutTreeRow { id: string; node: PaneNode; depth: number; parent?: PaneSplit; index: number; size?: PaneSize }
 export function layoutTreeRows(root: PaneNode): LayoutTreeRow[] {
@@ -53,6 +53,8 @@ export function layoutEditorRows(layout: PaneLayout, state: LayoutEditorState): 
         { id: "after", label: "Insert after", detail: "Add a pane after this node" },
         { id: "weight", label: "Change weight", detail: `${paneSizeText(selected.size)}${parent.direction === "column" ? " · or content" : ""}` },
         { id: "move", label: "Move", detail: "Choose a container and insertion position" },
+        { id: "bubble-previous", label: "Bubble previous", detail: parent.direction === "row" ? "Swap with the sibling to the left" : "Swap with the sibling above" },
+        { id: "bubble-next", label: "Bubble next", detail: parent.direction === "row" ? "Swap with the sibling to the right" : "Swap with the sibling below" },
       ] : []),
       ...(node.type === "pane" && !protectedNode(node) ? [{ id: "assign", label: "Change job", detail: "Assign another auxiliary pane kind" }] : []),
       { id: "row", label: "Wrap in row", detail: "Add a pane to the left of this subtree" },
@@ -100,7 +102,7 @@ export function layoutEditorPreview(state: LayoutEditorState): string | undefine
 }
 export function layoutEditorHint(state: LayoutEditorState): string {
   switch (state.stage.type) {
-    case "tree": return "↑↓ move · Shift+Enter/Space mark · i insert · w wrap · Del/Backspace remove · Enter actions"
+    case "tree": return "↑↓ move · Shift+↑↓ bubble · Shift+Enter/Space mark · i insert · w wrap · Del/Backspace remove · Enter actions"
     case "wrap": return "r row · c column · Esc cancel"
     case "kind": return `↑↓ choose pane · Enter adds${state.stage.direct && (state.stage.action === "row" || state.stage.action === "column") ? " · Tab before/after" : ""} · Esc cancel`
     case "insert-position": return "↑↓ choose position · Enter continues · Esc cancel"
@@ -133,6 +135,7 @@ export function layoutEditorChoose(layout: PaneLayout, original: LayoutEditorSta
         switch (id) {
           case "weight": return go({ type: "weight", value: selected.size?.mode === "weight" ? String(selected.size.value) : "content", replace: true })
           case "move": return go({ type: "destination" })
+          case "bubble-previous": case "bubble-next": return done(bubblePane(layout, state.selected, id === "bubble-previous" ? "previous" : "next"))
           case "remove":
             if (protectedNode(selected.node)) throw new Error("Cannot remove the conversation or message editor")
             return go({ type: "remove" })
@@ -171,6 +174,10 @@ export function layoutEditorKey(layout: PaneLayout, original: LayoutEditorState,
     || key.ctrl && !key.shift && key.name === "j")
   if (mark) return { state: { ...state, marked: state.marked === state.selected ? undefined : state.selected, error: undefined } }
   if (key.ctrl || key.meta || key.option || key.super) return { state }
+  if (key.shift && state.stage.type === "tree" && (key.name === "up" || key.name === "down")) {
+    const next = bubblePane(layout, state.selected, key.name === "up" ? "previous" : "next")
+    return { state: { ...state, error: undefined }, ...(next !== layout ? { layout: next } : {}) }
+  }
   if (key.shift && state.stage.type !== "weight") return { state }
   if (key.name === "escape") return { state: layoutEditorBack(state) }
   if (state.stage.type === "wrap") {

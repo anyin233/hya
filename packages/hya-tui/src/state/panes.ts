@@ -197,6 +197,20 @@ export function movePane(layout: PaneLayout, target: string, container: string, 
   const root = mapNode(without, parent.id, (node) => node.type === "split" ? { ...node, children: [...node.children.slice(0, index), movedSlot, ...node.children.slice(index)] } : node)
   return finish(layout, root)
 }
+/** Swap sibling slots without detaching/normalizing their subtrees or size policies. */
+export function bubblePane(layout: PaneLayout, target: string, direction: "previous" | "next"): PaneLayout {
+  const selected = resolvePaneNode(layout, target)
+  const parent = paneNodes(layout.root).find((node): node is PaneSplit => node.type === "split" && node.children.some((child) => child.node.id === selected.id))
+  if (!parent) return layout
+  const index = parent.children.findIndex((child) => child.node.id === selected.id)
+  const adjacent = index + (direction === "previous" ? -1 : 1)
+  if (adjacent < 0 || adjacent >= parent.children.length) return layout
+  const children = [...parent.children]
+  const slot = children[index]!
+  children[index] = children[adjacent]!
+  children[adjacent] = slot
+  return { ...layout, root: mapNode(layout.root, parent.id, (node) => node.type === "split" ? { ...node, children } : node) }
+}
 export function resizePane(layout: PaneLayout, delta: number): PaneLayout {
   if (!Number.isFinite(delta)) throw new Error("Resize must be a finite number")
   const parent = paneNodes(layout.root).find((node): node is PaneSplit => node.type === "split" && node.children.some((child) => child.node.id === layout.active))

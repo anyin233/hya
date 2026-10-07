@@ -195,6 +195,7 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
     ...([
       { keys: "Up / Down", description: "Layout pane: select a tree node or action" },
       { keys: "Left / Right", description: "Layout pane: select parent or first child" },
+      { keys: "Shift+Up / Shift+Down", description: "Layout tree: bubble the cursor node to the previous / next sibling, preserving its size" },
       { keys: "Home / End", description: "Layout pane: select first or last row" },
       { keys: "Enter", description: "Layout pane: edit the selected node, choose an action, or save a weight" },
       { keys: "Shift+Enter / Space / Ctrl+J / Linefeed", description: "Layout tree: mark/unmark the cursor node; WebUI Shift+Enter arrives as line feed" },

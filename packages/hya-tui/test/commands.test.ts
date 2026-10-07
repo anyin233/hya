@@ -937,3 +937,15 @@ test("/subagents opens ordinary panes, previews without opening a session, and p
   await expect(h.run("/subagents select unrelated")).rejects.toThrow("Choose a subagent")
   expect(h.registry.complete("/subagents pin ", h.store.completionContext())).toContain(`/subagents pin ${viewer.id}`)
 })
+
+
+test("/layout bubble swaps siblings, persists them, completes arguments, and validates usage", async () => {
+  const h = harness()
+  await h.run("/layout bubble todos next")
+  const group = paneNodes(h.store.state.paneLayout.root).find((node) => node.id === "group-3")!
+  expect(group.type === "split" && group.children.map((slot) => slot.node.id)).toEqual(["pane-3", "pane-5", "pane-4"])
+  expect(h.calls.some((call) => call.startsWith("prefs "))).toBe(true)
+  expect(h.registry.complete("/layout bubble pane-4 ", h.store.completionContext())).toEqual(["/layout bubble pane-4 next", "/layout bubble pane-4 previous"])
+  expect(h.registry.complete("/layout bubble ", h.store.completionContext())).toContain("/layout bubble group-3")
+  for (const line of ["/layout bubble", "/layout bubble pane-4", "/layout bubble pane-4 up", "/layout bubble pane-4 next extra"]) await expect(h.run(line)).rejects.toThrow("Usage: /layout bubble")
+})
