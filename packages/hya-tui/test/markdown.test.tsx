@@ -91,7 +91,7 @@ test("fenced code blocks sit on the panel color with a language label and highli
     "highlighted keyword, string, and trailing paragraph",
   )
   expect(hex(span("\"forty-two\"")?.fg)).toBe(syntaxColors.string)
-  expect(hex(span("const")?.bg)).toBe(colors.panel)
+  expect(span("const")?.bg?.intent).toBe("default")
   const lines = frame()
   const label = lines.findIndex((line) => line.trim() === "ts")
   expect(label).toBeGreaterThan(0)
@@ -103,7 +103,7 @@ test("fenced code blocks sit on the panel color with a language label and highli
 test("a code block of an unknown language still renders its text", async () => {
   await render(() => "```python\nprint('hi')\n```")
   await until(() => frame().some((line) => line.includes("print('hi')")), "python code")
-  expect(hex(span("print('hi')")?.bg)).toBe(colors.panel)
+  expect(span("print('hi')")?.bg?.intent).toBe("default")
 })
 
 test("partial markdown while streaming: an unclosed fence and unclosed emphasis still show their text", async () => {
@@ -170,5 +170,5 @@ test("switching the theme re-renders rendered Markdown: headings, highlighted co
   await until(() => hex(span("const")?.fg) === themes.light.syntaxColors.keyword, "light keyword")
   await until(() => hex(span("Title")?.fg) === themes.light.colors.accent, "light heading")
   await until(() => hex(span("After")?.fg) === themes.light.colors.fg, "light paragraph")
-  expect(hex(span("const")?.bg)).toBe(themes.light.colors.panel)
+  expect(span("const")?.bg?.intent).toBe("default")
 })

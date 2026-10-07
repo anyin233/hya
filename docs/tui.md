@@ -1500,7 +1500,7 @@ The built-in registry in `components/paneRegistry.tsx` exposes:
 
 ```ts
 // PaneFrame props: kind: PaneKind; title: string; focused?: boolean;
-// background?: string; children: JSX.Element. Borders follow kind eligibility.
+// background?: ColorInput; children: JSX.Element. Borders follow kind eligibility.
 interface PaneDefinition {
   title: string;
   selectable: boolean;
@@ -1561,8 +1561,8 @@ default `hya` theme:
 
 | Name | Value | Used for |
 | --- | --- | --- |
-| `bg` | `#11151b` | Screen and transcript background. |
-| `panel` | `#1c2530` | Boxes, user message blocks, code blocks, the input. |
+| `bg` | Terminal default | Screen and transcript background. |
+| `panel` | Terminal default | Boxes, user message blocks, code blocks, the input. |
 | `fg` | `#e8edf3` | Text. |
 | `muted` | `#9caab9` | Controller status state, instructions, `Thinking` lines, model names, queued prompts. |
 | `accent` | `#73c8e8` | Header, user message bar, assistant name, headings, list markers. |
@@ -1590,10 +1590,18 @@ file when it starts.
 
 | Name | Kind | Look |
 | --- | --- | --- |
-| `hya` | dark | The default: slate background, cyan accent (the palette in [Layout](#layout)). |
-| `light` | light | Light background (`#f7f9fb`) with dark text (`#1f2933`), for bright terminals. |
-| `contrast` | dark | Black background, white text, saturated accents. |
-| `ember` | dark | Warm dark theme: brown background, amber accent. |
+| `hya` | dark | The default: terminal background, light text and cyan accents (the palette in [Layout](#layout)). |
+| `light` | light | Dark text (`#1f2933`) for terminals with a light background. |
+| `contrast` | dark | White text and saturated accents on the terminal background. |
+| `ember` | dark | Warm text and amber accents on the terminal background. |
+
+All themes inherit the terminal background, including any transparency configured
+in your terminal emulator. No TUI setting is needed: restart the TUI to apply it.
+The WebUI uses xterm.js’s configured background. Text, borders and mouse-selection
+highlights still use the selected theme. The internal `bg` and `panel` palette
+fields are OpenTUI `ColorInput` values with ANSI default-background intent
+(`RGBA.defaultBackground()`); they are not fixed RGB colors. Default-color fills
+still clear the area under popups, so underlying content does not show through.
 
 **Usage.** `/theme` (no arguments) opens the [picker](#pickers) with one
 row per theme, `[dark]`/`[light]` tagged; `●` marks the theme in effect.

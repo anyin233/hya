@@ -11,8 +11,8 @@ import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep } from "./hya"
 
 // Palettes of packages/hya-tui/src/theme.ts.
-const hya = { bg: "#11151b", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8" }
-const light = { bg: "#f7f9fb", fg: "#1f2933", muted: "#5b6b7b", accent: "#0b6f94", panel: "#e6ecf2", keyword: "#8839c9" }
+const hya = { bg: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8" }
+const light = { bg: "default", fg: "#1f2933", muted: "#5b6b7b", accent: "#0b6f94", panel: "default", keyword: "#8839c9" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -51,7 +51,7 @@ test.describe("/theme", () => {
 
     // Down highlights Light: the whole screen previews it at once.
     await term.press("ArrowDown")
-    await expect.poll(async () => (await screenColors(term)).bg).toBe(light.bg)
+    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.accent)
     await term.attach(testInfo, "light-preview")
     // Esc restores the default theme and saves nothing.
     await term.press("Escape")
@@ -71,12 +71,12 @@ test.describe("/theme", () => {
     // A new TUI reads the file and starts in the light theme; the picker marks it.
     term = await tui(hyaTui(backend), { env })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await expect.poll(async () => (await screenColors(term)).bg).toBe(light.bg)
+    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.accent)
     await prompt(term, "/theme")
     await term.waitForText(/▸ ● Light\s+\[light\]/)
     await term.press("Escape")
     await expect.poll(() => term.find("● Light")).toBeNull()
-    expect((await screenColors(term)).bg).toBe(light.bg)
+    expect((await screenColors(term)).focus).toBe(light.accent)
   })
 
   test("at about 80 columns the light theme covers the screen and the picker fits", async ({ tui, backend }) => {

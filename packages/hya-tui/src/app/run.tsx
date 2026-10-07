@@ -49,7 +49,7 @@ import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probe
 import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
 import { setCustomKeybindings } from "../keys/custom"
-import { setTheme } from "../theme"
+import { colors, setTheme } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
 import { App } from "./App"
 import { AppContext } from "./context"
@@ -286,7 +286,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
-  renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30, autoFocus: false })
+  renderer = await createCliRenderer({ backgroundColor: colors.bg, exitOnCtrlC: false, targetFps: 30, autoFocus: false })
   // Every full-screen view and the main layout follow the terminal size
   // (`useTerminalDimensions`, one "resize" listener each, all mounted at
   // once). Past Node's default of 10 its MaxListenersExceededWarning would be
