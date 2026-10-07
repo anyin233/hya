@@ -250,4 +250,3 @@ export function createProviderController({ store, client, refresh, pickModel }: 
 
   return { open, close, key, paste, dispose: () => { abort?.abort(); secret.clear() } }
 }
-

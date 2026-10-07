@@ -8,7 +8,6 @@ import { InputHistory } from "../composer/history"
 import { pickerWindow } from "../state/picker"
 import { isShiftTab } from "../state/modes"
 import { keyboardOwner } from "../state/focus"
-import { projectsSidebarVisible } from "../state/layout"
 import { colors } from "../theme"
 
 interface CommandMenu {
@@ -71,15 +70,12 @@ export function CommandPane() {
     setActive(false)
     ui.commandInput = { text: editor?.plainText ?? "", active: false, originSidebar }
     setMenu(undefined)
-    // Opened from the Projects pane holding the keyboard: give it back.
-    if (originSidebar && projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) controller.focusProjects()
   }
 
   function open(): void {
     if (active()) return
     originSidebar = store.state.projectsFocus
     ui.commandInput = { text: editor?.plainText ?? "", active: true, originSidebar }
-    store.setProjectsFocus(false)
     setActive(true)
     if (!editor?.plainText.startsWith("/")) replace("/")
     else updateMenu()
@@ -150,7 +146,8 @@ export function CommandPane() {
       return true
     }
     if (!event.ctrl && !event.meta && !event.shift && (event.name === "return" || event.name === "kpenter")) {
-      if (shown) acceptEntry(true)
+      if (/^\/keybind\s+show\s*$/.test(editor?.plainText ?? "")) submit()
+      else if (shown) acceptEntry(true)
       else submit()
       return true
     }

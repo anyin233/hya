@@ -26,9 +26,11 @@ async function firstFrame(width: number): Promise<string> {
 }
 
 test("initial workspace renders before any backend data arrives", async () => {
-  // Wide: the Context pane is framed and loading (hya/basic-tui-components draws it once it runs); no top status line.
+  // Wide: the passive Context section carries the session context; no top status line.
   const wide = await firstFrame(156)
-  expect(wide).toContain("─Context─")
+  expect(wide).toContain("Context")
+  expect(wide).not.toContain("─Context")
+  expect(wide).not.toContain("─Todos")
   expect(wide).toContain("Loading…")
   expect(wide).not.toContain("mode manual")
   // Narrow: no sidebar and no restored metadata heading.

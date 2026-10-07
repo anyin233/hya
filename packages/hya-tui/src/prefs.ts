@@ -1,8 +1,8 @@
 /**
  * TUI preferences (docs/tui.md "Preferences file"): a small JSON object in
  * `$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
- * `~/.config/hya/tui.json`. The TUI reads it once at start and writes it
- * when a preference changes (`/theme`, `/vim`, `/permissions`).
+ * `~/.config/hya/tui.json`. The TUI reads it at start and `/layout reload`, and writes it
+ * when a preference changes (`/theme`, `/vim`, `/permissions`, `/keybind`).
  *
  * - Missing file: no preferences, no warning.
  * - Unreadable or corrupt file (not a JSON object): no preferences, and a
@@ -19,9 +19,12 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path"
 import { parsePaneLayout, type PaneLayout } from "./state/panes"
 import { sandboxPolicies, type SandboxPolicy } from "./extensions/sandbox"
+import { validateCustomKeybindings, type CustomKeybindings } from "./keys/custom"
 
 /** The known preference keys. Every key is optional; unset means the built-in default. */
 export interface TuiPreferences {
+  /** Shortcut overrides: command/scope assigns a command; null disables the physical key. */
+  keybindings?: CustomKeybindings
   /** Built-in theme name (`hya`, `light`, `contrast`, `ember`); default `hya`. */
   theme?: string
   /** Vim mode in the composer (`/vim`); default off. */
@@ -43,6 +46,9 @@ export interface TuiPreferences {
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
 
 const validators: Validators = {
+  keybindings: (value): value is CustomKeybindings => {
+    try { validateCustomKeybindings(value); return true } catch { return false }
+  },
   theme: (value): value is string => typeof value === "string" && value.length > 0,
   vim: (value): value is boolean => typeof value === "boolean",
   notifications: (value): value is boolean => typeof value === "boolean",
@@ -96,13 +102,28 @@ export function loadPreferences(path: string): LoadedPreferences {
   if (raw === undefined) return { preferences: {} }
   if (raw === null) return { preferences: {}, warning: `Ignored unreadable TUI preferences ${path}` }
   const preferences: Record<string, unknown> = {}
+  let warning: string | undefined
   for (const [key, valid] of Object.entries(validators) as [string, (value: unknown) => boolean][]) {
-    if (key === "paneLayout") {
+    if (key === "keybindings" && key in raw) {
+      try { preferences[key] = validateCustomKeybindings(raw[key]) }
+      catch (error) { warning = `Ignored invalid keybindings in ${path}: ${String(error)}` }
+    } else if (key === "paneLayout") {
       const layout = parsePaneLayout(raw[key])
       if (layout) preferences[key] = layout
     } else if (key in raw && valid(raw[key])) preferences[key] = raw[key]
   }
-  return { preferences: preferences as TuiPreferences }
+  return { preferences: preferences as TuiPreferences, ...(warning ? { warning } : {}) }
+}
+
+/** Strictly read just the saved layout for explicit reload; never falls back or writes. */
+export function loadPaneLayout(path: string): PaneLayout {
+  const raw = readRaw(path)
+  if (raw === undefined) throw new Error(`TUI preferences file not found: ${path}; save a layout first with /layout reset`)
+  if (raw === null) throw new Error(`Cannot read TUI preferences JSON object: ${path}`)
+  if (!("paneLayout" in raw)) throw new Error(`No paneLayout in ${path}; save a layout first with /layout reset`)
+  const layout = parsePaneLayout(raw.paneLayout)
+  if (!layout) throw new Error(`Invalid paneLayout in ${path}; see docs/tui.md#tiled-workspace`)
+  return layout
 }
 
 let writes = 0

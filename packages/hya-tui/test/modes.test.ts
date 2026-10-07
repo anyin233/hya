@@ -88,4 +88,3 @@ test("picker rows show title, source, description, and mark the current mode", (
   // Without a listing, the built-ins are offered.
   expect(modeRows([], "manual").map((row) => row.id)).toEqual(["manual", "yolo"])
 })
-

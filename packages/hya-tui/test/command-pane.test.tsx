@@ -38,6 +38,17 @@ test("Backspace deleting the final command character closes the command pane", a
     await setup.renderOnce()
     expect(controller.ui.composerInput?.text).toBe("message")
     expect(controller.ui.commandInput?.text).toBe("")
+    store.setProjectsSidebar("open")
+    store.setProjectsFocus(true)
+    controller.ui.command?.open()
+    await setup.renderOnce()
+    expect(controller.ui.commandInput?.text).toBe("/")
+    expect(store.state.projectsFocus).toBe(true) // Overlay preserves the underlying workspace focus.
+    setup.mockInput.pressBackspace()
+    await setup.renderOnce()
+    expect(controller.ui.command?.active()).toBe(false)
+    expect(store.state.projectsFocus).toBe(true)
+    expect(controller.ui.composerInput?.text).toBe("message")
   } finally {
     setup.renderer.destroy()
   }

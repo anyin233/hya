@@ -130,3 +130,12 @@ test("pickerHighlighted is the highlighted row of the filtered list (what a live
   state = update(state, "z")
   expect(pickerHighlighted(state)).toBeUndefined()
 })
+
+
+test("column picker preserves headings and filters shortcut cells", () => {
+  const columns = { shortcut: "Shortcut", label: "Action", tag: "Scope" }
+  const state = createPicker({ title: "Bindings", columns, rows: [{ id: "quit", label: "quit", shortcut: "Ctrl+C", tag: "workspace" }] })
+  expect(state.columns).toEqual(columns)
+  expect(pickerRows({ ...state, query: "ctrl+c" }).map((row) => row.id)).toEqual(["quit"])
+  expect(createPicker({ title: "Plain", rows }).columns).toBeUndefined()
+})

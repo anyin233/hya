@@ -124,4 +124,3 @@ export function createMcpController({ store, client, copyText }: McpControllerOp
 
   return { open, close, key, dispose: () => { abort?.abort() } }
 }
-

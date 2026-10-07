@@ -134,9 +134,10 @@ jobs:
         run: bun run typecheck && bun test
       # e2e/hya-tui.spec.ts and e2e/hya-tui-launch.spec.ts start this binary as
       # the backend under test (see docs/tui-web.md#running-the-tests).
-      - name: build hya
+      # The disk-inspector spec packages its source with target/debug/xtask.
+      - name: build hya and bundle packager
         if: ${{ !cancelled() }}
-        run: cargo build --locked -p hya-backend --bin hya
+        run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
       - name: install Playwright Chromium
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-web

@@ -31,7 +31,7 @@
  * `applyAsk`; state/prompts.ts `askFrameRoute`). Frames sent before the
  * subscription are not replayed, so `GET /v1/interactions` is read once
  * after every (re)subscribe and after a `resync`, besides the full catalog
- * refreshes (start, Ctrl+R). `answer()` responds to a prompt
+ * refreshes (start, /refresh). `answer()` responds to a prompt
  * (app/prompts.ts).
  *
  * Asks of other sessions: from start, the global stream
@@ -66,10 +66,10 @@
  * changes that: after `stop` nothing is started and prompts are refused
  * until `/reconnect`; after `restart` the TUI waits for the next server.
  *
- * Sessions (app/sessionKeeper.ts): a plain local start creates a new
- * `ephemeral` session in the active Project; existing chats remain available
- * through `/open` and `/resume` (as is every `/new` one): the daemon deletes it
- * while still unused once no client watches it
+ * Sessions (app/sessionKeeper.ts): a plain local start resumes the active
+ * Project's latest durable session, preferring one with a waiting request;
+ * with no history a new `ephemeral` session is created (as is every `/new`
+ * one): the daemon deletes it while still unused once no client watches it
  * (no session stream open on it), so leaving it (another session opened, any
  * exit, a kill) needs no request. `close("archive")` (a graceful exit:
  * `/exit`, Ctrl+C twice) archives the open session's root when it is used;
@@ -96,7 +96,7 @@ import { initialSessionId } from "../launch"
 import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { editText } from "../composer/editor"
-import { savePreferences } from "../prefs"
+import { loadPaneLayout, savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, globalAskRoute, treeSessionIds, type PromptChoice } from "../state/prompts"
@@ -795,7 +795,6 @@ export function createController({ client, store, directory, remote: startedRemo
     status(`Project ${project.name} · ${target ? "opened its latest session" : "new session"}`)
   }
 
-
   /** Leave a subagent's read-only view: open its parent session. */
   async function returnToParent(): Promise<void> {
     const parent = store.state.selected?.parent
@@ -978,7 +977,7 @@ export function createController({ client, store, directory, remote: startedRemo
   let editing = false
 
   /**
-   * `/editor`, Ctrl+X Ctrl+E: the input in the external editor
+   * `/editor`: the input in the external editor
    * (composer/editor.ts). The edited text replaces the input (not sent); on
    * a failure the input keeps its text and the status line says why.
    */
@@ -1022,7 +1021,7 @@ export function createController({ client, store, directory, remote: startedRemo
    */
   function focusProjects(): void {
     if (!paneLeaves(store.state.paneLayout.root).some((pane) => pane.kind === "projects")) {
-      status("No Projects pane · /layout split vertical projects to add one")
+      status("No Projects pane · /layout split left projects to add one")
       return
     }
     if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
@@ -1080,7 +1079,7 @@ export function createController({ client, store, directory, remote: startedRemo
     refresh: async () => { store.setSessions(await client.listSessions()) },
   })
 
-  /** The oldest waiting request outside the open tree: F4 opens its root session so the normal prompt can answer it. */
+  /** The oldest waiting request outside the open tree: /pending opens its root session so the normal prompt can answer it. */
   async function reviewPending(): Promise<void> {
     const pending = store.state.interactions.find((item) => item.session && !treeSessionIds(store.state.selected?.id ?? "", store.state.sessions, childSessionIds(store.state.members, store.state.messages)).has(item.session))
     if (!pending?.session) { status("No pending request in another session"); return }
@@ -1090,7 +1089,7 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   const actions: AppActions = {
-    refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
+    reviewPending, refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
     switchProject,
     refreshProjects,
@@ -1114,6 +1113,11 @@ export function createController({ client, store, directory, remote: startedRemo
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
     savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
+    paneBounds: () => new Map([...ui.paneBounds ?? []].map(([id, read]) => [id, read()])),
+    loadPaneLayout: () => {
+      if (!preferencesPath) throw new Error("No TUI preferences path configured")
+      return { layout: loadPaneLayout(preferencesPath), path: preferencesPath }
+    },
     deleteSession,
   }
 
@@ -1349,7 +1353,7 @@ export function createController({ client, store, directory, remote: startedRemo
    * skipped with `--remote`, which starts without an active Project),
    * catalogs, then the session `startup` names (`--session <id>`, or
    * `--continue`: the most recent nonarchived root of that Project). A
-   * plain local start creates a new ephemeral session in the active Project.
+   * plain local start restores a saved chat, prioritizing pending requests, or creates a new ephemeral session.
    */
   function start(): Promise<void> {
     starting = startOnce().finally(() => { starting = undefined })
@@ -1387,10 +1391,17 @@ export function createController({ client, store, directory, remote: startedRemo
       else if (target) await openSession(target).catch(() => { missing += ` · session ${target} not found` })
       else if (startup.continue) missing += remote ? " · --continue needs a project" : " · no earlier session in this project"
       else if (!remote && store.state.activeProjectId) {
-        // A plain local start always opens a fresh session in the Project for --dir.
-        // Existing chats remain available through /open and /resume; avoiding their
-        // transcript load keeps startup fast and gives each invocation a clean draft.
-        await newSession().catch(() => undefined)
+        const projectId = store.state.activeProjectId
+        const history = await client.listSessions({ includeArchived: true, projectId }).catch((error: unknown) => {
+          missing += ` · could not read earlier sessions: ${String(error)}`
+          return [] as SessionInfo[]
+        })
+        const durable = history.filter((session) => !session.ephemeral)
+        const waiting = durable.filter((session) => store.state.interactions.some((ask) => ask.session && treeSessionIds(session.id, history).has(ask.session)))
+        const prior = newestTopLevelSession(waiting, projectId, { includeArchived: true })
+          ?? newestTopLevelSession(durable, projectId, { includeArchived: true })
+        if (prior) await resumer.resume(prior.id).catch((error: unknown) => { missing += ` · could not resume ${prior.id}: ${String(error)}` })
+        if (!store.state.selected) await newSession().catch(() => undefined)
       }
       // With no local Project or model, no session is created until the first prompt.
       else if (!remote || store.state.activeProjectId) await newSession().catch(() => undefined)

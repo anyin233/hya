@@ -7,7 +7,7 @@ import type { Tui } from "./harness"
 import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep } from "./hya"
 
 const colors = {
-  bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
+  bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
   error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#a5d6a7", inlineCode: "#f2a97a",
 }
 
@@ -111,7 +111,7 @@ test.describe("reasoning", () => {
     },
   })
 
-  test("reasoning is a collapsed Thinking line that Ctrl+O and /thinking expand", async ({ tui, backend }) => {
+  test("reasoning is a collapsed Thinking line that /thinking expand", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "think about it")
@@ -123,13 +123,17 @@ test.describe("reasoning", () => {
     expect(await term.find("private chain of thought")).toBeNull()
     expect(label.row).toBeLessThan((await at(term, "The final answer is 7.")).row)
 
-    await term.press("Control+o")
+    await term.press("Control+x")
+    await term.type("/thinking")
+    await term.press("Enter")
     await term.waitForText("▾ Thinking · 6 words")
     const body = await at(term, "private chain of thought about apples")
     expect((await term.cell(body.row, body.col))?.fg).toBe(colors.muted)
     expect((await term.cell(body.row, body.col))?.italic).toBe(true)
 
-    await term.press("Control+o")
+    await term.press("Control+x")
+    await term.type("/thinking")
+    await term.press("Enter")
     await term.waitForText("▸ Thinking · 6 words")
     expect(await term.find("private chain of thought")).toBeNull()
 
@@ -218,7 +222,7 @@ test.describe("scrolling", () => {
     await term.page.mouse.move(box.x + box.width / 4, box.y + ((row.row + 0.5) / cell.rows) * box.height)
     await term.page.mouse.wheel(0, -600)
     await expect.poll(async () => (await term.text()).includes("row 90 of the long reply")).toBe(false)
-    await term.press("Control+End")
+    await term.press("End")
     await term.waitForText("row 90 of the long reply")
   })
 })
