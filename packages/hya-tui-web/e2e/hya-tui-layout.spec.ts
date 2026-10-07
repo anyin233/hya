@@ -4,7 +4,7 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
-const colors = { bg: "#11151b", panel: "#1c2530", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
+const colors = { bg: "default", panel: "default", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -31,7 +31,7 @@ test.describe("layout", () => {
     const initialSessions = (await term.find("Sessions"))!
     await term.press("Alt+ArrowLeft")
     await term.waitForText("Projects")
-    await term.press("Control+p")
+    await term.press("Alt+ArrowRight")
     await term.type("/layout focus pane-1")
     await term.press("Enter")
     await prompt(term, "/layout focus pane-2")
@@ -44,9 +44,56 @@ test.describe("layout", () => {
     await expect.poll(() => term.find("Sessions")).toBeNull()
     await prompt(term, "/layout focus pane-2")
     await prompt(term, "/layout assign jobs")
-    await term.press("Control+p")
+    await prompt(term, "/projects-sidebar off")
     await expect.poll(() => term.find("Projects")).toBeNull()
   })
+
+  test("close passive panes by name or id and restore the saved removal", async ({ tui, backend }, testInfo) => {
+    let term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await statusSessionId(term)
+    await term.waitForText("Todos")
+    await term.type("/layout close tod")
+    await term.waitForText("/layout close todos")
+    await term.press("Tab")
+    await term.press("Enter")
+    await expect.poll(() => term.find("Todos")).toBeNull()
+    await term.waitForText("Context")
+    await prompt(term, "/layout close pane-5")
+    await expect.poll(() => term.find("Context")).toBeNull()
+    await term.type("still editing here")
+    await term.waitForText("still editing here")
+    const input = (await term.find("still editing here"))!
+    expect((await term.cell(input.row - 1, input.col))?.fg).toBe(colors.accent)
+    await term.attach(testInfo, "named-close")
+    term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await statusSessionId(term)
+    expect(await term.find("Todos")).toBeNull()
+    expect(await term.find("Context")).toBeNull()
+    await term.resize(690, 640)
+    await prompt(term, "/layout close sessions") // hidden at this width
+    await term.resize(wideViewport.width, wideViewport.height)
+    await expect.poll(() => term.find("Sessions")).toBeNull()
+    await term.attach(testInfo, "named-close-restored")
+  })
+
+  for (const width of [1100, 690]) {
+    test(`split up places a new Jobs pane above the selected editor (${width}px)`, async ({ tui, backend }, testInfo) => {
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await term.waitForText("Message, !shell, or @file · / commands")
+      await statusSessionId(term)
+      await prompt(term, "/layout split up jobs")
+      await term.waitForText("▸ jobs · pane-8")
+      const jobs = (await term.find("jobs · pane-8"))!
+      const editor = (await term.find("Message, !shell, or @file · / commands"))!
+      expect(jobs.row).toBeLessThan(editor.row)
+      await term.press("Alt+ArrowDown")
+      await term.type("editor below jobs")
+      await term.waitForText("editor below jobs")
+      await term.attach(testInfo, "split-up")
+    })
+  }
 
   test("an open command survives a responsive pane reshape", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1500, height: 640 } })
@@ -63,31 +110,29 @@ test.describe("layout", () => {
   test("split, focus, and assign tiled panes; restore the saved layout on a new TUI", async ({ tui, backend }) => {
     let term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await prompt(term, "/layout split vertical jobs")
-    await term.waitForText("▸ jobs · pane-6")
-    const conversation = (await term.find("No messages yet"))!
-    const jobs = (await term.find("jobs · pane-6"))!
-    expect(jobs.col).toBeGreaterThan(conversation.col)
-    await term.press("Alt+ArrowLeft")
-    await prompt(term, "/layout split horizontal todos")
-    await expect.poll(async () => (await term.lines()).filter((line) => line.includes("─Todos")).length).toBeGreaterThanOrEqual(2)
-    expect((await term.find("Todos"))!.col).toBeLessThan(jobs.col)
-    const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.row
+    await prompt(term, "/layout split left jobs")
+    await term.waitForText("▸ jobs · pane-8")
+    const editor = (await term.find("Message, !shell, or @file · / commands"))!
+    const jobs = (await term.find("jobs · pane-8"))!
+    expect(jobs.col).toBeLessThan(editor.col)
+    await term.press("Alt+ArrowRight")
+    await prompt(term, "/layout split up todos")
+    await expect.poll(async () => (await term.lines()).filter((line) => line.includes("Todos")).length).toBeGreaterThanOrEqual(2)
+    const inputBeforeSwap = (await term.find("Message, !shell, or @file · / commands"))!.col
     await term.type("/")
     await term.waitForText("Commands")
-    await term.type("layout assign conversation")
+    await term.type("layout focus pane-8")
     await term.press("Enter")
-    // A frame caught mid-relayout may not show the placeholder yet; keep polling.
-    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))?.row ?? -1).toBeGreaterThan(inputBeforeSwap)
+    await prompt(term, "/layout assign composer")
+    await expect.poll(async () => (await term.find("Message, !shell, or @file · / commands"))!.col).toBeLessThan(inputBeforeSwap)
     await prompt(term, "hello after moving conversation")
     await term.waitForText("layout reply marker l1", 20_000)
 
     term = await tui(hyaTui(backend), { viewport: wideViewport })
-    // Plain launch creates a fresh ephemeral session; the saved layout is what persists.
-    await term.waitForText("No messages yet. Type a prompt below.")
-    await term.waitForText("jobs · pane-6")
+    await term.waitForText("layout reply marker l1")
+    await term.waitForText("jobs · pane-1")
     await prompt(term, "/layout reset")
-    await expect.poll(() => term.find("pane-6")).toBeNull()
+    await expect.poll(() => term.find("pane-8")).toBeNull()
     await term.waitForText("Sessions")
   })
 
@@ -99,7 +144,7 @@ test.describe("layout", () => {
     await prompt(term, "hello layout")
     await term.waitForText("layout reply marker l1", 20_000)
 
-    // Sidebar: three titled boxes stacked on the right, in the panel color.
+    // Sidebar: selectable Sessions stays boxed; passive sections use plain headings.
     for (const title of ["Sessions", "Todos", "Context"]) await term.waitForText(title)
     const sessions = (await term.find("Sessions"))!
     expect(sessions.col).toBeGreaterThan(cols / 2)
@@ -120,7 +165,9 @@ test.describe("layout", () => {
     expect(text).not.toContain("Pending")
 
     // Ctrl+B hides the sidebar and gives the transcript the full width; /sidebar brings it back.
-    await term.press("Control+b")
+    await term.press("Control+x")
+    await term.type("/sidebar")
+    await term.press("Enter")
     await expect.poll(() => sidebarShown(term)).toBe(false)
     await term.waitForText("layout reply marker l1")
     await prompt(term, "/sidebar")
@@ -141,8 +188,10 @@ test.describe("layout", () => {
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-closed")
 
-    await term.press("Control+b")
-    await expect.poll(() => term.find("mode manual")).not.toBeNull()
+    await term.press("Control+x")
+    await term.type("/sidebar")
+    await term.press("Enter")
+    expect(await term.find("mode manual")).toBeNull()
     expect(await term.find("Sessions")).toBeNull()
 
     await prompt(term, "/sidebar off")
@@ -188,7 +237,7 @@ test.describe("pending interactions", () => {
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)
-    await term.waitForText("F4 review request")
+    await term.waitForText("/pending review request")
     expect(await term.find("asked by hya-main")).toBeNull()
   })
 })
@@ -199,9 +248,9 @@ test.describe("jobs pane", () => {
   test("shows the open session working while its turn streams", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await prompt(term, "/layout split vertical jobs")
-    await term.waitForText("▸ jobs · pane-6")
-    await term.press("Alt+ArrowLeft")
+    await prompt(term, "/layout split left jobs")
+    await term.waitForText("▸ jobs · pane-8")
+    await term.press("Alt+ArrowRight")
     await prompt(term, "show the work")
     await term.waitForText("turn running", 20_000)
     await term.waitForText("finished from tiled jobs pane", 20_000)

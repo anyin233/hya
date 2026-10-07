@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadPreferences, preferencesPath, savePreferences } from "../src/prefs"
+import { loadPaneLayout, loadPreferences, preferencesPath, savePreferences } from "../src/prefs"
 import { defaultPaneLayout, splitPane } from "../src/state/panes"
 
 const dirs: string[] = []
@@ -22,6 +22,15 @@ test("the file lives at HYA_TUI_CONFIG, else $XDG_CONFIG_HOME/hya/tui.json, else
 test("a missing file loads as no preferences, without a warning", () => {
   const path = join(temp(), "missing", "tui.json")
   expect(loadPreferences(path)).toEqual({ preferences: {} })
+})
+
+test("custom command shortcuts round-trip and normalize while invalid bindings warn without discarding other preferences", () => {
+  const path = join(temp(), "tui.json")
+  savePreferences(path, { keybindings: { f6: { command: "/layout focus left", scope: "workspace" } } })
+  expect(loadPreferences(path).preferences.keybindings).toEqual({ F6: { command: "/layout focus left", scope: "workspace" } })
+  writeFileSync(path, JSON.stringify({ theme: "light", vim: true, keybindings: { F6: { command: "invalid", scope: "conversation" } } }))
+  expect(loadPreferences(path).preferences).toEqual({ theme: "light", vim: true })
+  expect(loadPreferences(path).warning).toContain("single slash command")
 })
 
 test("a corrupt file loads as no preferences, with a warning naming the file", () => {
@@ -109,10 +118,36 @@ test("a saved version-1 center split loads with editable outer side panes", () =
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
   writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
   const loaded = loadPreferences(path).preferences.paneLayout!
-  expect(loaded.version).toBe(2)
+  expect(loaded.version).toBe(4)
   expect(loaded.active).toBe("pane-2")
   expect(JSON.stringify(loaded.root)).toContain('"kind":"projects"')
   expect(JSON.stringify(loaded.root)).toContain('"kind":"sessions"')
+})
+
+
+test("disabled default bindings persist as explicit null overrides", () => {
+  const path = join(temp(), "tui.json")
+  savePreferences(path, { keybindings: { "Ctrl+C": null, "Ctrl+W": { command: "/layout close", scope: "workspace" } } })
+  expect(loadPreferences(path).preferences.keybindings).toEqual({ "Ctrl+C": null, "Ctrl+W": { command: "/layout close", scope: "workspace" } })
+})
+
+
+test("explicit layout loading refuses missing/corrupt/invalid layouts and never rewrites preferences", () => {
+  const path = join(temp(), "tui.json")
+  expect(() => loadPaneLayout(path)).toThrow("not found")
+  for (const [text, error] of [["bad json", "JSON object"], ["[]", "JSON object"], ["{}", "No paneLayout"], ['{"paneLayout":null}', "Invalid paneLayout"]]) {
+    writeFileSync(path, text!)
+    expect(() => loadPaneLayout(path)).toThrow(error!)
+    expect(readFileSync(path, "utf8")).toBe(text!)
+  }
+  const layout = splitPane(defaultPaneLayout(), "vertical", "jobs")
+  const text = JSON.stringify({ paneLayout: layout, theme: "light", unknown: 42 })
+  writeFileSync(path, text)
+  expect(loadPaneLayout(path)).toEqual(layout)
+  expect(readFileSync(path, "utf8")).toBe(text)
+  const legacy = { version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }
+  writeFileSync(path, JSON.stringify({ paneLayout: legacy }))
+  expect(loadPaneLayout(path).version).toBe(4)
 })
 
 test("extension enabled preferences round-trip and reject malformed maps", () => {

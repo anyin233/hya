@@ -65,7 +65,7 @@ contributions, recent warnings, and the last lines of its stderr.
 | `/extensions untrust <bundle id>` | Run it in the VM and remember the choice. |
 | `/bundles` | The full-screen [Bundles view](tui.md#bundles): install, uninstall, enable, disable, and trust whole bundles (backend components and TUI extension together). |
 | `/extensions sandbox <required\|best-effort\|disabled>` | Set the OS sandbox policy (`extensionSandbox`) and restart running extensions. The VM always applies. |
-| `/layout split <horizontal\|vertical> extension <bundle id>#<panel id>` | Show a panel in a new pane; `/layout assign extension <key>` puts it in the active pane. |
+| `/layout split <up\|left> extension <bundle id>#<panel id>` | Show a panel in a new pane; `/layout assign extension <key>` puts it in the active pane. |
 
 ## Manifest contract
 
@@ -129,8 +129,10 @@ commands. `onKey` and `onResult` use the same result shape.
 
 ### Replaceable surfaces and missing replacements
 
-In addition to replaceable panes, `context_line` is the compact status line
-above the conversation and `project_view` is the full-screen Projects view.
+In addition to replaceable panes, `project_view` is the full-screen Projects
+view. `context_line` remains a supported SDK contribution target, but this
+frontend does not draw an implicit status line above the conversation; place
+a Context or Status pane explicitly for metadata.
 The conversation pane itself is never replaceable. If a surface has no
 replacement because `hya/basic-tui-components` is not installed or running,
 the host displays `<Surface> needs hya/basic-tui-components (<reason>)`.
@@ -139,7 +141,7 @@ the host displays `<Surface> needs hya/basic-tui-components (<reason>)`.
 
 | Contribution | API | Where it shows |
 | --- | --- | --- |
-| Panel | `registerPanel({ id, title, render, placement?, replaces?, refreshMs?, onAction?, onKey?, onResult? })` | `placement: "sidebar"` (default): a column at the workspace's right edge, while the terminal is wide enough. `placement: "pane"`: only where `/layout` puts it. `replaces` may name a pane or surface (`projects`, `sessions`, `todos`, `context`, `jobs`, `status`, `models`, `workflows`, `interactions`, `api`, `context_line`, `project_view`); the conversation pane cannot be replaced. `onKey` needs `tui.keys` and handles captured keys; `onResult` receives a result for a tokenized host command. `refreshMs` is at least 1000 ms. Among replacements, a non-first-party bundle wins over first-party bundles; ties are by bundle id. |
+| Panel | `registerPanel({ id, title, render, placement?, replaces?, refreshMs?, onAction?, onKey?, onResult? })` | `placement: "sidebar"` (default): placed once as a selectable extension leaf at the right of the v4 layout root, without changing focus; the Layout editor can move, resize, or remove it. `placement: "pane"`: only where `/layout` puts it. `replaces` may name a pane or surface (`projects`, `sessions`, `todos`, `context`, `jobs`, `status`, `models`, `workflows`, `interactions`, `api`, `context_line`, `project_view`); the conversation pane cannot be replaced. `onKey` needs `tui.keys` and handles captured keys; `onResult` receives a result for a tokenized host command. `refreshMs` is at least 1000 ms. Among replacements, a non-first-party bundle wins over first-party bundles; ties are by bundle id. |
 | Status item | `registerStatusItem({ id, label, render, priority? })` | A Context box row (`label  value`) before the connection rows, and a segment of the narrow status line; `priority` 1–9 is its drop order there. Returning nothing hides it. |
 | Tool-card renderer | `registerRenderer({ id, target: "tool_call", mode, priority?, render(input) })` | `replace`: the highest priority (ties: the last bundle id) draws the card instead of the built-in one; returning `null` keeps the built-in card for that call. `decorate`: a tree with one `{ kind: "slot" }` wraps the card (or the replacement); higher priorities wrap outermost. |
 | Composer decoration | `registerRenderer({ id, target: "composer", mode: "decorate", render })` | A `column` with `{ kind: "slot" }` as a direct child: rows before the slot are drawn above the composer, rows after it below. The composer itself, its keys, and its input always stay the host's. |
@@ -221,10 +223,9 @@ commands; a command-result handler may therefore issue more commands.
 ### Keyboard capture
 
 A panel declaring `onKey` with `tui.keys` can receive keys while its pane or
-overlay owns focus. The built-in Projects sidebar is reached with Ctrl+P;
+overlay owns focus. The built-in Projects sidebar is reached with Alt+Arrow or `/layout focus`;
 captured keys are delivered through `tui/key`. A handler can return
-`ui.release` to return focus to the host (Ctrl+P/Escape behavior remains host
-controlled), or `ui.close` to close its overlay. Keys are not available without
+`ui.release` to return focus to the message editor, or `ui.close` to close its overlay. Keys are not available without
 `tui.keys`.
 
 `RenderNode` is a tagged object (`kind`):
@@ -278,7 +279,7 @@ renders 95–98 ms after it in the VM and 51–57 ms on the JIT tier.
 ### `hya/basic-tui-components`
 
 The trusted `hya/basic-tui-components` bundle provides the Sessions, Todos,
-Projects sidebar, Context box and compact Context line, and full-screen
+Projects sidebar, Context pane, and full-screen
 Projects view. It is an ordinary TUI extension: another bundle can replace one
 of those panels or surfaces by registering a panel with the matching
 `replaces` value. Replacement precedence favors a non-first-party bundle.

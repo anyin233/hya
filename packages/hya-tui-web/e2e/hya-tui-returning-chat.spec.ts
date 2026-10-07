@@ -32,8 +32,6 @@ test("a plain relaunch restores the waiting chat and offers approval keys, then 
   await api(backend, "PATCH", `/v1/sessions/${newer.id}`, { title: "Newer saved chat" })
 
   const second = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
-  await second.waitForText(/Pending \(1\)/, 20_000)
-  await second.press("F4")
   await second.waitForText("Check this repository", 20_000)
   expect(await second.text()).not.toContain("Newer saved chat")
   await second.waitForText(outlinedToolCard("◌", "bash", '"command":"git status --short --branch"', "awaiting approval"), 20_000)
@@ -48,14 +46,6 @@ test("a plain relaunch restores the waiting chat and offers approval keys, then 
   expect(await second.waitForExit()).toBe(0)
 
   const third = await tui(hyaTui(backend), { viewport: { width: 690, height: 480 } })
-  await third.waitForText("Message, !shell, or @file · / commands", 20_000)
-  // A plain launch opens a fresh session (docs/tui.md); the answered chat is listed in /sessions
-  // (untitled, archived again by the second TUI's /exit): filter to its row and open it.
-  await prompt(third, "/sessions")
-  await third.waitForText(id, 20_000)
-  await third.type(id)
-  await third.waitForText(/1 of \d+/)
-  await third.press("Enter")
   await third.waitForText("Check this repository", 20_000)
   await third.waitForText("Repository status checked.", 20_000)
   await third.attach(testInfo, "reopened-history")

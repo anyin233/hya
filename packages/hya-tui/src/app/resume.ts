@@ -65,4 +65,3 @@ export function createResumer({ store, client, openSession, openPicker, refresh 
     },
   }
 }
-

@@ -48,7 +48,8 @@ import { GrpcHyaClient } from "../grpc_client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
 import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
-import { setTheme } from "../theme"
+import { setCustomKeybindings } from "../keys/custom"
+import { colors, setTheme } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
 import { App } from "./App"
 import { AppContext } from "./context"
@@ -140,6 +141,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // Preferences first, so the first frame already uses the saved theme.
   const prefsPath = preferencesPath(process.env)
   const loaded = loadPreferences(prefsPath)
+  setCustomKeybindings(loaded.preferences.keybindings ?? {})
   const warnings = loaded.warning ? [loaded.warning] : []
   if (loaded.preferences.theme && !setTheme(loaded.preferences.theme)) {
     warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using hya`)
@@ -284,7 +286,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
-  renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30, autoFocus: false })
+  renderer = await createCliRenderer({ backgroundColor: colors.bg, exitOnCtrlC: false, targetFps: 30, autoFocus: false })
   // Every full-screen view and the main layout follow the terminal size
   // (`useTerminalDimensions`, one "resize" listener each, all mounted at
   // once). Past Node's default of 10 its MaxListenersExceededWarning would be

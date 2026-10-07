@@ -178,11 +178,11 @@ test.describe("command menu", () => {
     await term.waitForText("▸ /layout assign")
     await term.waitForText("/layout split")
     await term.type("split ")
-    await term.waitForText("▸ /layout split horizontal")
-    await term.waitForText("/layout split vertical")
-    await term.type("vertical ")
-    await term.waitForText("/layout split vertical jobs")
-    expect((await box(term, "Commands"))?.rows.some((row) => row.includes("/layout split vertical conversation"))).toBe(false)
+    await term.waitForText("▸ /layout split left")
+    await term.waitForText("/layout split up")
+    await term.type("up ")
+    await term.waitForText("/layout split up jobs")
+    expect((await box(term, "Commands"))?.rows.some((row) => row.includes("/layout split up conversation"))).toBe(false)
   })
 
   test("Tab accepts nested choices and Enter runs the completed layout command", async ({ tui, backend }) => {
@@ -194,17 +194,17 @@ test.describe("command menu", () => {
     await term.waitForText("▸ /layout split")
     await term.press("Tab")
     await expect.poll(() => commandText(term)).toBe("/layout split")
-    await term.waitForText("▸ /layout split horizontal")
+    await term.waitForText("▸ /layout split left")
     await term.press("ArrowDown")
-    await term.waitForText("▸ /layout split vertical")
+    await term.waitForText("▸ /layout split up")
     await term.press("Tab")
-    await expect.poll(() => commandText(term)).toBe("/layout split vertical")
+    await expect.poll(() => commandText(term)).toBe("/layout split up")
     await term.type("jo")
-    await term.waitForText("▸ /layout split vertical jobs")
+    await term.waitForText("▸ /layout split up jobs")
     await term.press("Tab")
-    await expect.poll(() => commandText(term)).toBe("/layout split vertical jobs")
+    await expect.poll(() => commandText(term)).toBe("/layout split up jobs")
     await term.press("Enter")
-    await term.waitForText("jobs · pane-6")
+    await term.waitForText("jobs · pane-8")
   })
 
   test("the same nested menu shows API methods and paths", async ({ tui, backend }) => {
@@ -268,7 +268,7 @@ test.describe("command menu", () => {
   test("/new from the focused Projects sidebar leaves the composer taking typed text", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 1700, height: 800 } })
     await connected(term, backend)
-    await term.press("Control+p")
+    await term.press("Alt+ArrowRight")
     const projects = (await term.find("Projects"))!
     await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe(accent)
     // Not `createSessionViaMenu`: at this width the Projects sidebar starts every row, so `^Created` never matches.

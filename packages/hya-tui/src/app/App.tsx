@@ -16,6 +16,7 @@ import { extensionContext } from "../extensions/context"
 import { ExtensionOverlay } from "../extensions/Host"
 import { extensionManager } from "../extensions/manager"
 import { shownServer } from "../state/format"
+import { paneLeaves } from "../state/panes"
 import { colors } from "../theme"
 import { useApp } from "./context"
 
@@ -29,7 +30,10 @@ export function App() {
     store.setStatus(copyNotice(text, controller.copyText(text)))
   })
   extensionManager.configure({
-    release: () => store.setProjectsFocus(false),
+    release: () => {
+      const composer = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")
+      if (composer) store.setPaneLayout({ ...store.state.paneLayout, active: composer.id })
+    },
     close: (panelKey) => { if (store.state.extensionOverlay === panelKey) store.setExtensionOverlay(undefined) },
     open: (panelKey) => { if (extensionManager.replacement("project_view")?.key === panelKey) store.setExtensionOverlay(panelKey) },
     executeCommand: (command, origin) => controller.hostCommand(command, origin),

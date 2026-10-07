@@ -243,4 +243,3 @@ export function createReconnector({
     stopped: (): boolean => stopped,
   }
 }
-

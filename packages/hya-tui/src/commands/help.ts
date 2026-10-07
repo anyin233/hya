@@ -10,6 +10,7 @@
  */
 import type { TextareaAction } from "@opentui/core"
 import { composerKeyBindings, keyBindings, type ComposerKeyBinding, type KeyAction } from "../keys/bindings"
+import { customKeybindings, isKeyOverridden } from "../keys/custom"
 import { agentsViewKeyRows } from "../state/agentsView"
 import { diffKeyRows } from "../state/diff"
 import { mcpKeyRows } from "../state/mcp"
@@ -20,7 +21,7 @@ import { rulesKeyRows } from "../state/rules"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Layout", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -88,6 +89,7 @@ const editingText: Partial<Record<TextareaAction, string>> = {
 function composerRows(): HelpRow[] {
   const groups = new Map<string, { labels: string[]; description: string }>()
   for (const binding of composerKeyBindings) {
+    if (isKeyOverridden(composerKeyLabel(binding))) continue
     const key = binding.action
     const base = editingText[binding.action] ?? binding.action
     const description = binding.action === "newline"
@@ -169,7 +171,7 @@ const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = 
 
 /** Every key (grouped, in `helpGroups` order) and every command of `commands` (the merged `/` menu list). */
 export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
-  const bindingRows: HelpRow[] = keyBindings.map((binding) => ({ group: actionGroups[binding.action], keys: binding.label, description: binding.description }))
+  const bindingRows: HelpRow[] = keyBindings.filter((binding) => !isKeyOverridden(binding.label)).map((binding) => ({ group: actionGroups[binding.action], keys: binding.label, description: binding.description }))
   const commandRows: HelpRow[] = commands.map((entry) => ({
     group: "Commands",
     keys: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}`,
@@ -185,8 +187,24 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   const savedRuleRows: HelpRow[] = rulesKeyRows.map((row) => ({ group: "Rules", keys: row.keys, description: row.description }))
   const agentsViewRows: HelpRow[] = agentsViewKeyRows.map((row) => ({ group: "Agents", keys: row.keys, description: row.description }))
   const rows = [
+    ...([
+      { keys: "Up / Down", description: "Layout pane: select a tree node or action" },
+      { keys: "Left / Right", description: "Layout pane: select parent or first child" },
+      { keys: "Home / End", description: "Layout pane: select first or last row" },
+      { keys: "Enter", description: "Layout pane: edit the selected node, choose an action, or save a weight" },
+      { keys: "Shift+Enter / Space / Ctrl+J / Linefeed", description: "Layout tree: mark/unmark the cursor node; WebUI Shift+Enter arrives as line feed" },
+      { keys: "i", description: "Layout tree: insert before the cursor; at root choose a child position" },
+      { keys: "w", description: "Layout tree: start wrapping the marked node, otherwise the cursor node" },
+      { keys: "r / c", description: "Layout wrap prefix: choose row or column" },
+      { keys: "Tab", description: "Layout direct wrap chooser: toggle new pane before/after the target" },
+      { keys: "Esc", description: "Layout pane: cancel a form/prefix, return to the tree, or clear the mark" },
+      { keys: "Backspace / Delete", description: "Layout tree: remove marked/cursor auxiliary pane; groups ask confirmation. Weight form: erase text" },
+    ].map((row): HelpRow => ({ group: "Layout", ...row }))),
     ...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(),
     ...providerRows, ...diffRows, ...mcpRows, ...bundlesViewRows, ...savedRuleRows, ...agentsViewRows, ...commandRows,
+    ...Object.entries(customKeybindings()).filter((entry): entry is [string, NonNullable<typeof entry[1]>] => entry[1] !== null).map(([keys, binding]): HelpRow => ({
+      group: "Views", keys, description: `Run ${binding.command} (${binding.scope}; custom /keybind shortcut)`,
+    })),
   ]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))
