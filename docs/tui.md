@@ -1961,6 +1961,63 @@ second Esc clears it. Opening another session this way resets the parent's
 overlay and prompt queue like any session switch; the parent's turn keeps
 running on the server, and its transcript is re-read on return.
 
+
+### Subagent selector and viewer panes
+
+`subagents` is a selectable layout pane for the open conversation's descendants.
+`subagent-viewer` is a passive, read-only transcript pane. They let you monitor
+helpers alongside the parent conversation without replacing its transcript,
+changing its session, or sending the parent's draft to a child. Completed children
+stay in the list; nested children are indented, and pending requests show `waiting`.
+The existing parent permission/question prompt remains the place to answer asks.
+
+Run `/subagents` to add missing selector and viewer panes beside the workspace and
+focus the selector. Existing panes are reused. In the selector, Up/Down previews a
+child in every following viewer; Enter pins it to the first following viewer (or
+replaces the first pin if all are pinned); `n` adds a new pinned viewer. Unsupported
+keys stay in the selector. Alt+arrows navigate selectable panes as usual. A viewer
+has no border and does not take keyboard focus; use its mouse wheel to scroll.
+Each viewer scrolls independently, even when two show the same child.
+
+Commands (arguments are exact session and pane IDs, with dropdown completion):
+
+| Command | Contract |
+| --- | --- |
+| `/subagents` | Add missing `subagents` and `subagent-viewer` panes, persist the layout, focus the selector. Requires an open session. |
+| `/subagents select <session>` | Preview a descendant of the open session; keep the main session and composer unchanged. |
+| `/subagents pin <viewer-pane> [session]` | Persist a pin on that viewer; omitted session uses the current preview or first child. |
+| `/subagents follow <viewer-pane>` | Remove that viewer's pin and follow the selector again. |
+| `/subagents view <session>` | Add a separate pinned viewer, preserving keyboard focus. |
+
+For example, run `/subagents`, use Down to choose a helper, press Enter to pin it,
+then choose another helper and press `n` to watch both. Use `/layout show` to find
+pane IDs, `/subagents follow pane-9` to resume previewing there, and `/layout close
+pane-9` to remove it. IDs depend on your layout. Both jobs also work through the
+normal tree editor and `/layout split up|left <job>` commands; the convenience
+command does not impose a fixed layout.
+
+**Layout interface:** version 4 `PaneLeaf` accepts the additional jobs
+`kind: "subagents" | "subagent-viewer"`. Only a `subagent-viewer` leaf may have
+`session?: string`, a nonempty child-session ID. Absent `session` means following;
+present means pinned. Pins are saved in `paneLayout` in TUI preferences and survive
+`/layout reload` and restart. Preview selection is ephemeral and resets when the
+main session changes. A pin outside the current conversation shows an unavailable
+placeholder instead of another conversation's transcript. Removing the last
+viewer for a child releases its watch; hidden viewers release theirs too.
+
+**Backend interface:** these panes use the existing `hya.v1` session projection:
+`GetSession` (`GET /v1/sessions/{session}`) for `SessionInfo`, `ListMessages` for
+`MessageInfo[]`, `ListEvents` for replay, and `StreamSessionEvents` for live
+`StreamFrame` events/resync. HTTP/SSE and direct gRPC share this implementation;
+there are no new RPCs or durable frontend read models. Each server/root/child
+combination has one reference-counted watch. Reconnect gap-fills from its durable
+sequence and refreshes the authoritative projection; transient live parts use the
+same overlay and Markdown/tool rendering as the main conversation. Viewer errors
+appear within that viewer and do not replace the parent's connection status.
+Live deltas are transient: joining a response after its part-start frame may
+show that part only once its durable completed text is available. Keeping a
+following viewer open before spawning a helper shows its response as it streams.
+
 ## Streaming, queued prompts, and turn status
 
 The assistant reply appears chunk by chunk while the model streams it. When
