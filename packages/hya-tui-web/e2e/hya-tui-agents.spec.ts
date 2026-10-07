@@ -70,8 +70,9 @@ test.describe("hya TUI Agents view", () => {
     await term.waitForText(/▸  hya-plan\s/)
     await term.press("Enter")
     await expect.poll(() => term.find("── Primary agents")).toBeNull()
-    // The session's agent switch lands (the compact context line names it) before the prompt goes out.
-    await term.waitForText(/· hya-plan ·/)
+    // /status exposes session context without adding a conversation heading.
+    await prompt(term, "/status")
+    await term.waitForText(/Agent\s+hya-plan/)
     await prompt(term, "hi")
     await term.waitForText("Reply one.", 20_000)
     await term.waitForText(/● hya-plan · fake\//)

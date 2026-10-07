@@ -229,9 +229,12 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     const webPage = await page.context().newPage()
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
-    // Plain launches create a fresh Project session (docs/tui.md "Sessions on
-    // start"); the tab must not inherit the terminal's transcript.
+    // Plain launches restore the saved Project chat. Start a fresh chat explicitly
+    // before testing cross-client resume in both directions.
     await web.waitForText("Message, !shell, or @file · / commands", 30_000)
+    expect(await statusSessionId(web)).toBe(terminalId)
+    await web.waitForText("Terminal reply.")
+    await prompt(web, "/new")
     const webId = await statusSessionId(web)
     expect(webId).not.toBe(terminalId)
     expect(await web.text()).not.toContain("Terminal reply.")

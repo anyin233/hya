@@ -1,21 +1,3 @@
-# 0.44.6
+# 0.44.10
 
-## TUI
-
-- Added the full-screen Bundles view (`/bundles`): every bundle of the scope with its version, scope, state, components, and TUI extension (tier and run state); `i` installs a `.hyabundle` (user or project scope), `x` uninstalls, `e` enables or disables, `t` trusts or untrusts its TUI extension, and panels appear or disappear at once.
-- Bundle TUI extensions: the TUI runs each bundle's `tui:` extension from catalog files it verifies by sha256. Extensions add panels (sidebar column, `/layout … extension <bundle>#<panel>`, or in place of a built-in pane), Context fields, tool-card and composer renderers, tool-output formatters, and submit interceptors; `/extensions` lists, enables, disables, reloads them and sets the OS sandbox policy. A remote backend's extensions run only after `/extensions enable`.
-- Extension isolation needs no helper binary: untrusted extensions run in their own QuickJS WebAssembly VM (ECMAScript only, 64 MiB memory cap, 2 s of execution per request) inside one shared extension host process, which confines itself before starting (Landlock + seccomp on Linux, `sandbox_init` on macOS) and also works in Docker's default container. Where the OS cannot confine, `best-effort` keeps the VM and warns; `required` refuses.
-- Trusted extensions run on JavaScriptCore's JIT, each in its own realm and thread: rendering is 6–10x faster and 20 extensions start in about half the time. `/extensions trust|untrust <id>` chooses per bundle; by default only a local backend's first-party bundles are trusted. Trusted extensions keep the deadline and OS sandbox but have no memory cap.
-- Faster extension startup: one host process with one VM thread instead of a process per extension, started while the catalog loads; extension files already cached are not downloaded again, and the sandbox probe result is cached. 20 extensions with full panels render about 0.1 s (macOS) to 0.25 s (Linux in Docker) after the catalog arrives, instead of about 1 s, using about 140 MB instead of 1.25 GB. An extension whose handler runs past the 2 s deadline is failed and restarted within its restart budget, so it cannot keep stalling the others.
-- Extensions with the `fs.read` permission can read, list, stat, and watch files under the active Project's roots through `api.fs`.
-- Added the standalone `@hya/tui-sdk` 1.0.0 (`defineTuiExtension`), versioned independently of the frontend and shipped next to the TUI.
-- Moved the built-in Sessions, Todos, Projects sidebar and full-screen Projects view, and Context surfaces into the first-party `hya/basic-tui-components` TUI bundle; non-running bundles show a replacement placeholder.
-- Extended the TUI extension API with permission-scoped context, captured keys, host commands and token results, replaceable surfaces, action mouse buttons, `now`, and additional theme colors.
-- Improved subagent sessions with readable roster handles, direct child-session navigation, compact nested rows, and complete Project descendant visibility.
-- Rendered received agent messages as tool cards and deferred pointer selection until after click layout updates.
-- Fixed dragging a sidebar border: the drag no longer stops once the pointer crosses rows the pane re-renders (it could not shrink the right sidebar back to its minimum), and a press on text next to the border no longer starts a text selection.
-- Fixed a prompt sent while startup was still opening the session: it was sent in an extra session the TUI then left; it now goes to the session startup opens.
-
-## Version management
-
-- This frontend requires backend `0.45.3` or newer through `minimumBackendVersion`: its Sessions, Todos, Projects, and Context panes come from the backend's TUI extension catalog (`ListTuiExtensions`), and `/bundles` uses the bundle management API.
+- Collapse unused composer decoration containers so the transcript, activity row, and message input remain adjacent and their resize boundary matches the visible input border.

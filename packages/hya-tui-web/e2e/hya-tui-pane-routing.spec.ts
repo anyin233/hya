@@ -25,7 +25,7 @@ test("Sessions owns typing, editing, paste, and Enter while conversation draft s
   await term.waitForText("Commands")
   await term.press("Escape")
   await expect.poll(() => term.find("Commands")).toBeNull()
-  await term.press("Alt+ArrowLeft")
+  await term.press("Alt+ArrowRight")
   await expect.poll(async () => (await term.cell(sessions.row, sessions.col - 1))?.fg).toBe("#405366")
   await term.type(" continues")
   await term.waitForText("preserved draft continues")

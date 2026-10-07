@@ -21,6 +21,7 @@ architecture notes.
 - [Browser-rendered TUI](tui-web.md) — serve a terminal frontend to a browser
   on a real PTY; the Playwright environment for TUI tests and the WebUI host.
 - [TUI Extension SDK](tui-extension-sdk.md) — `@hya/tui-sdk`: `defineTuiExtension`, panels, status items, renderers, formatters, interceptors.
+- [Disk inspector plugin](disk-inspector.md) — standalone frontend/backend plugin scaffold and its host foundation requirements.
 - [Secure relay](relay.md) — reach a backend through a third-party `hya proxy`
   with end-to-end encryption; the `hya.relay.v1` protocol and link grammar.
 

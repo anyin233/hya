@@ -84,4 +84,3 @@ export function workingLineText(state: AppState, now: number): string | undefine
   const queued = queuedCount(state)
   return `${elapsed} · ${activity}${queued ? ` · Queued ${queued}` : ""} · Esc to interrupt`
 }
-

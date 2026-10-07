@@ -1,4 +1,4 @@
-// External editor (docs/tui.md "External editor"): Ctrl+X Ctrl+E or
+// External editor (docs/tui.md "External editor"): the command pane or
 // `/editor` suspends the TUI, runs $VISUAL / $EDITOR on a temp file holding
 // the input, then puts the edited text back into the input without sending
 // it. The editor here is a shell script: it prints a line (visible while the
@@ -33,13 +33,14 @@ async function composerText(term: Tui): Promise<string | undefined> {
   return lines.slice(top + 1, bottom).map((line) => line.slice(1, right).trim()).join("\n").trim()
 }
 
-test("Ctrl+X Ctrl+E edits the input in $EDITOR and puts the result back, unsent", async ({ tui, backend }, testInfo) => {
+test("/editor edits the input in $EDITOR and puts the result back, unsent", async ({ tui, backend }, testInfo) => {
   const editor = await editorScript(`printf 'edited: %s\\nsecond line' "$(cat "$1")" > "$1"`)
   const term = await tui(hyaTui(backend), { env: { EDITOR: editor, VISUAL: "" } })
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("draft words")
   await term.press("Control+x")
-  await term.press("Control+e")
+  await term.type("/editor")
+  await term.press("Enter")
   // The TUI hands the terminal to the editor: its output is on screen.
   await term.waitForText(/editing \S+prompt\.md/)
   await term.attach(testInfo, "editor-running")
@@ -70,14 +71,16 @@ test("a failing or missing editor keeps the input", async ({ tui, backend }) => 
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("keep this")
   await term.press("Control+x")
-  await term.press("Control+e")
+  await term.type("/editor")
+  await term.press("Enter")
   await expect.poll(() => composerText(term)).toBe("keep this")
 
   term = await tui(hyaTui(backend), { env: { EDITOR: "/no/such/editor-hya", VISUAL: "" } })
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("still here")
   await term.press("Control+x")
-  await term.press("e")
+  await term.type("/editor")
+  await term.press("Enter")
   await expect.poll(() => composerText(term)).toBe("still here")
 })
 
@@ -88,11 +91,11 @@ test("Ctrl+X then another key drops the chord; that key works as usual; help lis
   await term.press("Control+x")
   await term.type("ab")
   await expect.poll(() => composerText(term)).toBe("ab")
-  await expect.poll(() => term.find("Ctrl+X · Ctrl+E opens")).toBeNull()
+  await expect.poll(() => term.find("Ctrl+X · / opens")).toBeNull()
   await term.press("Control+u")
   await term.press("?")
   await term.waitForText("Help · keys and commands")
   await term.type("editor")
-  await term.waitForText("Ctrl+X Ctrl+E")
+  await expect.poll(() => term.find("Ctrl+X Ctrl+E")).toBeNull()
   await term.waitForText("/editor")
 })

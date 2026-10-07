@@ -173,11 +173,17 @@ describe("OS sandbox plans", () => {
 
 describe("extension panes", () => {
   test("an extension pane names its panel; saved layouts validate it", () => {
-    const layout = splitPane(defaultPaneLayout(), "vertical", "extension", "acme/git#git")
+    const layout = splitPane(defaultPaneLayout(), "vertical", "extension", false, "acme/git#git")
     expect(parsePaneLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout)
-    expect(() => splitPane(defaultPaneLayout(), "vertical", "extension")).toThrow("needs a panel")
+    expect(() => splitPane(defaultPaneLayout(), "vertical", "extension")).toThrow("require a")
     const assigned = setPaneKind(layout, "jobs")
     expect(JSON.stringify(assigned)).not.toContain("acme/git#git")
+    const retargeted = setPaneKind(layout, "extension", "acme/git#summary")
+    expect(parsePaneLayout(JSON.parse(JSON.stringify(retargeted)))).toEqual(retargeted)
+    expect(JSON.stringify(retargeted)).toContain("acme/git#summary")
+    expect(JSON.stringify(retargeted)).not.toContain('"first":')
+    expect(retargeted.version).toBe(4)
+    expect(() => setPaneKind(layout, "extension", "invalid")).toThrow("require a")
     expect(parsePaneLayout({ ...layout, root: { type: "pane", id: "pane-1", kind: "conversation", panel: "x#y" }, active: "pane-1" })).toBeUndefined()
   })
 })

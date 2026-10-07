@@ -153,8 +153,10 @@ test.describe("live todo panel", () => {
     expect(await term.find("Todos 0/1")).toBeNull()
 
     // Hiding the sidebar removes its metadata without adding conversation headings.
-    await term.press("Control+b")
-    await expect.poll(() => term.find("─Todos")).toBeNull()
+    await term.press("Control+x")
+    await term.type("/sidebar")
+    await term.press("Enter")
+    await expect.poll(() => term.find("Todos")).toBeNull()
     expect(await term.find("○ write tests")).toBeNull()
   })
 })

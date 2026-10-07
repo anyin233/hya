@@ -28,4 +28,3 @@ export function createQuitGuard({ windowMs = quitWindowMs, now = Date.now }: Qui
     disarm(): void { armedAt = undefined },
   }
 }
-

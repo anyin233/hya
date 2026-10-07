@@ -80,8 +80,8 @@ test("pending asks of other sessions name the session they belong to (its /open 
   expect(askSessionLabel("hysec_2", store.state.sessions, undefined)).toBe("2. Other work")
   expect(askSessionLabel("hysec_1", store.state.sessions, undefined)).toBe("1. hysec_1")
   expect(askSessionLabel("hysec_9", store.state.sessions, undefined)).toBe("hysec_9")
-  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions, undefined)).toBe("Permission needed in 2. Other work · F4 to review")
-  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions, undefined)).toBe("Question in a saved session · F4 to review")
+  expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions, undefined)).toBe("Permission needed in 2. Other work · /pending to review")
+  expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions, undefined)).toBe("Question in a saved session · /pending to review")
 })
 
 test("an ask's session number is the sidebar's: counted in the active Project; another Project's session goes by its title", () => {

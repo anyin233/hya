@@ -5,7 +5,7 @@ import { effortRows, isKnownEffort, modelRows, relativeTime, sessionRows } from 
 import { copyNotice } from "../composer/clipboard"
 import { currentModel, modelBaseReference, modelReference, sessionNumbers, sessionTree, strategyText, thinkingEffortLabel, webTabBackgroundNotice } from "../state/format"
 import { layoutBreakpoints, parseSwitch, projectsSidebarVisible, sidebarTooNarrowNotice, sidebarVisible } from "../state/layout"
-import { closePane, defaultPaneLayout, movePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneAxis, type PaneDirection, type PaneKind, type PaneLayout } from "../state/panes"
+import { openLayoutPane, insertPane, movePane, wrapPane, closePane, defaultPaneLayout, isSelectablePane, movePaneFocus, rotatePaneFocus, paneKinds, paneLeaves, resizePane, setPaneKind, splitPane, visiblePaneLayout, type PaneDirection, type PaneKind, type PaneLayout, type LayoutDirection } from "../state/panes"
 import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import { forkSourceText } from "../state/revert"
@@ -19,6 +19,7 @@ import { loadPreferences, preferencesPath } from "../prefs"
 
 import { CommandRegistry, matchValues, type ArgumentPosition, type CommandContext, type CommandInvocation, type CommandSpec, type Completion } from "./registry"
 import type { CompletionContext } from "../completion"
+import { keybindingsCommand } from "./keybindings"
 
 /**
  * Session id completions (`/open`, `/resume`): a titled session shows as
@@ -33,8 +34,8 @@ function matchSessions({ head, current }: ArgumentPosition, sessions: Completion
 }
 
 /**
- * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never
- * Ctrl+R — that key means refresh), Ctrl+A shows or hides archived sessions,
+ * `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes,
+ * Ctrl+A shows or hides archived sessions,
  * F3 toggles showing every Project's sessions.
  */
 export const sessionPickerActions: readonly PickerAction[] = [
@@ -334,32 +335,84 @@ const runEffort = (context: CommandContext, { args }: CommandInvocation): Promis
   args[0] ? selectEffort(context, args[0]) : openEffortPicker(context)
 
 export const nativeCommandSpecs: CommandSpec[] = [
+  keybindingsCommand,
   {
     name: "/layout",
-    description: "Edit workspace panes: split, assign, focus, resize, close, reset, or show",
-    argumentHint: "[split|assign|focus|resize|close|reset|show]",
-    complete: ({ words, current, head }) => {
-      if (words.length === 1) return matchValues(head, current, ["split", "assign", "focus", "resize", "close", "reset", "show"])
-      if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["horizontal", "vertical"])
-      if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation"))
-      if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
-      if ((words[0] === "split" && words.length === 4 && words[2] === "extension") || (words[0] === "assign" && words.length === 3 && words[1] === "extension")) {
-        return matchValues(head, current, extensionManager.panels().map((panel) => panel.key))
+    description: "Edit workspace panes: split, insert, move, wrap, remove, assign, focus, resize, close, reload, reset, tree, or show",
+    argumentHint: "[split|insert|move|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]",
+    complete: ({ words, current, head }, context) => {
+      if (words.length === 1) return matchValues(head, current, ["split", "insert", "move", "wrap", "remove", "assign", "focus", "resize", "close", "reload", "reset", "tree", "show"])
+      if (words[0] === "split" && words.length === 2) return matchValues(head, current, ["up", "left"])
+      if (words[0] === "split" && words.length === 3) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer"))
+      if ((words[0] === "close" || words[0] === "remove") && words.length === 2) {
+        const panes = (context.panes ?? []).filter((pane) => pane.kind !== "conversation" && pane.kind !== "composer")
+        const names = panes.filter((pane) => panes.filter((other) => other.kind === pane.kind).length === 1).map((pane) => pane.kind)
+        return matchValues(head, current, [...names, ...panes.map((pane) => pane.id), ...(context.layoutContainers ?? []).filter((node) => node.removable).map((node) => node.id)])
       }
-      if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down"])
+      const groups = ["root", ...(context.layoutContainers ?? []).map((node) => node.id)]
+      const targets = [...groups, ...(context.panes ?? []).map((pane) => pane.id)]
+      if (words[0] === "insert" && words.length === 2) return matchValues(head, current, groups)
+      const container = (target: string | undefined) => target === "root" ? context.layoutContainers?.[0] : context.layoutContainers?.find((node) => node.id === target)
+      if (words[0] === "insert" && words.length === 3) {
+        const target = container(words[1])
+        return target ? matchValues(head, current, Array.from({ length: target.children.length + 1 }, (_, i) => String(i))) : []
+      }
+      if (words[0] === "move" && words.length === 4) {
+        const target = container(words[2])
+        return target ? matchValues(head, current, Array.from({ length: target.children.length + (target.children.includes(words[1] ?? "") ? 0 : 1) }, (_, i) => String(i))) : []
+      }
+      if (words[0] === "insert" && words.length === 4) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer" && kind !== "extension"))
+      if (words[0] === "move" && words.length === 2) return matchValues(head, current, targets)
+      if (words[0] === "move" && words.length === 3) return matchValues(head, current, groups)
+      if (words[0] === "wrap" && words.length === 2) return matchValues(head, current, targets)
+      if (words[0] === "wrap" && words.length === 3) return matchValues(head, current, ["row", "column"])
+      if (words[0] === "wrap" && words.length === 4) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer" && kind !== "extension"))
+      if (words[0] === "wrap" && words.length === 5) return matchValues(head, current, ["before", "after"])
+      if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
+      if ((words[0] === "split" && words.length === 4 && words[2] === "extension") || (words[0] === "assign" && words.length === 3 && words[1] === "extension")) return matchValues(head, current, extensionManager.panels().map((panel) => panel.key))
+      if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down", "next", "previous"])
       return []
     },
     run: ({ store, actions }, { args }) => {
       const current = store.state.paneLayout
       const command = args[0] ?? "show"
       let next: PaneLayout = current
+      let reloadedPath: string | undefined
       switch (command) {
+        case "tree": {
+          if (args.length !== 1) throw new Error("Usage: /layout tree")
+          next = openLayoutPane(current)
+          break
+        }
         case "show": break
+        case "insert": {
+          const [_, container, index, kind] = args
+          if (args.length !== 4 || !container || !index || !/^\d+$/.test(index) || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout insert <container-id|root> <index> <job>")
+          next = insertPane(current, container, Number(index), kind as PaneKind)
+          break
+        }
+        case "move": {
+          const [_, target, container, index] = args
+          if (args.length !== 4 || !target || !container || !index || !/^\d+$/.test(index)) throw new Error("Usage: /layout move <node-id|pane-name> <container-id|root> <index>")
+          next = movePane(current, target, container, Number(index))
+          break
+        }
+        case "wrap": {
+          const [_, target, direction, kind, position = "before"] = args
+          if (args.length < 4 || args.length > 5 || !target || (direction !== "row" && direction !== "column") || !paneKinds.includes(kind as PaneKind) || (position !== "before" && position !== "after")) throw new Error("Usage: /layout wrap <node-id|pane-name|root> <row|column> <job> [before|after]")
+          next = wrapPane(current, target, direction as LayoutDirection, kind as PaneKind, position === "before")
+          break
+        }
+        case "remove": {
+          if (args.length !== 2 || !args[1]) throw new Error("Usage: /layout remove <node-id|pane-name>")
+          next = closePane(current, args[1])
+          break
+        }
         case "split": {
-          const axis = args[1]
+          const direction = args[1]
           const kind = args[2] ?? "jobs"
-          if ((axis !== "horizontal" && axis !== "vertical") || !paneKinds.includes(kind as PaneKind)) throw new Error("Usage: /layout split <horizontal|vertical> [job] (extension <bundle>#<panel>)")
-          next = splitPane(current, axis as PaneAxis, kind as PaneKind, args[3])
+          if ((direction !== "up" && direction !== "left") || !paneKinds.includes(kind as PaneKind) || args.length > (kind === "extension" ? 4 : 3)) throw new Error("Usage: /layout split <up|left> [job] (extension <bundle>#<panel>)")
+          next = splitPane(current, direction === "up" ? "horizontal" : "vertical", kind as PaneKind, true, args[3])
           break
         }
         case "assign": {
@@ -370,10 +423,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
         }
         case "focus": {
           const target = args[1]
-          if (!target) throw new Error("Usage: /layout focus <left|right|up|down|pane-id>")
-          if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection).active }
-          else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target)) next = { ...current, active: target }
-          else throw new Error(`Unknown pane ${target}`)
+          if (!target) throw new Error("Usage: /layout focus <left|right|up|down|next|previous|pane-id>")
+          if (["left", "right", "up", "down"].includes(target)) next = { ...current, active: movePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target as PaneDirection, actions.paneBounds?.()).active }
+          else if (target === "next" || target === "previous") next = { ...current, active: rotatePaneFocus(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar), target === "next" ? 1 : -1, actions.paneBounds?.()).active }
+          else if (paneLeaves(visiblePaneLayout(current, store.state.columns, store.state.sidebar, store.state.projectsSidebar).root).some((pane) => pane.id === target && isSelectablePane(pane))) next = { ...current, active: target }
+          else throw new Error(`Pane ${target} is unselectable, hidden, or unknown`)
           break
         }
         case "resize": {
@@ -382,22 +436,32 @@ export const nativeCommandSpecs: CommandSpec[] = [
           next = resizePane(current, Number(percent) / 100)
           break
         }
-        case "close": next = closePane(current); break
+        case "close": {
+          if (args.length > 2) throw new Error("Usage: /layout close [pane-name|node-id]")
+          next = closePane(current, args[1])
+          break
+        }
+        case "reload": {
+          if (args.length !== 1) throw new Error("Usage: /layout reload")
+          const loaded = actions.loadPaneLayout()
+          next = loaded.layout
+          reloadedPath = loaded.path
+          break
+        }
         case "reset": next = defaultPaneLayout(); break
-        default: throw new Error("Usage: /layout [split|assign|focus|resize|close|reset|show]")
+        default: throw new Error("Usage: /layout [split|insert|move|wrap|remove|assign|focus|resize|close|reload|reset|tree|show]")
       }
       store.setView("chat")
       const active = paneLeaves(next.root).find((pane) => pane.id === next.active)
-      store.setProjectsFocus(command === "focus" && active?.kind === "projects")
       if (next !== current) {
         store.setPaneLayout(next)
-        try { actions.savePreferences({ paneLayout: next }) }
+        try { if (!reloadedPath) actions.savePreferences({ paneLayout: next }) }
         catch (error) {
           store.setStatus(`Layout changed, not saved: ${error instanceof Error ? error.message : String(error)}`)
           return
         }
       }
-      store.setStatus(`Layout · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reset`)
+      store.setStatus(`${reloadedPath ? `Layout reloaded from ${reloadedPath}` : "Layout"} · ${paneLeaves(next.root).length} pane${paneLeaves(next.root).length === 1 ? "" : "s"} · ${active?.id ?? "?"} ${active?.kind ?? ""} · split|assign|focus|resize|close|reload|reset`)
     },
   },
   {
@@ -731,7 +795,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
     run: ({ store }, { args }) => {
       const visible = projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)
       store.setProjectsSidebar(parseSwitch(args[0], visible, "Usage: /projects-sidebar [on|off]") ? "open" : "closed")
-      store.setStatus(`Projects sidebar ${projectsSidebarVisible(store.state.projectsSidebar, store.state.columns) ? "shown" : "hidden"} · Ctrl+P toggles`)
+      store.setStatus(`Projects sidebar ${projectsSidebarVisible(store.state.projectsSidebar, store.state.columns) ? "shown" : "hidden"}`)
     },
   },
   {
@@ -764,6 +828,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
       store.setView("workflows")
       store.setStatus(`Workflow ${action} submitted`)
     },
+  },
+  {
+    name: "/pending",
+    description: "Open the oldest pending request in another session",
+    run: async ({ actions }) => actions.reviewPending(),
   },
   {
     name: "/interactions",
@@ -829,7 +898,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/sidebar",
-    description: "Show or hide the sidebar (Ctrl+B)",
+    description: "Show or hide the sidebar",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
@@ -839,29 +908,29 @@ export const nativeCommandSpecs: CommandSpec[] = [
         return
       }
       store.setSidebar(shown ? "auto" : "closed")
-      store.setStatus(`Sidebar ${shown ? "shown" : "hidden"} · Ctrl+B toggles`)
+      store.setStatus(`Sidebar ${shown ? "shown" : "hidden"}`)
     },
   },
   {
     name: "/thinking",
-    description: "Expand or collapse reasoning blocks (Ctrl+O)",
+    description: "Expand or collapse reasoning blocks",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
       const expanded = parseSwitch(args[0], store.state.thinking, "Usage: /thinking [on|off]")
       store.setThinking(expanded)
-      store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+      store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"}`)
     },
   },
   {
     name: "/tools",
-    description: "Expand or collapse tool call cards (Ctrl+G)",
+    description: "Expand or collapse tool call cards",
     argumentHint: "[on|off]",
     complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
     run: ({ store }, { args }) => {
       const expanded = parseSwitch(args[0], store.state.tools ?? false, "Usage: /tools [on|off]")
       store.setTools(expanded)
-      store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
+      store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"}`)
     },
   },
   {
@@ -883,7 +952,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/editor",
-    description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the text comes back into the input (Ctrl+X Ctrl+E)",
+    description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the text comes back into the input",
     run: ({ actions }) => { actions.openEditor() },
   },
   {

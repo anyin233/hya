@@ -3,10 +3,10 @@ import { defaultPaneLayout, paneLeaves, paneRects, parsePaneLayout, resizePane, 
 
 test("default layout owns the Projects, Conversation, Sessions, Todos, and Context rectangles", () => {
   const layout = defaultPaneLayout()
-  expect(paneLeaves(layout.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "sessions", "todos", "context"])
+  expect(paneLeaves(layout.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "activity", "composer", "sessions", "todos", "context"])
   const rects = paneRects(layout.root)
   const projects = rects.get("pane-2")!
-  const conversation = rects.get("pane-1")!
+  const conversation = rects.get("pane-6")!
   const sessions = rects.get("pane-3")!
   const todos = rects.get("pane-4")!
   const context = rects.get("pane-5")!
@@ -14,6 +14,9 @@ test("default layout owns the Projects, Conversation, Sessions, Todos, and Conte
   expect(conversation.right).toBeLessThanOrEqual(sessions.left)
   expect(sessions.bottom).toBeLessThanOrEqual(todos.top)
   expect(todos.bottom).toBeLessThanOrEqual(context.top)
+  expect(paneLeaves(visiblePaneLayout(layout, 80, "auto", "auto").root).map((pane) => pane.kind)).toEqual(["conversation", "activity", "composer"])
+  expect(paneLeaves(visiblePaneLayout(layout, 149, "auto", "auto").root).map((pane) => pane.kind)).toEqual(["conversation", "activity", "composer"])
+  expect(paneLeaves(visiblePaneLayout(layout, 150, "auto", "closed").root).map((pane) => pane.kind)).toEqual(["conversation", "activity", "composer", "sessions", "todos", "context"])
 })
 
 test("side panes can be selected, resized, reassigned, and remain visible after reload", () => {
@@ -22,14 +25,14 @@ test("side panes can be selected, resized, reassigned, and remain visible after 
   const resized = resizePane(projects, 0.05)
   expect(paneRects(resized.root).get("pane-2")!.right).toBeGreaterThan(paneRects(original.root).get("pane-2")!.right)
   const sessions = setPaneKind({ ...resized, active: "pane-3" }, "jobs")
-  expect(paneLeaves(parsePaneLayout(JSON.parse(JSON.stringify(sessions)))!.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "jobs", "todos", "context"])
+  expect(paneLeaves(parsePaneLayout(JSON.parse(JSON.stringify(sessions)))!.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "activity", "composer", "jobs", "todos", "context"])
 })
 
 test("version 1 center-only layouts migrate into the complete workspace", () => {
   const old = { version: 1, active: "pane-2", root: { type: "split", axis: "vertical", weight: 0.5,
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "jobs" } } }
   const migrated = parsePaneLayout(old)!
-  expect(migrated.version).toBe(2)
+  expect(migrated.version).toBe(4)
   expect(migrated.active).toBe("pane-2")
-  expect(paneLeaves(migrated.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "jobs", "sessions", "todos", "context"])
+  expect(paneLeaves(migrated.root).map((pane) => pane.kind)).toEqual(["projects", "conversation", "activity", "composer", "jobs", "sessions", "todos", "context"])
 })

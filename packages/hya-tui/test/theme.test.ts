@@ -9,6 +9,7 @@ import {
   syntaxStylesFor,
   themeName,
   themes,
+  terminalBackground,
   toolColors,
   type ThemeDefinition,
 } from "../src/theme"
@@ -17,11 +18,11 @@ afterEach(() => { setTheme(defaultThemeName) })
 
 const hex = /^#[0-9a-f]{6}$/
 
-test("the default theme is hya and keeps the historical palette", () => {
+test("the default theme inherits the terminal background and preserves text colors", () => {
   expect(defaultThemeName).toBe("hya")
   expect(themeName()).toBe("hya")
   expect({ ...colors }).toEqual({
-    bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
+    bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
   })
   expect({ ...toolColors }).toEqual({ done: "#a5d6a7" })
   expect({ ...diffColors }).toEqual({ add: "#a5d6a7", remove: "#f07878", hunk: "#82aaff", context: "#9caab9" })
@@ -41,11 +42,14 @@ test("built-ins: hya, one light theme, and two more dark themes, each defining e
     expect(theme.description.length).toBeGreaterThan(0)
     for (const group of ["colors", "toolColors", "diffColors", "syntaxColors"] as const) {
       expect(Object.keys(theme[group]).sort()).toEqual(Object.keys(reference[group]).sort())
-      for (const value of Object.values(theme[group])) expect(value).toMatch(hex)
+      for (const [key, value] of Object.entries(theme[group])) {
+        if (group === "colors" && (key === "bg" || key === "panel")) expect(value).toMatchObject({ intent: "default" })
+        else expect(value).toMatch(hex)
+      }
     }
   }
   // The themes really differ from each other.
-  expect(new Set(list.map((theme) => theme.colors.bg)).size).toBe(list.length)
+  expect(new Set(list.map((theme) => theme.colors.fg)).size).toBe(list.length)
 })
 
 test("setTheme switches the reactive palette; effects reading it re-run", () => {
@@ -53,7 +57,7 @@ test("setTheme switches the reactive palette; effects reading it re-run", () => 
   const seen: string[] = []
   const names: string[] = []
   const dispose = createRoot((dispose) => {
-    createEffect(() => { seen.push(colors.bg) })
+    createEffect(() => { seen.push(colors.fg) })
     createEffect(() => { names.push(themeName()) })
     return dispose
   })
@@ -64,7 +68,7 @@ test("setTheme switches the reactive palette; effects reading it re-run", () => 
   expect(diffColors.add).toBe(light.diffColors.add)
   expect(syntaxColors.keyword).toBe(light.syntaxColors.keyword)
   expect(toolColors.done).toBe(light.toolColors.done)
-  expect(seen).toEqual(["#11151b", light.colors.bg])
+  expect(seen).toEqual(["#e8edf3", light.colors.fg])
   expect(names).toEqual(["hya", light.name])
   dispose()
 })
@@ -72,7 +76,7 @@ test("setTheme switches the reactive palette; effects reading it re-run", () => 
 test("an unknown theme name is rejected and the palette stays", () => {
   expect(setTheme("no-such-theme")).toBe(false)
   expect(themeName()).toBe("hya")
-  expect(colors.bg).toBe("#11151b")
+  expect(colors.bg).toBe(terminalBackground)
 })
 
 test("syntax styles are derived from a theme's palette", () => {

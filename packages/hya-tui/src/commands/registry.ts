@@ -9,11 +9,14 @@
 import type { HyaClient } from "../client"
 import type { CompletionContext } from "../completion"
 import type { TuiPreferences } from "../prefs"
+import type { PaneLayout, Rect } from "../state/panes"
 import type { PickerSpec } from "../state/picker"
 import type { AppStore } from "../state/store"
 
 /** Controller actions a command handler may call. */
 export interface AppActions {
+  /** Open the oldest pending request outside the current session tree. */
+  reviewPending(): Promise<void>
   refresh(): Promise<void>
   refreshMessages(): Promise<void>
   openSession(sessionId: string): Promise<void>
@@ -60,6 +63,9 @@ export interface AppActions {
   requestPermissionMode(mode: string): Promise<void>
   /** Merge `patch` into the TUI preferences file (src/prefs.ts); throws when it cannot be written. */
   savePreferences(patch: Partial<TuiPreferences>): void
+  /** Strictly read the saved layout from this frontend's preferences file; does not write. */
+  loadPaneLayout(): { layout: PaneLayout; path: string }
+  paneBounds?(): ReadonlyMap<string, Rect>
   /** Copy `text` to the system clipboard with OSC 52; `false` when the terminal does not accept it. */
   copyText(text: string): boolean
   /** Edit the composer's input in the external editor (composer/editor.ts); the result goes back into the input. */
@@ -128,7 +134,7 @@ export interface CommandSpec {
   argumentHint?: string
   /** Not offered in a WebUI tab (`--web-tab`): hidden from the command menu, help, and completion; typing it still runs it. */
   terminalOnly?: boolean
-  complete?(position: ArgumentPosition, context: CompletionContext): Completion[]
+  complete?(position: ArgumentPosition, context: CompletionContext, registry?: CommandRegistry): Completion[]
   run(context: CommandContext, invocation: CommandInvocation): Promise<void> | void
 }
 
@@ -177,6 +183,6 @@ export class CommandRegistry {
     if (!spec?.complete) return []
     const words = input.slice(space + 1).split(" ")
     const current = words.at(-1) ?? ""
-    return spec.complete({ words, current, head: input.slice(0, input.length - current.length) }, context)
+    return spec.complete({ words, current, head: input.slice(0, input.length - current.length) }, context, this)
   }
 }

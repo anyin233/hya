@@ -1,19 +1,23 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
+import { customKeybindings, setCustomKeybindings } from "../src/keys/custom"
 import { HttpError, type HyaClient } from "../src/client"
 import type { TuiPreferences } from "../src/prefs"
 import type { CompletionContext } from "../src/completion"
 import { createCommandRegistry, mergeCommandEntries, suggestCommandInput, type AppActions, type CommandContext } from "../src/commands"
 import { createAppStore, type AppStore } from "../src/state/store"
 import { modelReference } from "../src/state/format"
+import { defaultPaneLayout, closePane, paneRects, paneNodes, paneLeaves, type Rect } from "../src/state/panes"
 import { sidebarTooNarrowNotice } from "../src/state/layout"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
+afterEach(() => setCustomKeybindings({}))
 
 function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
   const store = createAppStore()
   const calls: string[] = []
   const pickers: PickerSpec[] = []
   const actions: AppActions = {
+    reviewPending: async () => { calls.push("pending") },
     refresh: async () => { calls.push("refresh") },
     refreshMessages: async () => { calls.push("refreshMessages") },
     openSession: async (id) => { calls.push(`open ${id}`) },
@@ -36,6 +40,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
     openHelp: () => { calls.push("help") },
     savePreferences: (patch) => { calls.push(`prefs ${JSON.stringify(patch)}`) },
+    loadPaneLayout: () => ({ layout: defaultPaneLayout(), path: "/test/tui.json" }),
     copyText: (text) => { calls.push(`copy ${text}`); return copyWorks },
     openEditor: () => { calls.push("editor") },
     undo: async () => { calls.push("undo") },
@@ -54,7 +59,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     ...client,
   } as HyaClient
   const context = { store, client: clientWithDefaults, actions }
-  return { store, calls, pickers, registry, run: (text: string) => registry.dispatch(text, context) }
+  return { store, calls, pickers, registry, actions, run: (text: string) => registry.dispatch(text, context) }
 }
 
 test("/model persists an agent model and explicit effort", async () => {
@@ -120,6 +125,70 @@ test("registers every native slash command with a description", () => {
   expect(registry.get("/key")?.complete).toBeUndefined()
   expect(registry.get("/keys")).toBeUndefined()
   expect(registry.get("/login")).toBeUndefined()
+})
+
+test("/keybind browses and inspects actions without executing them", async () => {
+  const h = harness()
+  await h.run("/keybind")
+  expect(h.pickers[0]?.title).toBe("Keybindings")
+  const quit = h.pickers[0]!.rows.find((row) => row.id === "quit")!
+  expect(quit.detail).toContain("Command: /exit")
+  await h.pickers[0]!.onSelect(quit)
+  expect(h.pickers[1]?.title).toBe("Keybinding · quit")
+  expect(h.calls).toEqual([])
+  await h.run("/keybind show /exit")
+  expect(h.pickers.at(-1)?.rows[0]?.id).toBe("quit")
+  await h.run("/keybind list conversation")
+  expect(h.pickers.at(-1)?.rows.every((row) => row.tag === "conversation")).toBe(true)
+  expect(h.pickers.at(-1)?.rows.some((row) => row.id === "toggleTools")).toBe(false)
+  await h.run("/keybind show /layout focus left")
+  expect(h.pickers.at(-1)?.rows[0]?.id).toBe("focusPaneLeft")
+  expect(h.calls).toEqual([])
+})
+
+test("/keybind validates arguments and completes scopes and action targets", async () => {
+  const h = harness()
+  for (const command of ["/keybind edit", "/keybind show", "/keybind list nope", "/keybind list pane extra"]) {
+    await expect(h.run(command)).rejects.toThrow("Usage: /keybind")
+  }
+  await expect(h.run("/keybind show missing")).rejects.toThrow("No binding for")
+  expect(h.registry.complete("/keybind ", h.store.completionContext())).toEqual(["/keybind list", "/keybind reset", "/keybind set", "/keybind show", "/keybind unset"])
+  expect(h.registry.complete("/keybind list p", h.store.completionContext())).toEqual(["/keybind list pane"])
+  expect(h.registry.complete("/keybind show qu", h.store.completionContext())).toEqual(["/keybind show quit"])
+  expect(h.registry.complete("/keybind show /ex", h.store.completionContext())).toEqual(["/keybind show /exit"])
+})
+
+test("/keybind set preserves multiword commands and scopes; set replaces one key and reset persists", async () => {
+  const h = harness()
+  await h.run('/keybind set F6 /layout focus left')
+  expect(customKeybindings()).toEqual({ F6: { command: "/layout focus left", scope: "workspace" } })
+  expect(h.pickers.at(-1)?.title).toBe("Keybind saved · F6")
+  await h.run('/keybind set Alt+G /tools on')
+  await h.run('/keybind set F6 --scope conversation /rename a  long title')
+  expect(customKeybindings().F6).toEqual({ command: "/rename a  long title", scope: "conversation" })
+  expect(customKeybindings()["Alt+G"]?.command).toBe("/tools on")
+  await h.run("/keybind show F6")
+  expect(h.pickers.at(-1)?.rows[0]?.detail).toContain("/rename a  long title")
+  expect(h.registry.complete("/keybind set F6 /too", h.store.completionContext())).toEqual(["/keybind set F6 /tools"])
+  expect(h.registry.complete("/keybind set F6 --scope w", h.store.completionContext())).toEqual(["/keybind set F6 --scope workspace"])
+  expect(h.registry.complete("/keybind set F6 /layout focus l", h.store.completionContext())).toEqual(["/keybind set F6 /layout focus left"])
+  expect(h.registry.complete("/keybind set F6 --scope conversation /tools o", h.store.completionContext())).toEqual(["/keybind set F6 --scope conversation /tools off", "/keybind set F6 --scope conversation /tools on"])
+  await h.run("/keybind reset F6")
+  expect(customKeybindings().F6).toBeUndefined()
+  expect(h.calls.at(-1)).toBe('prefs {"keybindings":{"Alt+G":{"command":"/tools on","scope":"conversation"}}}')
+  await h.run("/keybind reset all")
+  expect(customKeybindings()).toEqual({})
+  expect(h.calls.some((call) => call.startsWith("quit"))).toBe(false)
+})
+
+test("failed keybind writes and invalid commands leave assignments intact and show an error modal", async () => {
+  const h = harness()
+  await h.run("/keybind set F6 /tools on")
+  await expect(h.run("/keybind set F7 invalid")).rejects.toThrow("slash command")
+  expect(h.pickers.at(-1)?.title).toBe("Keybind · not saved")
+  h.actions.savePreferences = () => { throw new Error("disk full") }
+  await expect(h.run("/keybind set F7 /exit")).rejects.toThrow("disk full")
+  expect(customKeybindings()).toEqual({ F6: { command: "/tools on", scope: "conversation" } })
 })
 
 test("/effort saves the choice on the layer that decides the session's effort", async () => {
@@ -453,10 +522,10 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
   store.setColumns(160)
   await run("/sidebar")
   expect(store.state.sidebar).toBe("closed")
-  expect(store.state.status).toBe("Sidebar hidden · Ctrl+B toggles")
+  expect(store.state.status).toBe("Sidebar hidden")
   await run("/sidebar on")
   expect(store.state.sidebar).toBe("auto")
-  expect(store.state.status).toBe("Sidebar shown · Ctrl+B toggles")
+  expect(store.state.status).toBe("Sidebar shown")
   // Too narrow: the sidebar cannot be shown; the status line says why.
   store.setColumns(149)
   await run("/sidebar on")
@@ -466,10 +535,10 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
 
   await run("/thinking")
   expect(store.state.thinking).toBe(true)
-  expect(store.state.status).toBe("Reasoning expanded · Ctrl+O toggles")
+  expect(store.state.status).toBe("Reasoning expanded")
   await run("/thinking off")
   expect(store.state.thinking).toBe(false)
-  expect(store.state.status).toBe("Reasoning collapsed · Ctrl+O toggles")
+  expect(store.state.status).toBe("Reasoning collapsed")
   expect(registry.complete("/sidebar o", store.completionContext())).toEqual(["/sidebar off", "/sidebar on"])
 })
 
@@ -669,4 +738,178 @@ test("/reconnect finds or starts the backend now", async () => {
   expect(registry.get("/reconnect")?.description).toContain("hya serve stop")
   await run("/reconnect")
   expect(calls).toEqual(["reconnect"])
+})
+
+test("/pending opens the oldest request through the controller", async () => {
+  const h = harness()
+  await h.run("/pending")
+  expect(h.calls).toEqual(["pending"])
+})
+
+
+test("unset completes saved keys, normalizes them and persists removal only after a successful write", async () => {
+  const h = harness()
+  await h.run("/keybind set Ctrl+Home /tools on")
+  await h.run("/keybind set F6 /refresh")
+  expect(h.registry.complete("/keybind unset Ctrl+", h.store.completionContext())).toContain("/keybind unset Ctrl+Home")
+  h.actions.savePreferences = () => { throw new Error("disk full") }
+  await expect(h.run("/keybind unset control+home")).rejects.toThrow("disk full")
+  expect(customKeybindings()["Ctrl+Home"]?.command).toBe("/tools on")
+  h.actions.savePreferences = (patch) => { h.calls.push(`prefs ${JSON.stringify(patch)}`) }
+  await h.run("/keybind unset control+home")
+  expect(customKeybindings()["Ctrl+Home"]).toBeNull()
+  expect(customKeybindings().F6?.command).toBe("/refresh")
+  expect(h.pickers.at(-1)?.title).toBe("Keybind unset")
+  expect(h.calls.at(-1)).toBe('prefs {"keybindings":{"Ctrl+Home":null,"F6":{"command":"/refresh","scope":"workspace"}}}')
+  await h.run("/keybind unset F7")
+  expect(customKeybindings().F7).toBeNull()
+  await expect(h.run("/keybind unset")).rejects.toThrow("Usage:")
+  await expect(h.run("/keybind unset all")).rejects.toThrow()
+})
+
+
+test("keybind lists only assigned rows with separate shortcut cells and retains unassigned inspection", async () => {
+  const h = harness()
+  await h.run("/keybind set F6 /tools on")
+  await h.run("/keybind list")
+  const picker = h.pickers.at(-1)!
+  expect(picker.columns).toEqual({ shortcut: "Shortcut", label: "Action / command", tag: "Scope" })
+  expect(picker.rows.every((row) => row.shortcut && row.shortcut !== "unassigned")).toBe(true)
+  expect(picker.rows.find((row) => row.id === "custom:F6")).toMatchObject({ shortcut: "F6", label: "/tools on", tag: "conversation" })
+  expect(picker.rows.find((row) => row.id === "quit")).toMatchObject({ shortcut: "Ctrl+C", label: "quit" })
+  expect(picker.rows.some((row) => row.detail?.includes("Keys:"))).toBe(false)
+  await h.run("/keybind show toggleTools")
+  expect(h.pickers.at(-1)?.rows[0]?.shortcut).toBe("unassigned")
+  await h.run("/keybind show F6")
+  expect(h.pickers.at(-1)?.title).toBe("Keybinding · F6")
+})
+
+
+test("show requires a target and presents a visible error; defaults can be overridden, disabled and restored", async () => {
+  const h = harness()
+  await expect(h.run("/keybind show")).rejects.toThrow("Usage: /keybind show")
+  expect(h.pickers.at(-1)?.title).toBe("Keybind · error")
+  await h.run("/keybind set Ctrl+C /layout close")
+  expect(customKeybindings()["Ctrl+C"]?.command).toBe("/layout close")
+  await h.run("/keybind unset Ctrl+C")
+  expect(customKeybindings()["Ctrl+C"]).toBeNull()
+  await h.run("/keybind show Ctrl+C")
+  expect(h.pickers.at(-1)?.rows[0]?.label).toBe("disabled")
+  await h.run("/keybind list")
+  expect(h.pickers.at(-1)?.rows.some((row) => row.shortcut === "Ctrl+C" && !row.id.startsWith("context:Command:"))).toBe(false)
+  await h.run("/keybind reset Ctrl+C")
+  expect(Object.hasOwn(customKeybindings(), "Ctrl+C")).toBe(false)
+  await h.run("/keybind show Ctrl+W")
+  expect(h.pickers.at(-1)?.rows.some((row) => row.label === "delete-word-backward")).toBe(true)
+})
+
+
+test("/layout close accepts passive names and ids, persists, and completes live targets", async () => {
+  const h = harness()
+  expect(h.registry.complete("/layout close con", h.store.completionContext())).toEqual(["/layout close context"])
+  await h.run("/layout close todos")
+  expect(h.store.completionContext().panes?.some((pane) => pane.kind === "todos")).toBe(false)
+  expect(h.store.state.paneLayout.active).toBe("pane-1")
+  expect(h.calls.at(-1)).toStartWith("prefs ")
+  expect(h.registry.complete("/layout close tod", h.store.completionContext())).toEqual([])
+  await h.run("/layout close pane-5")
+  await expect(h.run("/layout close context")).rejects.toThrow("Unknown pane")
+  await expect(h.run("/layout close todos context")).rejects.toThrow("Usage:")
+  await expect(h.run("/layout close conversation")).rejects.toThrow("Cannot close")
+  await h.run("/layout split left todos")
+  await h.run("/layout split up todos")
+  await expect(h.run("/layout close todos")).rejects.toThrow("ambiguous")
+  expect(h.registry.complete("/layout close tod", h.store.completionContext())).toEqual([])
+  expect(h.registry.complete("/layout close pane-", h.store.completionContext()).length).toBeGreaterThan(0)
+  await h.run("/layout split left jobs")
+  await h.run("/layout close")
+  expect(h.store.state.paneLayout.active).toBe("pane-1")
+})
+
+
+test("/layout reload applies only the read layout, preserves drafts and never saves", async () => {
+  const h = harness()
+  const layout = closePane(defaultPaneLayout(), "context")
+  h.actions.loadPaneLayout = () => ({ layout, path: "/profile/tui.json" })
+  h.store.setDraft(true)
+  h.store.setView("models")
+  await h.run("/layout reload")
+  expect(h.store.state.paneLayout).toEqual(layout)
+  expect(h.store.state.draft).toBe(true)
+  expect(h.store.state.view).toBe("chat")
+  expect(h.store.state.status).toContain("Layout reloaded from /profile/tui.json")
+  expect(h.calls).toEqual([])
+  expect(h.registry.complete("/layout rel", h.store.completionContext())).toEqual(["/layout reload"])
+  await expect(h.run("/layout reload extra")).rejects.toThrow("Usage: /layout reload")
+  h.actions.loadPaneLayout = () => { throw new Error("Invalid paneLayout") }
+  await expect(h.run("/layout reload")).rejects.toThrow("Invalid paneLayout")
+  expect(h.store.state.paneLayout).toEqual(layout)
+  expect(h.calls).toEqual([])
+})
+
+
+test("/layout split up/left inserts on the named side and rejects axis keywords", async () => {
+  for (const direction of ["up", "left"]) {
+    const h = harness()
+    expect(h.registry.complete("/layout split ", h.store.completionContext()).sort()).toEqual(["/layout split left", "/layout split up"])
+    await h.run(`/layout split ${direction} jobs`)
+    const layout = h.store.state.paneLayout
+    expect(layout.active).toBe("pane-8")
+    const rects = paneRects(layout.root)
+    const added = rects.get("pane-8")!
+    const editor = rects.get("pane-1")!
+    if (direction === "up") expect(added.bottom).toBeLessThanOrEqual(editor.top)
+    else expect(added.right).toBeLessThanOrEqual(editor.left)
+    expect(h.calls.at(-1)).toStartWith("prefs ")
+    for (const token of ["horizontal", "vertical", "right", "down"]) await expect(h.run(`/layout split ${token}`)).rejects.toThrow("Usage: /layout split <up|left>")
+    await expect(h.run("/layout split up jobs extra")).rejects.toThrow("Usage:")
+  }
+})
+
+
+test("layout tree commands expose container ids and share insert/move/wrap/remove operations", async () => {
+  const h = harness()
+  expect(h.registry.complete("/layout insert group-", h.store.completionContext())).toHaveLength(3)
+  await h.run("/layout insert root 1 jobs")
+  await h.run("/layout move pane-8 group-3 1")
+  expect(h.store.completionContext().layoutContainers?.find((node) => node.id === "group-3")?.children[1]).toBe("pane-8")
+  await h.run("/layout wrap pane-8 row models after")
+  const auxiliary = paneNodes(h.store.state.paneLayout.root).find((node) => node.type === "split" && paneLeaves(node).every((pane) => ["jobs", "models"].includes(pane.kind)))!
+  await h.run(`/layout remove ${auxiliary.id}`)
+  expect(h.store.completionContext().panes?.some((pane) => pane.kind === "jobs")).toBe(false)
+  await expect(h.run("/layout move root group-2 0")).rejects.toThrow("descendant")
+  for (const command of ["/layout insert root -1 jobs", "/layout move pane-1 root", "/layout wrap root sideways jobs", "/layout remove", "/layout tree extra"]) await expect(h.run(command)).rejects.toThrow("Usage:")
+})
+
+test("/layout tree opens and reuses a selectable pane with saved focus", async () => {
+  const h = harness()
+  await h.run("/layout tree")
+  expect(h.pickers).toHaveLength(0)
+  const selected = h.store.state.paneLayout.active
+  expect(paneLeaves(h.store.state.paneLayout.root).find((pane) => pane.id === selected)?.kind).toBe("layout")
+  await h.run("/layout focus pane-1")
+  await h.run("/layout tree")
+  expect(h.store.state.paneLayout.active).toBe(selected)
+  expect(paneLeaves(h.store.state.paneLayout.root).filter((pane) => pane.kind === "layout")).toHaveLength(1)
+  expect(h.calls.some((call) => call.startsWith("prefs ") && call.includes('"kind":"layout"'))).toBe(true)
+  expect(h.registry.complete("/layout split left lay", h.store.completionContext())).toEqual(["/layout split left layout"])
+})
+
+test("focus commands consume native bounds and horizontal navigation forms one cycle", async () => {
+  const h = harness()
+  const bounds = new Map<string, Rect>([
+    ["pane-1", { left: 0, top: 0, right: 20, bottom: 3 }],
+    ["pane-2", { left: 30, top: 10, right: 50, bottom: 20 }],
+    ["pane-3", { left: 0, top: 10, right: 20, bottom: 20 }],
+  ])
+  h.actions.paneBounds = () => bounds
+  h.store.setColumns(170)
+  await h.run("/layout focus right")
+  expect(h.store.state.paneLayout.active).toBe("pane-3")
+  await h.run("/layout focus right")
+  expect(h.store.state.paneLayout.active).toBe("pane-2")
+  await h.run("/layout focus right")
+  expect(h.store.state.paneLayout.active).toBe("pane-1")
+  await h.run("/layout focus down")
+  expect(h.store.state.paneLayout.active).toBe("pane-3")
 })

@@ -1,100 +1,199 @@
 import { expect, test } from "bun:test"
-import { sidebarMinColumns } from "../src/state/layout"
 import {
-  boundaryWeight, closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves,
-  renderedWeight, resizePane, setPaneKind, setSplitWeight, splitPane, visiblePaneRoot, type PaneLayout, type PaneSplit,
+  closePane, defaultPaneLayout, movePaneFocus, parsePaneLayout, paneLeaves, paneNodes,
+  resizePane, setPaneKind, splitPane, visiblePaneRoot, layoutRects, normalizePaneNode,
+  insertPane, movePane, wrapPane, setContainerBoundary, rotatePaneFocus,
+  type PaneLayout, type PaneNode, type PaneSplit, type Rect,
 } from "../src/state/panes"
+const leaf = (id: number, kind: "conversation" | "composer" | "jobs" | "sessions" | "status" = "jobs"): PaneNode => ({ type: "pane", id: `pane-${id}`, kind })
+const weight = (node: PaneNode, value = 1) => ({ node, size: { mode: "weight" as const, value } })
+const content = (node: PaneNode) => ({ node, size: { mode: "content" as const } })
+const group = (id: number, direction: "row" | "column", children: PaneSplit["children"]): PaneSplit => ({ type: "split", id: `group-${id}`, direction, children })
+const singlePaneLayout = (): PaneLayout => ({ version: 4, active: "pane-1", root: leaf(1, "composer") })
 
-const singlePaneLayout = (): PaneLayout => ({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } })
-
-test("nested splits keep one conversation and focus the nearest pane in each direction", () => {
-  const leftRight = splitPane(singlePaneLayout(), "vertical", "jobs")
-  expect(paneLeaves(leftRight.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs"])
-  const nested = splitPane(leftRight, "horizontal", "todos")
-  expect(paneLeaves(nested.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs", "todos"])
-  expect(movePaneFocus(nested, "left").active).toBe("pane-1")
-  expect(movePaneFocus(nested, "up").active).toBe("pane-2")
-  expect(movePaneFocus({ ...nested, active: "pane-1" }, "right").active).toBe("pane-2")
+test("row siblings flatten and retain multiplied ratios", () => {
+  const root = group(1, "row", [weight(leaf(1), .2), weight(group(2, "row", [weight(leaf(2), .25), weight(leaf(3), .75)]), .8)])
+  const flat = normalizePaneNode(root) as PaneSplit
+  expect(flat.children.map((child) => child.size)).toEqual([{ mode: "weight", value: .2 }, { mode: "weight", value: .2 }, { mode: "weight", value: .6000000000000001 }])
+  expect(normalizePaneNode(flat)).toBe(flat)
+  const bounds = layoutRects(flat, { left: 0, top: 0, right: 100, bottom: 40 })
+  expect(bounds.get("pane-1")?.right).toBe(20)
+  expect(bounds.get("pane-2")?.right).toBe(40)
 })
 
-test("assignment and close preserve the conversation; invalid saved layouts are refused", () => {
-  const split = splitPane(singlePaneLayout(), "vertical", "jobs")
-  const models = setPaneKind(split, "models")
-  expect(paneLeaves(models.root).map((pane) => pane.kind)).toEqual(["conversation", "models"])
-  const moved = setPaneKind(models, "conversation")
-  expect(paneLeaves(moved.root).map((pane) => pane.kind)).toEqual(["models", "conversation"])
-  expect(paneLeaves(closePane(models).root).map((pane) => pane.kind)).toEqual(["conversation"])
-  expect(() => closePane(moved)).toThrow("conversation")
-  expect(parsePaneLayout(JSON.parse(JSON.stringify(models)))).toEqual(models)
-  expect(parsePaneLayout({ ...models, active: "missing" })).toBeUndefined()
-  expect(parsePaneLayout({ ...models, root: { ...models.root, weight: 0 } })).toBeUndefined()
+test("normalization keeps mixed sizing boundaries and flattens content-only docks", () => {
+  const dock = group(2, "column", [content(leaf(2)), content(leaf(3))])
+  const flat = normalizePaneNode(group(1, "column", [weight(leaf(1)), content(dock)])) as PaneSplit
+  expect(flat.children).toHaveLength(3)
+  const mixed = group(3, "column", [weight(leaf(4)), content(leaf(5))])
+  const retained = normalizePaneNode(group(4, "column", [weight(leaf(6)), weight(mixed)])) as PaneSplit
+  expect(retained.children[1]?.node.id).toBe("group-3")
 })
 
-test("resize changes only the focused split and closes a nested auxiliary pane", () => {
-  const nested = splitPane(splitPane(singlePaneLayout(), "vertical", "jobs"), "horizontal", "todos")
-  const resized = resizePane(nested, 0.1)
-  expect(resized.root.type).toBe("split")
-  if (resized.root.type !== "split" || resized.root.second.type !== "split") return
-  expect(resized.root.weight).toBe(0.5)
-  expect(resized.root.second.weight).toBeCloseTo(0.4)
-  const closed = closePane(resized)
-  expect(paneLeaves(closed.root).map((pane) => pane.kind)).toEqual(["conversation", "jobs"])
+test("binary v3 migration preserves weighted geometry, focus and ids", () => {
+  const old = { version: 3, active: "pane-3", root: { type: "split", axis: "vertical", weight: .2,
+    first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "split", axis: "vertical", weight: .25,
+      first: { type: "pane", id: "pane-2", kind: "composer" }, second: { type: "pane", id: "pane-3", kind: "jobs" } } } }
+  const layout = parsePaneLayout(old)!
+  expect(layout.version).toBe(4)
+  expect(layout.active).toBe("pane-3")
+  const rects = layoutRects(layout.root, { left: 0, top: 0, right: 100, bottom: 40 })
+  expect(rects.get("pane-2")?.left).toBe(20)
+  expect(rects.get("pane-3")?.left).toBe(40)
+  expect(parsePaneLayout(layout)).toEqual(layout)
+})
+
+test("legacy default content dock becomes viewer plus two content leaves", () => {
+  const old = { version: 3, active: "pane-1", root: { type: "split", axis: "horizontal", weight: .8,
+    first: { type: "pane", id: "pane-2", kind: "conversation" }, second: { type: "split", axis: "horizontal", weight: .2,
+      first: { type: "pane", id: "pane-3", kind: "activity" }, second: { type: "pane", id: "pane-1", kind: "composer" } } } }
+  const migrated = parsePaneLayout(old)!
+  expect(migrated.root.type === "split" && migrated.root.children.map((child) => child.size.mode)).toEqual(["weight", "content", "content"])
+  const custom = { ...old, root: { ...old.root, weight: .7 } }
+  expect((parsePaneLayout(custom)!.root as PaneSplit).children.every((child) => child.size.mode === "weight")).toBe(true)
+})
+
+test("solver honors minimum widths, content rows, zero idle activity and screen bounds", () => {
+  const layout = defaultPaneLayout()
+  const minimum = (node: PaneNode, direction: "row" | "column"): number => {
+    if (node.type === "split") return direction === "column" ? 3 : node.id === "group-3" ? 28 : 12
+    return direction === "row" ? 8 : node.kind === "activity" ? 0 : 3
+  }
+  const rects = layoutRects(layout.root, { left: 0, top: 0, right: 150, bottom: 40 }, minimum)
+  expect(rects.get("group-3")!.right - rects.get("group-3")!.left).toBeGreaterThanOrEqual(28)
+  expect(rects.get("pane-7")!.bottom - rects.get("pane-7")!.top).toBe(0)
+  expect(rects.get("pane-1")!.bottom - rects.get("pane-1")!.top).toBe(3)
+  expect(rects.get("pane-6")!.bottom).toBe(rects.get("pane-1")!.top)
+  const tiny = layoutRects(layout.root, { left: 0, top: 0, right: 4, bottom: 2 }, minimum)
+  for (const rect of tiny.values()) { expect(rect.left).toBeGreaterThanOrEqual(0); expect(rect.right).toBeLessThanOrEqual(4); expect(rect.bottom).toBeLessThanOrEqual(2) }
+})
+
+test("tree operations insert, move, wrap root and prune closed auxiliary branches", () => {
+  const start = defaultPaneLayout()
+  const inserted = insertPane(start, "root", 1, "jobs")
+  expect(paneLeaves(inserted.root).map((pane) => pane.kind).slice(0, 2)).toEqual(["projects", "jobs"])
+  const moved = movePane(inserted, "pane-8", "group-3", 1)
+  expect((paneNodes(moved.root).find((node) => node.id === "group-3") as PaneSplit).children[1]?.node.id).toBe("pane-8")
+  expect(moved.active).toBe("pane-8")
+  const wrapped = wrapPane(moved, "root", "column", "models", false)
+  expect(wrapped.root.type === "split" && wrapped.root.direction).toBe("column")
+  expect(paneLeaves(wrapped.root).at(-1)?.kind).toBe("models")
+  expect(parsePaneLayout(wrapped)).toEqual(wrapped)
+  const closed = closePane(wrapped, "models")
+  expect(closed.root.id).toBe(moved.root.id)
+  expect(() => movePane(start, "root", "group-2", 0)).toThrow("descendant")
+  expect(() => insertPane(start, "root", 100, "jobs")).toThrow("index")
+  expect(() => wrapPane(start, "root", "row", "composer")).toThrow("assign")
+  expect(() => closePane(start, "group-2")).toThrow("Cannot close")
+})
+
+test("moving within a parent uses post-removal indexes and preserves singleton leaves", () => {
+  const layout = defaultPaneLayout()
+  const moved = movePane(layout, "composer", "group-2", 0)
+  const center = paneNodes(moved.root).find((node) => node.id === "group-2") as PaneSplit
+  expect(center.children[0]?.node.id).toBe("pane-1")
+  expect(paneLeaves(moved.root).filter((pane) => pane.kind === "composer")).toHaveLength(1)
+  expect(parsePaneLayout(moved)).toEqual(moved)
+  const intoRow = movePane(layout, "composer", "root", 1)
+  expect(parsePaneLayout(intoRow)).toEqual(intoRow)
+  expect(() => movePane(layout, "group-2", "group-2", 0)).toThrow("itself")
+})
+
+test("close removes an entire auxiliary container without leaving empty parents", () => {
+  const layout = wrapPane(defaultPaneLayout(), "todos", "row", "jobs")
+  const container = paneNodes(layout.root).find((node) => node.type === "split" && paneLeaves(node).every((pane) => ["todos", "jobs"].includes(pane.kind)))!
+  const closed = closePane(layout, container.id)
+  expect(paneLeaves(closed.root).some((pane) => ["todos", "jobs"].includes(pane.kind))).toBe(false)
   expect(parsePaneLayout(closed)).toEqual(closed)
 })
 
-test("default layout uses half-width project and context sidebars", () => {
-  const root = defaultPaneLayout().root
-  if (root.type !== "split" || root.second.type !== "split") throw new Error("expected nested vertical splits")
-  expect(root.weight).toBe(0.1)
-  expect(root.second.weight).toBe(0.88)
-})
-
-test("version 2 default layout migrates its legacy sidebar widths", () => {
-  const legacy = { ...defaultPaneLayout(), root: { type: "split" as const, axis: "vertical" as const, weight: 0.18, first: { type: "pane" as const, id: "pane-2", kind: "projects" as const }, second: { type: "split" as const, axis: "vertical" as const, weight: 0.74, first: { type: "pane" as const, id: "pane-1", kind: "conversation" as const }, second: { type: "pane" as const, id: "pane-3", kind: "sessions" as const } } } }
-  const migrated = parsePaneLayout(legacy)
-  expect(migrated?.root.type).toBe("split")
-  if (migrated?.root.type !== "split" || migrated.root.second.type !== "split") return
-  expect(migrated.root.weight).toBe(0.1)
-  expect(migrated.root.second.weight).toBe(0.88)
-})
-
-/** The Conversation | Sessions/Todos/Context split of the default layout, as shown below the Projects breakpoint. */
-function rightSplit(layout: PaneLayout = defaultPaneLayout()): PaneSplit {
-  const root = visiblePaneRoot(layout.root, 150, "auto", "closed")
-  if (root.type !== "split") throw new Error("expected the right sidebar split")
-  return root
-}
-
-test("the right sidebar is drawn at least sidebarMinColumns wide; wider when its weight allows", () => {
-  const split = rightSplit()
-  // 12% of 150 columns is 18: the drawn weight leaves the sidebar exactly its minimum.
-  expect(150 * (1 - renderedWeight(split, 150))).toBeCloseTo(sidebarMinColumns)
-  // 12% of 300 columns is 36, above the minimum: the saved weight is drawn as is.
-  expect(renderedWeight(split, 300)).toBe(0.88)
-  // Only a split whose second side is the right sidebar is held open.
-  const jobs = splitPane({ version: 2, active: "pane-1", root: { type: "pane", id: "pane-1", kind: "conversation" } }, "vertical", "jobs").root as PaneSplit
-  expect(renderedWeight({ ...jobs, weight: 0.9 }, 150)).toBe(0.9)
-})
-
-test("dragging a split boundary to a column sets its weight within the limits", () => {
-  const split = rightSplit()
-  // Split drawn from column 0, 200 columns wide: the boundary at column 120 is weight 0.6.
-  expect(boundaryWeight(split, 0, 200, 120)).toBeCloseTo(0.6)
-  expect(boundaryWeight(split, 20, 200, 140)).toBeCloseTo(0.6)
-  // Dragged past the sidebar's minimum: it stops at sidebarMinColumns.
-  expect(200 * (1 - boundaryWeight(split, 0, 200, 199))).toBeCloseTo(sidebarMinColumns)
-  // Dragged to the far left: the conversation keeps 10%.
-  expect(boundaryWeight(split, 0, 200, 0)).toBe(0.1)
-})
-
-test("setSplitWeight changes the split between two panes in the saved tree and nothing else", () => {
+test("boundary dragging and selected resize affect sibling weights and persist", () => {
   const layout = defaultPaneLayout()
-  const next = setSplitWeight(layout, "pane-1", "pane-3", 0.7)
-  if (next.root.type !== "split" || next.root.second.type !== "split") throw new Error("expected nested vertical splits")
-  expect(next.root.weight).toBe(0.1)
-  expect(next.root.second.weight).toBe(0.7)
-  expect(rightSplit(next).weight).toBe(0.7)
-  expect(parsePaneLayout(JSON.parse(JSON.stringify(next)))).toEqual(next)
-  // No split has pane-3 on its first side and pane-1 on its second: nothing to resize.
-  expect(setSplitWeight(layout, "pane-3", "pane-1", 0.7)).toBe(layout)
+  const changed = setContainerBoundary(layout, "group-1", 0, .3)
+  expect(changed.root.type === "split" && changed.root.children[0]?.size).toEqual({ mode: "weight", value: .2676 })
+  expect(changed.root.type === "split" && changed.root.children[2]).toEqual(layout.root.type === "split" && layout.root.children[2])
+  expect(parsePaneLayout(changed)).toEqual(changed)
+  const resized = resizePane({ ...layout, active: "pane-2" }, .05)
+  expect((resized.root as PaneSplit).children[0]?.size).toEqual({ mode: "weight", value: .15000000000000002 })
+})
+
+test("rendered rectangle navigation reaches all eligible panes and uses vertical overlap", () => {
+  const layout = splitPane(splitPane(defaultPaneLayout(), "vertical", "jobs"), "horizontal", "models")
+  const rects = new Map<string, Rect>([
+    ["pane-1", { left: 0, top: 20, right: 20, bottom: 25 }],
+    ["pane-2", { left: 40, top: 0, right: 60, bottom: 10 }],
+    ["pane-3", { left: 0, top: 0, right: 20, bottom: 10 }],
+    ["pane-8", { left: 30, top: 10, right: 50, bottom: 20 }],
+    ["pane-9", { left: 0, top: 10, right: 20, bottom: 20 }],
+    ["pane-4", { left: 0, top: 0, right: 1, bottom: 1 }], // passive
+  ])
+  let current = { ...layout, active: "pane-3" }; const seen: string[] = []
+  for (let i = 0; i < 5; i++) { seen.push(current.active); current = movePaneFocus(current, "right", rects) }
+  expect(seen).toEqual(["pane-3", "pane-2", "pane-9", "pane-8", "pane-1"])
+  expect(current.active).toBe("pane-3")
+  expect(movePaneFocus(current, "left", rects).active).toBe("pane-1")
+  expect(movePaneFocus({ ...layout, active: "pane-1" }, "up", rects).active).toBe("pane-9")
+  expect(movePaneFocus({ ...layout, active: "pane-3" }, "up", rects).active).toBe("pane-3")
+  const hidden = new Map(rects); hidden.set("pane-9", { left: 0, top: 0, right: 0, bottom: 0 })
+  expect(rotatePaneFocus({ ...layout, active: "pane-2" }, 1, hidden).active).toBe("pane-8")
+})
+
+test("v4 rejects malformed containers, duplicate ids, unsafe weights and missing singletons", () => {
+  const layout = defaultPaneLayout()
+  for (const value of [0, -1, NaN, Infinity]) {
+    const root = JSON.parse(JSON.stringify(layout.root))
+    root.children[0].size.value = value
+    expect(parsePaneLayout({ ...layout, root })).toBeUndefined()
+  }
+  for (const root of [group(1, "row", []), group(1, "row", [weight(leaf(1))]), group(1, "row", [weight(leaf(1, "conversation")), weight(leaf(1, "composer"))])]) expect(parsePaneLayout({ ...layout, root })).toBeUndefined()
+  expect(parsePaneLayout({ ...layout, active: "group-1" })).toBeUndefined()
+  expect(parsePaneLayout({ ...layout, active: "pane-6" })?.active).toBe("pane-1")
+})
+
+test("named close removes passive panes without changing input focus", () => {
+  const layout = defaultPaneLayout()
+  const closed = closePane(layout, "todos")
+  expect(paneLeaves(closed.root).some((pane) => pane.kind === "todos")).toBe(false)
+  expect(closed.active).toBe(layout.active)
+  expect(parsePaneLayout(closed)).toEqual(closed)
+  expect(paneLeaves(closePane(closed, "pane-5").root).some((pane) => pane.kind === "context")).toBe(false)
+  expect(() => closePane(layout, "missing")).toThrow("Unknown pane")
+  for (const target of ["conversation", "composer", "pane-6", "pane-1"]) expect(() => closePane(layout, target)).toThrow("Cannot close")
+})
+
+test("duplicate pane names require an id; unnamed close still uses selection", () => {
+  const layout = splitPane(defaultPaneLayout(), "vertical", "todos")
+  expect(() => closePane(layout, "todos")).toThrow("pane-8")
+  const closed = closePane(layout, "pane-8")
+  expect(paneLeaves(closed.root).filter((pane) => pane.kind === "todos")).toHaveLength(1)
+  const jobs = splitPane(closed, "vertical", "jobs")
+  expect(closePane(jobs).active).toBe("pane-1")
+  expect(paneLeaves(closePane(jobs).root).some((pane) => pane.id === jobs.active)).toBe(false)
+})
+
+
+test("splits can prepend the new leaf and retain passive focus and persistence", () => {
+  for (const axis of ["horizontal", "vertical"] as const) {
+    const layout = splitPane(defaultPaneLayout(), axis, "status", true)
+    const leaves = paneLeaves(layout.root)
+    expect(leaves.findIndex((pane) => pane.id === "pane-8")).toBeLessThan(leaves.findIndex((pane) => pane.id === "pane-1"))
+    expect(layout.active).toBe("pane-1")
+    expect(parsePaneLayout(layout)).toEqual(layout)
+  }
+})
+
+
+test("dragging a visible pair skips hidden/content siblings without changing them", () => {
+  const layout = defaultPaneLayout()
+  const before = (layout.root as PaneSplit).children[1]
+  const next = setContainerBoundary(layout, "group-1", 0, .4, 2)
+  expect((next.root as PaneSplit).children[1]).toBe(before)
+  expect(() => setContainerBoundary(layout, "group-1", 1, .4, 1)).toThrow("boundary")
+})
+
+test("all-content containers do not stretch their last child into unused space", () => {
+  const root = group(1, "column", [content(leaf(1)), content(leaf(2))])
+  const rects = layoutRects(root, { left: 0, top: 0, right: 80, bottom: 40 }, () => 3)
+  expect(rects.get("pane-1")?.bottom).toBe(3)
+  expect(rects.get("pane-2")?.bottom).toBe(6)
 })

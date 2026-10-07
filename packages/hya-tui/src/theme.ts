@@ -12,13 +12,15 @@
  * rebuilds its OpenTUI `SyntaxStyle` from `syntaxStylesFor(currentTheme())`
  * when it changes (components/Markdown.tsx).
  */
+import { RGBA, type ColorInput } from "@opentui/core"
 import { batch, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 
 /** The base UI colors. */
 export interface ThemeColors {
-  bg: string
-  panel: string
+  /** ANSI default background: inherits the terminal color and transparency. */
+  bg: ColorInput
+  panel: ColorInput
   fg: string
   muted: string
   accent: string
@@ -68,7 +70,7 @@ export interface ThemeDefinition {
   name: string
   /** Display name. */
   label: string
-  /** `dark` or `light` background (shown as the `/theme` row tag). */
+  /** Preferred terminal background (`dark` or `light`), shown as the `/theme` row tag. */
   kind: "dark" | "light"
   description: string
   colors: ThemeColors
@@ -77,14 +79,17 @@ export interface ThemeDefinition {
   syntaxColors: ThemeSyntaxColors
 }
 
+/** An opaque default-color fill clears overlays without setting a terminal RGB background. */
+export const terminalBackground = RGBA.defaultBackground()
+
 /** The built-in themes, in `/theme` order. `hya` is the default. */
 export const themes = {
   hya: {
     name: "hya",
     label: "hya",
     kind: "dark",
-    description: "Default dark theme: slate background, cyan accent",
-    colors: { bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b" },
+    description: "Terminal background with light text and cyan accents",
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b" },
     toolColors: { done: "#a5d6a7" },
     diffColors: { add: "#a5d6a7", remove: "#f07878", hunk: "#82aaff", context: "#9caab9" },
     syntaxColors: { keyword: "#c792ea", string: "#a5d6a7", number: "#f78c6c", comment: "#7a8a9c", function: "#82aaff", type: "#ffcb6b", operator: "#89ddff", inlineCode: "#f2a97a" },
@@ -93,8 +98,8 @@ export const themes = {
     name: "light",
     label: "Light",
     kind: "light",
-    description: "Light background with dark text, for bright terminals",
-    colors: { bg: "#f7f9fb", panel: "#e6ecf2", fg: "#1f2933", muted: "#5b6b7b", accent: "#0b6f94", border: "#a9b6c3", error: "#c23b3b", warning: "#946200", selection: "#b7d5ea" },
+    description: "Terminal background with dark text, for bright terminals",
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#1f2933", muted: "#5b6b7b", accent: "#0b6f94", border: "#a9b6c3", error: "#c23b3b", warning: "#946200", selection: "#b7d5ea" },
     toolColors: { done: "#2e7d32" },
     diffColors: { add: "#2e7d32", remove: "#c23b3b", hunk: "#3a5fcd", context: "#5b6b7b" },
     syntaxColors: { keyword: "#8839c9", string: "#2e7d32", number: "#b5520f", comment: "#6a7a8a", function: "#3a5fcd", type: "#8a5a00", operator: "#0e7490", inlineCode: "#b4491f" },
@@ -103,8 +108,8 @@ export const themes = {
     name: "contrast",
     label: "High contrast",
     kind: "dark",
-    description: "Black background, white text, saturated accents",
-    colors: { bg: "#000000", panel: "#141414", fg: "#ffffff", muted: "#cccccc", accent: "#00e5ff", border: "#8a8a8a", error: "#ff5c5c", warning: "#ffd400", selection: "#1f4f8a" },
+    description: "Terminal background with white text and saturated accents",
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#ffffff", muted: "#cccccc", accent: "#00e5ff", border: "#8a8a8a", error: "#ff5c5c", warning: "#ffd400", selection: "#1f4f8a" },
     toolColors: { done: "#5cff7a" },
     diffColors: { add: "#5cff7a", remove: "#ff5c5c", hunk: "#7aa2ff", context: "#cccccc" },
     syntaxColors: { keyword: "#ff79ff", string: "#5cff7a", number: "#ffa057", comment: "#a8a8a8", function: "#7aa2ff", type: "#ffe066", operator: "#66f0ff", inlineCode: "#ffb86c" },
@@ -113,8 +118,8 @@ export const themes = {
     name: "ember",
     label: "Ember",
     kind: "dark",
-    description: "Warm dark theme: brown background, amber accent",
-    colors: { bg: "#1a1512", panel: "#2a211c", fg: "#f1e6d8", muted: "#b3a393", accent: "#f0a35e", border: "#5c4a3d", error: "#e8665a", warning: "#e6b450", selection: "#5a3f28" },
+    description: "Terminal background with warm text and amber accents",
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#f1e6d8", muted: "#b3a393", accent: "#f0a35e", border: "#5c4a3d", error: "#e8665a", warning: "#e6b450", selection: "#5a3f28" },
     toolColors: { done: "#a9c77a" },
     diffColors: { add: "#a9c77a", remove: "#e8665a", hunk: "#8fb3c9", context: "#b3a393" },
     syntaxColors: { keyword: "#e0879a", string: "#a9c77a", number: "#f29e6d", comment: "#85766a", function: "#e6b86a", type: "#d7c28a", operator: "#e8a87c", inlineCode: "#f2b880" },

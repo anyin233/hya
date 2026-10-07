@@ -48,7 +48,7 @@ async function backendMode(backend: Backend): Promise<string | undefined> {
   return body.sessions?.find((session) => !session.parent)?.permissionMode
 }
 
-test.describe("Shift+Tab switching", () => {
+test.describe("Permission command switching", () => {
   test.use({
     model: {
       steps: [
@@ -60,12 +60,12 @@ test.describe("Shift+Tab switching", () => {
     },
   })
 
-  test("Shift+Tab asks before yolo; confirmed yolo runs bash without a prompt; manual asks again", async ({ tui, backend }, testInfo) => {
+  test("/permissions asks before yolo; confirmed yolo runs bash without a prompt; manual asks again", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await newSession(term)
 
     // Shift+Tab reaches the TUI through xterm.js (CSI Z) and asks first.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
     const warn = await at(term, "⚠ Enable yolo?")
     expect((await term.cell(warn.row, warn.col))?.fg).toBe(colors.error)
@@ -76,7 +76,7 @@ test.describe("Shift+Tab switching", () => {
     expect(await backendMode(backend)).toBe("manual")
 
     // Shift+Tab again, Enter confirms.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await expectStatus(term, "Mode", "yolo")
@@ -89,7 +89,7 @@ test.describe("Shift+Tab switching", () => {
     expect(await term.text()).not.toContain("asked by")
 
     // Shift+Tab back to manual (no confirmation needed); the next bash asks.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions manual")
     await expectStatus(term, "Mode", "manual")
     await expect.poll(() => backendMode(backend)).toBe("manual")
     await prompt(term, "run it under manual")
@@ -101,7 +101,7 @@ test.describe("Shift+Tab switching", () => {
     await promptGone(term)
 
     // Once confirmed, yolo no longer asks in this TUI process.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await expectStatus(term, "Mode", "yolo")
     expect(await term.text()).not.toContain(confirmLine)
   })
@@ -117,7 +117,7 @@ test.describe("yolo with a pending ask", () => {
     await term.waitForText("asked by hya-main", 20_000)
     await term.waitForText(outlinedToolCard("◌", "bash", '"command":"echo pending-ask"', "awaiting approval"))
     // Shift+Tab works with the prompt shown; the confirmation takes Enter, not the prompt.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
     await term.attach(testInfo, "yolo-confirm-over-prompt")
     await term.press("Enter")
@@ -204,7 +204,7 @@ test.describe("/permissions picker", () => {
     for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)
     await term.attach(testInfo, "narrow-picker")
     await closePicker(term)
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await term.waitForText("⚠ Enable yolo?")
     await term.press("Enter")
     await expectStatus(term, "Mode", "yolo")
@@ -217,7 +217,7 @@ test.describe("before a session exists", () => {
     // --continue with no earlier session: none is open (a plain start creates one).
     const term = await tui([...hyaTui(backend), "--continue"])
     await term.waitForText("Message, !shell, or @file · / commands")
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await expect.poll(() => term.find(confirmLine)).toBeNull()
@@ -326,7 +326,7 @@ test.describe("bundle permission mode", () => {
     await promptGone(term)
 
     // Shift+Tab from the bundle mode wraps around to manual.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions manual")
     await expectStatus(term, "Mode", "manual")
   })
 })
@@ -344,7 +344,7 @@ test.describe("!command shell turns never ask", () => {
     await term.attach(testInfo, "manual-shell")
 
     // Yolo: same, no prompt.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions yolo")
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await prompt(term, "!echo yolo-shell")
@@ -352,7 +352,7 @@ test.describe("!command shell turns never ask", () => {
     expect(/asked by /.test(await term.text()), "no permission prompt in yolo").toBe(false)
 
     // Back to manual: still no prompt.
-    await term.press("Shift+Tab")
+    await prompt(term, "/permissions manual")
     await prompt(term, "!echo manual-again")
     await term.waitForText(outlinedToolCard("✓", "bash", '"command":"echo manual-again"'), 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt back in manual").toBe(false)

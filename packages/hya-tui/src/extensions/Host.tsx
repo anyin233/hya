@@ -13,11 +13,11 @@ import { RenderTree } from "./renderTree"
  * renders asynchronously. `scrollRef` hands its scrollbox to the pane's
  * keyboard scrolling (components/PaneWorkspace.tsx).
  */
-export function ExtensionPanel(props: { panelKey: string; width: number; height: number; scrollRef?: (element: ScrollBoxRenderable) => void }) {
+export function ExtensionPanel(props: { panelKey: string; width: number; height: number; paddingX?: number; scrollRef?: (element: ScrollBoxRenderable) => void }) {
   const view = () => extensionManager.panelView(props.panelKey, Math.max(1, Math.floor(props.width)), Math.max(1, Math.floor(props.height)))
   const [extension, id] = [props.panelKey.slice(0, props.panelKey.lastIndexOf("#")), props.panelKey.slice(props.panelKey.lastIndexOf("#") + 1)]
   return (
-    <scrollbox {...(props.scrollRef ? { ref: props.scrollRef } : {})} width="100%" flexGrow={1} paddingX={1}>
+    <scrollbox {...(props.scrollRef ? { ref: props.scrollRef } : {})} width="100%" flexGrow={1} paddingX={props.paddingX ?? 1}>
       <Show when={view().node} keyed fallback={<text wrapMode="word" fg={view().error ? colors.error : colors.muted}>{view().error ?? "Loading…"}</text>}>
         {(node) => <RenderTree node={node} host={{ onAction: (action, point) => void extensionManager.action(extension, { kind: "panel", id }, action, point) }} />}
       </Show>

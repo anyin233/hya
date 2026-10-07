@@ -1,6 +1,6 @@
 /**
  * Switching the session tree's permission mode (docs/tui.md "Permission
- * modes"): Shift+Tab cycles, `/permissions` picks, `/permissions <mode>`
+ * modes"): `/permissions` picks, `/permissions <mode>`
  * sets. The switch is `UpdateSession` with `{permissionMode}`; the reply's
  * `permissionMode` becomes the shown mode, a muted notice is added to the
  * transcript, and the pending interactions are re-listed at once (switching
@@ -69,7 +69,7 @@ export function createModeSwitcher({ store, client, preferredMode, saveMode }: M
       const saveError = remember(applied)
       store.setStatus(saveError
         ? `Permission mode → ${label(applied)} · default could not be saved: ${saveError}`
-        : `Permission mode → ${label(applied)} · Shift+Tab cycles · /permissions lists`)
+        : `Permission mode → ${label(applied)} · /permissions lists`)
       // Asks the switch resolved (yolo allows them once) close now, not at the next frame.
       store.setInteractions(await client.listInteractions())
     } catch (error) {
@@ -152,4 +152,3 @@ export function createModeSwitcher({ store, client, preferredMode, saveMode }: M
     idle: (): Promise<void> => pending,
   }
 }
-

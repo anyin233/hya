@@ -48,7 +48,7 @@ test.describe("undo and redo", () => {
     await expect.poll(() => term.find("Wrote the notes.")).toBeNull()
     await expect.poll(() => existsSync(file)).toBe(false)
     // The pending-revert line ends the transcript, in the warning color.
-    await term.waitForText(/↶ \d+ messages reverted · \/redo or Ctrl\+X R restores them/)
+    await term.waitForText(/↶ \d+ messages reverted · \/redo restores them/)
     const line = (await term.find("↶"))!
     expect((await term.cell(line.row, line.col))?.fg).toBe(warning)
     // The only "write notes" left on screen is the input.
@@ -57,9 +57,10 @@ test.describe("undo and redo", () => {
     expect(input!.row).toBeGreaterThan(line.row)
     await term.attach(testInfo, "after-undo")
 
-    // Ctrl+X R redoes without clearing the prefilled input first; the untouched prefill is emptied.
+    // /redo redoes without clearing the prefilled input first; the untouched prefill is emptied.
     await term.press("Control+x")
-    await term.press("r")
+    await term.type("/redo")
+    await term.press("Enter")
     await term.waitForText("Wrote the notes.")
     await expect.poll(() => term.find("write notes")).not.toBeNull()
     expect(await term.find("Message, !shell, or @file · / commands")).not.toBeNull()
@@ -67,9 +68,10 @@ test.describe("undo and redo", () => {
     expect(await readFile(file, "utf8")).toBe("alpha\n")
     await expect.poll(() => term.find("↶")).toBeNull()
 
-    // Undo again with Ctrl+X U, then a new prompt makes it permanent: /redo is refused.
+    // Undo again with /undo, then a new prompt makes it permanent: /redo is refused.
     await term.press("Control+x")
-    await term.press("u")
+    await term.type("/undo")
+    await term.press("Enter")
     await expect.poll(() => existsSync(file)).toBe(false)
     await clearInput(term)
     await prompt(term, "something else")
@@ -143,16 +145,17 @@ test.describe("fork", () => {
     await prompt(term, "alpha question")
     await term.waitForText("First reply.", 20_000)
     await prompt(term, "/undo")
-    await term.waitForText("↶ 2 messages reverted · /redo or Ctrl+X R restores")
+    await term.waitForText("↶ 2 messages reverted · /redo restores")
     // The line wraps at the width instead of running off the edge.
     await term.waitForText(/the\s+next\s+prompt\s+makes\s+it\s+permanent/)
     await term.attach(testInfo, "narrow-after-undo")
     await clearInput(term)
     await prompt(term, "/redo")
     await term.waitForText("First reply.")
-    // Ctrl+X F opens the fork picker.
+    // /fork opens the fork picker.
     await term.press("Control+x")
-    await term.press("f")
+    await term.type("/fork")
+    await term.press("Enter")
     await term.waitForText("Fork at the latest message")
     await term.waitForText(/alpha question\s+\[#1\]/)
     await term.press("Escape")

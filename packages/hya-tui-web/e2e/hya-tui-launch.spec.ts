@@ -3,8 +3,8 @@
 // of its database: the one already running, else one it starts with
 // `hya serve start` (detached, in `--dir`). The daemon outlives the TUI.
 // `--continue` reopens the most recent session that is not archived; a plain
-// start opens a new ephemeral session that the daemon drops again once it is
-// still empty and no TUI shows it (after `/exit`, or a `kill -9`). A
+// start restores a saved chat, or creates an ephemeral session when no history
+// exists; the daemon drops an empty session after its last client leaves. A
 // missing binary or a daemon that fails to start is reported with its
 // output tail.
 
@@ -89,17 +89,16 @@ test.describe("one-command launch", () => {
     expect(running?.pid).toBe(pid)
     expect(await healthy(running!.url)).toBe(true)
 
-    // Plain launch creates a fresh ephemeral session; only --continue resumes
-    // saved chat (docs/tui.md, launch behavior).
+    // A new TUI attaches to the same daemon and restores the saved chat.
     const next = await tui(...selfLaunch(workspace))
     await next.waitForText("Message, !shell, or @file · / commands", 30_000)
-    await next.waitForText("No messages yet", 30_000)
+    await next.waitForText("Launched and replying.", 30_000)
     expect(await backendPid(next)).toBe(pid)
     await prompt(next, "/exit")
     expect(await next.waitForExit()).toBe(0)
   })
 
-  test("a plain start creates a fresh Project session; --continue reopens the saved chat", async ({ tui, workspace }) => {
+  test("a plain start reopens the saved session; an explicit empty new one is dropped after exit; --continue reopens the saved chat", async ({ tui, workspace }) => {
     // Ctrl+D quits without archiving (`/exit` would archive it, and --continue skips archived sessions).
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Message, !shell, or @file · / commands", 30_000)
@@ -110,17 +109,18 @@ test.describe("one-command launch", () => {
     await first.press("Control+d")
     await first.waitForExit()
 
-    // A plain start creates a new empty session in the current Project rather than reopening the saved chat.
+    // A plain start restores the saved chat; /new creates an empty one.
     const fresh = await tui(...selfLaunch(workspace))
-    await fresh.waitForText("No messages yet", 30_000)
-    expect(await fresh.find("remember this")).toBeNull()
+    await fresh.waitForText("remember this", 30_000)
+    await prompt(fresh, "/new")
+    await fresh.waitForText("No messages yet")
     const empty = await sessionId(fresh)
     const url = (await daemonStatus(workspace))!.url
     expect(await listed(url)).toContain(empty)
     await prompt(fresh, "/exit")
     expect(await fresh.waitForExit()).toBe(0)
     // …which the daemon drops once no client shows it (after a short grace):
-    // only the saved session with messages is left.
+    // only the session with messages is left.
     await expect.poll(() => listed(url), { timeout: 20_000 }).not.toContain(empty)
     expect(await listed(url)).toHaveLength(1)
 

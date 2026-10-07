@@ -411,30 +411,25 @@ export function hyaTui(backend: Backend): string[] {
 /** A browser viewport wide enough for the right sidebar (150 columns minimum). */
 export const wideViewport = { width: 1500, height: 640 }
 
-/** The `/status` view's rows: the bordered `─Status` box, borders stripped (a permanent Context pane also has a Version row). */
+/** Explicit /status facts are drawn in the passive conversation viewer, without a frame. */
 async function statusRows(term: Tui): Promise<string[] | undefined> {
   const lines = await term.lines()
-  const top = lines.findIndex((line) => line.includes("─Status"))
-  if (top < 0) return undefined
-  // The box's left border column: every row inside starts with `│` there.
-  const left = lines[top]!.lastIndexOf("┌", lines[top]!.indexOf("─Status"))
-  const rows: string[] = []
-  for (const line of lines.slice(top + 1)) {
-    if (line[left] !== "│") break
-    const right = line.indexOf("│", left + 1)
-    rows.push(line.slice(left + 1, right < 0 ? undefined : right).trimEnd())
-  }
-  return rows
+  const at = lines.findIndex((line) => /Version {5}\d+\./.test(line))
+  if (at < 0) return undefined
+  const left = lines[at]!.indexOf("Version")
+  return lines.slice(Math.max(0, at - 1)).map((line) => line.slice(left).replace(/│.*$/, "").trimEnd())
 }
 
 /** Open the explicit metadata view (`/status`); startup can finish after the first frame. */
 export async function showStatusView(term: Tui): Promise<void> {
   await expect.poll(async () => {
-    if (!(await statusRows(term))?.some((row) => /^Version\s+\d+\./.test(row))) {
+    // The persistent Context pane also shows Version, but uses two spaces.
+    // Wait for the explicit /status view's aligned field before reading it.
+    if (!/Version {5}\d+\./.test(await term.text())) {
       await term.type("/status")
       await term.press("Enter")
     }
-    return (await statusRows(term))?.some((row) => /^Version\s+\d+\./.test(row)) ?? false
+    return /Version {5}\d+\./.test(await term.text())
   }, { timeout: 30_000 }).toBe(true)
 }
 
@@ -460,7 +455,7 @@ async function statusField(term: Tui, field: string): Promise<string> {
 async function showConversation(term: Tui): Promise<void> {
   await term.type("/layout show")
   await term.press("Enter")
-  await expect.poll(() => term.find("─Status")).toBeNull()
+  await expect.poll(() => term.find("Version     ")).toBeNull()
 }
 
 /** Read the untitled selected session, then return to Conversation. */

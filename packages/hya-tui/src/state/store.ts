@@ -46,8 +46,8 @@ import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
 import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
-import { toggledSidebar, type SidebarMode } from "./layout"
-import { defaultPaneLayout, paneLeaves, type PaneLayout } from "./panes"
+import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
+import { paneNodes, paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
 import { foldMember, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
@@ -101,7 +101,7 @@ export interface AppState {
   /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
-  /** Local editable workspace inside the central panel; exactly one conversation pane. */
+  /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
   readonly apiOutput: string
   readonly status: string
@@ -128,7 +128,7 @@ export interface AppState {
   readonly sidebar: SidebarMode
   /** Terminal width in columns, kept current by the root layout. */
   readonly columns: number
-  /** Global reasoning switch (`/thinking`, Ctrl+O): expand every reasoning block. */
+  /** Global reasoning switch (`/thinking`): expand every reasoning block. */
   readonly thinking: boolean
   /** Vim mode in the composer (`/vim`, the `vim` preference; composer/vim.ts). */
   readonly vim: boolean
@@ -142,7 +142,7 @@ export interface AppState {
   readonly focused: boolean
   /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
   readonly reasoningToggles: ReadonlyMap<string, boolean>
-  /** Global tool-card switch (`/tools`, Ctrl+G); `undefined` = the defaults (collapsed, shell turns expanded). */
+  /** Global tool-card switch (`/tools`); `undefined` = the defaults (collapsed, shell turns expanded). */
   readonly tools: boolean | undefined
   /** Per-card expansion that overrides `tools` (a click on the card header), by part id. */
   readonly toolToggles: ReadonlyMap<string, boolean>
@@ -227,7 +227,7 @@ export interface AppState {
   readonly projectsSidebar: SidebarMode
   /** `--remote`: started without a Project for `--dir`. */
   readonly remote: boolean
-  /** The left Projects pane has keyboard focus (Ctrl+P): keys go to the panel drawing it (hya/basic-tui-components). */
+  /** Derived from the active layout leaf: keys go to the panel drawing Projects. */
   readonly projectsFocus: boolean
   /** The extension panel shown as the full-screen overlay (the Project view, `/project`), by panel key. */
   readonly extensionOverlay: string | undefined
@@ -298,7 +298,7 @@ export interface Catalog {
   projects?: ProjectInfo[]
 }
 
-export const startupStatus = "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit"
+export const startupStatus = "Enter prompt · /help commands · /refresh · Ctrl+C quit"
 
 function initialState(): { [K in keyof AppState]: AppState[K] } {
 
@@ -394,7 +394,9 @@ export function createAppStore() {
     Object.entries(initial).map(([key, value]) => [key, createSignal(value, { equals: false })]),
   ) as unknown as Signals
   const state = Object.defineProperties({} as AppState, Object.fromEntries(
-    Object.keys(initial).map((key) => [key, { enumerable: true, get: () => signals[key as keyof AppState][0]() }]),
+    Object.keys(initial).map((key) => [key, { enumerable: true, get: () => key === "projectsFocus"
+      ? paneLeaves(signals.paneLayout[0]().root).some((pane) => pane.id === signals.paneLayout[0]().active && pane.kind === "projects")
+      : signals[key as keyof AppState][0]() }]),
   ))
   const set = <K extends keyof AppState>(key: K, value: AppState[K]): void => {
     (signals[key][1] as (value: AppState[K]) => void)(value)
@@ -802,7 +804,7 @@ export function createAppStore() {
     },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
-    setPaneLayout(layout: PaneLayout): void { set("paneLayout", layout) },
+    setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
 
@@ -810,7 +812,6 @@ export function createAppStore() {
       if (columns !== state.columns) set("columns", columns)
     },
     setSidebar(mode: SidebarMode): void { set("sidebar", mode) },
-    setProjectsSidebar(mode: SidebarMode): void { set("projectsSidebar", mode) },
     /** Show the sidebar if it is hidden at the current width, else hide it. */
     toggleSidebar(): void { set("sidebar", toggledSidebar(state.sidebar, state.columns)) },
 
@@ -962,16 +963,13 @@ export function createAppStore() {
     },
     setRemote(value: boolean): void { set("remote", value) },
 
-    /**
-     * Focus the Projects pane (it becomes the active pane) or leave it (an
-     * active Projects pane hands over to the conversation).
-     */
+    setProjectsSidebar(mode: SidebarMode): void { set("projectsSidebar", mode) },
+    toggleProjectsSidebar(): void { set("projectsSidebar", toggledProjectsSidebar(state.projectsSidebar, state.columns)) },
     setProjectsFocus(focus: boolean): void {
-      set("projectsFocus", focus)
       const leaves = paneLeaves(state.paneLayout.root)
       const active = leaves.find((pane) => pane.id === state.paneLayout.active)
       const target = focus ? leaves.find((pane) => pane.kind === "projects")
-        : active?.kind === "projects" ? leaves.find((pane) => pane.kind === "conversation") : undefined
+        : active?.kind === "projects" ? leaves.find((pane) => pane.kind === "composer") : undefined
       if (target) set("paneLayout", { ...state.paneLayout, active: target.id })
     },
     setExtensionOverlay(extension: string | undefined): void { set("extensionOverlay", extension) },
@@ -979,6 +977,8 @@ export function createAppStore() {
 
     completionContext(): CompletionContext {
       return {
+        panes: paneLeaves(state.paneLayout.root).map(({ id, kind }) => ({ id, kind })),
+        layoutContainers: paneNodes(state.paneLayout.root).flatMap((node) => node.type === "pane" ? [] : [{ id: node.id, children: node.children.map((child) => child.node.id), removable: paneLeaves(node).every((pane) => pane.kind !== "conversation" && pane.kind !== "composer") }]),
         backendCommands: state.backendCommands.map((command) => command.name),
         models: state.models.map((model) => model.id),
         sessions: state.sessions.map((session) => ({ id: session.id, title: session.title })),

@@ -18,11 +18,20 @@
  */
 import type { KeyLike } from "../keys/bindings"
 
+/** Optional aligned list columns; descriptions stay in the detail pane. */
+export interface PickerColumns {
+  shortcut: string
+  label: string
+  tag: string
+}
+
 export interface PickerRow {
   /** Value handed to the selection callback (a mode id, a model id, a session id, …). */
   id: string
   /** Main text of the row. */
   label: string
+  /** Shortcut cell used by an opt-in column picker; also searchable. */
+  shortcut?: string
   /** The row's own name when `label` decorates it (a session's title without its list number): what rename edits and a confirmation names. Default `label`. */
   name?: string
   /** Muted text after the tag (a description). */
@@ -65,6 +74,8 @@ export interface PickerState {
   maxRows?: number
   /** Show the highlighted row's whole `detail`, wrapped, under the list (rows clip it to one line). */
   detailPane?: boolean
+  /** Opt in to aligned shortcut, label and tag columns with these headings. */
+  columns?: PickerColumns
   /** Render as a compact mouse context menu at terminal coordinates. */
   contextMenu?: { x: number; y: number }
   /** `"list"` (default) browses; `"rename"`/`"confirm"` are a row action in progress. */
@@ -96,7 +107,7 @@ function currentIndex(rows: PickerRow[]): number {
   return Math.max(0, rows.findIndex((row) => row.current))
 }
 
-export function createPicker(options: { title: string; rows: PickerRow[]; hint?: string; actions?: readonly PickerAction[]; maxRows?: number; detailPane?: boolean; contextMenu?: { x: number; y: number } }): PickerState {
+export function createPicker(options: { title: string; rows: PickerRow[]; hint?: string; actions?: readonly PickerAction[]; maxRows?: number; detailPane?: boolean; columns?: PickerColumns; contextMenu?: { x: number; y: number } }): PickerState {
   return {
     title: options.title,
     rows: options.rows,
@@ -107,6 +118,7 @@ export function createPicker(options: { title: string; rows: PickerRow[]; hint?:
     ...(options.actions ? { actions: options.actions } : {}),
     ...(options.maxRows ? { maxRows: options.maxRows } : {}),
     ...(options.detailPane ? { detailPane: true } : {}),
+    ...(options.columns ? { columns: options.columns } : {}),
     ...(options.contextMenu ? { contextMenu: options.contextMenu } : {}),
   }
 }
@@ -116,7 +128,7 @@ export function pickerMatches(rows: PickerRow[], query: string): PickerRow[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (!words.length) return rows
   return rows.filter((row) => {
-    const haystack = `${row.label}\n${row.id}\n${row.tag ?? ""}\n${row.detail ?? ""}`.toLowerCase()
+    const haystack = `${row.label}\n${row.id}\n${row.tag ?? ""}\n${row.shortcut ?? ""}\n${row.detail ?? ""}`.toLowerCase()
     return words.every((word) => haystack.includes(word))
   })
 }
@@ -222,6 +234,8 @@ export interface PickerSpec {
   maxRows?: number
   /** Show the highlighted row's whole detail under the list. */
   detailPane?: boolean
+  /** Opt in to aligned shortcut, label and tag columns with these headings. */
+  columns?: PickerColumns
   /** Place this picker as a compact context menu at terminal coordinates. */
   contextMenu?: { x: number; y: number }
   /** Runs after the picker closed (focus is back on the composer). */

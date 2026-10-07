@@ -1,8 +1,7 @@
 import { extensionManager, type HookTree } from "../extensions/manager"
 import { RenderTree } from "../extensions/renderTree"
 import type { RenderNode } from "../extensions/wire"
-import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, usePaste } from "@opentui/solid"
+import type { BoxRenderable, KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
@@ -16,6 +15,7 @@ import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
+import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
 import { focusedPane, keyboardOwner } from "../state/focus"
@@ -29,7 +29,7 @@ export const composerMaxRows = 8
 const mentionDebounceMs = 120
 export const quitHint = "Press Ctrl+C again to quit"
 /** Status while the Ctrl+X chord waits for its second key. */
-export const chordHint = "Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork · / commands"
+export const chordHint = "Ctrl+X · / opens commands"
 
 interface FileMenu {
   token: MentionToken
@@ -46,7 +46,7 @@ interface FileMenu {
  * Key order: the modal picker (every key but Ctrl+C), a full-screen view,
  * the command pane, the Projects sidebar, the one-line yolo confirmation,
  * the file list, the prompt dock, and the key bindings
- * (Shift+Tab cycles the permission mode; docs/tui.md "Permission modes").
+ * (docs/tui.md "Essential default shortcuts").
  *
  * Permission/question prompts (components/PromptDock.tsx): after the lists,
  * a shown prompt takes digits, Up/Down, Enter, and Esc while the input is
@@ -65,10 +65,8 @@ interface FileMenu {
  * arrows, Tab, Esc with nothing pending) keep their usual meaning. Edits go
  * through `replaceText`, so `u` / Ctrl+R use the textarea's undo history.
  *
- * Ctrl+X arms a chord for one key: Ctrl+E (or E) then opens the external
- * editor (`controller.openEditor`, composer/editor.ts); U, R, F (or with
- * Ctrl) run `/undo`, `/redo`, `/fork`, and `/` focuses the command pane
- * (app/revert.ts); any other key drops the chord and is handled as usual.
+ * Ctrl+X arms a prefix for one key: `/` focuses the command pane without
+ * altering the draft; any other key drops it and is handled as usual.
  *
  * While the Provider View (`/key`, components/ProviderView.tsx) — or the
  * Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`), or Agents
@@ -79,10 +77,10 @@ interface FileMenu {
  * screen) and is otherwise ignored. Ctrl+C closes the open view and keeps
  * its quit meaning.
  */
-function BaseComposer(props: { width: number }) {
+function BaseComposer(props: { width: number; decorationRows?: () => number }) {
   const { store, controller, ui } = useApp()
   const composerFocused = () => keyboardOwner(store.state, ui.command?.active() ?? false)
-    === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "conversation")?.id
+    === paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")?.id
   let editor: TextareaRenderable | undefined
   const [value, setValue] = createSignal("")
   const [rows, setRows] = createSignal(1)
@@ -290,16 +288,6 @@ function BaseComposer(props: { width: number }) {
     }, quitWindowMs)
   }
 
-  /** Ctrl+P: give the keyboard to the Projects pane's panel, or take it back. */
-  function toggleProjectsFocus(): void {
-    if (!store.state.projectsFocus) {
-      controller.focusProjects()
-      return
-    }
-    store.setProjectsFocus(false)
-    store.setStatus("Projects sidebar unfocused · Ctrl+P focuses it")
-  }
-
   /** Up/Down: move in the file list, else walk message history from the first/last line. */
   function arrow(key: KeyEvent, consume: () => void): boolean {
     if (key.ctrl || key.meta || key.shift || (key.name !== "up" && key.name !== "down")) return false
@@ -329,12 +317,32 @@ function BaseComposer(props: { width: number }) {
     return false
   }
 
+  function toggleProjectsFocus(): void {
+    if (store.state.projectsFocus) {
+      store.setProjectsFocus(false)
+      store.setStatus("Projects sidebar unfocused · Alt+Arrow focuses panes")
+    } else {
+      const projects = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "projects")
+      if (!projects) {
+        store.setStatus("No Projects pane · /layout split left projects to add one")
+        return
+      }
+      if (!projectsSidebarVisible(store.state.projectsSidebar, store.state.columns)) store.setProjectsSidebar("open")
+      store.setPaneLayout({ ...store.state.paneLayout, active: projects.id })
+      store.setProjectsFocus(true)
+      store.setStatus("Projects sidebar shown, focused")
+    }
+    return
+  }
 
-  useKeyboard((key: KeyEvent) => {
+  const onWorkspaceKey = (key: KeyEvent) => {
     const consume = (): void => {
       key.preventDefault()
       key.stopPropagation()
     }
+    // The command editor owns settings input; disabled physical keys suppress
+    // every other handler, including inherited textarea and modal actions.
+    if (!ui.command?.active() && isKeyDisabled(key)) { consume(); return }
     // The concealed `/connect-remote` entry takes every key; Ctrl+C cancels it.
     if (store.state.secretEntry) {
       consume()
@@ -392,9 +400,22 @@ function BaseComposer(props: { width: number }) {
       if (ui.command.key(key)) consume()
       return
     }
+    // Custom shortcuts dispatch the full command through the same registry.
+    // Modal views and command input above retain ownership of their keys.
+    const commandBinding = resolveCommandBinding(key)
+    if (commandBinding) {
+      consume()
+      if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
+      chord = undefined
+      quitGuard.disarm()
+      if (commandBinding.scope === "workspace" || focusedPane(store.state)?.kind === "composer") {
+        void controller.submit(commandBinding.command, "command")
+      }
+      return
+    }
     const inputEmpty = !(editor?.plainText ?? value())
     const commandPaneFocus = focusedPane(store.state)
-    const commandShortcut = resolveBinding(key, { composerEmpty: commandPaneFocus?.kind !== "conversation" || inputEmpty, chord })
+    const commandShortcut = resolveBinding(key, { composerEmpty: store.state.projectsFocus || commandPaneFocus?.kind !== "composer" || inputEmpty, chord })
     if (commandShortcut === "openCommands") {
       consume()
       if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
@@ -403,37 +424,25 @@ function BaseComposer(props: { width: number }) {
       ui.command?.open()
       return
     }
-    if (commandPaneFocus?.kind !== "conversation" && commandShortcut === "chord") {
+    if (commandPaneFocus?.kind !== "composer" && commandShortcut === "chord") {
       consume()
       chord = "ctrl+x"
       if (store.state.status !== chordHint) beforeChord = store.state.status
       store.setStatus(chordHint)
       return
     }
-    // A focused pane takes its keys: the Projects pane's panel while it holds the keyboard (Ctrl+P), else the pane's scrolling.
-    if (commandPaneFocus?.kind !== "conversation"
+    // Auxiliary selectable panes receive local input through their registered handle.
+    if (commandPaneFocus?.kind !== "composer"
       && commandShortcut !== "toggleSidebar" && commandShortcut !== "toggleProjectsCapture"
       && commandShortcut !== "refresh" && commandShortcut !== "help" && commandShortcut !== "reviewPending"
       && commandShortcut !== "quit" && commandShortcut !== "eof") {
       chord = undefined
       consume()
-      // The focused Projects pane's keys go to the panel drawing it; while it is still starting they are dropped.
-      const projects = commandPaneFocus?.kind === "projects" ? extensionManager.replacement("projects") : undefined
-      if (projects?.keys) {
-        void extensionManager.key(projects.key, key)
-        return
-      }
-      if (commandPaneFocus?.kind === "projects" && !projects && extensionManager.placeholder("projects") === undefined) return
-      const pane = commandPaneFocus && ui.panes?.get(commandPaneFocus.id)
-      if (key.name === "up" && !key.ctrl && !key.meta) pane?.line(-1)
-      else if (key.name === "down" && !key.ctrl && !key.meta) pane?.line(1)
-      else if (commandShortcut === "pageUp" || commandShortcut === "pageDown") pane?.page(commandShortcut === "pageUp" ? -1 : 1)
-      else if (commandShortcut === "scrollTop") pane?.top()
-      else if (commandShortcut === "scrollBottom") pane?.bottom()
+      if (commandPaneFocus) ui.paneInputs?.get(commandPaneFocus.id)?.onKey(key)
       return
     }
     // Global workspace actions skip conversation-local prompts, history and Vim.
-    if (commandPaneFocus?.kind !== "conversation") {
+    if (commandPaneFocus?.kind !== "composer") {
       consume()
       chord = undefined
       if (commandShortcut === "help") { controller.openHelp(); return }
@@ -449,36 +458,24 @@ function BaseComposer(props: { width: number }) {
       else if (commandShortcut === "toggleProjectsCapture") toggleProjectsFocus()
       return
     }
+    const pane = focusedPane(store.state)
+    if (pane) ui.paneInputs?.get(pane.id)?.onKey(key)
+  }
+
+  const onEditorKey = (key: KeyEvent) => {
+    const consume = (): void => { key.preventDefault(); key.stopPropagation() }
     // The yolo confirmation line takes Enter, Esc, and Shift+Tab before the
     // lists and the prompt dock (so they never answer an ask); any other key
     // cancels it and is handled as usual.
-    if (commandPaneFocus?.kind === "conversation" && store.state.modeConfirm && controller.modes.key(key)) {
+    if (store.state.modeConfirm && controller.modes.key(key)) {
       consume()
       quitGuard.disarm()
       return
     }
-    // The second key of a Ctrl+X chord: Ctrl+E / E opens the external editor; anything else drops the chord.
-    const armed = chord
+    // Slash was handled above; every other key drops the command prefix.
+    if (chord && store.state.status === chordHint) store.setStatus(beforeChord)
     chord = undefined
-    if (armed) {
-      if (store.state.status === chordHint) store.setStatus(beforeChord)
-      const action = resolveBinding(key, { chord: armed })
-      if (action === "externalEditor") {
-        consume()
-        quitGuard.disarm()
-        controller.openEditor()
-        return
-      }
-      // Undo / redo / fork act on the session, whatever the input holds (the input may hold the reverted prompt).
-      if (action === "undo" || action === "redo" || action === "fork") {
-        consume()
-        quitGuard.disarm()
-        if (action === "fork") controller.fork()
-        else void controller[action]()
-        return
-      }
-    }
-    // Shift+Tab in the file list moves its highlight up instead of cycling the permission mode.
+    // Shift+Tab in the file list moves its highlight up.
     if (isShiftTab(key) && menu()) {
       consume()
       const files = menu()!
@@ -540,7 +537,7 @@ function BaseComposer(props: { width: number }) {
     if (!action) return
     const selectedPane = focusedPane(store.state)
     const transcript = store.state.view === "chat"
-      ? selectedPane?.kind === "conversation" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
+      ? selectedPane?.kind === "composer" ? ui.transcript : ui.panes?.get(store.state.paneLayout.active)
       : undefined
     switch (action) {
       case "interrupt": {
@@ -605,13 +602,13 @@ function BaseComposer(props: { width: number }) {
       case "toggleThinking":
         consume()
         store.setThinking(!store.state.thinking)
-        store.setStatus(`Reasoning ${store.state.thinking ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+        store.setStatus(`Reasoning ${store.state.thinking ? "expanded" : "collapsed"}`)
         return
       case "toggleTools": {
         consume()
         const expanded = !(store.state.tools ?? false)
         store.setTools(expanded)
-        store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
+        store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"}`)
         return
       }
       case "pageUp":
@@ -647,9 +644,9 @@ function BaseComposer(props: { width: number }) {
         // Reached only through the chord (handled above).
         return
     }
-  })
+  }
 
-  usePaste((event: PasteEvent) => {
+  const onWorkspacePaste = (event: PasteEvent) => {
     event.preventDefault()
     event.stopPropagation()
     const text = new TextDecoder().decode(event.bytes)
@@ -669,7 +666,12 @@ function BaseComposer(props: { width: number }) {
       ui.command.paste(cleaned)
       return
     }
-    if (focusedPane(store.state)?.kind !== "conversation") return
+    const pane = focusedPane(store.state)
+    if (pane) ui.paneInputs?.get(pane.id)?.onPaste?.(event)
+  }
+
+  const onEditorPaste = (event: PasteEvent) => {
+    const cleaned = new TextDecoder().decode(event.bytes).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r\n?/g, "\n")
     // A terminal pastes a file dragged into the window as its path (quoted or
     // escaped when it has spaces): turn it into an `@path ` mention instead
     // of raw text when the path exists, so it resolves like a typed mention.
@@ -689,6 +691,26 @@ function BaseComposer(props: { width: number }) {
       return
     }
     editor?.insertText(cleaned)
+  }
+
+  const workspaceInput = { onKey: onWorkspaceKey, onPaste: onWorkspacePaste }
+  const editorInput = { onKey: onEditorKey, onPaste: onEditorPaste }
+  ui.workspaceInput = workspaceInput
+  const composerHeight = () => (store.state.secretEntry ? 4 : rows() + 2)
+    + (menu() ? menu()!.items.length + 3 : 0) + attachments().length + (props.decorationRows?.() ?? 0)
+  ui.composerHeight = composerHeight
+  queueMicrotask(() => ui.invalidateLayout?.())
+  let editorPaneId: string | undefined
+  createEffect(() => {
+    if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
+    editorPaneId = paneLeaves(store.state.paneLayout.root).find((pane) => pane.kind === "composer")?.id
+    ui.paneInputs ??= new Map()
+    if (editorPaneId) ui.paneInputs.set(editorPaneId, editorInput)
+  })
+  onCleanup(() => {
+    if (ui.workspaceInput === workspaceInput) ui.workspaceInput = undefined
+    if (ui.composerHeight === composerHeight) ui.composerHeight = undefined
+    if (editorPaneId && ui.paneInputs?.get(editorPaneId) === editorInput) ui.paneInputs.delete(editorPaneId)
   })
 
   return (
@@ -774,6 +796,9 @@ function BaseComposer(props: { width: number }) {
  * built-in composer itself is never re-parented, so its input keeps focus.
  */
 export function Composer(props: { width: number }) {
+  const [aboveRows, setAboveRows] = createSignal(0)
+  const [belowRows, setBelowRows] = createSignal(0)
+  let above: BoxRenderable | undefined, below: BoxRenderable | undefined
   const parts = () => {
     const above: HookTree[] = []
     const below: HookTree[] = []
@@ -781,17 +806,32 @@ export function Composer(props: { width: number }) {
       if (decorator.node.kind !== "column") continue
       const at = decorator.node.children.findIndex((child) => child.kind === "slot")
       const piece = (children: readonly RenderNode[]): HookTree => ({ ...decorator, node: { kind: "column", children } })
-      above.unshift(piece(decorator.node.children.slice(0, at)))
-      below.push(piece(decorator.node.children.slice(at + 1)))
+      if (at > 0) above.unshift(piece(decorator.node.children.slice(0, at)))
+      if (at + 1 < decorator.node.children.length) below.push(piece(decorator.node.children.slice(at + 1)))
     }
     return { above, below }
   }
+  createEffect(() => {
+    const decorations = parts()
+    if (!decorations.above.length) setAboveRows(0)
+    if (!decorations.below.length) setBelowRows(0)
+  })
   const part = (tree: HookTree) => <RenderTree node={tree.node} host={{ onAction: (action) => void extensionManager.action(tree.extension, { kind: "renderer", id: tree.renderer }, action) }} />
   return (
     <box width="100%" flexDirection="column" flexShrink={0}>
-      <For each={parts().above}>{part}</For>
-      <BaseComposer {...props} />
-      <For each={parts().below}>{part}</For>
+      <Show when={parts().above.length > 0}>
+        <box ref={(element: BoxRenderable) => above = element} width="100%" flexDirection="column" flexShrink={0}
+          onSizeChange={() => setAboveRows(above?.height ?? 0)}>
+          <For each={parts().above}>{part}</For>
+        </box>
+      </Show>
+      <BaseComposer {...props} decorationRows={() => aboveRows() + belowRows()} />
+      <Show when={parts().below.length > 0}>
+        <box ref={(element: BoxRenderable) => below = element} width="100%" flexDirection="column" flexShrink={0}
+          onSizeChange={() => setBelowRows(below?.height ?? 0)}>
+          <For each={parts().below}>{part}</For>
+        </box>
+      </Show>
     </box>
   )
 }
