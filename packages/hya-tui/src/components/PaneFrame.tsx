@@ -1,9 +1,10 @@
+import type { ColorInput } from "@opentui/core"
 import { Show, type JSX } from "solid-js"
 import { paneDefinitions, type PaneKind } from "../state/panes"
 import { colors } from "../theme"
 
 /** A pane border always denotes selectable content; passive titles are plain text. */
-export function PaneFrame(props: { kind: PaneKind; title: string; focused?: boolean; background?: string; children: JSX.Element }) {
+export function PaneFrame(props: { kind: PaneKind; title: string; focused?: boolean; background?: ColorInput; children: JSX.Element }) {
   const selectable = () => paneDefinitions[props.kind].selectable
   return <box width="100%" height="100%" flexGrow={1} flexShrink={1} flexBasis={0}
     // An empty edge list avoids OpenTUI auto-enabling borders when borderColor is set.
