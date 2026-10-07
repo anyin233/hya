@@ -117,7 +117,9 @@ test.describe("backend daemon", () => {
     // Prompts are refused while stopped (and the stream keeps retrying meanwhile).
     await prompt(term, "lost prompt")
     expect(await daemonStatus(workspace)).toBeUndefined()
-    expect(servePids(workspace)).toEqual([])
+    // Discovery is removed before the old process finishes shutting down.
+    // Wait for process exit too; a replacement daemon would keep this nonempty.
+    await expect.poll(() => servePids(workspace), { timeout: 20_000 }).toEqual([])
 
     // /reconnect starts the next daemon, reloads the session, and it works.
     await prompt(term, "/reconnect")

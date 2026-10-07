@@ -1,4 +1,4 @@
-# 0.44.13
+# 0.44.14
 
-- Reserve enclosing borders for selectable UI. Pending summaries, permission/question warnings, transcript tool/task blocks and passive extension containers now use plain headings and text; input and pane focus frames remain available.
-- Remove obsolete notice border rows from composer sizing. RenderNode boxes keep their title/padding contracts while accepting the legacy border flag without drawing an outline.
+- Keep tree rows and action menus visible in compact Layout panes by limiting footer hint height and rendering the edit preview on one row. Long hints no longer consume the scrolling viewport.
+- Stabilize the browser provider-error assertion by checking the assistant heading and error together in one terminal-buffer snapshot.
