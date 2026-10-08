@@ -196,3 +196,15 @@ test("display arguments use semantic builtins and pretty generic JSON", () => {
   expect(toolCard({ tool: "read", state: ok, inputJson: json({ path: "src/a.ts", offset: 2 }) }).displayArgs).toBe("src/a.ts · from line 2")
   expect(toolCard({ tool: "mcp__server__inspect", state: ok, inputJson: json({ path: "a", nested: { enabled: true } }) }).displayArgs).toBe('{\n  "path": "a",\n  "nested": {\n    "enabled": true\n  }\n}')
 })
+
+
+test("task: canonical and legacy batches use member labels and counts", () => {
+  for (const field of ["tasks", "members"]) {
+    const card = toolCard({ tool: "task", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: json({
+      description: "ignored single label", subagent_type: "ignored-single-agent",
+      [field]: [{ description: "map routes", subagent_type: "hya-scout", prompt: "inspect" }, { prompt: "inspect tests" }],
+    }) })
+    expect(card.task).toEqual({ agent: "hya-scout", description: "map routes" })
+    expect(card.summary).toBe("hya-scout · map routes · 2 members")
+  }
+})

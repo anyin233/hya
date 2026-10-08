@@ -248,6 +248,26 @@ test.describe("subagents", () => {
   })
 })
 
+test.describe("batch subagents", () => {
+  test.use({ model: { steps: [] } })
+
+  test("tasks array keeps the batch label and count", async ({ tui, backend, fakeModel }) => {
+    fakeModel!.route("NEVER call `report`", [
+      toolStep("task", { context: "Read only", tasks: [
+        { description: "map routes", prompt: "inspect routes", subagent_type: "hya-task" },
+        { description: "map tests", prompt: "inspect tests", subagent_type: "hya-task" },
+      ] }),
+      textStep("Launched both helpers."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [hangStep(20_000)])
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await prompt(term, "delegate both inspections")
+    await term.waitForText("Launched both helpers.", 20_000)
+    await term.waitForText("hya-task · map routes · 2 members")
+  })
+})
+
 test.describe("narrow terminal", () => {
   test.use({ model: { permission: "allow", steps: [toolStep("bash", { command: "echo narrow-output && ls" }), textStep("Done.")] } })
 

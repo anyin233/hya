@@ -2557,3 +2557,51 @@ async fn task_spawn_member_row_carries_call_id_description_and_runs() {
     assert_eq!(running.status, hya_proto::MemberRunStatus::Running);
     assert_eq!(running.member, spawned.member);
 }
+
+#[tokio::test]
+async fn batch_children_enter_provider_before_either_completes() {
+    let gate = Arc::new(ProviderGate {
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let fixture = admission_fixture_with_store_and_gate(
+        2,
+        Some(gate.clone()),
+        SessionStore::connect_memory().await.unwrap(),
+    )
+    .await;
+    let outcomes = tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.scoped_spawner().spawn(
+            operation(),
+            ["first", "second"]
+                .into_iter()
+                .map(|label| SpawnMember {
+                    description: label.into(),
+                    prompt: label.into(),
+                    subagent_type: "quick".into(),
+                    ..SpawnMember::default()
+                })
+                .collect(),
+            Default::default(),
+        ),
+    )
+    .await
+    .expect("registration must not wait for provider completion")
+    .unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert_ne!(outcomes[0].session, outcomes[1].session);
+    assert!(outcomes.iter().all(|outcome| outcome.status == "running"));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fixture.provider_calls.load(Ordering::SeqCst) < 2 {
+            gate.entered.notified().await;
+        }
+    })
+    .await
+    .expect("both children must enter provider work while neither can finish");
+    // Release both independently registered provider calls; no wall-clock speed assertion.
+    gate.release.notify_waiters();
+    for outcome in outcomes {
+        wait_member_turn_done(&fixture.engine, &outcome.session).await;
+    }
+}

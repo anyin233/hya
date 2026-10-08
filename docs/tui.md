@@ -3936,6 +3936,19 @@ back), trusting it (JIT tier), uninstalling it, and the first-party refusal.
 
 The `Sessions` pane is mouse-aware: clicking either line of a session row opens that session. Clicking a subagent row opens its top-level parent session, so the pane always switches the main session tab rather than entering a read-only child. Top-level session groups are separated by horizontal divider lines; these are visual separators and are not clickable.
 
+
+### Batched subagent task cards
+
+The `task` card recognizes the preferred `{context?: string, tasks: [{prompt:
+string, description?: string, subagent_type?: string, ...}]}` tool input and
+its legacy `members` alias. Independent tasks are launched in one call; the
+card shows the first member's agent and label plus the batch count (for
+example, `hya-scout · map routes · 2 members`). Top-level single-task labels
+are ignored for batches. Follow the child sessions and their reports for
+completion; launch acknowledgement is not task completion. See the
+[task contract](architecture/agent-tool-surface.md#task) for a complete example
+and the input/result fields.
+
 ## Precompiled startup
 
 Release frontends ship precompiled JSX in `dist/app.js` and its sibling chunks.
