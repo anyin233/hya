@@ -359,20 +359,20 @@ fn open_library(stem: &'static str) -> Result<usize, String> {
     }
 }
 
-/// Load a library extracted from its package, then delete the extracted copy.
+/// Load a library extracted from its package, retaining only verified cache copies.
 ///
 /// The loaded image stays mapped after its file is unlinked, so nothing is
 /// left in the temporary directory once the process has the library.
 #[cfg(unix)]
 fn load_extracted(stem: &str, extracted: &std::path::Path) -> Result<usize, String> {
     let loaded = load_checked(stem, extracted);
-    let _ = std::fs::remove_file(extracted);
     if let Some(directory) = extracted.parent().filter(|directory| {
         directory
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|name| name.starts_with("hya-native-tool-"))
     }) {
+        let _ = std::fs::remove_file(extracted);
         let _ = std::fs::remove_dir(directory);
     }
     loaded
@@ -492,6 +492,13 @@ fn extract_packaged_library(
         ));
     }
     let payload = library.source_bytes().map_err(|error| error.to_string())?;
+    // Keep a verified immutable inode across daemon starts. Recreating and
+    // unlinking it forces the OS to revalidate the dynamic image every time.
+    if let Some(root) = native_cache_root()
+        && let Ok(path) = cache_library(&root, &payload, filename)
+    {
+        return Ok(path);
+    }
     let digest = Sha256::digest(&payload);
     let prefix = digest
         .iter()
@@ -529,6 +536,78 @@ fn extract_packaged_library(
     Ok(path)
 }
 
+#[cfg(unix)]
+fn native_cache_root() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|path| !path.is_empty())
+                .map(|home| std::path::PathBuf::from(home).join(".cache"))
+        })
+        .map(|root| root.join("hya/native-tools"))
+}
+
+/// Cache only bytes already validated against the trusted package; a cache hit
+/// is compared in full before dlopen. Cache failures use private extraction.
+#[cfg(unix)]
+fn cache_library(
+    root: &std::path::Path,
+    payload: &[u8],
+    filename: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let digest = Sha256::digest(payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let directory = root.join(digest);
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&directory)?;
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    // SAFETY: geteuid has no preconditions.
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(std::io::Error::other(
+            "native cache directory is not private",
+        ));
+    }
+    let path = directory.join(filename);
+    if let Ok(metadata) = std::fs::symlink_metadata(&path)
+        && metadata.is_file()
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.mode() & 0o022 == 0
+        && std::fs::read(&path)? == payload
+    {
+        return Ok(path);
+    }
+    let pending = directory.join(format!(
+        ".{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&pending)?;
+        file.write_all(payload)?;
+        drop(file);
+        std::fs::rename(&pending, &path)?;
+        Ok(path)
+    })();
+    let _ = std::fs::remove_file(pending);
+    result
+}
+
 #[cfg(not(unix))]
 fn open_library(stem: &str) -> Result<usize, String> {
     Err(format!(
@@ -558,6 +637,49 @@ fn symbol(_handle: usize, _name: &[u8]) -> Result<usize, String> {
 #[cfg(all(test, unix))]
 mod tests {
     use std::path::Path;
+
+    #[test]
+    fn verified_native_cache_reuses_inode_and_repairs_corruption() -> std::io::Result<()> {
+        use std::os::unix::fs::MetadataExt as _;
+        let root =
+            std::env::temp_dir().join(format!("hya-native-cache-test-{}", std::process::id()));
+        let payload = b"verified package library";
+        let path = super::cache_library(&root, payload, "library.so")?;
+        let inode = std::fs::metadata(&path)?.ino();
+        assert_eq!(super::cache_library(&root, payload, "library.so")?, path);
+        assert_eq!(
+            std::fs::metadata(&path)?.ino(),
+            inode,
+            "reuse the validated inode"
+        );
+        std::fs::write(&path, b"corrupt")?;
+        assert_eq!(super::cache_library(&root, payload, "library.so")?, path);
+        assert_eq!(std::fs::read(&path)?, payload);
+        let outside = root.join("outside");
+        std::fs::write(&outside, b"do not overwrite")?;
+        std::fs::remove_file(&path)?;
+        std::os::unix::fs::symlink(&outside, &path)?;
+        super::cache_library(&root, payload, "library.so")?;
+        assert_eq!(std::fs::read(&path)?, payload);
+        assert_eq!(std::fs::read(&outside)?, b"do not overwrite");
+        std::fs::remove_dir_all(root)
+    }
+
+    #[test]
+    fn native_cache_rejects_shared_directory() -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = std::env::temp_dir().join(format!(
+            "hya-native-cache-permissions-{}",
+            std::process::id()
+        ));
+        let path = super::cache_library(&root, b"library", "library.so")?;
+        let directory = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("no parent"))?;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o777))?;
+        assert!(super::cache_library(&root, b"library", "library.so").is_err());
+        std::fs::remove_dir_all(root)
+    }
 
     #[test]
     fn native_package_directory_matches_backend_and_test_layouts() {

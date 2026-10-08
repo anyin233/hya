@@ -38,13 +38,14 @@
  * draft (src/reload.ts) and exits with status 75, leaving the session as a
  * signal does. A supervisor that disappears ends the TUI (SIGHUP's status).
  */
+import { startupMark } from "../startup"
 import { extensionManager } from "../extensions/manager"
 import { extensionCacheRoot } from "../extensions/install"
 import { createCliRenderer, type CliRenderer } from "@opentui/core"
 import { render } from "@opentui/solid"
 import type { Options } from "../cli"
 import { HyaClient } from "../client"
-import { GrpcHyaClient } from "../grpc_client"
+import type { GrpcHyaClient } from "../grpc_client"
 import { BackendError, connectOrStart, defaultDatabase, findRunningServer, probeHealth, resolveHyaBinary, type Connection } from "../launch"
 import { startBridge, takeServerToken } from "../bridge"
 import { loadPreferences, preferencesPath } from "../prefs"
@@ -75,6 +76,7 @@ export interface Launch {
 export const reloadedNotice = "TUI reloaded (hya serve restart)"
 
 export async function run(options: Options, launch: Launch = { argv: [] }): Promise<void> {
+  startupMark("tui_modules_loaded")
   // First, before anything can spawn a child. The token belongs to `--server` only.
   const envToken = takeServerToken()
   let serverToken = options.server ? envToken : undefined
@@ -138,6 +140,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
     process.exit(1)
   }
 
+  startupMark("tui_backend_connected")
   // Preferences first, so the first frame already uses the saved theme.
   const prefsPath = preferencesPath(process.env)
   const loaded = loadPreferences(prefsPath)
@@ -148,7 +151,10 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   }
 
   // Remote: no directory scope until a Project is chosen (--dir is this machine's).
-  grpcClient = options.grpc ? new GrpcHyaClient(options.grpc, options.remote ? "" : options.directory) : undefined
+  if (options.grpc) {
+    const { GrpcHyaClient } = await import("../grpc_client")
+    grpcClient = new GrpcHyaClient(options.grpc, options.remote ? "" : options.directory)
+  }
   const client = grpcClient ?? new HyaClient(server, options.remote ? "" : options.directory, fetch, serverToken)
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)
@@ -163,6 +169,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
     sandbox: loaded.preferences.extensionSandbox ?? "best-effort",
     notice: (text) => store.setStatus(text),
   })
+  void extensionManager.prewarm()
   // Code from a backend on another machine runs only after `/extensions enable <id>`.
   const remoteBackend = (): boolean => {
     let host = ""
@@ -176,9 +183,12 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
       const catalog = await client.listTuiExtensions()
       const { extensionEnabled = {}, extensionTrusted = {} } = loadPreferences(prefsPath).preferences
       const rejected = await extensionManager.load(catalog, { enabled: (id) => extensionEnabled[id], remote: remoteBackend(), trusted: (id) => extensionTrusted[id] })
+      const states = extensionManager.list()
+      if (!rejected.length && states.every((entry) => entry.state === "running")) startupMark("tui_extensions_loaded", states.map((entry) => entry.id).join(","))
       if (rejected.length) store.setStatus(`TUI extensions rejected: ${rejected.join(" · ")}`)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
+      startupMark("tui_extensions_failed", error instanceof Error ? error.stack : reason)
       extensionManager.catalogFailed(reason)
       store.setStatus(`TUI extensions unavailable: ${reason}`)
     }
@@ -287,6 +297,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
   // composer's double-press quit (components/Composer.tsx), not the renderer's.
   renderer = await createCliRenderer({ backgroundColor: colors.bg, exitOnCtrlC: false, targetFps: 30, autoFocus: false })
+  startupMark("tui_renderer_created")
   // Every full-screen view and the main layout follow the terminal size
   // (`useTerminalDimensions`, one "resize" listener each, all mounted at
   // once). Past Node's default of 10 its MaxListenersExceededWarning would be
@@ -295,6 +306,7 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // OpenTUI's own signal handlers destroy the renderer; finish the shutdown from there.
   // Only reached when nothing above started the shutdown (a signal OpenTUI caught first): never archive.
   renderer.once("destroy", () => void shutdown(0, "signal"))
+  const starting = controller.start()
   const active = controller
   if (launch.reloaded?.draft) active.ui.composerInput = launch.reloaded.draft
   await render(() => (
@@ -302,7 +314,9 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
       <App />
     </AppContext.Provider>
   ), renderer)
-  await controller.start()
+  startupMark("tui_tree_mounted")
+  await starting
+  startupMark("tui_controller_ready", store.state.status)
   void refreshExtensions()
   if (launch.reloaded) warnings.unshift(reloadedNotice)
   if (warnings.length) store.setStatus([store.state.status, ...warnings].filter(Boolean).join(" · "))
