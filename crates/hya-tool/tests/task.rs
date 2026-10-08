@@ -180,12 +180,18 @@ async fn task_preserves_the_persisted_tool_call_operation_identity() {
 }
 
 #[test]
-fn task_schema_exposes_open_code_fields() {
+fn task_schema_allows_batch_without_dummy_single_fields() {
     let tool = ToolRegistry::builtins().get("task").unwrap();
     let schema = tool.schema().input_schema;
 
-    assert_eq!(schema["required"], json!(["description", "prompt"]));
+    assert_eq!(schema["required"], json!([]));
+    assert_eq!(schema["properties"]["tasks"]["minItems"], 1);
+    assert_eq!(schema["properties"]["context"]["type"], "string");
     let props = &schema["properties"];
+    assert!(
+        props.get("members").is_none(),
+        "legacy alias is executable but not advertised"
+    );
     assert_eq!(props["description"]["type"], "string");
     assert_eq!(props["prompt"]["type"], "string");
     assert_eq!(props["subagent_type"]["type"], "string");
@@ -213,7 +219,7 @@ fn task_schema_describes_inline_agent_as_request_scoped() {
     let single = props["inline_agent"]["description"]
         .as_str()
         .expect("single-task inline_agent schema description");
-    let batch = props["members"]["items"]["properties"]["inline_agent"]["description"]
+    let batch = props["tasks"]["items"]["properties"]["inline_agent"]["description"]
         .as_str()
         .expect("batch members inline_agent schema description");
 
@@ -242,7 +248,7 @@ fn task_schema_hides_unsupported_inline_description() {
     let single_properties = props["inline_agent"]["properties"]
         .as_object()
         .expect("single-task inline_agent schema properties");
-    let member_properties = props["members"]["items"]["properties"]["inline_agent"]["properties"]
+    let member_properties = props["tasks"]["items"]["properties"]["inline_agent"]["properties"]
         .as_object()
         .expect("batch members inline_agent schema properties");
 
@@ -540,11 +546,7 @@ fn task_schema_chooses_the_agent_by_subagent_type_only() {
     let schema = tool.schema();
     let props = &schema.input_schema["properties"];
     assert!(props.get("name").is_none(), "{props}");
-    assert!(
-        props["members"]["items"]["properties"]
-            .get("name")
-            .is_none()
-    );
+    assert!(props["tasks"]["items"]["properties"].get("name").is_none());
     assert!(
         schema.description.contains("<subagent_type>-<operator>"),
         "{}",
@@ -557,4 +559,95 @@ fn task_schema_chooses_the_agent_by_subagent_type_only() {
             .contains("hya-task"),
         "the omitted default is documented"
     );
+}
+
+#[tokio::test]
+async fn task_batch_preserves_context_order_and_running_or_failed_handles() {
+    for field in ["tasks", "members"] {
+        let (spawner, mut rx) = SpawnerPlane::new();
+        let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, SessionId::new());
+        let tool = ToolRegistry::builtins().get("task").unwrap();
+        let mut input = json!({"context": "Shared contract", "model": "ignored"});
+        input[field] = json!([
+            {"description":"Inspect", "prompt":"Inspect files", "effort":"low"},
+            {"description":"Review", "prompt":"Review tests", "subagent_type":"reviewer"}
+        ]);
+        let handle = tokio::spawn(async move { tool.execute(&ctx, input).await });
+        let req = rx.recv().await.unwrap();
+        assert_eq!(req.members.len(), 2);
+        assert_eq!(req.members[0].prompt, "Shared contract\n\nInspect files");
+        assert_eq!(req.members[1].prompt, "Shared contract\n\nReview tests");
+        assert_eq!(req.members[0].subagent_type, "hya-task");
+        assert_eq!(req.members[0].effort.as_deref(), Some("low"));
+        assert!(req.members.iter().all(|m| m.model.is_none()));
+        req.reply
+            .send(Ok(vec![
+                MemberOutcome {
+                    member: "main/worker-a".into(),
+                    session: "session-a".into(),
+                    status: "running".into(),
+                    summary: "live".into(),
+                    model: None,
+                },
+                MemberOutcome {
+                    member: "-".into(),
+                    session: "-".into(),
+                    status: "failed".into(),
+                    summary: "registration failed".into(),
+                    model: None,
+                },
+            ]))
+            .unwrap();
+        let result = handle.await.unwrap().unwrap();
+        assert_eq!(result["metadata"]["status"], "running");
+        assert_eq!(result["metadata"]["members"][0]["description"], "Inspect");
+        let output = result["output"].as_str().unwrap();
+        assert!(output.contains("main/worker-a") && output.contains("registration failed"));
+        assert!(output.contains("1 running, 1 failed"));
+        assert!(!output.contains("members finished"));
+    }
+}
+
+#[tokio::test]
+async fn task_rejects_invalid_batches_before_dispatch() {
+    for input in [
+        json!({"tasks": []}),
+        json!({"tasks": null, "description":"d", "prompt":"p"}),
+        json!({"tasks": [{"prompt":"ok"}, {"prompt":"  "}]}),
+        json!({"tasks": [{"prompt":"ok"}, {}]}),
+        json!({"tasks": [{"prompt":"ok"}], "members": [{"prompt":"other"}]}),
+    ] {
+        let (spawner, mut rx) = SpawnerPlane::new();
+        let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, SessionId::new());
+        let tool = ToolRegistry::builtins().get("task").unwrap();
+        assert!(matches!(
+            tool.execute(&ctx, input).await,
+            Err(ToolError::Input(_))
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn task_one_item_batch_keeps_batch_result_shape() {
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, SessionId::new());
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let handle = tokio::spawn(async move {
+        tool.execute(&ctx, json!({"tasks":[{"prompt":"work"}]}))
+            .await
+    });
+    let req = rx.recv().await.unwrap();
+    req.reply
+        .send(Ok(vec![MemberOutcome {
+            member: "main/worker-a".into(),
+            session: "a".into(),
+            status: "running".into(),
+            summary: "live".into(),
+            model: None,
+        }]))
+        .unwrap();
+    let result = handle.await.unwrap().unwrap();
+    assert_eq!(result["metadata"]["members"][0]["member"], "main/worker-a");
+    assert_eq!(result["metadata"]["status"], "running");
 }
