@@ -53,7 +53,16 @@ function frame(): string[] {
 
 test("renders headings, emphasis, inline code, and links with the palette", async () => {
   await render(() => "# Release notes\n\nSome **bold**, *soft*, and `npm test` via [docs](https://example.test/docs).\n\n> quoted line", undefined, 90)
-  await until(() => hex(span("Release notes")?.fg) === colors.accent, "accent heading")
+  // Each Markdown block highlights independently. A ready heading does not
+  // imply the paragraph or quote has rendered yet (especially on cold CI).
+  await until(() =>
+    hex(span("Release notes")?.fg) === colors.accent &&
+    ((span("bold")?.attributes ?? 0) & 1) === 1 &&
+    ((span("soft")?.attributes ?? 0) & 4) === 4 &&
+    hex(span("npm test")?.fg) === syntaxColors.inlineCode &&
+    frame().some((line) => line.includes("docs (https://example.test/docs)")) &&
+    frame().some((line) => /│ quoted line/.test(line)),
+  "heading, styled paragraph, link, and quote")
   const lines = frame()
   expect(lines).toContain("Release notes")
   // Blocks keep their blank line between them.
@@ -116,7 +125,8 @@ test("partial markdown while streaming: an unclosed fence and unclosed emphasis 
   expect(frame().some((line) => line.includes("```"))).toBe(false)
   setText("Intro **bold** done\n\n```ts\nconst x = 1\nlet y = 2\n```\n\nTail")
   setStreaming(false)
-  await until(() => frame().includes("Tail") && frame().some((line) => line.includes("let y = 2")), "closed fence")
+  await until(() => frame().includes("Tail") && frame().some((line) => line.includes("let y = 2")) &&
+    ((span("bold")?.attributes ?? 0) & 1) === 1, "closed fence and styled emphasis")
   expect(span("bold")!.attributes & 1).toBe(1)
 })
 

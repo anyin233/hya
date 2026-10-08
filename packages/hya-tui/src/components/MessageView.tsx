@@ -18,7 +18,7 @@ import { TextAttributes } from "@opentui/core"
 import { createMemo, For, Match, Show, Switch, type JSX } from "solid-js"
 import { useApp } from "../app/context"
 import { formatBytes } from "../composer/attachments"
-import { childStatus, taskLink, type ChildStatus } from "../state/members"
+import { taskChildStatus, taskLinks, type TaskMemberLink, type ChildStatus } from "../state/members"
 import { waitingKind } from "../state/prompts"
 import { messageBlockGap, reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
 import type { TaskInfo, Tone, ToolStatus } from "../state/tools"
@@ -292,25 +292,44 @@ const childLabels: Record<ChildStatus, string> = {
   starting: "starting", running: "running", idle: "idle", done: "done", failed: "failed", cancelled: "cancelled",
 }
 
-/**
- * A `task` card: the header (`task  agent · description`) and, always shown,
- * the child's status with its latest activity (or the member's finish
- * summary) and how to open it. A click opens the child session read-only.
- */
+/** A task card keeps every launched member visible and individually navigable. */
 function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskInfo }) {
   const { store, controller } = useApp()
-  const link = () => taskLink({ ...(props.block.callId ? { callId: props.block.callId } : {}), ...(props.task.child ? { child: props.task.child } : {}) }, store.state.members)
+  const links = createMemo(() => taskLinks(props.task, props.block.callId, store.state.members))
+  const openSingle = () => {
+    const id = links().length === 1 ? links()[0]?.child : undefined
+    if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
+  }
+  return (
+    <box width="100%" flexDirection="column">
+      <box width="100%" flexDirection="column" onMouseDown={openSingle}>
+        <text height={1} wrapMode="none" fg={colors.fg}>{props.block.card.tool}</text>
+        <CardHeader status={props.block.card.status} summary={props.block.card.summary} duration={props.block.card.duration} />
+      </box>
+      <Show when={props.block.card.error}>
+        <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>
+      </Show>
+      <Show when={props.block.card.status !== "failed"}>
+        <For each={links()}>{(link) => <TaskMemberRow link={link} />}</For>
+      </Show>
+    </box>
+  )
+}
+
+function TaskMemberRow(props: { link: TaskMemberLink }) {
+  const { store, controller } = useApp()
+  const link = () => props.link
   const child = () => {
     const id = link().child
     return id ? store.state.children.get(id) : undefined
   }
-  const status = () => childStatus(link().member, child())
+  const status = () => taskChildStatus(link(), child())
   /** The child waits for the user (a pending ask of its session): shown instead of `running`. */
   const waiting = () => {
     const id = link().child
     return id ? waitingKind(store.state.interactions, id) : undefined
   }
-  const detail = () => link().member?.summary || child()?.activity
+  const detail = () => link().member?.summary || child()?.activity || (status() === "failed" ? link().summary : undefined)
   const open = () => {
     const id = link().child
     if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
@@ -325,29 +344,19 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
     }
   }
   return (
-    <box width="100%" flexDirection="column" onMouseDown={open}>
-      <text height={1} wrapMode="none" fg={colors.fg}>{props.block.card.tool}</text>
-      <CardHeader status={props.block.card.status} summary={props.block.card.summary} duration={props.block.card.duration} />
-      <Show when={props.block.card.error}>
-        <box width="100%" paddingLeft={2}>
-              <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>
-            </box>
-      </Show>
-      <Show when={props.block.card.status !== "failed"}>
-        <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
-          <text width="100%" height={1} wrapMode="none">
-            <Show when={!waiting()} fallback={<span style={{ fg: colors.warning }}>◌</span>}>
-              <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
-                <RunningIcon />
-              </Show>
-            </Show>
-            <span style={{ fg: waiting() ? colors.warning : statusColor() }}>{waiting() ? ` waiting for ${waiting() === "approval" ? "approval" : "an answer"}` : ` ${childLabels[status()]}`}</span>
-            <span style={{ fg: colors.muted }}>{detail() ? `  ↳ ${detail()}` : ""}</span>
-          </text>
-          <Show when={link().child}>
-            {(id) => <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{`click to view · /open ${id()}`}</text>}
+    <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1} onMouseDown={open}>
+      <text width="100%" wrapMode="word" fg={colors.fg}>{[link().name || link().agent, link().description].filter(Boolean).join(" · ")}</text>
+      <text width="100%" height={1} wrapMode="none">
+        <Show when={!waiting()} fallback={<span style={{ fg: colors.warning }}>◌</span>}>
+          <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
+            <RunningIcon />
           </Show>
-        </box>
+        </Show>
+        <span style={{ fg: waiting() ? colors.warning : statusColor() }}>{waiting() ? ` waiting for ${waiting() === "approval" ? "approval" : "an answer"}` : ` ${childLabels[status()]}`}</span>
+        <span style={{ fg: colors.muted }}>{detail() ? `  ↳ ${detail()}` : ""}</span>
+      </text>
+      <Show when={link().child}>
+        {(id) => <text width="100%" wrapMode="word" fg={colors.muted}>{`click to view · /open ${id()}`}</text>}
       </Show>
     </box>
   )
