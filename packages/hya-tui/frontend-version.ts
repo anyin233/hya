@@ -1,5 +1,5 @@
 /** The independent frontend release version. */
-export const frontendVersion = "0.44.14"
+export const frontendVersion = "0.44.15"
 
 /** The oldest backend release this frontend can use. */
 export const minimumBackendVersion = "0.45.3"

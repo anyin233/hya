@@ -1,3 +1,4 @@
+import { packageRoot } from "../packageRoot"
 /**
  * From a `ListTuiExtensions` catalog entry to runnable local files: validate
  * the descriptor, check every file's sha256, and write the files under
@@ -73,7 +74,7 @@ export function parseCatalogEntry(value: unknown): CatalogExtension | string {
 }
 
 /** The SDK shipped next to this TUI, or `undefined` (then no extension can run). */
-export function locateSdk(from = import.meta.dir): InstalledSdk | undefined {
+export function locateSdk(from = resolve(packageRoot, "src/extensions")): InstalledSdk | undefined {
   for (const name of ["tui-sdk", "hya-tui-sdk"]) {
     const dir = resolve(from, "../../..", name)
     try {

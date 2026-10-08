@@ -1,7 +1,7 @@
 /**
  * TUI hot update (docs/tui.md "Hot update after `hya serve restart`"): the
- * app runs as a child of a small supervisor (src/supervisor.ts, started by
- * src/main.ts). After `hya serve restart` hands the backend to its successor,
+ * app runs as a child of a supervisor (bare hya itself, or src/supervisor.ts
+ * for direct/WebUI starts). After `hya serve restart` hands the backend to its successor,
  * the app writes a reload request to the file the supervisor named in
  * `HYA_TUI_RELOAD_FILE`, restores the terminal, and exits with
  * `reloadExitCode`; the supervisor then starts the app again from the files

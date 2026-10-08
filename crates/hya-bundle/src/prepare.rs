@@ -1146,7 +1146,9 @@ fn resolve_catalog_references(
                 &local_resources,
                 &hook_resources,
             )?,
-            PreparedInstallableBundle::Plugin(_) => {}
+            // Plugins have no agent references to resolve. Their digest was
+            // already computed during preparation (including native payloads).
+            PreparedInstallableBundle::Plugin(_) => continue,
         }
         set_bundle_digest(bundle)?;
     }

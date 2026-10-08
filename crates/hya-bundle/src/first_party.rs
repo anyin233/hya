@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::{BundleError, BundleSource, PreparedCatalog, inspect_public_package, prepare_package};
 
@@ -155,12 +155,25 @@ pub fn load_first_party(
 /// Returns [`BundleError::FirstPartyBundle`] when the identity is unknown or
 /// its source/package is missing, or the load failure from [`load_first_party`].
 pub fn first_party_bundle(identity: &str) -> Result<&'static PreparedCatalog, BundleError> {
-    static LOADED: OnceLock<Mutex<HashMap<String, &'static PreparedCatalog>>> = OnceLock::new();
-    let mut loaded = LOADED
+    type Slot = Arc<Mutex<Option<&'static PreparedCatalog>>>;
+    static LOADED: OnceLock<Mutex<HashMap<String, Slot>>> = OnceLock::new();
+    if !FIRST_PARTY_BUNDLES.contains(&identity) {
+        return Err(BundleError::FirstPartyBundle {
+            identity: identity.to_owned(),
+            detail: "unknown first-party identity".into(),
+        });
+    }
+    let slot = LOADED
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(identity.to_owned())
+        .or_insert_with(|| Arc::new(Mutex::new(None)))
+        .clone();
+    let mut loaded = slot
+        .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(catalog) = loaded.get(identity) {
+    if let Some(catalog) = *loaded {
         return Ok(catalog);
     }
     let missing = |detail: String| BundleError::FirstPartyBundle {
@@ -180,6 +193,6 @@ pub fn first_party_bundle(identity: &str) -> Result<&'static PreparedCatalog, Bu
     // Loaded bundles are immutable process-lifetime data, like mapped tool libraries.
     let catalog: &'static PreparedCatalog =
         Box::leak(Box::new(load_first_party(&source, identity)?));
-    loaded.insert(identity.to_string(), catalog);
+    *loaded = Some(catalog);
     Ok(catalog)
 }

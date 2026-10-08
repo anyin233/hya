@@ -136,12 +136,13 @@ jobs:
             mkdir -p "dist/$package_dir/lib/hya/bin" "dist/$package_dir/lib/hya/tui/src" "dist/$package_dir/lib/hya/tui-web/src" "dist/$package_dir/lib/hya/tui-web/web" "dist/$package_dir/lib/hya/tui-sdk/src"
             install -m 0755 "$HOME/.bun/bin/bun" "dist/$package_dir/lib/hya/bin/bun"
             cp packages/hya-tui/frontend-version.ts "dist/$package_dir/lib/hya/tui/frontend-version.ts"
-            cp packages/hya-tui/package.json packages/hya-tui/bun.lock packages/hya-tui/bunfig.toml packages/hya-tui/tsconfig.json "dist/$package_dir/lib/hya/tui/"
+            cp packages/hya-tui/build.ts packages/hya-tui/package.json packages/hya-tui/bun.lock packages/hya-tui/bunfig.toml packages/hya-tui/tsconfig.json "dist/$package_dir/lib/hya/tui/"
             cp -R packages/hya-tui/src/. "dist/$package_dir/lib/hya/tui/src/"
             cp packages/hya-tui-sdk/package.json packages/hya-tui-sdk/bun.lock packages/hya-tui-sdk/tsconfig.json "dist/$package_dir/lib/hya/tui-sdk/"
             cp -R packages/hya-tui-sdk/src/. "dist/$package_dir/lib/hya/tui-sdk/src/"
             (cd "dist/$package_dir/lib/hya/tui-sdk" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
             (cd "dist/$package_dir/lib/hya/tui" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+            (cd "dist/$package_dir/lib/hya/tui" && "$HOME/.bun/bin/bun" run build)
             cp packages/hya-tui-web/package.json packages/hya-tui-web/bun.lock packages/hya-tui-web/tsconfig.json "dist/$package_dir/lib/hya/tui-web/"
             cp -R packages/hya-tui-web/src/. "dist/$package_dir/lib/hya/tui-web/src/"
             cp -R packages/hya-tui-web/web/. "dist/$package_dir/lib/hya/tui-web/web/"
