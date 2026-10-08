@@ -405,11 +405,11 @@ stop` plus another client's start, or through `/reconnect` does not, and
 neither does a remote backend (`/connect-remote`, `hya --connect`), a
 `--grpc` start, or a fixed `--server` without `--db`.
 
-How it works: the process a host starts (`bun <tui>/src/main.ts …`, run by
-bare `hya`, by each WebUI tab of the web host, or by hand) is a small
-supervisor (`src/supervisor.ts`). It runs the same entry again as the app
-(`src/tui.ts`) on the same terminal, with stdin, stdout, and stderr
-inherited, and forwards SIGINT, SIGTERM, and SIGHUP to it. To reload, the app
+How it works: bare `hya` supervises the terminal app directly, saving an
+extra Bun process at startup. Direct TUI starts and each WebUI tab still use
+the small Bun supervisor (`src/supervisor.ts`). Both use the same reload
+protocol and run `src/main.ts` as the app on the inherited terminal.
+To reload, the app
 restores the terminal, writes `{"argv": [...], "draft": {"text", "cursor"}}`
 to the file the supervisor named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the
 temporary directory), and exits with status **75**; the supervisor starts a
@@ -3948,3 +3948,47 @@ are ignored for batches. Follow the child sessions and their reports for
 completion; launch acknowledgement is not task completion. See the
 [task contract](architecture/agent-tool-surface.md#task) for a complete example
 and the input/result fields.
+
+## Precompiled startup
+
+Release frontends ship precompiled JSX in `dist/app.js` and its sibling chunks.
+This avoids loading Babel and transforming the entire UI on every launch. The
+HTTP path imports the gRPC implementation only when `--grpc` selects it.
+
+For a source checkout, run `bun install --frozen-lockfile` and `bun run build`
+in `packages/hya-tui`, then start `bun src/main.ts` as usual. Rebuild after source
+edits; remove `dist/` to return to live source execution. A build writes hashed
+chunks first and replaces `dist/app.js` last. Source files, protobuf definitions,
+and the adjacent TUI SDK remain required; the bundle is not a standalone binary.
+The release workflow and `release-rehearsal` both run this build.
+
+`HYA_STARTUP_TRACE_FILE=<absolute path>` appends JSONL startup diagnostics to a
+file rather than the terminal. Each row has `hya_startup: true`, `mark: string`,
+`wall_ms: number` (Unix milliseconds), `pid: number`, and optional `detail: string`.
+Backend marks use integer milliseconds; frontend marks preserve fractions.
+`frontend_launch` starts at the native launch handler, before daemon discovery;
+`tui_tree_mounted` records the mounted UI, `tui_controller_ready` records the
+completion of the initial controller load, and `tui_extensions_loaded` records
+a successful catalog load with every listed extension running. A controller
+error appears in the ready mark's detail and must not count as a successful
+performance sample. Marks do not assert that a browser has painted the frame.
+
+For repeatable browser verification, build a release backend and all tool-family
+libraries, stage all first-party bundles with `xtask stage-first-party-bundles`,
+and run the dedicated spec from `packages/hya-tui-web`:
+
+```sh
+HYA_BIN=/absolute/package/bin/hya \
+  HYA_STARTUP_BUDGET_COLD_MS=100 HYA_STARTUP_BUDGET_WARM_MS=50 \
+  bunx playwright test e2e/hya-startup.spec.ts --workers=1
+```
+
+The spec launches bare `hya` on a real PTY through the browser, measures a cold
+daemon, a subsequent connection to that same daemon, and a stopped daemon
+restarted with its existing native cache (`cold_cached`). It verifies commands and
+attaches phase timings and screenshots. The two optional positive-number
+budget variables enforce milliseconds from the test wrapper’s `frontend_spawn`
+(immediately before spawning the executable) to controller
+readiness. With neither variable set it verifies correctness without asserting
+hardware-dependent timing. Record whether the package/native cache and database
+were fresh; do not confuse repeated daemon starts with first-install latency.

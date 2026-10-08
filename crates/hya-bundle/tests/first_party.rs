@@ -196,3 +196,24 @@ fn first_party_identity_versions_follow_the_hya_version() {
         );
     }
 }
+
+#[test]
+fn concurrent_first_party_loads_share_one_catalog_per_identity() {
+    std::thread::scope(|scope| {
+        let workers = (0..24)
+            .map(|index| {
+                scope.spawn(move || {
+                    let identity = FIRST_PARTY_BUNDLES[index % FIRST_PARTY_BUNDLES.len()];
+                    (
+                        identity,
+                        first_party_bundle(identity).expect("load first-party catalog"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            let (identity, catalog) = worker.join().expect("catalog worker");
+            assert!(std::ptr::eq(catalog, first_party_bundle(identity).unwrap()));
+        }
+    });
+}

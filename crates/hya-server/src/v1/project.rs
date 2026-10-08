@@ -276,18 +276,26 @@ async fn get_vcs_status(
 ) -> Result<Json<pb::VcsStatus>, V1Error> {
     let request: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
     let workdir = scope_directory(&request.directory)?;
-    let branch = crate::support::git::branch(&workdir);
-    let head = tokio::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&workdir)
-        .output()
+    // Git helpers wait for child processes and may read file contents. Keep the
+    // entire snapshot off the async executor so unrelated startup RPCs can run.
+    let snapshot = tokio::task::spawn_blocking(move || vcs_status(&workdir))
         .await
+        .map_err(|error| V1Error::internal(format!("read VCS status: {error}")))??;
+    Ok(Json(snapshot))
+}
+
+fn vcs_status(workdir: &std::path::Path) -> Result<pb::VcsStatus, V1Error> {
+    let branch = crate::support::git::branch(workdir);
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(workdir)
+        .output()
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default();
-    let files = if crate::support::git::is_repo(&workdir) {
-        crate::support::git::status(&workdir).map_err(V1Error::from)?
+    let files = if crate::support::git::is_repo(workdir) {
+        crate::support::git::status(workdir).map_err(V1Error::from)?
     } else {
         Vec::new()
     };
@@ -307,14 +315,14 @@ async fn get_vcs_status(
             status: file_status(file),
         })
         .collect();
-    Ok(Json(pb::VcsStatus {
+    Ok(pb::VcsStatus {
         branch: branch.unwrap_or_default(),
         head,
         dirty,
         ahead: 0,
         behind: 0,
         files: mapped,
-    }))
+    })
 }
 
 fn file_status(file: &crate::support::git::FileStatus) -> i32 {
