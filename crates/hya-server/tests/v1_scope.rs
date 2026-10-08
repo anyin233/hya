@@ -658,3 +658,67 @@ async fn grpc_x_hya_directory_metadata_is_invalid_argument() {
         .into_inner();
     assert_eq!(read.content, b"hello".to_vec());
 }
+
+/// A slow Git child must not prevent another RPC from being polled, even on
+/// a single async worker. The monitor is released by the health response; a
+/// watchdog only breaks the deadlock in the regressed implementation.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn slow_vcs_snapshot_does_not_block_health() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    let app = router(state().await);
+    let repo = support::init_git_repo("vcs-nonblocking");
+    let marker = repo.join(".git/monitor-entered");
+    let release = repo.join(".git/monitor-release");
+    let hook = repo.join(".git/slow-monitor");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\n: > .git/monitor-entered\nwhile [ ! -f .git/monitor-release ]; do sleep 0.01; done\nprintf 'token\\0/\\0'\n",
+    ).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    support::git(&repo, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+    std::fs::write(repo.join("README.md"), "changed\n").unwrap();
+    let expired = Arc::new(AtomicBool::new(false));
+    let watchdog_expired = expired.clone();
+    let watchdog_release = release.clone();
+    let watchdog = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !watchdog_release.exists() {
+            if Instant::now() >= deadline {
+                watchdog_expired.store(true, Ordering::SeqCst);
+                std::fs::write(watchdog_release, "release").unwrap();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let vcs_app = app.clone();
+    let scope = repo.to_string_lossy().into_owned();
+    let vcs = tokio::spawn(async move {
+        send(vcs_app, Method::GET, "/v1/vcs", Some(&scope), Value::Null).await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !marker.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (status, _) = send(app, Method::GET, "/v1/health", None, Value::Null).await;
+    std::fs::write(&release, "release").unwrap();
+    watchdog.join().unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !expired.load(Ordering::SeqCst),
+        "Git blocked the async worker until the watchdog intervened"
+    );
+    let (status, reply) = vcs.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["dirty"], 1);
+    assert_eq!(reply["files"][0]["path"], "README.md");
+    assert!(!reply["head"].as_str().unwrap().is_empty());
+    std::fs::remove_dir_all(repo).unwrap();
+}
