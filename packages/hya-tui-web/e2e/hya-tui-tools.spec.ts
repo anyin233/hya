@@ -251,21 +251,41 @@ test.describe("subagents", () => {
 test.describe("batch subagents", () => {
   test.use({ model: { steps: [] } })
 
-  test("tasks array keeps the batch label and count", async ({ tui, backend, fakeModel }) => {
-    fakeModel!.route("NEVER call `report`", [
-      toolStep("task", { context: "Read only", tasks: [
-        { description: "map routes", prompt: "inspect routes", subagent_type: "hya-task" },
-        { description: "map tests", prompt: "inspect tests", subagent_type: "hya-task" },
-      ] }),
-      textStep("Launched both helpers."),
-    ])
-    fakeModel!.route("Finish your task with `report`", [hangStep(20_000)])
-    const term = await tui(hyaTui(backend))
-    await term.waitForText("Message, !shell, or @file · / commands")
-    await prompt(term, "delegate both inspections")
-    await term.waitForText("Launched both helpers.", 20_000)
-    await term.waitForText("hya-task · map routes · 2 members")
-  })
+  for (const width of [1100, 700]) {
+    test(`batch task shows every handle/session and opens each child at width ${width}`, async ({ tui, backend, fakeModel }, testInfo) => {
+      fakeModel!.route("NEVER call `report`", [
+        toolStep("task", { context: "Read only", tasks: [
+          { description: "map routes", prompt: "inspect routes", subagent_type: "hya-task" },
+          { description: "map tests", prompt: "inspect tests", subagent_type: "hya-task" },
+        ] }),
+        textStep("Launched both helpers."),
+      ])
+      fakeModel!.route("Finish your task with `report`", [hangStep(20_000)])
+      const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
+      await term.waitForText("Message, !shell, or @file · / commands")
+      await prompt(term, "delegate both inspections")
+      await term.waitForText("Launched both helpers.", 20_000)
+      await term.waitForText("hya-task · map routes · 2 members")
+      const sessions = async () => [...(await term.text()).matchAll(/\/open (hysec_\w+)/g)].map((match) => match[1]!)
+      await expect.poll(async () => new Set(await sessions()).size).toBe(2)
+      const ids = await sessions()
+      const handles = [...(await term.text()).matchAll(/main\/hya-task-[a-z0-9-]+/g)].map((match) => match[0])
+      expect(new Set(handles).size).toBe(2)
+      await term.waitForText("map tests")
+      await term.attach(testInfo, "batch-members")
+      // Every row opens its own session rather than falling back to the first call-id match.
+      for (const [index, assignment] of ["inspect routes", "inspect tests"].entries()) {
+        const target = await at(term, `/open ${ids[index]}`)
+        await click(term, target.row, target.col + 7)
+        await term.waitForText("Viewing subagent hya-task · Esc returns")
+        await term.waitForText(assignment)
+        await term.press("Escape")
+        await expect.poll(() => term.find("Viewing subagent")).toBeNull()
+        await term.waitForText("Launched both helpers.")
+      }
+    })
+  }
+
 })
 
 test.describe("narrow terminal", () => {

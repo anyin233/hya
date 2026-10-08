@@ -1,4 +1,4 @@
-# 0.44.16
+# 0.44.17
 
-- Integrate precompiled JSX, lazy gRPC loading, and overlapped initialization with batch task cards that display `tasks[]` member labels and counts.
-- Verify batch cards, narrow layouts, compiled gRPC, and native session/draft reload together; retain minimum backend version 0.45.3.
+- Show every task batch member’s full handle and session in the tool card, with independent live status and a clickable child-session row. Wrap names and session commands on narrow terminals.
+- Preserve all batch children during replay and distinguish partial launch failures instead of linking every member to the first child.
