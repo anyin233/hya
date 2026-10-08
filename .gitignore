@@ -23,3 +23,6 @@
 /.autors/
 # machine-local ZCode session state
 /.zcode/
+
+# Precompiled frontend output; rebuilt for each release.
+/packages/hya-tui/dist/

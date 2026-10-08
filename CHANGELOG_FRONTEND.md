@@ -1,4 +1,5 @@
-# 0.44.14
+# 0.44.15
 
-- Keep tree rows and action menus visible in compact Layout panes by limiting footer hint height and rendering the edit preview on one row. Long hints no longer consume the scrolling viewport.
-- Stabilize the browser provider-error assertion by checking the assistant heading and error together in one terminal-buffer snapshot.
+- Precompile JSX in release packages and load gRPC only for gRPC connections.
+- Overlap frontend initialization with initial backend reads and extension-host startup.
+- Add browser cold/warm startup diagnostics and optional latency budgets.
