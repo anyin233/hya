@@ -196,9 +196,13 @@ impl Provider for TransientLossProvider {
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        self.entered.notify_one();
+        let entered = self.entered.clone();
         let release = self.release.clone();
         Ok(Box::pin(stream::once(async move {
+            // Signal only once the engine polls the blocked stream. Opening the
+            // stream is too early: StepStarted still has to be persisted, and
+            // cancellation there can drop the sole in-memory SQLite connection.
+            entered.notify_one();
             release.notified().await;
             Ok::<Event, ProviderError>(Event::MessageFinished {
                 session,

@@ -1610,14 +1610,12 @@ agents:
             );
         }
     }
-    assert!(
-        bundle_command(&root)
-            .args(["bundle", "uninstall", "-y", "acme/set-cli"])
-            .output()?
-            .status
-            .success()
-    );
+    let uninstall = bundle_command(&root)
+        .args(["bundle", "uninstall", "-y", "acme/set-cli"])
+        .output()?;
+    assert_success("uninstall agent set", &uninstall);
     let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert_success("list after agent-set uninstall", &list);
     assert!(!String::from_utf8_lossy(&list.stdout).contains("acme/set-cli"));
     fs::remove_dir_all(root)?;
     Ok(())
