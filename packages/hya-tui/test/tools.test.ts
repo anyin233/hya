@@ -204,7 +204,17 @@ test("task: canonical and legacy batches use member labels and counts", () => {
       description: "ignored single label", subagent_type: "ignored-single-agent",
       [field]: [{ description: "map routes", subagent_type: "hya-scout", prompt: "inspect" }, { prompt: "inspect tests" }],
     }) })
-    expect(card.task).toEqual({ agent: "hya-scout", description: "map routes" })
+    expect(card.task).toEqual({ agent: "hya-scout", description: "map routes", members: [{ agent: "hya-scout", description: "map routes" }, { agent: "hya-task", description: "" }] })
     expect(card.summary).toBe("hya-scout · map routes · 2 members")
   }
+})
+
+
+test("task: retains every batch handle/session and failed launch without clipping", () => {
+  const members = Array.from({ length: 15 }, (_, i) => ({ member: `main/scout-${i}`, sessionId: `hysec_${i}`, subagent_type: "hya-scout", description: `inspect ${i}`, status: "running" }))
+  const card = toolCard({ tool: "task", state: ok, outputJson: json({ metadata: { members: [...members, { subagent_type: "hya-task", description: "failed launch", status: "error", summary: "capacity exhausted", sessionId: "" }] } }) })
+  expect(card.task?.members).toHaveLength(16)
+  expect(card.task?.members?.[14]).toMatchObject({ name: "main/scout-14", child: "hysec_14", description: "inspect 14" })
+  expect(card.task?.members?.[15]).toEqual({ agent: "hya-task", description: "failed launch", status: "error", summary: "capacity exhausted" })
+  expect(toolCard({ tool: "task", state: ok, outputJson: json({ metadata: { members: [{ member: "main/legacy", session: "hysec_legacy" }] } }) }).task?.members?.[0]).toMatchObject({ name: "main/legacy", child: "hysec_legacy" })
 })
