@@ -1303,6 +1303,18 @@ gRPC call through the relay carries `Origin::Relay` into its handler, so
 `RelayStatus.lastError` holds no terminal escape sequences or control
 characters (it may carry the relay's text).
 
+## VCS snapshot scheduling
+
+`GetVcsStatus` (`GET /v1/vcs?directory=<absolute-path>`, or the matching
+`hya.v1` gRPC call) reads the same Git snapshot on a blocking task pool. Slow
+Git subprocesses and file reads therefore do not occupy async RPC workers or
+delay independent startup requests. No new option or transport is required.
+For example, `GET /v1/vcs?directory=/work/project` returns the existing
+`VcsStatus` fields: `branch` and `head` (strings), `dirty`, `ahead`, and `behind`
+(unsigned integers), and `files` (`VcsFileChange[]`, each with `path` and
+`status`). Query ordering, Git error handling and non-repository results are
+unchanged; the response still waits for the complete snapshot.
+
 ## Minimal client walkthrough
 
 ```

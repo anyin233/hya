@@ -2,11 +2,13 @@
  * Entry point: `bun packages/hya-tui/src/main.ts [--server URL | --grpc HOST:PORT] [--dir PATH] [--hya PATH] [--db PATH] [--continue | --session ID | --resume [ID]] [--web-tab]`
  * (src/cli.ts `usage`). Without either explicit transport the TUI starts its own `hya serve` (src/launch.ts).
  *
- * One file, two roles (src/reload.ts): started by a host it is the
- * supervisor (src/supervisor.ts), which runs this same file again as the app
- * (src/tui.ts) and starts it anew when the app reloads after `hya serve
- * restart`. The supervisor's environment (`HYA_TUI_RELOAD_FILE`) marks the app.
+ * One file, two roles (src/reload.ts): direct and WebUI starts use the Bun
+ * supervisor (src/supervisor.ts), which runs this same file again as the app.
+ * Bare hya supervises the app directly. Both restart it after `hya serve
+ * restart`; the supervisor's environment (`HYA_TUI_RELOAD_FILE`) marks the app.
  */
+import { startupMark } from "./startup"
+import { existsSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -18,7 +20,10 @@ async function app(): Promise<void> {
   const supervision = takeSupervision(process.env)
   const reloaded = takeReloadState(process.env)
   // Dynamic on purpose: the supervisor never loads the renderer, Solid, or the app.
-  const { app: start } = await import("./tui")
+  const compiled = join(import.meta.dir, "../dist/app.js")
+  const built = existsSync(compiled)
+  if (built) await import("./compiledRuntime")
+  const { app: start } = await import(built ? compiled : "./source")
   await start({ argv, ...(supervision ? { supervision } : {}), ...(reloaded ? { reloaded } : {}) })
 }
 
@@ -33,6 +38,7 @@ async function supervisor(): Promise<void> {
   process.exit(code)
 }
 
+startupMark(process.env[reloadFileEnv] ? "tui_app_entry" : "tui_supervisor_entry")
 const role = process.env[reloadFileEnv] ? app : supervisor
 void role().catch((error: unknown) => {
   process.stderr.write(`hya-tui: ${String(error)}\n`)
