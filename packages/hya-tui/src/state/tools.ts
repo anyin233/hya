@@ -353,9 +353,10 @@ function describe(tool: string, input: Json, output: unknown, raw: string, shell
       return { summary: question, body: clipLines(textLines(text)) }
     }
     case "task": {
-      const members = Array.isArray(input.members) ? input.members.map(record) : []
-      const agent = str(input.subagent_type) || str(members[0]?.subagent_type) || str(meta.subagent_type) || "hya-task"
-      const description = str(input.description) ?? str(members[0]?.description) ?? str(out.title) ?? ""
+      const batch = Array.isArray(input.tasks) ? input.tasks : input.members
+      const members = Array.isArray(batch) ? batch.map(record) : []
+      const agent = (members.length ? str(members[0]?.subagent_type) : str(input.subagent_type)) || str(meta.subagent_type) || "hya-task"
+      const description = (members.length ? str(members[0]?.description) : str(input.description)) ?? str(out.title) ?? ""
       const child = str(meta.sessionId)
       return {
         summary: [agent, description, members.length > 1 ? `${members.length} members` : ""].filter(Boolean).join(" · "),

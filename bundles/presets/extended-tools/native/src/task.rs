@@ -85,7 +85,10 @@ struct TaskInput {
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
     #[serde(default)]
-    members: Vec<TaskMemberInput>,
+    #[serde(alias = "members")]
+    tasks: Option<Vec<TaskMemberInput>>,
+    #[serde(default)]
+    context: String,
     /// Removed in 0.41.0; see [`TaskMemberInput::name`].
     #[serde(default)]
     name: Option<Value>,
@@ -104,6 +107,7 @@ fn reject_removed_name(name: Option<&Value>) -> Result<(), ToolError> {
 struct TaskResult {
     title: String,
     parent_session: String,
+    member: String,
     session: String,
     subagent_type: String,
     status: String,
@@ -121,8 +125,12 @@ impl Tool for TaskTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "task",
-            "Launch a specialized subagent (ADR-0015 episodic actor). Non-blocking: returns immediately with the agent's handle; results arrive later as its `report` mail. Continue the conversation, then check mail or wait for the report. Follow up on a finished agent by sending mail to its handle; archived agents are revived by that mail. Choose the agent with `subagent_type`; the harness names the member `<subagent_type>-<operator>` under your own path (`subagent_type: \"scout\"` → `main/scout-suzuran`). Handles are never reused in a team.",
+            include_str!("task.txt"),
             json!({
+                "context": {
+                    "type": "string",
+                    "description": "Shared goal, interfaces and constraints prepended to every task prompt. Put member-specific scope and acceptance in each item prompt."
+                },
                 "description": {
                     "type": "string",
                     "description": "A short (3-5 words) description of the task"
@@ -161,14 +169,15 @@ impl Tool for TaskTool {
                         "model": { "type": "string", "description": "Concrete provider/model (request overlay; folds into spawn model precedence)" }
                     }
                 },
-                "members": {
+                "tasks": {
                     "type": "array",
-                    "description": "hya extension: dispatch several members in one tool call",
+                    "description": "Independent tasks to launch concurrently in one call. Each item needs a non-empty prompt; set agent and model overrides per item. No top-level description or prompt required.",
+                    "minItems": 1,
                     "items": {
                         "type": "object",
                         "properties": {
                             "description": { "type": "string" },
-                            "prompt": { "type": "string" },
+                            "prompt": { "type": "string", "minLength": 1, "description": "Member-specific scope, non-goals and acceptance criteria" },
                             "subagent_type": { "type": "string" },
                             "category": { "type": "string" },
                             "model": { "type": "string" },
@@ -188,7 +197,7 @@ impl Tool for TaskTool {
                     }
                 }
             }),
-            &["description", "prompt"],
+            &[],
         )
     }
 
@@ -197,6 +206,13 @@ impl Tool for TaskTool {
         // subagents. Recursion depth and total fan-out are bounded by the engine's
         // SubagentGovernor (max_depth + per-run budget), enforced in `run_team`, so
         // there is no hard one-level cap here.
+        for field in ["tasks", "members"] {
+            if input.get(field).is_some_and(|value| !value.is_array()) {
+                return Err(ToolError::Input(format!(
+                    "{field} must be a non-empty array"
+                )));
+            }
+        }
         let input: TaskInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         let parent_session = ctx
@@ -205,11 +221,23 @@ impl Tool for TaskTool {
             .to_string();
         reject_removed_name(input.name.as_ref())?;
 
+        let batch = input.tasks.is_some();
+        if input.tasks.as_ref().is_some_and(Vec::is_empty) {
+            return Err(ToolError::Input(
+                "tasks must contain at least one task".to_string(),
+            ));
+        }
         let mut members: Vec<SpawnMember> = input
-            .members
+            .tasks
+            .unwrap_or_default()
             .into_iter()
             .map(|m| {
                 reject_removed_name(m.name.as_ref())?;
+                if m.prompt.trim().is_empty() {
+                    return Err(ToolError::Input(
+                        "each task needs a non-empty prompt".to_string(),
+                    ));
+                }
                 let subagent_type = normalized_agent_target(&m.subagent_type);
                 let inline_agent = m
                     .inline_agent
@@ -246,6 +274,12 @@ impl Tool for TaskTool {
             });
         }
 
+        if !input.context.trim().is_empty() {
+            for member in &mut members {
+                member.prompt = format!("{}\n\n{}", input.context, member.prompt);
+            }
+        }
+
         for member in &members {
             ctx.permission
                 .assert(
@@ -274,7 +308,12 @@ impl Tool for TaskTool {
                 }
                 SpawnError::InvalidEffort { .. } => ToolError::Input(error.to_string()),
             })?;
-        if members.len() == 1 && outcomes.len() == 1 {
+        if outcomes.len() != members.len() {
+            return Err(ToolError::Other(
+                "task spawner returned an unexpected number of outcomes".to_string(),
+            ));
+        }
+        if !batch && outcomes.len() == 1 {
             let member = members.remove(0);
             let Some(outcome) = outcomes.into_iter().next() else {
                 return Err(ToolError::Other(
@@ -284,6 +323,7 @@ impl Tool for TaskTool {
             return Ok(render_single(TaskResult {
                 title: member.description,
                 parent_session,
+                member: outcome.member,
                 session: outcome.session,
                 subagent_type: member.subagent_type,
                 status: outcome.status,
@@ -295,7 +335,7 @@ impl Tool for TaskTool {
 
         // Pair outcomes with the original member specs so the TUI can show every
         // launched subagent (type + short description + session) in the main
-        // message, matching OpenCode's multi-task rows.
+        // message, preserving the existing multi-task rows.
         let members_json: Vec<Value> = outcomes
             .into_iter()
             .enumerate()
@@ -318,15 +358,33 @@ impl Tool for TaskTool {
             members_json.len(),
             if members_json.len() == 1 { "" } else { "s" }
         );
+        let running = members_json
+            .iter()
+            .filter(|m| m["status"] == "running")
+            .count();
+        let failed = members_json
+            .iter()
+            .filter(|m| {
+                m["status"] != "running" && m["status"] != "done" && m["status"] != "completed"
+            })
+            .count();
+        let state = if running > 0 {
+            "running"
+        } else if failed > 0 {
+            "error"
+        } else {
+            "completed"
+        };
         Ok(json!({
             "title": title,
             "metadata": {
                 "parentSessionId": parent_session,
                 "members": members_json,
+                "status": state,
             },
             "output": format!(
-                "<task state=\"completed\">\n<task_result>\n{} members finished\n</task_result>\n</task>",
-                members_json.len()
+                "<task state=\"{state}\">\n<task_result>\n{running} running, {failed} failed. Running agents report later; continue independent work, then use wait when blocked.\n{}\n</task_result>\n</task>",
+                serde_json::to_string(&members_json).map_err(|error| ToolError::Other(error.to_string()))?
             ),
         }))
     }
@@ -355,6 +413,7 @@ fn render_single(result: TaskResult) -> Value {
         "task_result"
     };
     let mut metadata = Map::from_iter([
+        ("member".to_string(), json!(result.member)),
         (
             "parentSessionId".to_string(),
             json!(result.parent_session.clone()),
