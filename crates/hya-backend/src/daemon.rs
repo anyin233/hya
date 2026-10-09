@@ -35,8 +35,10 @@ use crate::db_lock::{self, Discovery};
 pub(crate) const START_WAIT: Duration = Duration::from_secs(60);
 /// One health probe of a discovered server.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-/// Poll interval while waiting for a server to appear or go away.
+/// Poll interval while waiting for a server to go away.
 const POLL: Duration = Duration::from_millis(100);
+/// Probe promptly on launch; back off while a slow daemon is composing.
+const START_POLL_MIN: Duration = Duration::from_millis(1);
 /// The daemon log is rotated to `<log>.1` before a start once this large.
 const LOG_ROTATE_BYTES: u64 = 4 * 1024 * 1024;
 /// Wait after SIGKILL (`stop --force`) for the kernel to release the lock.
@@ -123,6 +125,8 @@ pub(crate) async fn start_with_relay(
     }
     let deadline = tokio::time::Instant::now() + wait;
     let mut child: Option<Child> = None;
+    let launch_time = tokio::time::Instant::now();
+    let mut poll = START_POLL_MIN;
     loop {
         if let Some(discovery) = running(&spec.db).await {
             let started = child
@@ -177,7 +181,16 @@ pub(crate) async fn start_with_relay(
                 ),
             });
         }
-        tokio::time::sleep(POLL).await;
+        tokio::time::sleep(
+            poll.min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+        )
+        .await;
+        let cap = if launch_time.elapsed() < Duration::from_secs(1) {
+            Duration::from_millis(5)
+        } else {
+            POLL
+        };
+        poll = (poll * 2).min(cap);
     }
 }
 

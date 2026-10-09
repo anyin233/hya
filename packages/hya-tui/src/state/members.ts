@@ -15,7 +15,7 @@
  * Pure TypeScript (no Solid).
  */
 import type { MemberInfo, MessageInfo } from "../client"
-import { toolCard } from "./tools"
+import { toolCard, type TaskInfo, type TaskMemberInfo } from "./tools"
 
 /** What the controller last read about a child session. */
 export interface ChildState {
@@ -39,12 +39,51 @@ export function foldMember(rows: readonly MemberInfo[], update: MemberInfo): Mem
   return rows.map((row, at) => at === index ? { ...row, ...known } : row)
 }
 
-/** The child session and member of a task card: by `callId`, else by the child session from the task output. */
+/** An explicit child must match exactly; use the call ID only before a child is known. */
 export function taskLink(card: { callId?: string; child?: string }, members: readonly MemberInfo[]): { child?: string; member?: MemberInfo } {
-  const member = (card.callId ? members.find((row) => row.callId === card.callId) : undefined)
-    ?? (card.child ? members.find((row) => row.child === card.child) : undefined)
+  const member = card.child ? members.find((row) => row.child === card.child)
+    : card.callId ? members.find((row) => row.callId === card.callId) : undefined
   const child = card.child ?? member?.child
   return { ...(child ? { child } : {}), ...(member ? { member } : {}) }
+}
+
+/** One independently navigable task member, reconciled with live roster state. */
+export interface TaskMemberLink extends TaskMemberInfo {
+  member?: MemberInfo
+}
+
+export function taskLinks(task: TaskInfo, callId: string | undefined, members: readonly MemberInfo[]): TaskMemberLink[] {
+  const spawned = callId ? members.filter((row) => row.callId === callId) : []
+  const entries: TaskMemberInfo[] = task.members ?? (spawned.length > 1 ? spawned.map((row) => ({
+    agent: row.agent || task.agent, description: row.description ?? "", child: row.child,
+  })) : [task])
+  const used = new Set<MemberInfo>()
+  const links = entries.map((entry, index): TaskMemberLink => {
+    const member = entry.child ? members.find((row) => row.child === entry.child)
+      : entry.name ? members.find((row) => row.handle === entry.name || row.member === entry.name)
+      : !entry.status ? spawned[index] : undefined
+    if (member) used.add(member)
+    return { ...entry, ...(member ? {
+      member, child: entry.child || member.child, name: member.handle || entry.name,
+      agent: member.agent || entry.agent, description: entry.description || member.description || "",
+    } : {}) }
+  })
+  for (const member of spawned) {
+    if (!used.has(member)) links.push({ agent: member.agent || task.agent, description: member.description ?? "", child: member.child, name: member.handle, member })
+  }
+  return links
+}
+
+/** Launch-result fallback while live roster/child state has not arrived. */
+export function taskChildStatus(link: TaskMemberLink, child: ChildState | undefined): ChildStatus {
+  if (link.member || child) return childStatus(link.member, child)
+  switch (link.status) {
+    case "running": return "running"
+    case "done": case "completed": return "done"
+    case "error": case "failed": return "failed"
+    case "cancelled": return "cancelled"
+    default: return "starting"
+  }
 }
 
 /** The child's status for its task card. */
@@ -83,8 +122,9 @@ export function childSessionIds(members: readonly MemberInfo[], messages: readon
   for (const message of messages) {
     for (const part of message.parts ?? []) {
       if (part.toolCall?.tool !== "task") continue
-      const child = toolCard(part.toolCall).task?.child
-      if (child) ids.add(child)
+      const task = toolCard(part.toolCall).task
+      if (task?.child) ids.add(task.child)
+      for (const member of task?.members ?? []) if (member.child) ids.add(member.child)
     }
   }
   return [...ids]

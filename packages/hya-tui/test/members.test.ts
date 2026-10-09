@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MemberInfo, MessageInfo } from "../src/client"
-import { childActivity, childSessionIds, childStatus, foldMember, taskLink } from "../src/state/members"
+import { childActivity, childSessionIds, childStatus, foldMember, taskLink, taskLinks, taskChildStatus } from "../src/state/members"
 
 const spawn: MemberInfo = { member: "mbr_1", child: "hysec_c", agent: "hya-scout", description: "survey", status: "MEMBER_STATUS_SPAWNING", callId: "call_1", depth: 1 }
 
@@ -54,4 +54,32 @@ test("child sessions come from members and task outputs, once each", () => {
     { id: "t2", toolCall: { tool: "task", state: "TOOL_EXECUTION_STATE_OK", outputJson: "{\"metadata\":{\"sessionId\":\"hysec_c\"}}" } },
   ] }]
   expect(childSessionIds([spawn], messages)).toEqual(["hysec_c", "hysec_e"])
+})
+
+
+test("batch links use each exact child, survive resident roster/replay and keep failures separate", () => {
+  const second = { ...spawn, member: "mbr_2", child: "hysec_second", handle: "main/scout-second" }
+  const rows = [spawn, second]
+  expect(taskLink({ callId: "call_1", child: "hysec_second" }, rows).member).toBe(second)
+  expect(taskLink({ callId: "call_1", child: "hysec_unknown" }, rows).member).toBeUndefined()
+  const task = { agent: "hya-scout", description: "", members: [
+    { agent: "hya-scout", description: "first", child: "hysec_c", name: "main/scout-first", status: "running" },
+    { agent: "hya-task", description: "rejected", status: "error", summary: "overloaded" },
+    { agent: "hya-scout", description: "second", child: "hysec_second", name: "main/scout-second", status: "running" },
+  ] }
+  const links = taskLinks(task, "call_1", rows)
+  expect(links).toHaveLength(3)
+  expect(links[0]?.member).toBe(spawn)
+  expect(links[1]?.child).toBeUndefined()
+  expect(taskChildStatus(links[1]!, undefined)).toBe("failed")
+  expect(links[2]?.member).toBe(second)
+  expect(taskLinks(task, undefined, rows)[2]?.member).toBe(second)
+  expect(taskChildStatus(taskLinks(task, undefined, [])[2]!, undefined)).toBe("running")
+  const messages: MessageInfo[] = [{ id: "m", role: "ROLE_ASSISTANT", parts: [{ id: "p", toolCall: { tool: "task", outputJson: JSON.stringify({ metadata: { members: [{ sessionId: "hysec_c" }, { session: "hysec_second" }] } }) } }] }]
+  expect(childSessionIds([], messages)).toEqual(["hysec_c", "hysec_second"])
+})
+
+test("batch links include all live members before the tool result arrives", () => {
+  const second = { ...spawn, member: "mbr_2", child: "hysec_second" }
+  expect(taskLinks({ agent: "hya-scout", description: "" }, "call_1", [spawn, second]).map((link) => link.child)).toEqual(["hysec_c", "hysec_second"])
 })

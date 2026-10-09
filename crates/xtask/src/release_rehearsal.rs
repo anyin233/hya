@@ -101,6 +101,8 @@ const WORKFLOW_BUN_SOURCE_COPY: &str =
 const WORKFLOW_TUI_SOURCE_COPY: &str =
     "cp -R packages/hya-tui/src/. \"dist/$package_dir/lib/hya/tui/src/\"";
 const WORKFLOW_TUI_INSTALL: &str = "(cd \"dist/$package_dir/lib/hya/tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
+const WORKFLOW_TUI_BUILD: &str =
+    "(cd \"dist/$package_dir/lib/hya/tui\" && \"$HOME/.bun/bin/bun\" run build)";
 const WORKFLOW_TUI_WEB_SOURCE_COPY: &str =
     "cp -R packages/hya-tui-web/src/. \"dist/$package_dir/lib/hya/tui-web/src/\"";
 const WORKFLOW_FRONTEND_VERSION_COPY: &str =
@@ -146,6 +148,7 @@ const TUI_RUNTIME: BunRuntime = BunRuntime {
     source: "packages/hya-tui",
     destination: "lib/hya/tui",
     files: &[
+        "build.ts",
         "package.json",
         "bun.lock",
         "bunfig.toml",
@@ -193,7 +196,7 @@ const TUI_WEB_DEV_ONLY: [&str; 4] = [
     "bun-types",
     "typescript",
 ];
-const TUI_RUNTIME_FILES: [&str; 1] = ["src/main.ts"];
+const TUI_RUNTIME_FILES: [&str; 2] = ["src/main.ts", "dist/app.js"];
 const TUI_WEB_RUNTIME_FILES: [&str; 6] = [
     "src/main.ts",
     "src/frames.ts",
@@ -564,6 +567,7 @@ fn validate_workflow(workflow: &Value, target: &str, _component: Component) -> R
             WORKFLOW_TUI_INSTALL,
             "install the TUI's production dependencies on the target runner",
         ),
+        (WORKFLOW_TUI_BUILD, "precompile the TUI before packaging"),
         (
             WORKFLOW_TUI_WEB_SOURCE_COPY,
             "recursively copy the complete WebUI host source tree",
@@ -1396,6 +1400,16 @@ fn install_runtime_dependencies(runtime: &BunRuntime, destination: &Path) -> Res
         &[],
     )
     .with_context(|| format!("install {} production dependencies", runtime.destination))?;
+    if runtime.source == TUI_RUNTIME.source {
+        run_checked(
+            OsStr::new("bun"),
+            &arg_list(&["run", "build"]),
+            destination,
+            &[],
+            &[],
+        )
+        .context("precompile the TUI JSX for startup")?;
+    }
     Ok(())
 }
 
@@ -2317,6 +2331,7 @@ mod tests {
         WORKFLOW_BUN_RUNTIME_COPY,
         WORKFLOW_TUI_SOURCE_COPY,
         WORKFLOW_TUI_INSTALL,
+        WORKFLOW_TUI_BUILD,
         WORKFLOW_TUI_WEB_SOURCE_COPY,
         WORKFLOW_FRONTEND_VERSION_COPY,
         WORKFLOW_TUI_WEB_PAGE_COPY,

@@ -30,22 +30,24 @@ const alive = (pid: number): boolean => {
 
 /** The daemon's pid, read from `/status`; also checks it is a running `hya serve`. */
 async function backendPid(term: Tui): Promise<number> {
-  // A /status typed while startup still runs can be lost; the helper retypes it until the view shows.
-  await showStatusView(term)
-  await term.waitForText(/Backend\s+daemon · pid \d+ · db \//)
-  // The row wraps in the status view, at a point that depends on the temp
-  // path's length: the start time may be on the next line, behind the border.
-  await term.waitForText(/started[\s│]*\d+[sm] ago/)
-  const pid = Number(/Backend\s+daemon · pid (\d+)/.exec(await term.text())![1])
+  let pid = 0
+  await expect.poll(async () => {
+    await showStatusView(term)
+    // Startup or reconnect may restore Conversation between frames. Read
+    // the PID and age together, and reopen Status on the next attempt.
+    const snapshot = await term.text()
+    const match = /Backend\s+daemon · pid (\d+) · db \//.exec(snapshot)
+    if (!match || !/started[\s│]*\d+[sm] ago/.test(snapshot)) return false
+    pid = Number(match[1])
+    return true
+  }, { timeout: 30_000 }).toBe(true)
   expect(alive(pid)).toBe(true)
   expect(execFileSync("ps", ["-o", "command=", "-p", String(pid)]).toString()).toContain("serve --bind 127.0.0.1:0")
   return pid
 }
 
 async function sessionId(term: Tui): Promise<string> {
-  await showStatusView(term)
-  await term.waitForText(/Session\s+hysec_\w+/)
-  return /Session\s+(hysec_\w+)/.exec(await term.text())![1]!
+  return statusSessionId(term)
 }
 
 /** Ids of the root sessions the daemon at `url` lists. */
