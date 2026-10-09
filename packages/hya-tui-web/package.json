@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test ./test",
     "test:e2e": "playwright test",
-    "test:tui-exp": "bun test ./tui-exp --timeout 30000"
+    "test:tui-exp": "bun run test:tui-exp:unit && bun run test:tui-exp:parity",
+    "test:tui-exp:unit": "bun test ./tui-exp --timeout 30000",
+    "test:tui-exp:parity": "bun --bun node_modules/@playwright/test/cli.js test --config tui-exp/playwright.config.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",

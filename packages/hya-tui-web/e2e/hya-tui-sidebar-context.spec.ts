@@ -4,9 +4,9 @@ import { expect, hyaTui, statusSessionId, test, wideViewport } from "./hya"
 async function rightClick(term: Tui, text: string) {
   await term.waitForText(text)
   const at = (await term.find(text))!
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
-  await term.page.mouse.click(box.x + (at.col + .5) / cols * box.width, box.y + (at.row + .5) / rows * box.height, { button: "right" })
+  await term.mouse.click(box.x + (at.col + .5) / cols * box.width, box.y + (at.row + .5) / rows * box.height, { button: "right" })
 }
 
 test("sidebar context menus coexist with strict pane focus and the keybinding columns", async ({ tui, backend }, testInfo) => {

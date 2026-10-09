@@ -31,6 +31,7 @@ export class PtyTerminal {
   private rawSize = 0
   private sgrMouse = false
   private pixelMouse = false
+  private focusReporting = false
   private closed = false
   private ptyClosed = false
   private finishPty: () => void = () => {}
@@ -49,6 +50,7 @@ export class PtyTerminal {
     })
     for (const final of ["h", "l"]) {
       this.screen.parser.registerCsiHandler({ prefix: "?", final }, (params: (number | number[])[]) => {
+        if (params.includes(1004)) this.focusReporting = final === "h"
         if (params.includes(1006)) this.sgrMouse = final === "h"
         if (params.includes(1016)) this.pixelMouse = final === "h"
         return false // Keep xterm's own mode handling.
@@ -162,6 +164,11 @@ export class PtyTerminal {
   private write(data: string): void {
     if (!this.proc?.terminal || this.proc.terminal.closed) throw new Error("PTY is closed")
     this.proc.terminal.write(data)
+  }
+  async focus(focused: boolean): Promise<void> {
+    if (!this.focusReporting) throw new Error("Application has not enabled terminal focus reporting")
+    this.write(focused ? "\x1b[I" : "\x1b[O")
+    await this.flush()
   }
   async type(text: string): Promise<void> { this.write(text); await this.flush() }
   async press(shortcut: string): Promise<void> {

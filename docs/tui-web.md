@@ -3,7 +3,8 @@
 `packages/hya-tui-web` runs a terminal program on a real PTY and renders it in
 a browser with xterm.js. It has two jobs:
 
-- **TUI test environment.** Playwright drives Chromium against the rendered
+- **TUI test environment.** The required PTY/headless suite drives the real
+  TUI directly; optional Playwright browser checks drive Chromium against the rendered
   terminal. Tests type keys, resize the viewport, read the screen as text,
   check per-cell colors and glyph widths, and attach screenshots, with no
   tmux scraping.
@@ -163,17 +164,18 @@ missed instead of stacking it.
 cd packages/hya-tui-web
 bun run typecheck
 bun test ./test                       # codec + host unit tests (bun run test)
-bunx playwright test e2e/<spec>.ts    # browser E2E for the screens you changed
-bunx playwright test                  # whole browser suite (bun run test:e2e)
+bun run test:tui-exp:parity -- e2e/<spec>.ts  # terminal scenarios for changed screens
+bun run test:tui-exp                         # full required terminal suite
+bun run test:e2e                             # optional Chromium/WebUI checks
 ```
 
 Locally, run the specs that cover your change: the new or changed spec and the
-specs for the screens it touches. The whole suite is the CI gate; run it
+specs for the screens it touches. The whole terminal suite is the CI gate; run it
 locally only when asked or when a change affects every screen.
 
 #### Experimental direct-PTY suite (`tui-exp`)
 
-The experimental suite runs the actual Bun/OpenTUI executable on a Bun PTY and
+The required terminal suite runs the actual Bun/OpenTUI executable on a Bun PTY and
 feeds its bytes into `@xterm/headless` 6.0.0, aligned with the browser's xterm.js
 version. It reads the resulting screen cells directly, without Chromium, a
 DOM, the WebUI host, or a WebSocket. This tests terminal behavior with fewer
@@ -200,16 +202,82 @@ frontend entrypoint when comparing versions. For example, run
 to exercise only the command-overlay scenario. No real provider keys or model
 calls are used.
 
-GitHub's separate `tui-exp` job runs the experiment with `continue-on-error:
-true` while the full browser suite remains the gate. The experiment initially
-covers terminal parsing/input/cleanup, the OpenTUI probe, command overlays at
-wide and narrow sizes, mouse focus and paste routing, and streamed replies.
-It is not yet a replacement for all browser scenarios. Browser clipboard
-permissions, notifications, DOM focus, reserved shortcuts, and WebSocket
-reconnect still require browser checks. Ordinary terminal input uses legacy
-xterm encoding; Kitty keyboard, pixel mouse coordinates, and browser-specific
-event translation are not emulated. Unsupported key combinations and pixel
-mouse mode fail explicitly rather than silently testing a different key.
+GitHub's required `tui` job runs this suite without installing Chromium.
+The command runs protocol checks followed by the shared terminal matrix:
+
+```sh
+bun run test:tui-exp:unit           # nine focused protocol and real-TUI tests
+bun run test:tui-exp:parity         # all shared terminal scenarios, four workers
+bun run test:tui-exp:parity -- e2e/hya-tui-layout-editor.spec.ts
+HYA_TUI_EXP_WORKERS=2 bun run test:tui-exp:parity
+```
+
+The parity runner uses **Playwright's test runner and assertions under Bun**,
+without launching Chromium. `tui-exp/playwright.config.ts` selects
+`HYA_TUI_DRIVER=pty`; the default browser config selects the browser driver.
+Both load the same `e2e/*.spec.ts` test bodies, backend fixtures, fake model
+scripts, and assertions. New terminal scenarios automatically run on both
+drivers. Requesting a browser `page` in PTY mode fails explicitly.
+
+Coverage includes sessions and archive/resume, providers/models/effort, prompts
+and permissions, shell/tools/MCP/bundles, extensions, projects, direct gRPC,
+relay connections and remote attachments, subagent panes, every layout editor
+flow, pane focus, clipboard OSC 52, notification OSC 9, terminal focus reporting,
+Markdown streaming, scrolling, input/history/Vim, and daemon crash/restart and
+multi-client synchronization. At introduction, the shared inventory contains
+294 terminal scenarios and seven excluded browser-only scenarios;
+the browser suite additionally contains two generic host tests.
+
+| Optional Chromium-only coverage, excluded from CI | Why a direct PTY cannot provide equivalent assertions |
+| --- | --- |
+| `host.spec.ts` (two tests) | WebUI-injected exit notice and browser reload creating a new WebSocket/client process. Direct child exit, cleanup and real process spawning are covered separately by PTY tests. |
+| `hya-bare.spec.ts` (five tagged cases) | Actual WebUI tabs alongside the terminal, tab teardown on exit/signals, and WebUI reconnect after daemon replacement. The three terminal-only bare-hya cases also run on PTY. |
+| `hya-tui-archive.spec.ts`, WebUI tab case | Web-tab-only command restrictions and closing an actual tab while a turn runs. Cross-client resume runs on two real PTYs as well as terminal/WebUI in Chromium. |
+| `hya-tui-notifications.spec.ts`, browser Notification case | Browser Notification API and document visibility. The three terminal OSC notification cases also run on PTY. |
+
+These seven cases are tagged `@browser-only` and excluded via `grepInvert`
+from the required gate. They remain available through the optional
+`bun run test:e2e` browser suite. The two generic host tests are excluded by exact filename from
+the PTY config. Browser clipboard permissions, DOM focus and WebSocket behavior
+remain browser responsibilities. Terminal input uses legacy xterm encoding;
+Kitty keyboard, pixel mouse coordinates and browser-specific event translation
+are not emulated. Unsupported combinations and pixel mouse mode fail explicitly.
+
+Each parity run writes `parity.json` under its output directory. Its contract is
+`{ driver, status, durationMs, workers, selected, terminalScenarios,
+browserOnlyExcludedTag, browserOnlyFiles, tests }`. Each test records
+`{ file, line, title, browserOnly, outcome, runs }`; each run contains
+`{ status, durationMs, retry, errors }`. This makes coverage and failures
+inspectable without a browser report. Per-client artifacts contain
+`final-screen.txt`, `frames.json` and `output.base64.txt`; the runner prints
+per-test durations. The default parity output directory is
+`~/data/hya-rust/tmp/tui-exp-parity`, overridden by `HYA_TUI_EXP_OUTPUT_DIR`.
+
+##### Shared scenario driver interface
+
+`e2e/harness.ts` exports `Tui` and `tui(command, options?)`. Existing `text`,
+`lines`, `find`, `cell`, `size`, `type`, `press`, `resize`, `waitForText`,
+`waitForIdle`, `waitForExit` and `attach` assertions work on both drivers.
+The following methods keep scenarios independent of browser internals:
+
+| Method / option | Contract |
+| --- | --- |
+| `paste(text: string)` | Send bracketed paste when enabled by the child. |
+| `focus(focused: boolean)` | Browser textarea focus or negotiated CSI 1004 terminal focus reporting. |
+| `exitStatus(): Promise<number | null>` | Child status; null while running, `128 + signal` after signal termination. |
+| `screenBox()` | `{x, y, width, height}` coordinate space for `mouse`; CSS pixels in Chromium and cells on PTY. Calculate positions from `size()` and this box rather than assuming pixels. |
+| `mouse.move/down/up/click/wheel` | Pointer input; move accepts `{steps?}`, click/down accept `{button?: "left" | "middle" | "right"}`. PTY wheel maps 100 delta units to one terminal wheel event. |
+| `inspect(callback, arg?)` | Self-contained callback `(terminal, state, arg)` runs against the actual xterm emulator. `state` retains per-client OSC/cursor observations. No DOM, application internals or captured outer variables. |
+| `disconnect()` | Browser navigation away or SIGHUP to the PTY process group. |
+| `close()` | Close the browser page or reap/dispose the PTY client. |
+| `LaunchOptions.independent?: boolean` | Default false replaces the primary client, matching browser navigation/relaunch. True keeps it alive and launches another client for multi-client tests. |
+| `LaunchOptions.viewport` | PTY uses deterministic conversion: `cols = floor((width - 15) / 8.43)`, `rows = floor(height / 17)`, bounded below by 2/1. Historical 690×640 narrow cases become 80×37 cells; default 1100×640 becomes 128×37. This checks terminal geometry, not browser font measurement. |
+| `LaunchOptions.hostArgs` | PTY supports `--shift-enter-lf`; other host flags fail explicitly. |
+
+The browser `page` property is available only on the browser driver. Shared
+scenarios wait for visible state transitions before the next input: command
+pane opening, wizard steps, changed draft text, ready status and completed
+reconnect. They do not depend on Chromium's incidental input latency.
 
 ##### Harness interface
 
@@ -250,22 +318,17 @@ From the repository root, run:
 ```
 
 This runs frozen installs, type checks and unit tests for the TUI, WebUI,
-Bun adapter and TUI SDK, builds `hya` and `xtask`, installs Chromium if needed,
-and runs the complete browser suite with two workers. Use the CI-pinned Bun
-version (currently 1.4.2) and the repository Rust toolchain. Linux may need
-`bunx playwright install --with-deps chromium` once to install system libraries.
-The script stops at the first failed command and returns its nonzero status;
-assertions and browser retries use the normal Playwright configuration.
+Bun adapter and TUI SDK, builds `hya` and `xtask`, then runs the complete
+PTY suite with four workers and no retries. Use the CI-pinned Bun version
+(currently 1.4.2) and repository Rust toolchain. No browser installation is
+needed. The script stops at the first failed command.
 
 `HYA_TUI_CHECK_DIR` sets the artifact directory (default
-`~/data/hya-tui-check`): temporary workspaces go in `tmp/`, browser artifacts
-in `results/`, the HTML report in `report/`, Chromium in `browsers/`, and Bun's
-download cache in `bun-cache/`. `HYA_TUI_TEST_WORKERS` is a
-positive integer worker count (default `2`, matching the GitHub runner).
-Existing `PLAYWRIGHT_BROWSERS_PATH` and `BUN_INSTALL_CACHE_DIR` overrides are
-honored. Cargo uses the repository's
-normal target configuration; keep `target` on the data disk as in this
-workspace. For example:
+`~/data/hya-tui-check`): temporary workspaces go in `tmp/`, terminal artifacts
+and `parity.json` in `results/`, and Bun's cache in `bun-cache/`.
+`HYA_TUI_TEST_WORKERS` sets the worker count (default `4`, matching GitHub).
+Existing `BUN_INSTALL_CACHE_DIR` overrides are honored. Cargo uses the normal
+target configuration; keep `target` on the data disk. For example:
 
 ```sh
 HYA_TUI_CHECK_DIR="$HOME/data/hya-tui-prepush" ./scripts/check-tui.sh
@@ -274,13 +337,13 @@ HYA_TUI_CHECK_DIR="$HOME/data/hya-tui-prepush" ./scripts/check-tui.sh
 Run this gate before pushing when requested or when validating a broad TUI
 integration. Focused specs remain the normal development loop.
 
-#### Keeping the browser gate aligned with the TUI
+#### Keeping the terminal gate aligned with the TUI
 
-Update the browser specs in the same change as a UI contract change. The
+Update the shared specs in the same change as a UI contract change. The
 conversation has no permanent metadata heading: read session, model, server,
 and permission fields through `/status`, and assert workflow results in the
 transcript, prompt dock, picker, or backend API. Do not reintroduce removed
-headings to satisfy a test. CI runs the entire `bun run test:e2e` suite.
+headings to satisfy a test. CI runs `bun run test:tui-exp` with every shared terminal scenario.
 
 The shared helpers in `e2e/hya.ts` define these test interfaces:
 
@@ -308,11 +371,10 @@ narrow-layout checks. Assert actual terminal glyphs and colors with the
 Vim tests observe DECSCUSR cursor-shape sequences through xterm's public
 parser API and verify editing behavior, without depending on a mode banner.
 
-The GitHub `tui` job uploads `tui-web-playwright-report` after its browser
-run. Failed runs also upload `tui-web-test-results`, containing terminal
-buffers, screenshots, and retained traces. Download the report artifact and
-open `index.html` to inspect individual failures. No test is excluded to
-accommodate a UI change.
+The GitHub `tui` job always uploads `tui-exp-results`, containing `parity.json`,
+terminal screen text, parsed frames and raw output. Inspect failed tests in
+that artifact. Browser-only cases are explicitly excluded; terminal tests
+are not excluded to accommodate UI changes.
 
 `e2e/hya-tui.spec.ts` needs a built backend. Run
 `cargo build -p hya-backend --bin hya -p xtask --bin xtask` first, or set
@@ -343,17 +405,14 @@ and `crates/hya-plugin-bun/adapter`, then `bun run typecheck && bun test` in
 `hya-tui-web`. It builds `hya` and the bundle packager
 (`cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask`)
 with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
-that binary, installs Chromium (`bunx playwright install --with-deps chromium`),
-and runs `bun run test:e2e` from `packages/hya-tui-web`, retrying a failed
-test once (`retries` in `playwright.config.ts` when `CI` is set). On failure it
-uploads `packages/hya-tui-web/test-results/` as the `tui-web-test-results`
-artifact. The HTML report is uploaded as `tui-web-playwright-report` after
-each browser run.
+that binary, and runs `bun run test:tui-exp` from `packages/hya-tui-web`.
+The TUI SDK also receives frozen installation, typecheck and unit tests.
+The required matrix uses four workers and no retries. Artifacts go under
+`runner.temp` and upload as `tui-exp-results`, even on failure. There is no
+Chromium installation or separate non-blocking experimental job.
 
-Reproduce it locally with the commands in
-["Running the tests"](#running-the-tests) above; the only CI-specific pieces
-are the pinned Bun install and the Chromium install for a clean runner (a
-local checkout usually already has both).
+Reproduce the complete job locally with `./scripts/check-tui.sh`, or use the
+focused commands in [the terminal suite section](#experimental-direct-pty-suite-tui-exp).
 
 **A TUI that starts its own backend.** `launchTest` (from `e2e/hya.ts`) is
 `test` with a `workspace` fixture in place of `backend`: the same isolated
@@ -648,10 +707,10 @@ Teardown attaches the final screen and stops the host. `fixture(name)` returns
 | `find(needle)` | `{ row, col }` of the first match, or `null`. |
 | `cell(row, col)` | `{ char, fg, bg, bold, italic, underline, inverse, width }`; colors are `#rrggbb`, `palette:N`, or `default`. |
 | `size()` | `{ cols, rows }`. |
-| `type(text)` / `press(key)` | Playwright keyboard input (`"Enter"`, `"Control+C"`, …). For a bracketed paste use `window.hyaTerm.term.paste(text)` (see "What xterm.js sends"). |
+| `type(text)` / `press(key)` | Keyboard input (`"Enter"`, `"Control+C"`, …), encoded for the selected driver. Use `paste(text)` for bracketed paste. |
 | `resize(width, height)` | Resizes the viewport, waits for a new grid size, and returns it. |
 | `waitForExit(timeout?)` | Child exit code. |
-| `attach(testInfo, name)` | Writes `<name>.png` and `<name>.txt` to the test output dir and attaches both. |
+| `attach(testInfo, name)` | Browser driver attaches PNG/text; PTY driver saves screen text, frames and raw output, attaching the text. |
 
 ### Library
 

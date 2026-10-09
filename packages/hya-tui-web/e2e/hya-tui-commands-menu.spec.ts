@@ -257,7 +257,7 @@ test.describe("command menu", () => {
     await expect.poll(() => commandText(term)).toBe("/status")
     await term.press("Escape")
     await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
-    await term.page.evaluate(() => window.hyaTerm.term.paste("/help"))
+    await term.paste("/help")
     await expect.poll(() => composerText(term)).toBe("/help")
     await term.press("Enter")
     await term.waitForText("┃ /help")

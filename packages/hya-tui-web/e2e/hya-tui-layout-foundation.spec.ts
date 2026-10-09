@@ -102,14 +102,14 @@ test("dragging with a hidden sibling resizes the drawn pair and preserves the hi
   expect(await term.find("Projects")).toBeNull()
   const editor = (await term.find("Message, !shell"))!
   const boundary = editor.col - 2
-  const screen = (await term.page.locator(".xterm-screen").boundingBox())!
+  const screen = await term.screenBox()
   const { cols, rows } = await term.size()
   const point = (col: number) => ({ x: screen.x + (col + .5) / cols * screen.width, y: screen.y + 1.5 / rows * screen.height })
   const start = point(boundary), end = point(boundary - 5)
-  await term.page.mouse.move(start.x, start.y)
-  await term.page.mouse.down()
-  await term.page.mouse.move(end.x, end.y, { steps: 5 })
-  await term.page.mouse.up()
+  await term.mouse.move(start.x, start.y)
+  await term.mouse.down()
+  await term.mouse.move(end.x, end.y, { steps: 5 })
+  await term.mouse.up()
   await expect.poll(async () => (await term.find("Message, !shell"))?.col).toBe(editor.col - 5)
   await expect.poll(async () => JSON.parse(await readFile(path, "utf8")).paneLayout.root.children[1].size.value).not.toBe(.45)
   expect(JSON.parse(await readFile(path, "utf8")).paneLayout.root.children[0].size.value).toBe(.1)
@@ -127,14 +127,14 @@ test.describe("column boundary dragging", () => {
     await term.waitForIdle()
     const marker = (await term.find("COLUMN END"))!
     const editor = (await term.find("Message, !shell"))!
-    const screen = (await term.page.locator(".xterm-screen").boundingBox())!
+    const screen = await term.screenBox()
     const { cols, rows } = await term.size()
     const point = (row: number) => ({ x: screen.x + 30.5 / cols * screen.width, y: screen.y + (row + .5) / rows * screen.height })
     const start = point(editor.row - 1), end = point(editor.row - 6)
-    await term.page.mouse.move(start.x, start.y)
-    await term.page.mouse.down()
-    await term.page.mouse.move(end.x, end.y, { steps: 5 })
-    await term.page.mouse.up()
+    await term.mouse.move(start.x, start.y)
+    await term.mouse.down()
+    await term.mouse.move(end.x, end.y, { steps: 5 })
+    await term.mouse.up()
     await expect.poll(async () => (await term.find("COLUMN END"))?.row).toBe(marker.row - 5)
     const path = join(backendConfigDir(backend), "tui.json")
     await expect.poll(async () => JSON.parse(await readFile(path, "utf8")).paneLayout.root.children[1].node.children[2].size.mode).toBe("weight")

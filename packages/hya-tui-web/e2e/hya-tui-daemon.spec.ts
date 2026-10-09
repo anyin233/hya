@@ -6,14 +6,10 @@
 // -9) makes it find or start the next server by itself; with two TUIs, the
 // database lock makes exactly one of them start it, the other attaches.
 
-import type { Page } from "@playwright/test"
-import { execFileSync, spawn, type ChildProcess } from "node:child_process"
-import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { execFileSync } from "node:child_process"
+
 import { Tui } from "./harness"
 import { daemon, daemonStatus, expect, launchTest as test, selfLaunch, textStep, tuiInstances, tuiMain, workspaceDb, type Workspace } from "./hya"
-
-const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -52,25 +48,10 @@ function appPids(workspace: Workspace): number[] {
   return pids.filter((pid) => !supervisors.includes(pid))
 }
 
-/** A second web host in a second tab, so two TUIs run at once. */
-async function secondTab(page: Page, workspace: Workspace): Promise<{ term: Tui; host: ChildProcess }> {
-  const [command] = selfLaunch(workspace)
-  const host = spawn("bun", [hostMain, "--port", "0", "--cwd", workspace.dir, "--", ...command], { env: { ...process.env, ...workspace.env }, stdio: ["ignore", "pipe", "pipe"] })
-  const url = await new Promise<string>((resolve, reject) => {
-    let output = ""
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString()
-      const match = /hya-tui-web listening on (\S+)/.exec(output)
-      if (match) resolve(match[1]!)
-    }
-    host.stdout!.on("data", onData)
-    host.stderr!.on("data", onData)
-    host.once("exit", (code) => reject(new Error(`second web host exited (${code}): ${output}`)))
-  })
-  const tab = await page.context().newPage()
-  await tab.goto(url)
-  await expect.poll(() => tab.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
-  return { term: new Tui(tab, url), host }
+/** A second independent client on the selected browser or PTY driver. */
+async function secondClient(tui: (command: string[], options?: import("./harness").LaunchOptions) => Promise<Tui>, workspace: Workspace): Promise<{ term: Tui }> {
+  const [command, options] = selfLaunch(workspace)
+  return { term: await tui(command, { ...options, independent: true }) }
 }
 
 /** Pids of every `hya serve` process of the workspace database. */
@@ -85,13 +66,6 @@ function servePids(workspace: Workspace): number[] {
     // pgrep exits 1 when nothing matches.
   }
   return out.split("\n").filter(Boolean).map(Number)
-}
-
-async function stopHost(host: ChildProcess): Promise<void> {
-  if (host.exitCode !== null || host.signalCode !== null) return
-  const exited = new Promise((resolve) => host.once("exit", resolve))
-  host.kill("SIGTERM")
-  await exited
 }
 
 test.describe("backend daemon", () => {
@@ -130,7 +104,8 @@ test.describe("backend daemon", () => {
     }, { timeout: 30_000 }).not.toBe(before)
     expect(after).not.toBe(before)
     expect((await daemonStatus(workspace))?.pid).toBe(after)
-    await term.waitForText("Before the stop.")
+    // Daemon discovery can precede the client finishing its reconnect.
+    expect(await statusPid(term, after)).toBe(after)
     await prompt(term, "second prompt")
     await term.waitForText("After the new server.", 20_000)
     await term.waitForIdle()
@@ -222,10 +197,10 @@ test.describe("backend daemon", () => {
     await term.waitForText("Before the stop.", 20_000)
   })
 
-  test("two TUIs lose the daemon to a crash: exactly one starts the next, the other attaches to it", async ({ tui, workspace, page }, testInfo) => {
+  test("two TUIs lose the daemon to a crash: exactly one starts the next, the other attaches to it", async ({ tui, workspace }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Message, !shell, or @file · / commands", 30_000)
-    const { term: second, host } = await secondTab(page, workspace)
+    const { term: second } = await secondClient(tui, workspace)
     try {
       await second.waitForText("Message, !shell, or @file · / commands", 30_000)
       const session = await statusSessionId(first)
@@ -248,7 +223,7 @@ test.describe("backend daemon", () => {
       await prompt(second, `/open ${session}`)
       await second.waitForText("shared after the move", 20_000)
     } finally {
-      await stopHost(host)
+      await second.close()
     }
   })
 })

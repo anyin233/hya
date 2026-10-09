@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process"
 import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
 import { join } from "node:path"
-import { Tui } from "./harness"
+import { Tui, terminalDriver } from "./harness"
 import { daemon, daemonStatus, expect, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -70,8 +70,10 @@ function pids(needle: string, except?: string): number[] {
     .map((line) => Number(line.trim().split(/\s+/)[0]))
 }
 
+const browserOnly = terminalDriver === "pty" ? test.skip : test
+
 test.describe("bare hya", () => {
-  test("starts the terminal TUI and a WebUI on --port that share one backend and each other's sessions", async ({ tui, workspace, page }, testInfo) => {
+  browserOnly("starts the terminal TUI and a WebUI on --port that share one backend and each other's sessions", { tag: "@browser-only" }, async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
@@ -152,7 +154,7 @@ test.describe("bare hya", () => {
     }
   })
 
-  test("/exit stops the WebUI host and its tabs' TUIs, leaves the daemon running, and exits 0", async ({ tui, workspace, page }) => {
+  browserOnly("/exit stops the WebUI host and its tabs' TUIs, leaves the daemon running, and exits 0", { tag: "@browser-only" }, async ({ tui, workspace, page }) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
@@ -190,7 +192,7 @@ test.describe("bare hya", () => {
   })
 
   for (const [signal, code] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) {
-    test(`${signal} to hya stops the TUI, the WebUI host, and its tabs' TUIs; the daemon keeps running`, async ({ tui, workspace, page }) => {
+    browserOnly(`${signal} to hya stops the TUI, the WebUI host, and its tabs' TUIs; the daemon keeps running`, { tag: "@browser-only" }, async ({ tui, workspace, page }) => {
       const port = await freePort()
       const term = await tui(...bareHya(workspace, port))
       await term.waitForText("Message, !shell, or @file · / commands", 60_000)
@@ -220,7 +222,7 @@ test.describe("bare hya", () => {
     })
   }
 
-  test("after `hya serve stop` the terminal TUI and the WebUI tab stay stopped; /reconnect in one starts the next, the other attaches", async ({ tui, workspace, page }, testInfo) => {
+  browserOnly("after `hya serve stop` the terminal TUI and the WebUI tab stay stopped; /reconnect in one starts the next, the other attaches", { tag: "@browser-only" }, async ({ tui, workspace, page }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)

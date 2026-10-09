@@ -115,10 +115,10 @@ test.describe("hya TUI Diff view", () => {
     await expect.poll(async () => (await term.text()).includes("+ added 01")).toBe(false)
     const midMatch = (await term.text()).match(/\+ added \d\d/)!
     const midRow = await at(term, midMatch[0])
-    const box = (await term.page.locator(".xterm-screen").boundingBox())!
+    const box = await term.screenBox()
     const size = await term.size()
-    await term.page.mouse.move(box.x + box.width / 2, box.y + ((midRow.row + 0.5) / size.rows) * box.height)
-    await term.page.mouse.wheel(0, -600)
+    await term.mouse.move(box.x + box.width / 2, box.y + ((midRow.row + 0.5) / size.rows) * box.height)
+    await term.mouse.wheel(0, -600)
     // Scrolling up with the wheel moves the view: the first visible line is
     // an earlier one (a longer poll: the wheel event's round trip through
     // the PTY can lag under heavy parallel load).
@@ -129,7 +129,7 @@ test.describe("hya TUI Diff view", () => {
     // One wheel event moves a few rows, so keep wheeling until the end shows.
     await expect.poll(async () => {
       if ((await term.text()).includes("+ added 80")) return true
-      await term.page.mouse.wheel(0, 600)
+      await term.mouse.wheel(0, 600)
       return false
     }, { timeout: 15_000, intervals: [50] }).toBe(true)
     await expectLastLineVisible(term)
