@@ -8,7 +8,7 @@
 
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
-import { Tui } from "./harness"
+import { Tui, terminalDriver } from "./harness"
 import { expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
@@ -105,8 +105,7 @@ test.describe("archive on exit and resume", () => {
     await picking.attach(testInfo, "resume-picker")
     await picking.type("Older")
     await picking.press("Enter")
-    await prompt(picking, "/status")
-    await picking.waitForText(/Session\s+Older work/, 20_000)
+    await expectStatus(picking, "Session", "Older work")
     await expect.poll(async () => (await session(backend, older)).archived ?? false).toBe(false)
   })
 })
@@ -169,14 +168,15 @@ test.describe("/sessions archived toggle", () => {
   })
 })
 
-test.describe("WebUI tabs (bare hya)", () => {
+test.describe("WebUI tabs (bare hya)", { tag: "@browser-only" }, () => {
+  test.skip(terminalDriver === "pty", "Browser tab disconnect and WebUI-only commands require Chromium")
   test.use({ model: { steps: [hangStep(60_000), textStep("Spare."), textStep("Spare."), textStep("Spare.")] } })
 
   test("a tab offers no /to-background, Ctrl+D only shows a notice, and closing the tab leaves the session unarchived and running", async ({ tui, workspace, page, fakeModel }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
-    const webPage = await page.context().newPage()
+    const webPage = await term.page.context().newPage()
     await webPage.setViewportSize({ width: 690, height: 640 })
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
@@ -217,7 +217,7 @@ test.describe("WebUI tabs (bare hya)", () => {
 test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
   test.use({ model: { steps: [textStep("Terminal reply."), textStep("Web reply."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("/resume in a tab opens the terminal's session, and the other way round", async ({ tui, workspace, page }, testInfo) => {
+  test("/resume in a tab opens the terminal's session, and the other way round", async ({ tui, workspace }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
@@ -226,9 +226,13 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     await term.waitForText("Terminal reply.", 20_000)
     await term.waitForIdle()
 
-    const webPage = await page.context().newPage()
-    await webPage.goto(`http://127.0.0.1:${port}/`)
-    const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
+    const web = terminalDriver === "pty"
+      ? await tui(...selfLaunch(workspace, [], { independent: true }))
+      : await (async () => {
+          const webPage = await term.page.context().newPage()
+          await webPage.goto(`http://127.0.0.1:${port}/`)
+          return new Tui(webPage, `http://127.0.0.1:${port}/`)
+        })()
     // Plain launches restore the saved Project chat. Start a fresh chat explicitly
     // before testing cross-client resume in both directions.
     await web.waitForText("Message, !shell, or @file · / commands", 30_000)

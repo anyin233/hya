@@ -8,7 +8,7 @@ import { expect, hyaTui, test, wideViewport as wide } from "./hya"
 const sidebarMinColumns = 29
 
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
   return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
 }
@@ -23,11 +23,11 @@ async function sidebarBorder(term: Tui): Promise<{ row: number; col: number }> {
 async function drag(term: Tui, from: { row: number; col: number }, toCol: number): Promise<void> {
   const start = await cellPoint(term, from.row, from.col)
   const end = await cellPoint(term, from.row, toCol)
-  await term.page.mouse.move(start.x, start.y)
-  await term.page.mouse.down()
-  await term.page.mouse.move((start.x + end.x) / 2, end.y, { steps: 4 })
-  await term.page.mouse.move(end.x, end.y, { steps: 4 })
-  await term.page.mouse.up()
+  await term.mouse.move(start.x, start.y)
+  await term.mouse.down()
+  await term.mouse.move((start.x + end.x) / 2, end.y, { steps: 4 })
+  await term.mouse.move(end.x, end.y, { steps: 4 })
+  await term.mouse.up()
 }
 
 test.describe("right sidebar width", () => {

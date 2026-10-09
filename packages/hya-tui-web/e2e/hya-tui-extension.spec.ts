@@ -9,7 +9,7 @@ import { expect, hyaTui, test, textStep, wideViewport } from "./hya"
 
 /** Center of one terminal cell in page pixels (see hya-tui-projects.spec.ts). */
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
   return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
 }
@@ -95,7 +95,7 @@ test.describe("TUI extension process integration", () => {
 
     const button = (await term.find("CLICKS 0"))!
     const point = await cellPoint(term, button.row, button.col + 2)
-    await term.page.mouse.click(point.x, point.y)
+    await term.mouse.click(point.x, point.y)
     await term.waitForText("CLICKS 1")
     await term.type("/layout focus pane-8")
     await term.press("Enter")

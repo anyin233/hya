@@ -142,9 +142,9 @@ test.describe("reasoning", () => {
 
     // A click on one Thinking line toggles just that block.
     const line = await at(term, "▾ Thinking")
-    const screen = (await term.page.locator(".xterm-screen").boundingBox())!
+    const screen = await term.screenBox()
     const { cols, rows } = await term.size()
-    await term.page.mouse.click(screen.x + ((line.col + 3) / cols) * screen.width, screen.y + ((line.row + 0.5) / rows) * screen.height)
+    await term.mouse.click(screen.x + ((line.col + 3) / cols) * screen.width, screen.y + ((line.row + 0.5) / rows) * screen.height)
     await term.waitForText("▸ Thinking · 6 words")
     expect(await term.find("private chain of thought")).toBeNull()
     // The click leaves the input focused: typing still reaches it.
@@ -217,10 +217,10 @@ test.describe("scrolling", () => {
     await term.waitForText("row 90 of the long reply")
 
     const row = await at(term, "row 90 of the long reply")
-    const box = (await term.page.locator(".xterm-screen").boundingBox())!
+    const box = await term.screenBox()
     const cell = await term.size()
-    await term.page.mouse.move(box.x + box.width / 4, box.y + ((row.row + 0.5) / cell.rows) * box.height)
-    await term.page.mouse.wheel(0, -600)
+    await term.mouse.move(box.x + box.width / 4, box.y + ((row.row + 0.5) / cell.rows) * box.height)
+    await term.mouse.wheel(0, -600)
     await expect.poll(async () => (await term.text()).includes("row 90 of the long reply")).toBe(false)
     await term.press("End")
     await term.waitForText("row 90 of the long reply")

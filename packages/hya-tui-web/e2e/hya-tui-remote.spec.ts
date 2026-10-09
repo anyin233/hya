@@ -98,10 +98,13 @@ test.describe("/connect-remote", () => {
 
     // The remote's Project view: create a Project (its root lives on the remote machine), then switch into it.
     await term.press("n")
+    await term.waitForText("New project name")
     await term.type("remote-project")
     await term.press("Enter")
+    await term.waitForText("Root 1 (primary)")
     await term.type(remote.root)
     await term.press("Enter")
+    await term.waitForText("Root 2 (Enter empty to finish)")
     await term.press("Enter")
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
@@ -119,6 +122,7 @@ test.describe("/connect-remote", () => {
     // The command pane has its own history; Shift+Up recalls the command
     // without its link, while the message composer keeps only prompt history.
     await term.type("/")
+    await term.waitForText("Commands")
     await term.press("Shift+ArrowUp")
     await term.waitForText("/layout show")
     await term.press("Shift+ArrowUp")
@@ -153,14 +157,18 @@ test.describe("/connect-remote", () => {
     await writeFile(join(workspace.dir, "local-only.png"), Buffer.concat([signature, Buffer.alloc(64, 1)]))
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    await statusSessionId(term)
     await term.type(`/connect-remote ${remote.link}`)
     await term.press("Enter")
     await term.waitForText("No projects yet · n creates one", 30_000)
     await term.press("n")
+    await term.waitForText("New project name")
     await term.type("remote-project")
     await term.press("Enter")
+    await term.waitForText("Root 1 (primary)")
     await term.type(remote.root)
     await term.press("Enter")
+    await term.waitForText("Root 2 (Enter empty to finish)")
     await term.press("Enter")
     await term.waitForText(/Created remote-project/)
     await term.press("Enter")
@@ -204,7 +212,7 @@ test.describe("/connect-remote", () => {
 
     await prompt(term, "/connect-remote")
     await term.waitForText("Relay link")
-    await term.page.evaluate((text) => window.hyaTerm.term.paste(text), remote.link)
+    await term.paste(remote.link)
     await term.waitForText(`${"•".repeat(32)}…  ${remote.link.length} characters`)
     expect(await term.find(secretOf(remote.link))).toBeNull()
     await term.attach(testInfo, "concealed-entry")
@@ -223,7 +231,7 @@ test.describe("/connect-remote", () => {
     await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     await prompt(term, "/connect-remote")
     await term.waitForText("paste or type the relay link (hidden) · Enter connects · Esc cancels")
-    await term.page.evaluate((text) => window.hyaTerm.term.paste(text), remote.link)
+    await term.paste(remote.link)
     await term.waitForText(`${"•".repeat(32)}…  ${remote.link.length} characters`)
     const lines = await term.lines()
     const top = lines.findIndex((line) => line.includes("Relay link"))
@@ -280,8 +288,8 @@ test.describe("/connect-remote", () => {
     await term.waitForText("Refresh failed: unavailable: remote backend is offline", 20_000)
     await term.attach(testInfo, "remote-offline")
 
-    const all = await term.page.evaluate(() => {
-      const buffer = window.hyaTerm.term.buffer.active
+    const all = await term.inspect((terminal, state) => {
+      const buffer = terminal.buffer.active
       const rows: string[] = []
       for (let y = 0; y < buffer.length; y++) rows.push(buffer.getLine(y)?.translateToString(true) ?? "")
       return rows

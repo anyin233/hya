@@ -10,9 +10,9 @@ async function command(term: Tui, text: string) {
 async function click(term: Tui, text: string) {
   await term.waitForText(text)
   const at = (await term.find(text))!
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
-  await term.page.mouse.click(box.x + (at.col + .5) / cols * box.width, box.y + (at.row + .5) / rows * box.height)
+  await term.mouse.click(box.x + (at.col + .5) / cols * box.width, box.y + (at.row + .5) / rows * box.height)
 }
 function flatten(node: any): any[] { return node.type === "pane" ? [node] : [node, ...node.children.flatMap((child: any) => flatten(child.node))] }
 

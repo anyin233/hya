@@ -85,7 +85,7 @@ test.describe("hya TUI Provider View", () => {
         const models = await api<{ models?: Array<{ id?: string }> }>(backend, "GET", "/v1/models")
         return (models.models ?? []).some((model) => model.id === "gw/alpha")
       }, { timeout: 20_000 }).toBe(true)
-      await term.page.waitForTimeout(600)
+      await term.pause(600)
       await term.type("/model")
       await term.press("Enter")
       await term.waitForText(/alpha\s+\[gw\]/, 5_000)

@@ -146,11 +146,11 @@ test.describe("one-command launch", () => {
     await expect.poll(() => listed(url), { timeout: 20_000 }).not.toContain(empty)
   })
 
-  test("closing the browser tab (SIGHUP) leaves the daemon running", async ({ tui, workspace, page }) => {
+  test("closing the browser tab (SIGHUP) leaves the daemon running", async ({ tui, workspace }) => {
     const term = await tui(...selfLaunch(workspace))
     await term.waitForText("Message, !shell, or @file · / commands", 30_000)
     const pid = await backendPid(term)
-    await page.goto("about:blank")
+    await term.disconnect()
     // The tab's TUI is gone (`bun <tui main> --dir …`; the host's own argv names it later on)…
     const tuis = () => execFileSync("ps", ["-axo", "command="]).toString().split("\n")
       .filter((line) => line.trim().split(/\s+/)[1] === tuiMain && line.includes(`--dir ${workspace.dir}`))

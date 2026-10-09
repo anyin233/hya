@@ -1,6 +1,6 @@
 // A real raw-mode terminal child that exposes received bytes as printable hex.
 process.stdin.setRawMode(true)
-process.stdout.write("\x1b[?1h\x1b[?1002h\x1b[?1006h\x1b[?2004hready\r\n")
+process.stdout.write("\x1b[?1h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1004hready\r\n")
 let received = ""
 process.stdin.on("data", (bytes: Buffer) => {
   received += bytes.toString("hex")

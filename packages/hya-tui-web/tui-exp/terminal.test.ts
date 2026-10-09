@@ -25,7 +25,9 @@ test("keyboard, bracketed paste, mouse click/drag/wheel reach the raw child", as
     await terminal.click({ col: 4, row: 2 })
     await terminal.drag({ col: 0, row: 0 }, { col: 1, row: 0 })
     await terminal.mouse("wheel-down", { col: 4, row: 2 })
-    const wire = "\x1bOA\x1b[200~hello\x1b[201~\x1b[<0;5;3M\x1b[<0;5;3m\x1b[<0;1;1M\x1b[<32;2;1M\x1b[<0;2;1m\x1b[<65;5;3M"
+    await terminal.focus(false)
+    await terminal.focus(true)
+    const wire = "\x1bOA\x1b[200~hello\x1b[201~\x1b[<0;5;3M\x1b[<0;5;3m\x1b[<0;1;1M\x1b[<32;2;1M\x1b[<0;2;1m\x1b[<65;5;3M\x1b[O\x1b[I"
     await terminal.waitForText(`input:${Buffer.from(wire).toString("hex")}`)
     await terminal.press("Control+C")
     expect(await terminal.waitForExit()).toBe(0)

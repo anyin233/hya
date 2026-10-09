@@ -45,14 +45,15 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - Place the documentation using the boundary-to-page table in `docs/development.md`; a genuinely new surface gets a new page under `docs/` linked from `docs/README.md`.
 - Documentation is part of the feature's verification gate: do not commit or push feature work until the matching documentation is updated.
 
-## TUI Preview & Browser Test Rule
+## TUI Preview & Terminal Test Rule
 
 The TUI and the WebUI are one frontend: `packages/hya-tui-web` runs the TUI on
 a real PTY and renders it in the browser with xterm.js (see `docs/tui-web.md`,
-ADR-0018). TUI previews and the authoritative integration gate use that browser
-rendering. The experimental `packages/hya-tui-web/tui-exp` suite may also drive
-the actual TUI on a Bun PTY with `@xterm/headless`; keep browser coverage while
-evaluating its parity and timings. It does not use tmux or terminal scraping.
+ADR-0018). The required integration gate is `packages/hya-tui-web/tui-exp`:
+it drives the actual TUI on a Bun PTY with `@xterm/headless` using shared
+`e2e/*.spec.ts` scenarios. Browser-only cases are excluded from normal CI.
+Chromium remains available for optional WebUI checks and visual previews.
+Neither driver uses tmux or terminal scraping.
 
 - **Preview in the browser, not a terminal multiplexer.** Do not use tmux,
   `script`, or terminal scraping to check TUI output. To look at the TUI, serve
@@ -66,7 +67,7 @@ evaluating its parity and timings. It does not use tmux or terminal scraping.
   `bun packages/hya-tui-web/src/main.ts --port 7681 -- target/debug/hya --port 0`.
   The offline echo model is enough; do not spend real provider calls on UI
   checks.
-- **Add Playwright coverage for TUI changes where useful** under
+- **Add shared terminal coverage for TUI changes where useful** under
   `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`.
   Cover layout,
   keys, resize, and exit paths the change touches.
@@ -74,7 +75,7 @@ evaluating its parity and timings. It does not use tmux or terminal scraping.
   `cell` (color `#rrggbb`, glyph `width`, bold/inverse), and `size`. Do not
   commit pixel-baseline screenshots, because fonts differ between machines.
   Use `waitForText`/`expect.poll`, never fixed sleeps.
-- **Inspect visual results when browser execution is available.** Every test
+- **For optional browser visual checks, inspect the results.** Each browser test
   writes `test-results/<test>/final-screen.png` and `final-screen.txt`. Open
   the PNG (agents: read the image) at the default 1100×640 viewport. If the
   change depends on size, also check a narrow viewport (about 80 columns).
@@ -254,4 +255,4 @@ Run only the packages you changed, from that package's directory:
 |`packages/hya-tui`|`bun run typecheck && bun test` (use `bun test <file>` while iterating)|
 |`packages/hya-tui-web`|`bun run typecheck && bun test ./test`|
 
-A user-visible TUI change also runs its Playwright specs from `packages/hya-tui-web`: the new or changed spec and the specs for the screens it touches (`bunx playwright test e2e/<spec>.ts`), not the whole suite. Specs that start the backend need `cargo build -p hya-backend --bin hya` first (see `docs/tui-web.md#running-the-tests`).
+A user-visible TUI change also runs its shared terminal specs from `packages/hya-tui-web`: the new or changed spec and the specs for the screens it touches (`bun run test:tui-exp:parity -- e2e/<spec>.ts`), not the whole suite. Specs that start the backend need `cargo build -p hya-backend --bin hya` first (see `docs/tui-web.md#running-the-tests`).

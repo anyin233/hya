@@ -1,7 +1,7 @@
 // Copy (docs/tui.md "Copy"): `/copy` and a mouse selection in the transcript
 // write the text to the terminal as an OSC 52 clipboard sequence. The spec
 // registers an OSC 52 handler on the page's xterm.js terminal
-// (`window.hyaTerm.term`, the generic test hook of docs/tui-web.md) and
+// (`terminal`, the generic test hook of docs/tui-web.md) and
 // decodes what reached it, so it checks the bytes the TUI emitted, not the
 // browser's clipboard permissions.
 
@@ -16,10 +16,10 @@ declare global {
 
 /** Record every OSC 52 payload (`c;<base64>`) the terminal receives from now on. */
 async function captureOsc52(term: Tui): Promise<void> {
-  await term.page.evaluate(() => {
-    window.osc52 = []
-    window.hyaTerm.term.parser.registerOscHandler(52, (data: string) => {
-      window.osc52!.push(data)
+  await term.inspect((terminal, state) => {
+    state.osc52 = []
+    terminal.parser.registerOscHandler(52, (data: string) => {
+      state.osc52!.push(data)
       return true
     })
   })
@@ -27,13 +27,13 @@ async function captureOsc52(term: Tui): Promise<void> {
 
 /** The decoded texts of the OSC 52 writes seen so far. */
 async function copied(term: Tui): Promise<string[]> {
-  const payloads = await term.page.evaluate(() => window.osc52 ?? [])
+  const payloads = await term.inspect((_terminal, state) => state.osc52 ?? [])
   return payloads.map((payload) => Buffer.from(payload.slice(payload.indexOf(";") + 1), "base64").toString("utf8"))
 }
 
 /** Screen pixel of the middle of cell (row, col). */
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
   return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
 }
@@ -69,14 +69,14 @@ test.describe("copy", () => {
     const at = (await term.find("bravo charlie"))!
     const start = await cellPoint(term, at.row, at.col)
     const end = await cellPoint(term, at.row, at.col + "bravo charlie".length - 1)
-    await term.page.mouse.move(start.x, start.y)
-    await term.page.mouse.down()
-    await term.page.mouse.move((start.x + end.x) / 2, end.y, { steps: 3 })
-    await term.page.mouse.move(end.x, end.y, { steps: 3 })
+    await term.mouse.move(start.x, start.y)
+    await term.mouse.down()
+    await term.mouse.move((start.x + end.x) / 2, end.y, { steps: 3 })
+    await term.mouse.move(end.x, end.y, { steps: 3 })
     // While dragging, the selected cells use the hya theme's selection background.
     await expect.poll(async () => (await term.cell(at.row, at.col + 2))?.bg).toBe("#2f4d6b")
     await term.attach(testInfo, "selecting")
-    await term.page.mouse.up()
+    await term.mouse.up()
 
     await expect.poll(() => copied(term)).toEqual(["bravo charlie"])
     // The text keeps its own color under the highlight.
@@ -91,7 +91,7 @@ test.describe("copy", () => {
     await captureOsc52(term)
     const at = (await term.find("bravo"))!
     const point = await cellPoint(term, at.row, at.col)
-    await term.page.mouse.click(point.x, point.y)
+    await term.mouse.click(point.x, point.y)
     await prompt(term, "/status")
     await term.waitForText("Server")
     expect(await copied(term)).toEqual([])

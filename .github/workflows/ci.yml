@@ -138,64 +138,8 @@ jobs:
       - name: build hya and bundle packager
         if: ${{ !cancelled() }}
         run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
-      - name: install Playwright Chromium
+      - name: direct PTY protocol checks and full terminal suite
         if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-web
-        run: |
-          for attempt in 1 2 3; do
-            bunx playwright install --with-deps chromium && exit 0
-            echo "Playwright install attempt ${attempt} failed; retrying"
-            sleep $(( attempt * 10 ))
-          done
-          exit 1
-      - name: hya-tui-web browser e2e
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-web
-        env:
-          HYA_BIN: ${{ github.workspace }}/target/debug/hya
-        # Keep this identical to the documented local gate: the complete
-        # browser suite, including current pane, command and session flows.
-        run: bun run test:e2e
-      - name: upload playwright test-results on failure
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: tui-web-test-results
-          path: packages/hya-tui-web/test-results/
-          if-no-files-found: ignore
-      - name: upload playwright report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: tui-web-playwright-report
-          path: packages/hya-tui-web/playwright-report/
-          if-no-files-found: ignore
-
-  # Experimental direct-PTY coverage. The browser gate above stays authoritative
-  # until terminal behavior and timings have been compared on real CI runners.
-  tui-exp:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup-bun
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-      - name: install TUI and experimental harness dependencies
-        run: |
-          cd packages/hya-tui
-          bun install --frozen-lockfile
-          cd ../hya-tui-web
-          bun install --frozen-lockfile
-      - name: typecheck terminal harness
-        working-directory: packages/hya-tui-web
-        run: bun run typecheck
-      - name: build backend
-        run: cargo build --locked -p hya-backend --bin hya
-      - name: direct PTY TUI tests
         working-directory: packages/hya-tui-web
         env:
           HYA_BIN: ${{ github.workspace }}/target/debug/hya

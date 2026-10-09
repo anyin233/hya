@@ -39,9 +39,9 @@ async function match(term: Tui, pattern: RegExp): Promise<{ row: number; col: nu
 
 /** Click the terminal cell at `row`, `col`. */
 async function click(term: Tui, row: number, col: number): Promise<void> {
-  const screen = (await term.page.locator(".xterm-screen").boundingBox())!
+  const screen = await term.screenBox()
   const size = await term.size()
-  await term.page.mouse.click(screen.x + ((col + 0.5) / size.cols) * screen.width, screen.y + ((row + 0.5) / size.rows) * screen.height)
+  await term.mouse.click(screen.x + ((col + 0.5) / size.cols) * screen.width, screen.y + ((row + 0.5) / size.rows) * screen.height)
 }
 
 test.describe("read card", () => {

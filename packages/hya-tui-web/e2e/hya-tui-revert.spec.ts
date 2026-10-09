@@ -21,7 +21,7 @@ async function prompt(term: Tui, text: string): Promise<void> {
 /** Empty the input (the first Ctrl+C clears it). */
 async function clearInput(term: Tui): Promise<void> {
   await term.press("Control+c")
-  expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
+  expect(await term.exitStatus()).toBeNull()
 }
 
 test.describe("undo and redo", () => {
