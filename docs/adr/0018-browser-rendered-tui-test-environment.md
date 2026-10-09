@@ -38,3 +38,20 @@ serves the WebUI, one TUI process per browser connection.
   their own later decision.
 - The host spawns processes for any same-origin client, so it binds loopback
   by default and rejects cross-origin WebSocket upgrades.
+
+## Experimental direct-PTY tests (2026-10-09)
+
+Add `packages/hya-tui-web/tui-exp` as a parallel experiment: Bun spawns the
+real TUI on a PTY and `@xterm/headless`, pinned to the browser's xterm.js
+version, interprets its output. Assertions inspect the parsed screen, styles,
+wide glyphs, and cursor state. Inputs encode terminal keys, application-enabled
+mouse reporting, bracketed paste, and PTY resize. This removes the browser and
+WebUI transport from terminal-behavior tests without replacing the app renderer.
+
+The independent CI job is initially non-blocking. Keep the browser suite as
+the authoritative gate until matched scenarios demonstrate parity and measured
+timings justify migration. Browser notification/clipboard permissions, DOM
+focus, browser keyboard translation, and WebSocket behavior remain browser
+responsibilities. The experiment shares backend isolation and fake models with
+the browser suite; diagnostics are terminal text, recent parsed frames, raw
+output, and phase timings. See [usage and interface](../tui-web.md#experimental-direct-pty-suite-tui-exp).
