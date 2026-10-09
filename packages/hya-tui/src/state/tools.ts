@@ -38,12 +38,21 @@ export interface ToolLine {
   tone: Tone
 }
 
-export interface TaskInfo {
-  /** Subagent type (`subagent_type`, default `general`). */
+export interface TaskMemberInfo {
+  /** Subagent type (`subagent_type`, default `hya-task`). */
   agent: string
   description: string
   /** Child session id, from the output's `metadata.sessionId`. */
   child?: string
+  /** Runtime handle, not the internal roster member id. */
+  name?: string
+  status?: string
+  summary?: string
+}
+
+export interface TaskInfo extends TaskMemberInfo {
+  /** Every batch entry, including failed launches without a session. */
+  members?: TaskMemberInfo[]
 }
 
 export interface ToolCardView {
@@ -353,14 +362,31 @@ function describe(tool: string, input: Json, output: unknown, raw: string, shell
       return { summary: question, body: clipLines(textLines(text)) }
     }
     case "task": {
-      const members = Array.isArray(input.members) ? input.members.map(record) : []
-      const agent = str(input.subagent_type) || str(members[0]?.subagent_type) || str(meta.subagent_type) || "hya-task"
-      const description = str(input.description) ?? str(members[0]?.description) ?? str(out.title) ?? ""
-      const child = str(meta.sessionId)
+      const batch = Array.isArray(input.tasks) ? input.tasks : input.members
+      const members = Array.isArray(batch) ? batch.map(record) : []
+      const agent = (members.length ? str(members[0]?.subagent_type) : str(input.subagent_type)) || str(meta.subagent_type) || "hya-task"
+      const description = (members.length ? str(members[0]?.description) : str(input.description)) ?? str(out.title) ?? ""
+      const child = str(meta.sessionId) || str(meta.session)
+      const name = str(meta.handle) || str(meta.member)
+      const outcomes = Array.isArray(meta.members) ? meta.members.map(record) : undefined
+      const entries = Array.isArray(batch) || outcomes ? Array.from({ length: Math.max(members.length, outcomes?.length ?? 0) }, (_, index): TaskMemberInfo => {
+        const spec = members[index] ?? {}
+        const result = outcomes?.[index] ?? {}
+        const child = str(result.sessionId) || str(result.session)
+        const name = str(result.handle) || str(result.member)
+        const status = str(result.status)
+        const summary = str(result.summary)
+        return {
+          agent: str(result.subagent_type) || str(spec.subagent_type) || "hya-task",
+          description: str(result.description) ?? str(spec.description) ?? "",
+          ...(child ? { child } : {}), ...(name ? { name } : {}),
+          ...(status ? { status } : {}), ...(summary ? { summary } : {}),
+        }
+      }) : undefined
       return {
         summary: [agent, description, members.length > 1 ? `${members.length} members` : ""].filter(Boolean).join(" · "),
         body: [],
-        task: { agent, description, ...(child ? { child } : {}) },
+        task: { agent, description, ...(child ? { child } : {}), ...(name ? { name } : {}), ...(entries ? { members: entries } : {}) },
       }
     }
   }

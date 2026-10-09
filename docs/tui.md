@@ -405,11 +405,11 @@ stop` plus another client's start, or through `/reconnect` does not, and
 neither does a remote backend (`/connect-remote`, `hya --connect`), a
 `--grpc` start, or a fixed `--server` without `--db`.
 
-How it works: the process a host starts (`bun <tui>/src/main.ts …`, run by
-bare `hya`, by each WebUI tab of the web host, or by hand) is a small
-supervisor (`src/supervisor.ts`). It runs the same entry again as the app
-(`src/tui.ts`) on the same terminal, with stdin, stdout, and stderr
-inherited, and forwards SIGINT, SIGTERM, and SIGHUP to it. To reload, the app
+How it works: bare `hya` supervises the terminal app directly, saving an
+extra Bun process at startup. Direct TUI starts and each WebUI tab still use
+the small Bun supervisor (`src/supervisor.ts`). Both use the same reload
+protocol and run `src/main.ts` as the app on the inherited terminal.
+To reload, the app
 restores the terminal, writes `{"argv": [...], "draft": {"text", "cursor"}}`
 to the file the supervisor named in `HYA_TUI_RELOAD_FILE` (mode 0600 in the
 temporary directory), and exits with status **75**; the supervisor starts a
@@ -1945,19 +1945,23 @@ the call's argument fragments. Cards appear before the projection is re-read (se
 
 ### Subagents
 
-A `task` call spawns a subagent in its own child session. Its card shows the
-child's status and what it last did, and it always shows these lines:
+A `task` call spawns one or more subagents in their own child sessions. Its
+card shows every member's full handle, session, status, and latest activity.
+For example, a single member appears as:
 
 ```text
-✓ task  hya-task · survey the repo                                  7ms
+task
+✓ hya-task · survey the repo                                       7ms
+│ main/hya-task-marcille · survey the repo
 │ ⠹ running  ↳ read notes.txt · lines 1-1 of 1
 │ click to view · /open hysec_…
 ```
 
-- **Link.** The card finds its member (`MemberInfo`) by the tool call's
-  `callId` (`memberUpdated.callId`), else by the child session in the task
-  output (`outputJson.metadata.sessionId`). Resident spawns record no call
-  id, so the second rule is the one that usually applies.
+- **Link.** Each row matches its own output session or handle to `MemberInfo`.
+  Before output arrives, members sharing `memberUpdated.callId` supply live
+  rows. An explicit child never falls back to the first sibling with the same
+  call ID. Resident spawns can omit the call ID; their output sessions still
+  link correctly. See [Batched subagent task cards](#batched-subagent-task-cards).
 - **Status.** A finished member status wins (`✓ done`, `✗ failed`,
   `! cancelled`). Otherwise the child session's `busy` flag says `running`
   (spinner) or `idle` (`✓`, its turn ended; a resident subagent waits for
@@ -1981,7 +1985,7 @@ child's status and what it last did, and it always shows these lines:
   current, and the pending interactions (`GET /v1/interactions`), so a
   subagent's ask reaches the parent's prompt within one round.
 
-**Child view.** A click on the task card, `/open <child session id>`, or
+**Child view.** A click on a task member row, `/open <child session id>`, or
 `/open <number>` of its sidebar row opens the child session read-only: a
 `Viewing subagent <agent> · Esc returns · read-only` banner sits above its
 transcript, and the input's placeholder says so. Enter on a
@@ -3718,7 +3722,7 @@ together.
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (internal mode navigation), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session or saved as the TUI default, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, saves the successfully selected default, re-lists interactions, reports in the controller status state. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`, `askFrameRoute()` (the session stream) and `globalAskRoute()` (the global stream). |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the controller status state. |
-| `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
+| `src/state/members.ts` | Subagents: `foldMember()`, `taskLinks()` (all card members and their child sessions), `taskLink()` (single-child lookup), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar visibility modes and width breakpoints, plus `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/panes.ts`, `src/components/PaneWorkspace.tsx`, `src/components/ConversationPane.tsx` | Versioned ordered row/column containers, legacy migration, tree operations, rendered-bound navigation and stable flat pane instances. |
 | `src/state/projectsSidebar.ts` | The left Projects sidebar's pure state: `projectSidebarRows()` (name, busy, session count, active), `projectsSidebarKey()` (Up/Down/Enter/Esc while it has focus). |
@@ -3935,3 +3939,82 @@ back), trusting it (JIT tier), uninstalling it, and the first-party refusal.
 ### Session pane mouse navigation
 
 The `Sessions` pane is mouse-aware: clicking either line of a session row opens that session. Clicking a subagent row opens its top-level parent session, so the pane always switches the main session tab rather than entering a read-only child. Top-level session groups are separated by horizontal divider lines; these are visual separators and are not clickable.
+
+
+### Batched subagent task cards
+
+The `task` card recognizes the preferred `{context?: string, tasks: [{prompt:
+string, description?: string, subagent_type?: string, ...}]}` tool input and
+its legacy `members` alias. Independent tasks are launched in one call; the
+header shows the first member's agent and label plus the batch count (for
+example, `hya-scout · map routes · 2 members`). Below it, every member has its
+own always-visible row with its full runtime handle (for example,
+`main/hya-scout-marcille`), description, live status/activity, and complete
+`/open hysec_…` session command. Names and session commands wrap on narrow
+terminals rather than being truncated. Scroll the transcript for longer
+batches; the generic tool-output line limit does not hide batch members.
+
+Click a member's row to open that specific child read-only, or enter its
+`/open <session>` command; Esc returns to the parent. A single-task header
+remains clickable. For example, a two-member route/test inspection displays
+both handles and both sessions, and clicking the second row opens the test
+inspector. Follow the child sessions and their reports for completion;
+launch acknowledgement is not task completion.
+
+The display consumes the existing output contract: batch
+`metadata.members[]` entries carry `member: string` (runtime handle),
+`sessionId: string` (legacy `session: string` also accepted),
+`subagent_type: string`, `description: string`, `status: string`, and
+`summary: string`. Single-task output retains `metadata.sessionId` and
+`metadata.member`. The UI reconciles each entry by its own child session or
+handle with live member events, so siblings sharing a call ID cannot steal
+one another's state or click target. Failed batch entries without a session
+remain visible without an open link. Replayed outputs can populate every
+child before live roster state arrives. Top-level single-task labels are
+ignored for batches. See the
+[task contract](architecture/agent-tool-surface.md#task) for a complete example
+and the input/result fields; no backend contract change is required.
+
+## Precompiled startup
+
+Release frontends ship precompiled JSX in `dist/app.js` and its sibling chunks.
+This avoids loading Babel and transforming the entire UI on every launch. The
+HTTP path imports the gRPC implementation only when `--grpc` selects it.
+
+For a source checkout, run `bun install --frozen-lockfile` and `bun run build`
+in `packages/hya-tui`, then start `bun src/main.ts` as usual. Rebuild after source
+edits; remove `dist/` to return to live source execution. A build writes hashed
+chunks first and replaces `dist/app.js` last. Source files, protobuf definitions,
+and the adjacent TUI SDK remain required; the bundle is not a standalone binary.
+The release workflow and `release-rehearsal` both run this build.
+
+`HYA_STARTUP_TRACE_FILE=<absolute path>` appends JSONL startup diagnostics to a
+file rather than the terminal. Each row has `hya_startup: true`, `mark: string`,
+`wall_ms: number` (Unix milliseconds), `pid: number`, and optional `detail: string`.
+Backend marks use integer milliseconds; frontend marks preserve fractions.
+`frontend_launch` starts at the native launch handler, before daemon discovery;
+`tui_tree_mounted` records the mounted UI, `tui_controller_ready` records the
+completion of the initial controller load, and `tui_extensions_loaded` records
+a successful catalog load with every listed extension running. A controller
+error appears in the ready mark's detail and must not count as a successful
+performance sample. Marks do not assert that a browser has painted the frame.
+
+For repeatable browser verification, build a release backend and all tool-family
+libraries, stage all first-party bundles with `xtask stage-first-party-bundles`,
+and run the dedicated spec from `packages/hya-tui-web`:
+
+```sh
+HYA_BIN=/absolute/package/bin/hya \
+  HYA_STARTUP_BUDGET_COLD_MS=100 HYA_STARTUP_BUDGET_WARM_MS=50 \
+  bunx playwright test e2e/hya-startup.spec.ts --workers=1
+```
+
+The spec launches bare `hya` on a real PTY through the browser, measures a cold
+daemon, a subsequent connection to that same daemon, and a stopped daemon
+restarted with its existing native cache (`cold_cached`). It verifies commands and
+attaches phase timings and screenshots. The two optional positive-number
+budget variables enforce milliseconds from the test wrapper’s `frontend_spawn`
+(immediately before spawning the executable) to controller
+readiness. With neither variable set it verifies correctness without asserting
+hardware-dependent timing. Record whether the package/native cache and database
+were fresh; do not confuse repeated daemon starts with first-install latency.

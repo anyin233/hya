@@ -179,10 +179,26 @@ fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String
 }
 
 fn load_presets() -> Result<Vec<BaseToolsPreset>, String> {
-    let presets = TOOL_FAMILIES
-        .iter()
-        .map(|identity| load_preset(identity).map_err(|error| format!("{identity}: {error}")))
-        .collect::<Result<Vec<_>, _>>()?;
+    // These five independent packages include native binaries. Validate them
+    // concurrently, then retain the declared family order for policy resolution.
+    let presets = std::thread::scope(|scope| {
+        let workers = TOOL_FAMILIES
+            .iter()
+            .map(|identity| {
+                scope.spawn(move || {
+                    load_preset(identity).map_err(|error| format!("{identity}: {error}"))
+                })
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "tool-family validation worker panicked".to_string())?
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
     check_family_exports(
         &presets
             .iter()

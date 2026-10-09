@@ -389,8 +389,10 @@ dependencies must be installed (`bun install` in `packages/hya-tui`).
 runs the specs against that TUI instead (for example an older revision, to
 show that a new spec fails without the change it covers).
 
-Daemon reconnect specs read each `/status` field from one terminal-buffer
-snapshot and reopen the status view while waiting for the successor PID.
+Daemon reconnect and launch specs read related `/status` fields from one
+terminal-buffer snapshot and reopen the status view while waiting for a PID.
+Launch specs use the shared session-id reader so startup cannot leave them
+waiting on a status view that has already returned to Conversation.
 Reconnection restores the conversation asynchronously, so a prior successful
 text wait does not guarantee a later screen read still contains the field.
 

@@ -1,0 +1,9 @@
+Launch independent subagents concurrently with one task call: {"context":"shared goal and interfaces","tasks":[{"description":"Map entry points","subagent_type":"hya-scout","prompt":"Find routing entry points; report paths and contracts."},{"description":"Inspect test coverage","subagent_type":"hya-scout","prompt":"Find routing tests and missing cases; report evidence."}]}.
+
+Prefer one tasks[] batch for work that can start independently. Give each task a bounded scope, explicit file ownership/non-goals and observable acceptance; keep shared constraints in context. Avoid overlapping edits; assign one integration owner. Dependent work starts only after its prerequisites are available. Do trivial work directly.
+
+Non-blocking: returns all handles and session IDs after registration, while agents work concurrently subject to runtime limits. A running result acknowledges launch, not completion. Continue useful independent work; use wait only when blocked on reports, and integrate and verify the reports before finishing. Do not spawn one child then wait before launching independent siblings. Failed batch entries do not cancel successfully launched siblings; inspect each status and never blindly retry the entire batch.
+
+Choose subagent_type from the available roster (list_agents); omit it for hya-task. Omit model/category/effort unless an override is needed; batch overrides belong to each item. The harness names each handle <subagent_type>-<operator>. Send mail to a handle for follow-up, including revival of an archived agent. Shared context is prepended to each prompt; children do not inherit the parent's conversation.
+
+Use tasks with at least one non-empty prompt per item. Do not supply both tasks and its legacy alias members. Legacy single calls use top-level description and prompt, with optional subagent_type and overrides. Batch calls need no dummy top-level description or prompt; top-level single-task fields are ignored in batch mode.

@@ -1,4 +1,4 @@
-# 0.44.14
+# 0.44.17
 
-- Keep tree rows and action menus visible in compact Layout panes by limiting footer hint height and rendering the edit preview on one row. Long hints no longer consume the scrolling viewport.
-- Stabilize the browser provider-error assertion by checking the assistant heading and error together in one terminal-buffer snapshot.
+- Show every task batch member’s full handle and session in the tool card, with independent live status and a clickable child-session row. Wrap names and session commands on narrow terminals.
+- Preserve all batch children during replay and distinguish partial launch failures instead of linking every member to the first child.

@@ -1,6 +1,6 @@
 /**
- * The TUI process a host starts (bare `hya`, the WebUI host, a direct `bun
- * src/main.ts`): it runs the app as a child Bun process on the same
+ * The TUI process a WebUI host or direct `bun src/main.ts` starts (bare
+ * `hya` implements the same supervision itself): it runs the app as a child Bun process on the same
  * terminal and starts it again when it asks to reload (src/reload.ts), so a
  * host keeps one process for the TUI's whole life while the app code is
  * replaced (docs/tui.md "Hot update after `hya serve restart`").
