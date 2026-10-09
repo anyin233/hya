@@ -49,7 +49,10 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 
 The TUI and the WebUI are one frontend: `packages/hya-tui-web` runs the TUI on
 a real PTY and renders it in the browser with xterm.js (see `docs/tui-web.md`,
-ADR-0018). All TUI preview and testing goes through that browser rendering.
+ADR-0018). TUI previews and the authoritative integration gate use that browser
+rendering. The experimental `packages/hya-tui-web/tui-exp` suite may also drive
+the actual TUI on a Bun PTY with `@xterm/headless`; keep browser coverage while
+evaluating its parity and timings. It does not use tmux or terminal scraping.
 
 - **Preview in the browser, not a terminal multiplexer.** Do not use tmux,
   `script`, or terminal scraping to check TUI output. To look at the TUI, serve

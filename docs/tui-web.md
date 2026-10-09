@@ -171,6 +171,76 @@ Locally, run the specs that cover your change: the new or changed spec and the
 specs for the screens it touches. The whole suite is the CI gate; run it
 locally only when asked or when a change affects every screen.
 
+#### Experimental direct-PTY suite (`tui-exp`)
+
+The experimental suite runs the actual Bun/OpenTUI executable on a Bun PTY and
+feeds its bytes into `@xterm/headless` 6.0.0, aligned with the browser's xterm.js
+version. It reads the resulting screen cells directly, without Chromium, a
+DOM, the WebUI host, or a WebSocket. This tests terminal behavior with fewer
+processes and records where time is spent. Backend isolation, provider config,
+and scripted model responses are shared with the browser fixtures in
+`e2e/backend.ts` and `e2e/fake-model.ts`.
+
+Run it from the source checkout:
+
+```sh
+cargo build --locked -p hya-backend --bin hya
+cd packages/hya-tui-web
+bun install --frozen-lockfile
+export HYA_TUI_EXP_OUTPUT_DIR="$HOME/data/hya-tui-exp/results"
+mkdir -p "$HOME/data/hya-tui-exp/tmp"
+export TMPDIR="$HOME/data/hya-tui-exp/tmp"
+bun run test:tui-exp
+```
+
+Install `packages/hya-tui` dependencies too when using a fresh checkout. Set
+`HYA_BIN` to a staged backend executable or `HYA_TUI_MAIN` to another checkout's
+frontend entrypoint when comparing versions. For example, run
+`bun test ./tui-exp/hya.test.ts --test-name-pattern 'command overlay' --timeout 30000`
+to exercise only the command-overlay scenario. No real provider keys or model
+calls are used.
+
+GitHub's separate `tui-exp` job runs the experiment with `continue-on-error:
+true` while the full browser suite remains the gate. The experiment initially
+covers terminal parsing/input/cleanup, the OpenTUI probe, command overlays at
+wide and narrow sizes, mouse focus and paste routing, and streamed replies.
+It is not yet a replacement for all browser scenarios. Browser clipboard
+permissions, notifications, DOM focus, reserved shortcuts, and WebSocket
+reconnect still require browser checks. Ordinary terminal input uses legacy
+xterm encoding; Kitty keyboard, pixel mouse coordinates, and browser-specific
+event translation are not emulated. Unsupported key combinations and pixel
+mouse mode fail explicitly rather than silently testing a different key.
+
+##### Harness interface
+
+`tui-exp/terminal.ts` exports `PtyTerminal.launch(command: string[], options?)`.
+Options are `cols?: number` (default 120), `rows?: number` (default 36),
+`cwd?: string`, `env?: Record<string, string>`, and `shiftEnterLf?: boolean`
+(default false, matching ordinary browser Shift+Enter's CR). Sizes must be
+integer cell counts in 1..4096. Coordinates are zero-based cells.
+
+| Method / property | Contract |
+| --- | --- |
+| `text()`, `lines()`, `find(text)` | Current visible screen; `find` returns `{row, col}` or null, accounting for wide glyphs. |
+| `cell(row, col)` | `{char, width, fg, bg, bold, italic, underline, inverse}` or null; color is `#rrggbb`, `palette:N`, or `default`. |
+| `size()`, `resize(cols, rows)` | Emulator and PTY dimensions; resize signals the real child. |
+| `type(text)`, `press(shortcut)`, `paste(text)` | UTF-8 text, explicit legacy xterm key encoding, or paste respecting the application's bracketed-paste mode. |
+| `click(point)`, `drag(from, to)`, `mouse(action, point, modifiers?, button?)` | Application-enabled mouse reporting; actions are `down`, `up`, `move`, `wheel-up`, `wheel-down`. Modifiers are `{shift?, alt?, ctrl?}`; button defaults to left (0). |
+| `waitForText(pattern, timeout?)`, `waitFor(predicate, description, timeout?)` | Poll parsed screen state, default 10 seconds, with screen diagnostics on failure. |
+| `flush()` | Wait for already-received output to be parsed; does not assert application idle. |
+| `pid`, `exitCode`, `waitForExit(timeout?)` | Real child PID and settled status (`128 + signal` for signal termination, null while running); `waitForExit` also drains PTY EOF. Default exit timeout 10 seconds. |
+| `screen`, `osc52` | Underlying headless terminal and captured OSC 52 payloads for protocol assertions. |
+| `save(directory)`, `close()` | Save bounded diagnostics; terminate/reap the child, escalating to process-group kill after one second, and dispose the emulator. |
+
+The real-TUI cases save `final-screen.txt`, `frames.json` (last 100 parsed output
+batches with elapsed milliseconds), `output.base64.txt` (bounded raw output
+diagnostics), and `timings.json` under `$HYA_TUI_EXP_OUTPUT_DIR/<scenario>/`.
+The default output root is `~/data/hya-rust/tmp/tui-exp-results`; temporary
+workspaces follow `TMPDIR`. Timing fields are `backendSetupMs`,
+`launchToReadyMs`, `actionsMs`, `teardownMs`, and `totalMs`, plus `name` and
+`passed`. Incomplete phases are omitted on failure. Compare matched scenarios
+and worker counts with the browser report before claiming a speedup.
+
 #### Full local TUI CI gate
 
 From the repository root, run:

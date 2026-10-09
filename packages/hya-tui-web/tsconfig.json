@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "web/**/*.ts", "test/**/*.ts", "e2e/**/*.ts", "playwright.config.ts"]
+  "include": ["src/**/*.ts", "web/**/*.ts", "test/**/*.ts", "e2e/**/*.ts", "tui-exp/**/*.ts", "playwright.config.ts"]
 }
