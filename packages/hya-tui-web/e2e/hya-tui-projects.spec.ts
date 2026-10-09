@@ -28,7 +28,7 @@ async function esc(term: Tui, thenGone: string | RegExp): Promise<void> {
 
 /** Center of one terminal cell in page pixels (see hya-tui-sidebar-resize.spec.ts). */
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
   return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
 }
@@ -57,12 +57,16 @@ test.describe("Projects sidebar", () => {
     // Create a second Project via /project, then switch to it from the sidebar with Alt+0, Down, Enter.
     await prompt(term, "/project")
     await term.waitForText("Projects")
+    await term.waitForText("Up/Down move · Enter opens/switches")
     await term.press("n")
+    await term.waitForText("New project name")
     await term.type("second")
     await term.press("Enter")
+    await term.waitForText("Root 1 (primary)")
     const secondRoot = await mkdtemp(join(tmpdir(), "hya-e2e-second-"))
     await term.type(secondRoot)
     await term.press("Enter")
+    await term.waitForText("Root 2 (Enter empty to finish)")
     await term.press("Enter")
     await term.waitForText(/Created second/)
     await esc(term, "Created second")
@@ -99,7 +103,7 @@ test.describe("Projects sidebar", () => {
 
     // A click on the row switches (Enter and the Project view do the same).
     const point = await cellPoint(term, row.row, row.col + 2)
-    await term.page.mouse.click(point.x, point.y)
+    await term.mouse.click(point.x, point.y)
     await expectStatus(term, "Directory", secondRoot)
     await term.attach(testInfo, "sidebar-clicked")
   })
@@ -137,8 +141,10 @@ test.describe("Project view", () => {
 
     // Create: name, then two roots (Enter on an empty root finishes).
     await term.press("n")
+    await term.waitForText("New project name")
     await term.type("multi-root")
     await term.press("Enter")
+    await term.waitForText("Root 1 (primary)")
     const rootA = await mkdtemp(join(tmpdir(), "hya-e2e-a-"))
     const rootB = await mkdtemp(join(tmpdir(), "hya-e2e-b-"))
     await term.type(rootA)
@@ -175,6 +181,7 @@ test.describe("Project view", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "/project")
     await term.waitForText("Projects")
+    await term.waitForText("Up/Down move · Enter opens/switches")
     await term.press("t")
     const first = await statusSessionId(term)
     await prompt(term, "/new --temp")
@@ -235,7 +242,10 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.waitForText("Sessions · all projects")
     // The other Project's session is listed without a number: `/open <n>` counts only this Project's.
     await term.waitForText(firstId)
-    expect((await term.lines()).find((line) => line.includes(firstId))).not.toMatch(/\d\. hysec_/)
+    const otherPosition = (await term.find(firstId))!
+    // Check this picker entry's prefix; the same row can also contain a numbered sidebar entry.
+    const otherPrefix = (await term.lines())[otherPosition.row]!.slice(Math.max(0, otherPosition.col - 6), otherPosition.col)
+    expect(otherPrefix).not.toMatch(/\d\.\s*$/)
     await term.waitForText(`1. ${otherId}`)
     await esc(term, "Sessions · all projects")
 

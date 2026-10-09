@@ -2,6 +2,7 @@
 // drives it through xterm.js in Chromium. Assertions read the xterm buffer
 // (text and per-cell style); screenshots are attached for visual review.
 
+import type { Terminal } from "@xterm/headless"
 import { spawn, type ChildProcess } from "node:child_process"
 import { writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
@@ -22,6 +23,8 @@ export type Cell = {
 }
 
 export type LaunchOptions = {
+  /** Keep the previous client alive for explicit multi-client scenarios. */
+  independent?: boolean
   cwd?: string
   env?: Record<string, string>
   /** Browser host flags, before the fixed command separator. */
@@ -30,11 +33,50 @@ export type LaunchOptions = {
   viewport?: { width: number; height: number }
 }
 
+export const terminalDriver = process.env.HYA_TUI_DRIVER === "pty" ? "pty" : "browser"
+
+export type Pointer = {
+  move(x: number, y: number, options?: { steps?: number }): Promise<void>
+  down(options?: { button?: "left" | "middle" | "right" }): Promise<void>
+  up(): Promise<void>
+  click(x: number, y: number, options?: { button?: "left" | "middle" | "right" }): Promise<void>
+  wheel(dx: number, dy: number): Promise<void>
+}
+
+export type InspectionState = { osc52?: string[]; observedCursor?: { style: number | null }; osc9?: string[] }
+
 export class Tui {
   constructor(
-    readonly page: Page,
+    private readonly browserPage: Page | undefined,
     readonly url: string,
   ) {}
+
+  get page(): Page {
+    if (!this.browserPage) throw new Error("This scenario requested a browser page in PTY mode; use the terminal driver API or mark browser-only coverage explicitly")
+    return this.browserPage
+  }
+
+  /** Inspect only the emulator and per-client observation state; no DOM access. */
+  async inspect<R, A = undefined>(fn: (terminal: Terminal, state: InspectionState, arg: A) => R, arg?: A): Promise<R> {
+    return this.page.evaluate(({ source, arg }) => {
+      const view = window as typeof window & { terminalInspectionState?: Record<string, unknown> }
+      view.terminalInspectionState ??= {}
+      return new Function("terminal", "state", "arg", `return (${source})(terminal, state, arg)`)(window.hyaTerm.term, view.terminalInspectionState, arg)
+    }, { source: fn.toString(), arg })
+  }
+  async focus(focused: boolean): Promise<void> {
+    await this.page.evaluate((focused) => {
+      const input = document.querySelector<HTMLElement>(".xterm-helper-textarea")
+      if (focused) input?.focus(); else input?.blur()
+    }, focused)
+  }
+  async paste(text: string): Promise<void> { await this.page.evaluate((text) => window.hyaTerm.term.paste(text), text) }
+  async exitStatus(): Promise<number | null> { return this.page.evaluate(() => window.hyaTerm.exitCode) }
+  async screenBox(): Promise<{ x: number; y: number; width: number; height: number }> { return (await this.page.locator(".xterm-screen").boundingBox())! }
+  get mouse(): Pointer { return this.page.mouse }
+  async pause(ms: number): Promise<void> { await this.page.waitForTimeout(ms) }
+  async disconnect(): Promise<void> { await this.page.goto("about:blank") }
+  async close(): Promise<void> { await this.page.close() }
 
   /** Visible screen rows, right-trimmed. Clipped to the current width: after a shrink xterm.js keeps the old cells past `cols` in its lines. */
   async lines(): Promise<string[]> {
@@ -158,17 +200,18 @@ function startHost(command: string[], options: LaunchOptions): Promise<{ child: 
   })
 }
 
-export const test = base.extend<{ tui: (command: string[], options?: LaunchOptions) => Promise<Tui> }>({
+const browserTest = base.extend<{ tui: (command: string[], options?: LaunchOptions) => Promise<Tui> }>({
   tui: async ({ page }, use, testInfo) => {
     const children: ChildProcess[] = []
     let last: Tui | undefined
     await use(async (command, options = {}) => {
       const { child, url } = await startHost(command, options)
       children.push(child)
-      if (options.viewport) await page.setViewportSize(options.viewport)
-      await page.goto(url)
-      await expect.poll(() => page.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
-      last = new Tui(page, url)
+      const clientPage = options.independent ? await page.context().newPage() : page
+      if (options.viewport) await clientPage.setViewportSize(options.viewport)
+      await clientPage.goto(url)
+      await expect.poll(() => clientPage.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
+      last = new Tui(clientPage, url)
       return last
     })
     // A derived fixture may already have captured the final screen.
@@ -184,3 +227,34 @@ export { expect }
 export function fixture(name: string): string[] {
   return ["bun", fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url))]
 }
+
+// The PTY fixture never requests page/browser, so Playwright runs assertions and
+// fixture lifetimes without starting Chromium. Bun supplies the real PTY API.
+const ptyTest = base.extend<{ tui: (command: string[], options?: LaunchOptions) => Promise<Tui> }>({
+  page: async ({}, _use) => {
+    throw new Error("PTY scenarios cannot request Playwright's page fixture. Use tui() or explicitly mark a browser-only scenario.")
+  },
+  tui: async ({}, use, testInfo) => {
+    const { PtyTui } = await import("../tui-exp/driver")
+    const clients: InstanceType<typeof PtyTui>[] = []
+    let active: InstanceType<typeof PtyTui> | undefined
+    try {
+      await use(async (command, options = {}) => {
+        if (!options.independent && active) {
+          await active.attach(testInfo, `client-${clients.indexOf(active)}-final-screen`)
+          await active.close()
+        }
+        const client = new PtyTui(command, options)
+        if (!options.independent) active = client
+        clients.push(client)
+        return client
+      })
+    } finally {
+      for (const [index, client] of clients.entries()) {
+        try { await client.attach(testInfo, `client-${index}-final-screen`).catch(() => {}) }
+        finally { await client.close() }
+      }
+    }
+  },
+})
+export const test = terminalDriver === "pty" ? ptyTest : browserTest

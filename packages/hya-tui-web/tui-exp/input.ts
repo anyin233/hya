@@ -16,6 +16,13 @@ export function encodeKey(shortcut: string, modes: KeyboardModes): string {
     ArrowUp: "A", Up: "A", ArrowDown: "B", Down: "B", ArrowRight: "C", Right: "C", ArrowLeft: "D", Left: "D", Home: "H", End: "F",
   }
   if (arrows[key]) return modifier > 1 ? `\x1b[1;${modifier}${arrows[key]}` : `\x1b${modes.applicationCursor ? "O" : "["}${arrows[key]}`
+  const functionKey = /^F([1-9]|1[0-2])$/.exec(key)
+  if (functionKey) {
+    const n = Number(functionKey[1])
+    if (n <= 4) return modifier === 1 ? `\x1bO${"PQRS"[n - 1]}` : `\x1b[1;${modifier}${"PQRS"[n - 1]}`
+    const code = [15, 17, 18, 19, 20, 21, 23, 24][n - 5]
+    return `\x1b[${code}${modifier > 1 ? `;${modifier}` : ""}~`
+  }
   const numbered: Record<string, number> = { Insert: 2, Delete: 3, PageUp: 5, PageDown: 6 }
   if (numbered[key]) return `\x1b[${numbered[key]}${modifier > 1 ? `;${modifier}` : ""}~`
   if (key === "Tab" && !ctrl && !alt) return shift ? "\x1b[Z" : "\t"

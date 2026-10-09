@@ -3,8 +3,7 @@ import { expect, hyaTui, test } from "./hya"
 
 /** Count highlighted rectangles via their border corner, not text or pixels. */
 async function focusBoxes(term: Tui): Promise<{ row: number; col: number }[]> {
-  return term.page.evaluate(() => {
-    const terminal = window.hyaTerm.term
+  return term.inspect((terminal, state) => {
     const buffer = terminal.buffer.active
     const corners: { row: number; col: number }[] = []
     for (let row = 0; row < terminal.rows; row++) {

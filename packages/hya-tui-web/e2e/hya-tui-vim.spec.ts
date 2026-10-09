@@ -23,11 +23,10 @@ async function composerText(term: Tui): Promise<string> {
 
 /** Observe DECSCUSR through xterm's public parser API, without TUI internals. */
 async function cursorStyle(term: Tui): Promise<number | null> {
-  return term.page.evaluate(() => {
-    const state = window as typeof window & { observedCursor?: { style: number | null } }
+  return term.inspect((terminal, state) => {
     if (!state.observedCursor) {
       state.observedCursor = { style: null }
-      window.hyaTerm.term.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+      terminal.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
         state.observedCursor!.style = Number(params[0])
         return false
       })

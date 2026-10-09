@@ -20,7 +20,7 @@ test("Sessions owns typing, editing, paste, and Enter while conversation draft s
   await term.press("Enter")
   await term.press("Escape")
   await expect.poll(() => term.find("Commands")).toBeNull()
-  await term.page.evaluate(() => window.hyaTerm.term.paste("leaked paste"))
+  await term.paste("leaked paste")
   await term.type("/")
   await term.waitForText("Commands")
   await term.press("Escape")

@@ -55,3 +55,16 @@ focus, browser keyboard translation, and WebSocket behavior remain browser
 responsibilities. The experiment shares backend isolation and fake models with
 the browser suite; diagnostics are terminal text, recent parsed frames, raw
 output, and phase timings. See [usage and interface](../tui-web.md#experimental-direct-pty-suite-tui-exp).
+
+### Full shared terminal matrix (2026-10-09)
+
+The direct-PTY experiment now runs the browser suite's terminal scenarios from the same spec files. A driver selected by `HYA_TUI_DRIVER` supplies screen, keyboard, mouse, paste, focus, OSC and process operations. Playwright remains the scenario/fixture/assertion runner under Bun; its browser/page fixtures are never requested by the PTY driver. Browser-only tests are explicitly tagged/excluded or, for the generic host tests, excluded by exact filename. They remain enabled in Chromium. A parity JSON inventory records every selected case and its result. This retains one scenario source while measuring the cost of browser transport separately; it does not move rendering into the backend or create another frontend. See `docs/tui-web.md` for commands, contracts and coverage boundaries.
+
+### Required terminal gate (2026-10-09)
+
+The full shared terminal matrix replaces Chromium in the required `tui` CI job.
+The user explicitly chose to exclude the seven tagged browser-only cases.
+Two generic WebUI host cases are likewise outside this gate. Chromium specs
+remain available for optional WebUI checks. Remove the duplicate non-blocking
+job and browser installation; retain the `tui` job identity and component checks.
+`scripts/check-tui.sh` reproduces the same terminal gate locally.

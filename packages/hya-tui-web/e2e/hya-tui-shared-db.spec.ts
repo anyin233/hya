@@ -4,14 +4,8 @@
 // and each other's live events. Bare `hya` uses the same daemon, and quitting
 // any frontend leaves the daemon running.
 
-import { spawn, type ChildProcess } from "node:child_process"
-import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
-import type { Page } from "@playwright/test"
 import { Tui } from "./harness"
 import { expectStatus, expect, hyaBin, launchTest as test, selfLaunch, showStatusView, statusSessionId, textStep, type Workspace } from "./hya"
-
-const hostMain = join(dirname(fileURLToPath(import.meta.url)), "../src/main.ts")
 
 async function prompt(term: Tui, text: string): Promise<void> {
   if (text.startsWith("/")) {
@@ -45,34 +39,9 @@ async function status(term: Tui): Promise<{ server: string; text: string }> {
 /** The daemon's pid, from `/status`. */
 const startedPid = (text: string): number => Number(/Backend\s+daemon · pid (\d+)/.exec(text)![1])
 
-/**
- * A second web host in a second tab, so two TUIs run at once (the `tui`
- * fixture drives one tab, and navigating it away would hang up its TUI).
- */
-async function secondTab(page: Page, command: string[], cwd: string, env: Record<string, string>): Promise<{ term: Tui; host: ChildProcess }> {
-  const host = spawn("bun", [hostMain, "--port", "0", "--cwd", cwd, "--", ...command], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] })
-  const url = await new Promise<string>((resolve, reject) => {
-    let output = ""
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString()
-      const match = /hya-tui-web listening on (\S+)/.exec(output)
-      if (match) resolve(match[1]!)
-    }
-    host.stdout!.on("data", onData)
-    host.stderr!.on("data", onData)
-    host.once("exit", (code) => reject(new Error(`second web host exited (${code}): ${output}`)))
-  })
-  const tab = await page.context().newPage()
-  await tab.goto(url)
-  await expect.poll(() => tab.evaluate(() => window.hyaTerm?.connected ?? false)).toBe(true)
-  return { term: new Tui(tab, url), host }
-}
-
-async function stopHost(host: ChildProcess): Promise<void> {
-  if (host.exitCode !== null || host.signalCode !== null) return
-  const exited = new Promise((resolve) => host.once("exit", resolve))
-  host.kill("SIGTERM")
-  await exited
+/** A second independent client on the selected browser or PTY driver. */
+async function secondClient(tui: (command: string[], options?: import("./harness").LaunchOptions) => Promise<Tui>, command: string[], cwd: string, env: Record<string, string>): Promise<{ term: Tui }> {
+  return { term: await tui(command, { cwd, env, independent: true }) }
 }
 
 function bareHyaEnv(workspace: Workspace): Record<string, string> {
@@ -83,14 +52,14 @@ function bareHyaEnv(workspace: Workspace): Record<string, string> {
 test.describe("two frontends, one database", () => {
   test.use({ model: { steps: [textStep("Reply seen by both TUIs."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("a second TUI uses the first one's daemon; both follow the same session live", async ({ tui, workspace, page }, testInfo) => {
+  test("a second TUI uses the first one's daemon; both follow the same session live", async ({ tui, workspace }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(first)
     const pid = startedPid(one.text)
 
     const [command] = selfLaunch(workspace)
-    const { term: second, host } = await secondTab(page, command, workspace.dir, workspace.env)
+    const { term: second } = await secondClient(tui, command, workspace.dir, workspace.env)
     try {
       await second.waitForText("Message, !shell, or @file · / commands", 30_000)
       const two = await status(second)
@@ -116,23 +85,23 @@ test.describe("two frontends, one database", () => {
 
       // Quitting either TUI leaves the daemon running.
       await prompt(second, "/exit")
-      await expect.poll(() => second.page.evaluate(() => window.hyaTerm.exitCode), { timeout: 15_000 }).toBe(0)
+      await expect.poll(() => second.exitStatus(), { timeout: 15_000 }).toBe(0)
       expect(alive(pid)).toBe(true)
     } finally {
-      await stopHost(host)
+      await second.close()
     }
     await prompt(first, "/exit")
     expect(await first.waitForExit()).toBe(0)
     expect(alive(pid)).toBe(true)
   })
 
-  test("bare hya uses the running daemon of its database and leaves it running on quit", async ({ tui, workspace, page }, testInfo) => {
+  test("bare hya uses the running daemon of its database and leaves it running on quit", async ({ tui, workspace }, testInfo) => {
     const owner = await tui(...selfLaunch(workspace))
     await owner.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(owner)
     const pid = startedPid(one.text)
 
-    const { term: bare, host } = await secondTab(page, [hyaBin, "--port", "0"], workspace.dir, bareHyaEnv(workspace))
+    const { term: bare } = await secondClient(tui, [hyaBin, "--port", "0"], workspace.dir, bareHyaEnv(workspace))
     try {
       await bare.waitForText("Message, !shell, or @file · / commands", 60_000)
       const two = await status(bare)
@@ -142,9 +111,9 @@ test.describe("two frontends, one database", () => {
       await bare.waitForText(/WebUI\s+http:\/\/127\.0\.0\.1:\d+/)
       await bare.attach(testInfo, "bare-attached-status")
       await prompt(bare, "/exit")
-      await expect.poll(() => bare.page.evaluate(() => window.hyaTerm.exitCode), { timeout: 30_000 }).toBe(0)
+      await expect.poll(() => bare.exitStatus(), { timeout: 30_000 }).toBe(0)
     } finally {
-      await stopHost(host)
+      await bare.close()
     }
     // Only bare hya's frontends stopped: the daemon still answers.
     expect(alive(pid)).toBe(true)
@@ -154,7 +123,7 @@ test.describe("two frontends, one database", () => {
     expect(await owner.waitForExit()).toBe(0)
     expect(alive(pid)).toBe(true)
   })
-  test("an empty session shown by two TUIs stays while either shows it; the daemon drops it after the last one quits", async ({ tui, workspace, page }) => {
+  test("an empty session shown by two TUIs stays while either shows it; the daemon drops it after the last one quits", async ({ tui, workspace }) => {
     test.setTimeout(90_000)
     const creator = await tui(...selfLaunch(workspace))
     await creator.waitForText("Message, !shell, or @file · / commands", 30_000)
@@ -166,7 +135,7 @@ test.describe("two frontends, one database", () => {
       ((await (await fetch(`${server}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
 
     const [command] = selfLaunch(workspace, ["--session", session])
-    const { term: viewer, host } = await secondTab(page, command, workspace.dir, workspace.env)
+    const { term: viewer } = await secondClient(tui, command, workspace.dir, workspace.env)
     try {
       await showStatusView(viewer)
       await expectStatus(viewer, "Session", session)
@@ -174,16 +143,16 @@ test.describe("two frontends, one database", () => {
       await prompt(creator, "/exit")
       expect(await creator.waitForExit()).toBe(0)
       // A kept session has no event to wait for: stay well past the daemon's 5 s grace.
-      await page.waitForTimeout(8_000)
+      await creator.pause(8_000)
       expect(await listed()).toContain(session)
       await expectStatus(viewer, "Session", session)
       expect(await viewer.text()).not.toContain("was deleted elsewhere")
 
       // The last viewer quits: now nobody shows it, so the daemon drops it (never archived).
       await prompt(viewer, "/exit")
-      await expect.poll(() => viewer.page.evaluate(() => window.hyaTerm.exitCode), { timeout: 15_000 }).toBe(0)
+      await expect.poll(() => viewer.exitStatus(), { timeout: 15_000 }).toBe(0)
     } finally {
-      await stopHost(host)
+      await viewer.close()
     }
     await expect.poll(listed, { timeout: 20_000 }).not.toContain(session)
     const archived = ((await (await fetch(`${server}/v1/sessions?archivedOnly=true`)).json()) as { sessions?: { id: string }[] }).sessions ?? []
