@@ -485,6 +485,9 @@ impl ToolRegistry {
                 "unknown tool family {identity}"
             );
         }
+        // Prepare every selected family before loading any native image, so
+        // the first image does not serialize its package ahead of the others.
+        let _ = crate::base_tools::tool_bundle_presets();
         let registry = Self::empty();
         let mut implementations: HashMap<(&'static str, String), Arc<dyn Tool>> = HashMap::new();
         for (stem, identity) in STEMS {
