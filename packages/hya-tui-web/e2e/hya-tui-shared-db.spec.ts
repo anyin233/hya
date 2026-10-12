@@ -30,9 +30,14 @@ const alive = (pid: number): boolean => {
 
 /** `/status`'s Server URL and the whole screen (the Backend row is matched by the caller). */
 async function status(term: Tui): Promise<{ server: string; text: string }> {
-  await prompt(term, "/status")
-  await term.waitForText(/Backend\s+daemon · pid \d+/)
-  const text = await term.text()
+  let text = ""
+  await expect.poll(async () => {
+    // Startup can restore Conversation after the first status command.
+    // Reopen the view until its daemon facts are actually drawn.
+    await showStatusView(term)
+    text = await term.text()
+    return text
+  }, { timeout: 30_000 }).toMatch(/Backend\s+daemon · pid \d+/)
   return { server: /Server\s+(http:\/\/127\.0\.0\.1:\d+)/.exec(text)![1]!, text }
 }
 

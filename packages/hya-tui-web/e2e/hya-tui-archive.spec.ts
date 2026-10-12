@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
 import { Tui, terminalDriver } from "./harness"
-import { expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
+import { createSession, expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
@@ -238,8 +238,7 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     await web.waitForText("Message, !shell, or @file · / commands", 30_000)
     expect(await statusSessionId(web)).toBe(terminalId)
     await web.waitForText("Terminal reply.")
-    await prompt(web, "/new")
-    const webId = await statusSessionId(web)
+    const webId = await createSession(web, { previousId: terminalId })
     expect(webId).not.toBe(terminalId)
     expect(await web.text()).not.toContain("Terminal reply.")
     await prompt(web, "web work")

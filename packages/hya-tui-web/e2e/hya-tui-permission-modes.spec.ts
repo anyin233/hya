@@ -247,12 +247,7 @@ test("the last chosen permission mode becomes the default for new sessions and a
   await expectStatus(first, "Mode", "yolo")
   await expect.poll(savedMode).toBe("yolo")
 
-  const firstId = await statusSessionId(first)
-  await prompt(first, "/new")
-  await expect.poll(async () => {
-    const id = await statusSessionId(first).catch(() => undefined)
-    return id && id !== firstId ? id : undefined
-  }).not.toBeUndefined()
+  await createSession(first)
   await expectStatus(first, "Mode", "yolo")
   await expect.poll(() => backendMode(backend)).toBe("yolo")
   await prompt(first, "/exit")
@@ -267,12 +262,7 @@ test("the last chosen permission mode becomes the default for new sessions and a
   await prompt(second, "/permissions manual")
   await expectStatus(second, "Mode", "manual")
   await expect.poll(savedMode).toBe("manual")
-  const secondId = await statusSessionId(second)
-  await prompt(second, "/new")
-  await expect.poll(async () => {
-    const id = await statusSessionId(second).catch(() => undefined)
-    return id && id !== secondId ? id : undefined
-  }).not.toBeUndefined()
+  await createSession(second)
   await expectStatus(second, "Mode", "manual")
   await expect.poll(() => backendMode(backend)).toBe("manual")
 })

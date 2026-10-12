@@ -8,7 +8,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, expect, expectStatus, statusSessionId, hyaTui, test, textStep, tuiMain } from "./hya"
+import { api, createSession, expect, expectStatus, statusSessionId, hyaTui, test, textStep, tuiMain } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 const wide = { width: 1500, height: 640 }
@@ -179,13 +179,17 @@ test.describe("Project view", () => {
   test("`t` starts a temporary session from the Project view; /new --temp does the same", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
+    const initial = await statusSessionId(term)
     await prompt(term, "/project")
     await term.waitForText("Projects")
     await term.waitForText("Up/Down move · Enter opens/switches")
     await term.press("t")
-    const first = await statusSessionId(term)
-    await prompt(term, "/new --temp")
-    expect(await statusSessionId(term)).not.toBe(first)
+    await expect.poll(() => term.find("t temporary session")).toBeNull()
+    let first = initial
+    await expect.poll(async () => (first = await statusSessionId(term))).not.toBe(initial)
+    expect((await api<{ kind: string }>(backend, "GET", `/v1/sessions/${first}`)).kind).toBe("SESSION_KIND_TEMPORARY")
+    const second = await createSession(term, { previousId: first, temporary: true })
+    expect((await api<{ kind: string }>(backend, "GET", `/v1/sessions/${second}`)).kind).toBe("SESSION_KIND_TEMPORARY")
   })
 })
 
@@ -211,13 +215,14 @@ test.describe("--remote start", () => {
 })
 
 test.describe("/sessions is scoped to the active Project", () => {
-  test.use({ model: { steps: [textStep("a"), textStep("b")] } })
+  test.use({ model: { steps: [textStep("First project reply."), textStep("Other project reply.")] } })
 
   test("the picker shows only the active Project's sessions and temporary ones, until F3 shows every Project", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wide })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
-    await term.waitForText("a", 20_000)
+    await term.waitForText("First project reply.", 20_000)
+    await term.waitForIdle()
     const firstId = await statusSessionId(term)
 
     // A second Project with its own session.
@@ -233,7 +238,8 @@ test.describe("/sessions is scoped to the active Project", () => {
       return otherId
     }).not.toBe(firstId)
     await prompt(term, "hello other")
-    await term.waitForText("b", 20_000)
+    await term.waitForText("Other project reply.", 20_000)
+    await term.waitForIdle()
 
     await prompt(term, "/sessions")
     await term.waitForText("F3 all")

@@ -322,10 +322,14 @@ export async function expectStatus(term: Tui, field: string, expected: string | 
   await showConversation(term)
 }
 
-/** /new completes asynchronously; verify the selected session actually changed. */
-export async function createSession(term: Tui): Promise<string> {
-  const previous = await statusSessionId(term)
-  await term.type("/new")
+/** /new completes asynchronously; verify the selected session actually changed.
+ * Supply previousId when the current session has a title (/status displays its title).
+ */
+export async function createSession(term: Tui, options: { previousId?: string; temporary?: boolean } = {}): Promise<string> {
+  const previous = options.previousId ?? await statusSessionId(term)
+  const command = options.temporary ? "/new --temp" : "/new"
+  await term.type(command)
+  await term.waitForText(command)
   await term.press("Enter")
   let next = previous
   await expect.poll(async () => {
