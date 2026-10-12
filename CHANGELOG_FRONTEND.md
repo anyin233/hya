@@ -1,5 +1,5 @@
-# 0.44.20
+# 0.44.21
 
 ## Subagents
 
-- Hide archived actors from the subagent selector, command completion, and viewer panes. Preserve background tracking and viewer pins so revived actors reappear automatically, including after reopening. Active descendants remain visible when their parent is archived.
+- Toggle archived subagents with Ctrl+A in the selector or `/subagents archived [show|hide|toggle]`. Selection, viewers, and completion share the conversation-local filter, which defaults to hidden. The shortcut is discoverable and removable through the existing keybinding settings.

@@ -103,6 +103,7 @@ export interface AppState {
   readonly cursor: string
   readonly view: View
   /** Ephemeral child preview, independent of the main session and composer. */
+  readonly subagentsShowArchived: boolean
   readonly subagentSelection: string | undefined
   /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
@@ -324,6 +325,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     turnStartedAt: undefined,
     cursor: "0",
     view: "chat",
+    subagentsShowArchived: false,
     subagentSelection: undefined,
     paneLayout: defaultPaneLayout(),
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
@@ -573,7 +575,10 @@ export function createAppStore() {
       noticedMode = session.permissionMode || manualMode
       batch(() => {
         set("selected", session)
-        if (changedSession) set("subagentSelection", undefined)
+        if (changedSession) {
+          set("subagentSelection", undefined)
+          set("subagentsShowArchived", false)
+        }
         set("view", "chat")
         set("cursor", fold.lastSeq)
         set("messages", [])
@@ -816,6 +821,13 @@ export function createAppStore() {
     },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
+    setSubagentsShowArchived(show: boolean): void {
+      batch(() => {
+        set("subagentsShowArchived", show)
+        const rows = subagentRows(state)
+        if (!rows.some((row) => row.id === state.subagentSelection)) set("subagentSelection", rows[0]?.id)
+      })
+    },
     selectSubagent(id: string | undefined): void { set("subagentSelection", id) },
     setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
     setStatus(text: string): void { set("status", text) },

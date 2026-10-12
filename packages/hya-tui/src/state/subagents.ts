@@ -23,5 +23,5 @@ export function subagentRows(state: AppState, options: { includeArchived?: boole
     for (const nested of state.sessions) if (nested.parent === id) visit(nested.id, depth + 1)
   }
   for (const id of direct) visit(id, 0)
-  return options.includeArchived ? rows : rows.filter((row) => row.archived !== true)
+  return (options.includeArchived ?? state.subagentsShowArchived) ? rows : rows.filter((row) => row.archived !== true)
 }

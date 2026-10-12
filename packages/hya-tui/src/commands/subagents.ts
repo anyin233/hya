@@ -2,18 +2,25 @@ import { paneLeaves, pinSubagentViewer, wrapPane } from "../state/panes"
 import { subagentRows } from "../state/subagents"
 import { matchValues, type CommandSpec } from "./registry"
 
-const usage = "Usage: /subagents [select <session> | pin <viewer-pane> [session] | follow <viewer-pane> | view <session>]"
+const usage = "Usage: /subagents [select <session> | pin <viewer-pane> [session] | follow <viewer-pane> | view <session> | archived [show|hide|toggle]]"
 export const subagentsCommand: CommandSpec = {
   name: "/subagents",
   description: "Show subagent selector and transcripts without leaving the parent conversation",
-  argumentHint: "[select <session> | pin <viewer> [session] | follow <viewer> | view <session>]",
+  argumentHint: "[select <session> | pin <viewer> [session] | follow <viewer> | view <session> | archived [show|hide|toggle]]",
   complete: ({ words, current, head }, context) => {
-    if (words.length === 1) return matchValues(head, current, ["select", "pin", "follow", "view"])
+    if (words.length === 1) return matchValues(head, current, ["select", "pin", "follow", "view", "archived"])
+    if (words.length === 2 && words[0] === "archived") return matchValues(head, current, ["show", "hide", "toggle"])
     if (words.length === 2 && ["pin", "follow"].includes(words[0]!)) return matchValues(head, current, (context.panes ?? []).filter((pane) => pane.kind === "subagent-viewer").map((pane) => pane.id))
     if ((words.length === 2 && ["select", "view"].includes(words[0]!)) || (words.length === 3 && words[0] === "pin")) return matchValues(head, current, context.subagents ?? [])
     return []
   },
   run: ({ store, actions }, { args }) => {
+    if (args[0] === "archived") {
+      if (args.length > 2 || (args[1] && !["show", "hide", "toggle"].includes(args[1]))) throw new Error(usage)
+      if (!store.state.selected) throw new Error("Open a conversation before showing subagents")
+      store.setSubagentsShowArchived(args[1] === "show" ? true : args[1] === "hide" ? false : !store.state.subagentsShowArchived)
+      return
+    }
     const rows = subagentRows(store.state)
     const selected = rows.find((row) => row.id === store.state.subagentSelection)?.id ?? rows[0]?.id
     let layout = store.state.paneLayout

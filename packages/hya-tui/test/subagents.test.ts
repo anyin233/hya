@@ -59,3 +59,23 @@ test("archived direct and nested children are hidden, remain tracked, and reappe
   expect(subagentRows(store.state).some((row) => row.id === "a")).toBe(false)
   expect(subagentRows(store.state, { includeArchived: true })[0]).toMatchObject({ status: "done", archived: true, archiveReason: "reported" })
 })
+
+
+test("archive visibility shares selection and completion, preserves tracking, and resets for another conversation", () => {
+  const store = family()
+  store.setMembers([{ member: "m", child: "a", status: "MEMBER_STATUS_DONE", archived: true }])
+  store.selectSubagent("b")
+  store.setSubagentsShowArchived(true)
+  expect(subagentRows(store.state).map((row) => row.id)).toEqual(["a", "b"])
+  expect(store.state.subagentSelection).toBe("b")
+  expect(store.completionContext().subagents).toEqual(["a", "b"])
+  store.selectSubagent("a")
+  store.setSubagentsShowArchived(false)
+  expect(store.state.subagentSelection).toBe("b")
+  expect(store.completionContext().subagents).toEqual(["b"])
+  expect(subagentRows(store.state, { includeArchived: true })).toHaveLength(2)
+  store.setSubagentsShowArchived(true)
+  expect(subagentRows(store.state, { includeArchived: false }).map((row) => row.id)).toEqual(["b"])
+  store.openSession({ id: "other", agent: "main", workdir: "/work" })
+  expect(store.state.subagentsShowArchived).toBe(false)
+})
