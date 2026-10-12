@@ -2007,6 +2007,15 @@ changing its session, or sending the parent's draft to a child. Completed childr
 stay in the list; nested children are indented, and pending requests show `waiting`.
 The existing parent permission/question prompt remains the place to answer asks.
 
+Archived actors stay selectable: a row shows, for example, `survey files · done ·
+archived`, with `main/helper · reported` underneath. The outcome (`done`, `failed`,
+or `cancelled`) remains visible independently of archival. A successful `report`
+automatically archives its actor; idle alone does not. Parent-driven archive and
+shutdown use their recorded reasons. Mail-driven revival clears the archive
+marker live, and reopening the TUI restores the state from the backend projection.
+This also applies to nested helpers. Enter and `n` still open archived transcripts;
+archival does not remove a child from the selector or archive the root chat.
+
 Run `/subagents` to add missing selector and viewer panes beside the workspace and
 focus the selector. Existing panes are reused. In the selector, Up/Down previews a
 child in every following viewer; Enter pins it to the first following viewer (or
@@ -2050,6 +2059,18 @@ combination has one reference-counted watch. Reconnect gap-fills from its durabl
 sequence and refreshes the authoritative projection; transient live parts use the
 same overlay and Markdown/tool rendering as the main conversation. Viewer errors
 appear within that viewer and do not replace the parent's connection status.
+
+**Actor lifecycle interface (backend 0.45.7+):** member snapshots include
+`archived?: boolean`, `archiveReason: string`, and a `handle` retained after
+archival. `archiveReason` is `reported`, `killed` (legacy), `root_teardown`,
+`archived_by_parent`, or `shutdown`; an absent `archived` means no binding is known.
+Durable `memberLifecycleChanged` events carry `{child: string, handle: string,
+archived: boolean, archiveReason: string}` on the team root's stream and on the
+lightweight global stream. The selector patches matching children and refreshes
+the authoritative parent/member projections; revival clears the reason even when
+protojson omits the false boolean. See [Actor archival and revival](protocol/README.md#actor-archival-and-revival)
+for replay, nested-member routing, and examples. To inspect it, run `/subagents`,
+select a reported helper, and press Enter to pin its retained transcript.
 Live deltas are transient: joining a response after its part-start frame may
 show that part only once its durable completed text is available. Keeping a
 following viewer open before spawning a helper shows its response as it streams.

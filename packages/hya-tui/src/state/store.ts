@@ -49,7 +49,7 @@ import type { AgentsViewState } from "./agentsView"
 import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
 import { paneNodes, paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
-import { foldMember, type ChildState } from "./members"
+import { foldMember, foldMemberLifecycle, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
 import { mergeInteractions } from "./prompts"
@@ -708,6 +708,12 @@ export function createAppStore() {
       if (effect.durable) set("cursor", fold.lastSeq)
       // Members fold here, not in the overlay: they are session state, not transcript parts.
       if (event.memberUpdated?.member && (effect.durable || !event.seq)) set("members", foldMember(state.members, event.memberUpdated))
+      if (event.memberLifecycleChanged && (effect.durable || !event.seq)) {
+        const lifecycle = event.memberLifecycleChanged
+        set("members", foldMemberLifecycle(state.members, lifecycle))
+        set("children", new Map([...state.children].map(([id, child]) => [id, child.members
+          ? { ...child, members: foldMemberLifecycle(child.members, lifecycle) } : child])))
+      }
       // Pending asks are live frames: shown at once.
       applyAsk(event)
       // Durable session state below: skip a replayed duplicate (effect.durable is false for it).

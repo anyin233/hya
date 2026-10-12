@@ -1,8 +1,19 @@
 import { expect, test } from "bun:test"
 import type { MemberInfo, MessageInfo } from "../src/client"
-import { childActivity, childSessionIds, childStatus, foldMember, taskLink, taskLinks, taskChildStatus } from "../src/state/members"
+import { childActivity, childSessionIds, childStatus, foldMember, foldMemberLifecycle, taskLink, taskLinks, taskChildStatus } from "../src/state/members"
 
 const spawn: MemberInfo = { member: "mbr_1", child: "hysec_c", agent: "hya-scout", description: "survey", status: "MEMBER_STATUS_SPAWNING", callId: "call_1", depth: 1 }
+
+test("child-keyed archival and omitted-false revival preserve task outcome without phantom members", () => {
+  const completed = { ...spawn, status: "MEMBER_STATUS_DONE", summary: "done" }
+  const archived = foldMemberLifecycle([completed], { child: "hysec_c", handle: "main/scout", archived: true, archiveReason: "reported" })
+  expect(archived).toEqual([{ ...completed, handle: "main/scout", archived: true, archiveReason: "reported" }])
+  expect(foldMemberLifecycle(archived, { child: "hysec_c", handle: "main/scout" })).toEqual([
+    { ...completed, handle: "main/scout", archived: false, archiveReason: "" },
+  ])
+  expect(foldMemberLifecycle(archived, { child: "unknown", archived: true })).toEqual(archived)
+  expect(foldMember(archived, { member: spawn.member, archived: false })[0]?.archiveReason).toBe("")
+})
 
 test("member frames fold by member id without clearing known fields", () => {
   let rows = foldMember([], spawn)

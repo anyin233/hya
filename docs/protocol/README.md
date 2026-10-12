@@ -700,13 +700,15 @@ catalog). A renamed Project or an unchanged root list emits none. An empty
 
 **Interactions-only global stream.** `GET /v1/events/stream?interactionsOnly=true`
 (gRPC `StreamGlobalEventsRequest.interactions_only`) delivers only
-interaction, session-list, and Project-list frames: the live interaction
+interaction, session-list, Project-list, and actor-lifecycle frames: the live interaction
 frames of every session, `catalogUpdated`, `projectsUpdated`, and the
 [session-list frames](#session-list-push) of root sessions (durable
 `sessionStarted` / `sessionUpdated`, live `sessionUpdated {busy}` and
-`sessionDeleted`). Every other engine event (text, tools, messages, a child
+`sessionDeleted`), plus durable `memberLifecycleChanged` frames on the team root.
+Every other engine event (text, tools, messages, a child
 session's list changes) is left out. A `resync` frame means session-list
-frames were lost: list the sessions again. A client that follows its open
+or actor-lifecycle frames were lost: list the sessions and refresh member
+projections again. A client that follows its open
 session on the session stream uses it to see the other sessions' asks and
 keep its session and Project lists live without receiving their text. The
 option keeps its name for compatibility: it used to carry no session frames
@@ -800,9 +802,53 @@ type), `description`, `status` (`MEMBER_STATUS_SPAWNING`, `_RUNNING`,
 `_DONE`, `_FAILED`, `_CANCELLED`), `summary` (bounded, on finish),
 `callId`, `depth`, and `handle` (the readable team roster handle when known; for nested sessions, resolved from the root session roster). The initial spawn frame carries every field; later status
 frames carry `member` and `status`; a finish adds `summary` and `child`.
-Fold by `member`. `GET /v1/sessions/{id}` (`SessionInfo.members`) returns
+Fold by `member`. A terminal report also carries `handle`.
+`GET /v1/sessions/{id}` (`SessionInfo.members`) returns
 the folded rows, so a client that reconnects mid-task still has them, and
 `GET /v1/sessions?parent={id}` lists the child sessions.
+
+### Actor archival and revival
+
+Member task outcome and actor archival are separate. An accepted `report`
+automatically archives the actor; a parent can also use `archive`, and mail can
+revive it. A finished turn alone does not imply archival. Root chat archival
+(`SessionInfo.archived`) is a different operation.
+
+Each `SessionInfo.members[]` row additionally exposes:
+
+| Field | Type | Contract |
+| --- | --- | --- |
+| `archived` | optional boolean | `true` for an archived actor, `false` for a live roster binding; absent if no binding is known. |
+| `archiveReason` | string | `reported`, `killed` (legacy), `root_teardown`, `archived_by_parent`, or `shutdown`; empty/omitted when active or unknown. |
+| `handle` | string | Stable canonical team handle, resolved from live **or archived** root-team entries, including nested members. |
+
+`ListEvents` (`GET /v1/sessions/{team-root}/events`) and `StreamSessionEvents`
+(`GET /v1/sessions/{team-root}/events/stream`) carry durable
+`memberLifecycleChanged` payloads with `{child: string, handle: string,
+archived: boolean, archiveReason: string}`. They also reach `StreamGlobalEvents`
+(`GET /v1/events/stream`) with `interactionsOnly=true`, so a client viewing a
+nested parent can refresh its members without subscribing to every team root.
+HTTP/SSE and gRPC expose the same types and events; no new RPC is required.
+
+The owning `StreamEvent.session` is the **team root**, even when the member's
+spawn/outcome belongs to a nested parent's log. Match lifecycle updates by
+`child`, patch known member rows, and retain outcome, summary, and spawn metadata.
+Never create a member with an invented or empty member ID. When no matching row
+is loaded, re-read the appropriate parent's `GetSession` projection. Keep each
+session's replay watermark separate. On revival, `archived` is false (protojson
+may omit it), and `archiveReason` must be cleared. Snapshot `archived` uses
+optional presence so an unknown binding remains distinct from a live actor.
+
+For example, after a successful report the row can be `status: MEMBER_STATUS_DONE,
+archived: true, archiveReason: reported`. The following team-root events archive
+and then revive that same child without rewriting its task outcome:
+
+```json
+{ "event": { "seq": "41", "session": "hysec_root", "memberLifecycleChanged": { "child": "hysec_child", "handle": "main/helper", "archived": true, "archiveReason": "reported" } } }
+{ "event": { "seq": "50", "session": "hysec_root", "memberLifecycleChanged": { "child": "hysec_child", "handle": "main/helper" } } }
+```
+
+The existing member status updates describe the next task episode separately.
 
 Every subagent is a resident with one task at a time (ADR-0015), so the
 statuses mean:
