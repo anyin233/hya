@@ -42,6 +42,7 @@ test.describe("undo and redo", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "write notes")
     await term.waitForText("Wrote the notes.", 20_000)
+    await term.waitForIdle()
     await expect.poll(() => existsSync(file)).toBe(true)
 
     await prompt(term, "/undo")
@@ -73,6 +74,10 @@ test.describe("undo and redo", () => {
     await term.type("/undo")
     await term.press("Enter")
     await expect.poll(() => existsSync(file)).toBe(false)
+    // File restoration precedes the client undo response and composer prefill.
+    await expect.poll(() => term.find("Wrote the notes.")).toBeNull()
+    await term.waitForText(/↶ \d+ messages reverted · \/redo restores them/)
+    await term.waitForText("write notes")
     await clearInput(term)
     await prompt(term, "something else")
     await term.waitForText("Second reply.", 20_000)

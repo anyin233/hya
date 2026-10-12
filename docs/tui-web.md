@@ -301,12 +301,20 @@ menu or a readable old session ID does not establish completion.
 After the Project view's `t` shortcut, wait for the view to close before issuing
 another command, then verify the changed selection and temporary session kind.
 At startup, reopen `/status` until its expected metadata is drawn: initialization
-may restore Conversation after an early status command.
+may restore Conversation after an early status command. Before another client
+creates fixture sessions, wait for `statusSessionId(term)` so startup cannot
+select and resume the newly created fixture instead of the intended initial chat.
 
 Submitting a prompt clears the composer before the server event renders its
 transcript row. After observing the empty composer, use
 `await term.waitForText(submittedText)` before asserting on that row; an immediate
 `find` can inspect the intervening frame. The Vim send scenario covers this ordering.
+Likewise, an empty Diff placeholder renders while the request is loading. Wait
+for its `Esc close` hint before testing close; while busy, Escape cancels loading.
+For undo, a file disappearing establishes the backend filesystem change only.
+Before replacing the restored input, wait for the old reply to disappear, the
+revert marker, and the prompt prefill; otherwise the late undo response can
+overwrite the next turn's client state.
 
 Replies used as readiness markers must identify the current turn. Use distinct
 scripted replies for repeated turns and wait for the current reply and idle
