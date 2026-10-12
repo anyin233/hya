@@ -1,3 +1,4 @@
+import { minimumBackendVersion } from "../frontend-version"
 import { expect, test } from "bun:test"
 import type { HyaClient, Interaction, MessageInfo, ProjectInfo, SessionInfo, StreamFrame, StreamEvent } from "../src/client"
 import { createController } from "../src/app/controller"
@@ -82,6 +83,7 @@ function harness() {
     return promise
   }
   const globalEnds: Array<() => void> = []
+  const globalStreams: Array<{ push: (frame: StreamFrame) => void | Promise<void>; open: () => void | Promise<void> }> = []
 
   const client = {
     get baseUrl() { return url },
@@ -92,7 +94,7 @@ function harness() {
     bootstrap: async () => {
       calls.push(["bootstrap"])
       return {
-        location: { version: "0.45.3", pid: restarted ? nextPid : oldPid },
+        location: { version: minimumBackendVersion, pid: restarted ? nextPid : oldPid },
         agents: [{ name: "hya-main" }],
         models: [{ id: "hya/echo", providerId: "hya", modelId: "echo" }],
       }
@@ -126,8 +128,9 @@ function harness() {
       sessions.unshift(session)
       return session
     },
-    streamGlobal: (_onFrame: (frame: StreamFrame) => void, signal: AbortSignal, onOpen?: () => void | Promise<void>) => {
+    streamGlobal: (onFrame: (frame: StreamFrame) => void | Promise<void>, signal: AbortSignal, onOpen?: () => void | Promise<void>) => {
       calls.push(["streamGlobal"])
+      globalStreams.push({ push: onFrame, open: () => onOpen?.() })
       void onOpen?.()
       return new Promise<void>((resolve) => {
         globalEnds.push(resolve)
@@ -180,7 +183,7 @@ function harness() {
         { seq: "15", session: open.id, partAppended: { message: "m_b", part: "p_b", textDelta: "still going" } },
         { seq: "16", session: open.id, messageFinished: { message: "m_b", finish: "FINISH_REASON_STOP" } },
       )
-      return { url, pid: nextPid, started: false, version: "0.45.3", startedAt: 5 }
+      return { url, pid: nextPid, started: false, version: minimumBackendVersion, startedAt: 5 }
     },
   })
 
@@ -189,8 +192,42 @@ function harness() {
     stream.push({ event: { session: stream.session, serverStopping: { reason: "restart" } } }).then(() => stream.end())
   }
 
-  return { store, controller, statuses, calls, sessions, sessionStreams, restart, nextStream, statusWhere }
+  return { store, controller, statuses, calls, sessions, sessionStreams, globalStreams, restart, nextStream, statusWhere }
 }
+
+test("a nested parent's archival refreshes on root lifecycle frames, resync, and global reconnection without mixing cursors", async () => {
+  const h = harness()
+  try {
+    await h.controller.start()
+    await h.nextStream()
+    const member = { member: "m", child: "helper", handle: "main/lead/helper", status: "MEMBER_STATUS_DONE", archived: true, archiveReason: "reported" }
+    const lead: SessionInfo = { id: "lead", parent: "s1", agent: "hya-main", workdir: "/work", lastSeq: "10", members: [member] }
+    h.sessions.push(lead, { id: "helper", parent: "lead", agent: "hya-task", workdir: "/work" })
+    h.store.setSessions([...h.sessions])
+    await h.controller.openSession("lead")
+    await h.nextStream()
+    expect(h.store.state.members[0]?.archived).toBe(true)
+    const refreshed = Promise.withResolvers<void>()
+    const setMembers = h.store.setMembers.bind(h.store)
+    h.store.setMembers = (rows) => {
+      setMembers(rows)
+      if (rows[0]?.archived === false) refreshed.resolve()
+    }
+    lead.members = [{ ...member, archived: false, archiveReason: "" }]
+    const global = h.globalStreams.at(-1)!
+    await global.push({ event: { session: "s1", seq: "999", memberLifecycleChanged: { child: "helper", handle: member.handle } } })
+    await refreshed.promise
+    expect(h.store.state.members[0]?.archiveReason).toBe("")
+    expect(h.store.state.cursor).toBe("10")
+    lead.members = [{ ...member, archiveReason: "shutdown" }]
+    await global.push({ resync: { lastSeq: "999" } })
+    expect(h.store.state.members[0]).toMatchObject({ archived: true, archiveReason: "shutdown" })
+    lead.members = [{ ...member, archived: false, archiveReason: "" }]
+    await global.open()
+    expect(h.store.state.members[0]).toMatchObject({ archived: false, archiveReason: "" })
+    expect(h.store.state.cursor).toBe("10")
+  } finally { h.controller.close() }
+})
 
 test("after `serverStopping {restart}` the TUI attaches to the successor at the same URL: the session stays open, its durable turn renders, and no phantom turn keeps running", async () => {
   const h = harness()
@@ -210,7 +247,7 @@ test("after `serverStopping {restart}` the TUI attaches to the successor at the 
   expect(successor.since).toBe("12")
   expect(h.store.state.serverUrl).toBe(url)
   expect(h.store.state.serverPid).toBe(4242)
-  expect(h.store.state.serverVersion).toBe("0.45.3")
+  expect(h.store.state.serverVersion).toBe(minimumBackendVersion)
   // Its projection renders the turn that is durable on the successor.
   expect(h.store.state.messages.map((message) => message.id)).toEqual(["m_u", "m_a"])
   // The stale turn is not running: the TUI does not wait on a turn the old server took with it.

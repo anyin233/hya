@@ -35,3 +35,22 @@ test("viewer pins round-trip through layout reload; passive viewers never acquir
   composer.session = "a"
   expect(parsePaneLayout(invalid)).toBeUndefined()
 })
+
+test("archived direct and nested children remain selectable, revive live, and survive reopening", () => {
+  const store = family()
+  const member = { member: "m", child: "a", description: "Survey", status: "MEMBER_STATUS_DONE", handle: "main/a", archived: true, archiveReason: "reported" }
+  store.setMembers([member])
+  store.setChild("a", { busy: false, members: [{ member: "nested", child: "b", status: "MEMBER_STATUS_FAILED", archived: true, archiveReason: "archived_by_parent", handle: "main/a/b" }] })
+  expect(subagentRows(store.state)[0]).toMatchObject({ status: "done", archived: true, handle: "main/a", archiveReason: "reported" })
+  expect(subagentRows(store.state)[1]).toMatchObject({ status: "failed", archived: true, handle: "main/a/b", archiveReason: "archived_by_parent" })
+  store.selectSubagent("a")
+  expect(store.state.subagentSelection).toBe("a")
+  store.applyEvent({ seq: "1", session: "parent", memberLifecycleChanged: { child: "b", handle: "main/a/b" } })
+  expect(subagentRows(store.state)[1]).toMatchObject({ status: "failed", archived: false, archiveReason: "" })
+  store.applyEvent({ seq: "2", session: "parent", memberLifecycleChanged: { child: "a", handle: "main/a" } })
+  expect(subagentRows(store.state)[0]).toMatchObject({ status: "done", archived: false, archiveReason: "" })
+  store.applyEvent({ seq: "2", session: "parent", memberLifecycleChanged: { child: "a", archived: true, archiveReason: "shutdown" } })
+  expect(subagentRows(store.state)[0]?.archived).toBe(false)
+  store.openSession({ id: "parent", agent: "main", workdir: "/work", members: [member] })
+  expect(subagentRows(store.state)[0]).toMatchObject({ status: "done", archived: true, archiveReason: "reported" })
+})

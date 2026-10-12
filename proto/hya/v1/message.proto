@@ -360,6 +360,12 @@ message MemberInfo {
   uint32 depth = 8;
   // Readable team roster handle for the child session, when known.
   string handle = 9;
+  // Actor archival, independent of the member's task outcome and the root
+  // chat session's archived flag. Absent when no actor binding is known.
+  optional bool archived = 10;
+  // Why the actor archived: reported, killed (legacy), root_teardown,
+  // archived_by_parent, or shutdown. Empty while active or unknown.
+  string archive_reason = 11;
 }
 
 // One file a session revert or unrevert wrote (or could not restore).

@@ -14,7 +14,7 @@
  *
  * Pure TypeScript (no Solid).
  */
-import type { MemberInfo, MessageInfo } from "../client"
+import type { MemberInfo, MemberLifecycleChanged, MessageInfo } from "../client"
 import { toolCard, type TaskInfo, type TaskMemberInfo } from "./tools"
 
 /** What the controller last read about a child session. */
@@ -27,6 +27,8 @@ export interface ChildState {
   failed?: boolean
   /** Agent bound to the child session. */
   agent?: string
+  /** Members spawned by this child, from its authoritative session projection. */
+  members?: MemberInfo[]
 }
 
 export type ChildStatus = "starting" | "running" | "idle" | "done" | "failed" | "cancelled"
@@ -35,8 +37,17 @@ export type ChildStatus = "starting" | "running" | "idle" | "done" | "failed" | 
 export function foldMember(rows: readonly MemberInfo[], update: MemberInfo): MemberInfo[] {
   const index = rows.findIndex((row) => row.member === update.member)
   const known = Object.fromEntries(Object.entries(update).filter(([, value]) => value !== undefined && value !== "" && value !== 0))
+  if (update.archived === false) known.archiveReason = ""
   if (index < 0) return [...rows, { ...known, member: update.member }]
   return rows.map((row, at) => at === index ? { ...row, ...known } : row)
+}
+
+/** Team-root lifecycle frames only patch known children; they never create member rows. */
+export function foldMemberLifecycle(rows: readonly MemberInfo[], update: MemberLifecycleChanged): MemberInfo[] {
+  return rows.map((row) => row.child === update.child ? { ...row,
+    ...(update.handle ? { handle: update.handle } : {}), archived: update.archived === true,
+    archiveReason: update.archived ? update.archiveReason ?? "" : "",
+  } : row)
 }
 
 /** An explicit child must match exactly; use the call ID only before a child is known. */

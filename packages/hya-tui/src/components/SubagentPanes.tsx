@@ -61,8 +61,8 @@ export function SubagentsPane(props: PaneRenderProps) {
           if (event.button !== 0) return
           event.stopPropagation(); store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id }); store.selectSubagent(row.id)
         }}>
-          <text height={1} wrapMode="none" fg={at() === index() ? colors.accent : colors.fg}>{`${at() === index() ? "▸" : " "}${"  ".repeat(row.depth)}${row.label} · ${row.status}`}</text>
-          <text height={1} wrapMode="none" fg={colors.muted}>{`  ${row.activity || row.id}`}</text>
+          <text height={1} wrapMode="none" fg={at() === index() ? colors.accent : colors.fg}>{`${at() === index() ? "▸" : " "}${"  ".repeat(row.depth)}${row.label} · ${row.status}${row.archived ? " · archived" : ""}`}</text>
+          <text height={1} wrapMode="none" fg={colors.muted}>{`  ${row.archived ? `${row.handle || row.id}${row.archiveReason ? ` · ${row.archiveReason}` : ""}` : row.activity || row.id}`}</text>
         </box>}</For>
       </Show>
     </scrollbox>
