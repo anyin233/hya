@@ -17,7 +17,12 @@ test("disk inspector package exposes discovery and an opt-in pane", async ({ tui
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ directory: backend.dir, path, project: false }),
     })
-    expect(install.ok, await install.text()).toBe(true)
+    const installed = await install.text()
+    expect(install.ok, installed).toBe(true)
+    const change = JSON.parse(installed)
+    // Installation can succeed while activation fails and retains the old catalog.
+    expect(change.refresh?.errors ?? [], installed).toEqual([])
+    expect(change.refresh?.bundles?.map((bundle: { id: string }) => bundle.id), installed).toContain("hya-extra/disk-inspector")
     const info = await fetch(`${backend.url}/v1/bundles/hya-extra%2Fdisk-inspector/api/info`)
     expect(info.ok, await info.clone().text()).toBe(true)
     expect(await info.json()).toMatchObject({ contractVersion: 1, capabilities: { scans: false, volumes: false, cancel: false } })
