@@ -31,6 +31,8 @@ test.describe("hya TUI Diff view", () => {
     await term.waitForText("Diff")
     await term.waitForText("0 files changed")
     await term.waitForText("Not a git repository")
+    // The empty placeholder also renders while loading, when Esc cancels.
+    await term.waitForText("↑↓ scroll · n/p file · r reload · Esc close")
     await term.press("Escape")
     await term.waitForText("Message, !shell, or @file · / commands")
   })

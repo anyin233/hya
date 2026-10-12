@@ -140,6 +140,8 @@ test.describe("/sessions archived toggle", () => {
   test("/sessions shows archived chats by default; Ctrl+A hides them and opening one unarchives it", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
     await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    // Finish startup selection before another client creates the archived fixture.
+    await statusSessionId(term)
     const backend = await backendOf(workspace)
     const hidden = await otherSession(backend, "Shelved work")
     await api(backend, "PATCH", `/v1/sessions/${hidden}`, { archived: true })
@@ -150,7 +152,7 @@ test.describe("/sessions archived toggle", () => {
     await term.waitForText("Ctrl+A hides archived")
     await term.press("Control+a")
     await term.waitForText("Ctrl+A shows archived")
-    expect(await term.text()).not.toContain("Shelved work")
+    await expect.poll(() => term.text()).not.toContain("Shelved work")
     await term.press("Control+a")
     await term.waitForText("Shelved work")
     await term.attach(testInfo, "archived-shown")
