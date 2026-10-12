@@ -132,6 +132,18 @@ export interface MemberInfo {
   /** `ToolCallPart.callId` of the spawning `task` call; empty for resident spawns. */
   callId?: string
   depth?: number
+  /** Actor archival, independent of task outcome; absent if no binding is known. */
+  archived?: boolean
+  archiveReason?: string
+}
+
+/** Durable team-root event, keyed by child session rather than parent-local member id. */
+export interface MemberLifecycleChanged {
+  child: string
+  handle?: string
+  /** Protojson may omit false on revival. */
+  archived?: boolean
+  archiveReason?: string
 }
 
 /** `ToolCallPart` (docs/protocol/README.md "Tool calls"). */
@@ -479,6 +491,7 @@ export interface StreamEvent {
   toolStateChanged?: { message: string; part: string } & Partial<ToolCallPart>
   /** A member (subagent) spawn or status change on the parent session; partial frames fold by `member`. */
   memberUpdated?: MemberInfo
+  memberLifecycleChanged?: MemberLifecycleChanged
   permissionRequested?: { interaction?: Interaction }
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }

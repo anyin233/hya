@@ -625,6 +625,11 @@ impl V1Sdk {
 /// - Durable frames at or below [`last_seq`](Self::last_seq) are ignored.
 ///   A seed does not know its watermark: set `last_seq` to the seq the seed
 ///   read reflects, or durable deltas it already contains apply again.
+/// - `memberLifecycleChanged` patches known members by child session, retaining
+///   task outcome and clearing archival on revival. These events belong to the
+///   team-root stream. A mirror follows one session's sequence: consumers viewing
+///   a nested parent refresh its member snapshot on root lifecycle notifications
+///   instead of feeding a second session's watermark into this mirror.
 #[derive(Default)]
 pub struct V1SessionMirror {
     messages: BTreeMap<String, pb::MessageInfo>,
@@ -748,6 +753,17 @@ impl V1SessionMirror {
                 let member = self.members.entry(update.member.clone()).or_default();
                 fold_member(member, update);
             }
+            Some(P::MemberLifecycleChanged(update)) => {
+                for member in self
+                    .members
+                    .values_mut()
+                    .filter(|member| member.child == update.child)
+                {
+                    member.handle.clone_from(&update.handle);
+                    member.archived = Some(update.archived);
+                    member.archive_reason.clone_from(&update.archive_reason);
+                }
+            }
             Some(P::ErrorReported(reported)) => {
                 if let Some(message) = self.messages.get_mut(&reported.message) {
                     message.error = Some(pb::MessageError {
@@ -837,6 +853,7 @@ fn fold_member(member: &mut pb::MemberInfo, update: &pb::MemberInfo) {
         (&mut member.description, &update.description),
         (&mut member.summary, &update.summary),
         (&mut member.call_id, &update.call_id),
+        (&mut member.handle, &update.handle),
     ] {
         if !value.is_empty() {
             target.clone_from(value);
@@ -847,6 +864,10 @@ fn fold_member(member: &mut pb::MemberInfo, update: &pb::MemberInfo) {
     }
     if update.depth != 0 {
         member.depth = update.depth;
+    }
+    if let Some(archived) = update.archived {
+        member.archived = Some(archived);
+        member.archive_reason.clone_from(&update.archive_reason);
     }
 }
 
@@ -1213,5 +1234,33 @@ mod tests {
             ),
             ("hya-task", "c", "ok")
         );
+        for (seq, archived, reason) in [(9, true, "reported"), (10, false, "")] {
+            mirror.apply(&frame(
+                seq,
+                P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
+                    child: "child".into(),
+                    handle: "main/helper".into(),
+                    archived,
+                    archive_reason: reason.into(),
+                }),
+            ));
+            let members = mirror.members();
+            assert_eq!(members.len(), 1);
+            assert_eq!(members[0].member, "mem");
+            assert_eq!(members[0].handle, "main/helper");
+            assert_eq!(members[0].archived, Some(archived));
+            assert_eq!(members[0].archive_reason, reason);
+            assert_eq!(members[0].status, pb::MemberStatus::Done as i32);
+            assert_eq!(members[0].summary, "ok");
+        }
+        mirror.apply(&frame(
+            11,
+            P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
+                child: "unrelated".into(),
+                archived: true,
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(mirror.members().len(), 1);
     }
 }
