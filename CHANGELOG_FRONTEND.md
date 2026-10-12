@@ -1,5 +1,5 @@
-# 0.44.21
+# 0.44.22
 
-## Subagents
+## Remote backends
 
-- Toggle archived subagents with Ctrl+A in the selector or `/subagents archived [show|hide|toggle]`. Selection, viewers, and completion share the conversation-local filter, which defaults to hidden. The shortcut is discoverable and removable through the existing keybinding settings.
+- Finish reloading pane extensions before opening Projects after a backend switch, so initial keystrokes are not lost to a replaced pane instance.

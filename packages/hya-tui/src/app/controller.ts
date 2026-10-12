@@ -1550,7 +1550,12 @@ export function createController({ client, store, directory, remote: startedRemo
       catalogStale = true
       detail += ` · ${String(error)}`
     }
-    if (ok) { startGlobalStream(); void onScopeChanged?.() }
+    if (ok) {
+      startGlobalStream()
+      // Local/remote trust changes can replace the pane instance. Finish that
+      // replacement before exposing Projects to input on the new backend.
+      await onScopeChanged?.()
+    }
     if (remote) {
       if (!store.state.activeProjectId) openProjectOverlay()
     } else if (ok) {
