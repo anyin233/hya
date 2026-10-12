@@ -460,7 +460,14 @@ and `crates/hya-plugin-bun/adapter`, then `bun run typecheck && bun test` in
 with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
 that binary, and runs `bun run test:tui-exp` from `packages/hya-tui-web`.
 The TUI SDK also receives frozen installation, typecheck and unit tests.
-The required matrix uses four workers and no retries. Artifacts go under
+The required CI matrix sets `HYA_TUI_EXP_WORKERS=8` and uses no retries.
+The direct runner defaults to four workers locally; `HYA_TUI_EXP_WORKERS`
+is the positive integer worker count, also overridable with `--workers=N`.
+For example, `HYA_TUI_EXP_WORKERS=8 bun run test:tui-exp` reproduces CI
+from `packages/hya-tui-web`; for the complete local check script, use
+`HYA_TUI_TEST_WORKERS=8 ./scripts/check-tui.sh`.
+Each worker still launches real backend and TUI processes, so measure both
+wall time and failures before increasing this on a different machine. Artifacts go under
 `runner.temp` and upload as `tui-exp-results`, even on failure. There is no
 Chromium installation or separate non-blocking experimental job.
 
