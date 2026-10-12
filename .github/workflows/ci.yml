@@ -144,6 +144,7 @@ jobs:
         env:
           HYA_BIN: ${{ github.workspace }}/target/debug/hya
           TMPDIR: ${{ runner.temp }}
+          HYA_TUI_EXP_WORKERS: 8
           HYA_TUI_EXP_OUTPUT_DIR: ${{ runner.temp }}/tui-exp-results
         run: bun run test:tui-exp
       - name: upload terminal screens, output and timings
