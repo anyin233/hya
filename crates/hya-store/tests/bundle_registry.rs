@@ -574,6 +574,21 @@ async fn reserved_builtin_agent_id_is_rejected_and_registry_is_unchanged() {
 }
 
 #[tokio::test]
+async fn concurrent_registry_opens_complete_migrations_and_read_the_same_generation() {
+    let path = temp_db();
+    let opened = futures::future::join_all((0..16).map(|_| BundleRegistry::connect(&path))).await;
+    for registry in opened {
+        let registry = registry.unwrap_or_else(|error| panic!("concurrent registry open: {error}"));
+        let snapshot = registry
+            .snapshot()
+            .await
+            .unwrap_or_else(|error| panic!("read opened registry: {error}"));
+        assert_eq!(snapshot.generation, 0);
+        assert!(snapshot.bundles.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn writer_busy_fails_immediately_without_registry_mutation() {
     let path = temp_db();
     let registry = BundleRegistry::connect(&path).await;
