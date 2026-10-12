@@ -18,7 +18,7 @@ export function SubagentsPane(props: PaneRenderProps) {
   let scroll: ScrollBoxRenderable | undefined
   createEffect(() => {
     const row = rows()[index()]
-    if (row && row.id !== store.state.subagentSelection) store.selectSubagent(row.id)
+    if (row?.id !== store.state.subagentSelection) store.selectSubagent(row?.id)
   })
   createEffect(() => {
     const at = index()
@@ -56,7 +56,7 @@ export function SubagentsPane(props: PaneRenderProps) {
   })
   return <PaneFrame kind="subagents" focused={props.focused} title="Subagents">
     <scrollbox ref={(element: ScrollBoxRenderable) => { scroll = element; props.scrollRef(element) }} width="100%" flexGrow={1}>
-      <Show when={rows().length} fallback={<text fg={colors.muted}>No subagents in this conversation.</text>}>
+      <Show when={rows().length} fallback={<text fg={colors.muted}>No active subagents in this conversation.</text>}>
         <For each={rows()}>{(row, at) => <box height={2} flexShrink={0} flexDirection="column" onMouseDown={(event: MouseEvent) => {
           if (event.button !== 0) return
           event.stopPropagation(); store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id }); store.selectSubagent(row.id)

@@ -1,6 +1,5 @@
-# 0.44.19
+# 0.44.20
 
 ## Subagents
 
-- Show archived agents in the selector alongside their task outcome, stable handle, and archive reason, while keeping their transcripts selectable.
-- Refresh direct and nested member lifecycle state live and after reopening; revival clears stale archive markers. Requires backend 0.45.7 or newer.
+- Hide archived actors from the subagent selector, command completion, and viewer panes. Preserve background tracking and viewer pins so revived actors reappear automatically, including after reopening. Active descendants remain visible when their parent is archived.
