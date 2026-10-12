@@ -2007,7 +2007,29 @@ changing its session, or sending the parent's draft to a child. Completed childr
 stay in the list until archived; nested children are indented, and pending requests show `waiting`.
 The existing parent permission/question prompt remains the place to answer asks.
 
-Archived actors are hidden from the selector and `/subagents` command completion.
+Archived actors are hidden from the selector and `/subagents` command completion
+by default. With the Subagents selector focused, **Ctrl+A** toggles their visibility.
+The pane title says `archived included` when they are shown, and its footer shows
+whether Ctrl+A will show or hide them. Visible archived rows retain their outcome,
+handle, and archive reason and can be selected or pinned like any other helper.
+The toggle is shared by the conversation's selectors, viewers, and command
+completion; switching conversations or relaunching resets it to hidden.
+
+For example, run `/subagents`, press Ctrl+A to inspect a finished helper's report,
+then press Ctrl+A again to hide archived helpers. Hiding repairs selection to the
+first visible helper, or clears it if none remain. Pinned viewers clear without
+losing their pin and resume when archives are shown again.
+
+`/subagents archived [show|hide|toggle]` exposes the same action: omitted mode
+means `toggle`; `show` and `hide` are idempotent. It requires an open conversation
+and changes only in-memory frontend state (`subagentsShowArchived: boolean`,
+default `false`); it performs no backend archive/revival write and saves no preference.
+The existing `MemberInfo.archived` and lifecycle events determine which agents are
+archived. `/keybind list pane` and `?` list Ctrl+A; `/keybind unset Ctrl+A` disables
+that physical key, `/keybind reset Ctrl+A` restores it. To assign another key use
+`/keybind set Alt+A --scope workspace /subagents archived`; that custom binding
+is deliberately workspace-wide, while the default Ctrl+A is selector-local.
+
 A successful `report` automatically archives its actor; idle or a terminal task
 outcome alone does not hide it. For example, open `/subagents`, select a helper,
 and pin it with Enter: once that helper reports and is archived, its row disappears
@@ -2065,7 +2087,7 @@ appear within that viewer and do not replace the parent's connection status.
 
 **Actor lifecycle interface (backend 0.45.7+):** member snapshots include
 `archived?: boolean`, `archiveReason: string`, and a `handle` retained after
-archival. Only `archived === true` hides an actor; false or absent keeps it visible.
+archival. Only `archived === true` hides an actor while the archive filter is off; false or absent keeps it visible.
 Hidden actors remain in background lifecycle tracking so revival can restore them.
 `archiveReason` is `reported`, `killed` (legacy), `root_teardown`,
 `archived_by_parent`, or `shutdown`; an absent `archived` means no binding is known.

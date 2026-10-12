@@ -161,6 +161,32 @@ test.describe("subagent panes", () => {
         const snapshot = await read()
         expect(snapshot.members?.[0]?.archived).toBe(true)
         wake.channel = snapshot.members![0]!.handle
+        // The archive key belongs to the selector, never the composer.
+        await command(term, "/layout focus pane-1")
+        await term.press("Control+a")
+        expect(await term.find("helper · done · archived")).toBeNull()
+        await command(term, "/layout focus pane-8")
+        await term.press("Control+a")
+        await term.waitForText("helper · done · archived")
+        await term.waitForText("archive-child-prompt")
+        await term.waitForText("hide archived")
+        // Disabled keys must remain removable through the existing keybind system.
+        await command(term, "/keybind unset Ctrl+A")
+        await term.waitForText("Keybind unset")
+        await term.press("Escape")
+        await expect.poll(() => term.find("Keybind unset")).toBeNull()
+        await term.press("Control+a")
+        expect(await term.find("helper · done · archived")).not.toBeNull()
+        await command(term, "/keybind reset Ctrl+A")
+        await term.waitForText("Keybind reset")
+        await term.press("Escape")
+        await expect.poll(() => term.find("Keybind reset")).toBeNull()
+        await term.press("Control+a")
+        await term.waitForText("No active subagents in this conversation.")
+        await term.waitForText("Pinned subagent unavailable in this conversation.")
+        // Runtime visibility is not written to the persisted viewer layout.
+        await term.press("Control+a")
+        await term.waitForText("helper · done · archived")
         // Keep the parent turn in flight until both the live and restored rows were checked.
         await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
         await term.close()
