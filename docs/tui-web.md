@@ -303,6 +303,11 @@ another command, then verify the changed selection and temporary session kind.
 At startup, reopen `/status` until its expected metadata is drawn: initialization
 may restore Conversation after an early status command.
 
+Submitting a prompt clears the composer before the server event renders its
+transcript row. After observing the empty composer, use
+`await term.waitForText(submittedText)` before asserting on that row; an immediate
+`find` can inspect the intervening frame. The Vim send scenario covers this ordering.
+
 Replies used as readiness markers must identify the current turn. Use distinct
 scripted replies for repeated turns and wait for the current reply and idle
 before asserting that no notification or permission prompt occurred. A common

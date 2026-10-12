@@ -98,7 +98,8 @@ test("/vim: insert and normal mode, motions, dd, undo, the cursor shape, and per
   // Enter in normal mode sends; the next input starts in insert mode.
   await term.press("Enter")
   await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
-  expect(await term.find("next line")).not.toBeNull()
+  // Clearing the composer precedes the server event that adds the transcript row.
+  await term.waitForText("next line")
   await expect.poll(() => cursorStyle(term)).toBe(5)
 
   // A restarted TUI reads `vim: true` and starts in insert mode.
