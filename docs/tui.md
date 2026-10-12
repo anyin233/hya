@@ -2004,17 +2004,20 @@ running on the server, and its transcript is re-read on return.
 `subagent-viewer` is a passive, read-only transcript pane. They let you monitor
 helpers alongside the parent conversation without replacing its transcript,
 changing its session, or sending the parent's draft to a child. Completed children
-stay in the list; nested children are indented, and pending requests show `waiting`.
+stay in the list until archived; nested children are indented, and pending requests show `waiting`.
 The existing parent permission/question prompt remains the place to answer asks.
 
-Archived actors stay selectable: a row shows, for example, `survey files · done ·
-archived`, with `main/helper · reported` underneath. The outcome (`done`, `failed`,
-or `cancelled`) remains visible independently of archival. A successful `report`
-automatically archives its actor; idle alone does not. Parent-driven archive and
-shutdown use their recorded reasons. Mail-driven revival clears the archive
-marker live, and reopening the TUI restores the state from the backend projection.
-This also applies to nested helpers. Enter and `n` still open archived transcripts;
-archival does not remove a child from the selector or archive the root chat.
+Archived actors are hidden from the selector and `/subagents` command completion.
+A successful `report` automatically archives its actor; idle or a terminal task
+outcome alone does not hide it. For example, open `/subagents`, select a helper,
+and pin it with Enter: once that helper reports and is archived, its row disappears
+and its pinned viewer shows “Pinned subagent unavailable in this conversation.”
+A following viewer moves to the next visible helper or clears when none remain.
+Pins are retained in the layout, so mail-driven revival restores both the row and
+its pinned transcript automatically. Reopening or reconnecting restores the same
+visibility from the backend projection, including nested helpers. Active descendants
+remain visible even if their parent actor is archived. Historical transcripts are
+still available explicitly through `/open <child-session-id>`.
 
 Run `/subagents` to add missing selector and viewer panes beside the workspace and
 focus the selector. Existing panes are reused. In the selector, Up/Down previews a
@@ -2062,7 +2065,9 @@ appear within that viewer and do not replace the parent's connection status.
 
 **Actor lifecycle interface (backend 0.45.7+):** member snapshots include
 `archived?: boolean`, `archiveReason: string`, and a `handle` retained after
-archival. `archiveReason` is `reported`, `killed` (legacy), `root_teardown`,
+archival. Only `archived === true` hides an actor; false or absent keeps it visible.
+Hidden actors remain in background lifecycle tracking so revival can restore them.
+`archiveReason` is `reported`, `killed` (legacy), `root_teardown`,
 `archived_by_parent`, or `shutdown`; an absent `archived` means no binding is known.
 Durable `memberLifecycleChanged` events carry `{child: string, handle: string,
 archived: boolean, archiveReason: string}` on the team root's stream and on the

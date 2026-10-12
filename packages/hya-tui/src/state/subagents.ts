@@ -3,7 +3,8 @@ import type { AppState } from "./store"
 import { childSessionIds, childStatus } from "./members"
 
 export interface SubagentRow { id: string; label: string; depth: number; status: string; activity?: string; handle?: string; archived?: boolean; archiveReason?: string }
-export function subagentRows(state: AppState): SubagentRow[] {
+/** Hidden actors stay available to background refreshes so revival can restore them. */
+export function subagentRows(state: AppState, options: { includeArchived?: boolean } = {}): SubagentRow[] {
   const root = state.selected?.id
   if (!root) return []
   const sessions = new Map(state.sessions.map((session) => [session.id, session]))
@@ -22,5 +23,5 @@ export function subagentRows(state: AppState): SubagentRow[] {
     for (const nested of state.sessions) if (nested.parent === id) visit(nested.id, depth + 1)
   }
   for (const id of direct) visit(id, 0)
-  return rows
+  return options.includeArchived ? rows : rows.filter((row) => row.archived !== true)
 }

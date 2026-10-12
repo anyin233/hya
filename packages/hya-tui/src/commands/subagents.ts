@@ -15,7 +15,7 @@ export const subagentsCommand: CommandSpec = {
   },
   run: ({ store, actions }, { args }) => {
     const rows = subagentRows(store.state)
-    const selected = store.state.subagentSelection ?? rows[0]?.id
+    const selected = rows.find((row) => row.id === store.state.subagentSelection)?.id ?? rows[0]?.id
     let layout = store.state.paneLayout
     const add = (kind: "subagents" | "subagent-viewer"): string => {
       const before = new Set(paneLeaves(layout.root).map((pane) => pane.id))

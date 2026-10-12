@@ -121,16 +121,18 @@ test.describe("subagent panes", () => {
   test.describe("actor lifecycle", () => {
     test.use({ model: { steps: [], permission: "allow" } })
     for (const protocol of ["http", "grpc"] as const) {
-      test(`archival stays visible after reopening and clears on revival over ${protocol}`, async ({ tui, backend, fakeModel }) => {
+      test(`archival hides the selector row and pinned transcript after reopening and revival restores them over ${protocol}`, async ({ tui, backend, fakeModel }) => {
         test.setTimeout(60_000)
         const wake = { channel: "", body: "wake-archived-helper" }
+        const report = { channel: "", body: "report now" }
         fakeModel!.route("NEVER call `report`", [
           toolStep("task", { description: "helper", prompt: "archive-child-prompt", subagent_type: "hya-task" }),
+          toolStep("wait", { timeout_secs: 60 }), toolStep("send", report),
           toolStep("wait", { timeout_secs: 60 }), hangStep(40_000),
           toolStep("send", wake), textStep("Parent woke helper."), hangStep(40_000),
         ])
         fakeModel!.route("Finish your task with `report`", [
-          toolStep("report", { result: "archive-report-marker", outcome: "done" }), hangStep(40_000),
+          hangStep(40_000), toolStep("report", { result: "archive-report-marker", outcome: "done" }), hangStep(40_000),
         ])
         const argv = protocol === "http" ? hyaTui(backend)
           : ["bun", tuiMain, "--grpc", new URL(backend.url).host, "--dir", backend.dir]
@@ -142,8 +144,18 @@ test.describe("subagent panes", () => {
         await term.waitForText("Subagent · pane-9 · following")
         await command(term, "/layout focus pane-1")
         await command(term, "delegate archive check")
-        await term.waitForText("helper · done · archived", 20_000)
-        await term.waitForText("reported")
+        await term.waitForText("archive-child-prompt", 20_000)
+        await command(term, "/layout focus pane-8")
+        await term.press("Enter")
+        await term.waitForText("Subagent · pane-9 · pinned")
+        await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
+        const before = await api<{ members: { handle: string }[] }>(backend, "GET", `/v1/sessions/${rootId}`)
+        report.channel = before.members[0]!.handle
+        fakeModel!.release()
+        await term.waitForText("No active subagents in this conversation.")
+        await term.waitForText("Pinned subagent unavailable in this conversation.")
+        expect(await term.find("helper ·")).toBeNull()
+        expect(await term.find("archive-child-prompt")).toBeNull()
         type Session = { id: string; parent?: string; busy?: boolean; members?: { child: string; handle: string; archived?: boolean }[] }
         const read = () => api<Session>(backend, "GET", `/v1/sessions/${rootId}`)
         const snapshot = await read()
@@ -153,11 +165,9 @@ test.describe("subagent panes", () => {
         await expect.poll(() => fakeModel!.pendingHangs()).toBe(1)
         await term.close()
         term = await tui([...argv, "--session", rootId])
-        await term.waitForText("helper · done · archived")
-        await command(term, "/layout focus pane-8")
-        await term.press("Enter")
-        await term.waitForText("Subagent · pane-9 · pinned")
-        await term.waitForText("archive-child-prompt")
+        await term.waitForText("No active subagents in this conversation.")
+        await term.waitForText("Pinned subagent unavailable in this conversation.")
+        expect(await term.find("helper ·")).toBeNull()
         fakeModel!.release()
         // An unread report may wake the parent automatically; otherwise request
         // the next turn explicitly. Both paths use the real send/revival tools.
@@ -172,7 +182,8 @@ test.describe("subagent panes", () => {
         }
         await expect.poll(async () => (await read()).members?.[0]?.archived, { timeout: 15_000 }).toBe(false)
         await term.waitForText("Parent woke helper.", 15_000)
-        await expect.poll(() => term.find("helper · done · archived")).toBeNull()
+        await term.waitForText("helper ·")
+        await expect.poll(() => term.find("No active subagents in this conversation.")).toBeNull()
         await term.waitForText("wake-archived-helper", 15_000)
       })
     }

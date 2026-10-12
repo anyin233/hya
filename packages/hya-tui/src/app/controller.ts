@@ -487,7 +487,7 @@ export function createController({ client, store, directory, remote: startedRemo
 
   function readChildren(): void {
     childTimer = undefined
-    const ids = subagentRows(store.state).map((row) => row.id)
+    const ids = subagentRows(store.state, { includeArchived: true }).map((row) => row.id)
     if (!ids.length) return
     const generation = childGeneration
     childReading = true
@@ -502,7 +502,7 @@ export function createController({ client, store, directory, remote: startedRemo
       const busy = ids.some((id) => store.state.children.get(id)?.busy)
       // The listing may discover another generation of descendants after the
       // reads began. Load their member snapshots even if the whole team is idle.
-      const discovered = subagentRows(store.state).some((row) => !ids.includes(row.id))
+      const discovered = subagentRows(store.state, { includeArchived: true }).some((row) => !ids.includes(row.id))
       if (childAgain || busy || discovered || store.state.running) trackChildren()
     })
   }
@@ -667,7 +667,7 @@ export function createController({ client, store, directory, remote: startedRemo
     // session's sequence watermark to the open transcript.
     if (event.memberLifecycleChanged) {
       const child = event.memberLifecycleChanged.child
-      if (sessionId === store.state.selected?.id || subagentRows(store.state).some((row) => row.id === child)) {
+      if (sessionId === store.state.selected?.id || subagentRows(store.state, { includeArchived: true }).some((row) => row.id === child)) {
         sessionDue = true
         scheduleRefresh()
         trackChildren()
