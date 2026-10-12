@@ -12,7 +12,7 @@ import { mkdir, readFile } from "node:fs/promises"
 import { createServer, type Server } from "node:net"
 import { join } from "node:path"
 import { Tui, terminalDriver } from "./harness"
-import { daemon, daemonStatus, expect, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
+import { createSession, daemon, daemonStatus, expect, hyaBin, launchTest as test, tuiInstances, type Workspace } from "./hya"
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -114,7 +114,7 @@ test.describe("bare hya", () => {
     await expect.poll(async () => (await web.text()).includes("Esc closes")).toBe(false)
 
     // Start a separate chat; a plain tab now shares the terminal's last one.
-    await prompt(web, "/new")
+    await createSession(web, { previousId: terminalSession })
     // …and the other way round: the tab's session shows up in the terminal.
     await prompt(web, "hello from the web tab")
     await web.waitForText("No live provider is available", 20_000)

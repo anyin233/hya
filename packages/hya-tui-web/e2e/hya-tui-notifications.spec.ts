@@ -53,7 +53,7 @@ async function promptThenBlur(term: Tui, text: string): Promise<void> {
 }
 
 test.describe("desktop notifications: turn end", () => {
-  test.use({ model: { steps: [textStep("Notify me please.", { chunkSize: 4, delayMs: 30 }), textStep("Notify me please.", { chunkSize: 4, delayMs: 30 }), textStep("Notify me please.", { chunkSize: 4, delayMs: 30 })] } })
+  test.use({ model: { steps: [textStep("Focused turn reply.", { chunkSize: 4, delayMs: 30 }), textStep("Unfocused turn reply.", { chunkSize: 4, delayMs: 30 }), textStep("Notifications off reply.", { chunkSize: 4, delayMs: 30 })] } })
 
   test("notifies over OSC 9 only while unfocused, and not when /notifications is off", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
@@ -64,13 +64,15 @@ test.describe("desktop notifications: turn end", () => {
     await focusTerminal(term)
     await term.type("say it")
     await term.press("Enter")
-    await term.waitForText("Notify me please.", 20_000)
+    await term.waitForText("Focused turn reply.", 20_000)
+    await term.waitForIdle()
     expect(await osc9Payloads(term)).toEqual([])
 
     // Submitted focused, then unfocused before the turn finishes: notifies.
     await captureOsc9(term)
     await promptThenBlur(term, "say it again")
-    await term.waitForText("Notify me please.", 20_000)
+    await term.waitForText("Unfocused turn reply.", 20_000)
+    await term.waitForIdle()
     // A fresh session has no title yet (the backend titles it in the background), so the body is bare.
     await expect.poll(() => osc9Payloads(term)).toEqual(["Turn finished"])
 
@@ -80,7 +82,8 @@ test.describe("desktop notifications: turn end", () => {
     await term.press("Enter")
     await captureOsc9(term)
     await promptThenBlur(term, "say it once more")
-    await term.waitForText("Notify me please.", 20_000)
+    await term.waitForText("Notifications off reply.", 20_000)
+    await term.waitForIdle()
     expect(await osc9Payloads(term)).toEqual([])
   })
 })
