@@ -148,10 +148,15 @@ test.describe("fork", () => {
     await term.waitForText("↶ 2 messages reverted · /redo restores")
     // The line wraps at the width instead of running off the edge.
     await term.waitForText(/the\s+next\s+prompt\s+makes\s+it\s+permanent/)
+    // The revert marker arrives before the transcript read and input prefill.
+    // Let undo finish so the old reply cannot satisfy the later redo wait.
+    await expect.poll(() => term.find("First reply.")).toBeNull()
+    await term.waitForText("│ alpha question")
     await term.attach(testInfo, "narrow-after-undo")
     await clearInput(term)
     await prompt(term, "/redo")
     await term.waitForText("First reply.")
+    await expect.poll(() => term.find("↶")).toBeNull()
     // /fork opens the fork picker.
     await term.press("Control+x")
     await term.type("/fork")

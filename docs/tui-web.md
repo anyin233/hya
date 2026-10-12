@@ -279,6 +279,16 @@ scenarios wait for visible state transitions before the next input: command
 pane opening, wizard steps, changed draft text, ready status and completed
 reconnect. They do not depend on Chromium's incidental input latency.
 
+`waitForIdle()` only checks that the working indicator is absent; it does not
+wait for a newly submitted prompt to be admitted. Wait for that prompt's
+expected reply before checking idle and issuing a follow-up such as `/compact`.
+Likewise, `/undo` can show its pending-revert marker before its transcript read
+and composer prefill finish. Wait for the old reply to disappear and the prompt
+to appear in the composer before clearing it or invoking `/redo`. Then wait for
+the restored reply and removal of the revert marker before opening `/fork`.
+These conditions keep the shared browser and PTY scenarios tied to completed
+state transitions instead of text left over from an earlier frame.
+
 ##### Harness interface
 
 `tui-exp/terminal.ts` exports `PtyTerminal.launch(command: string[], options?)`.
