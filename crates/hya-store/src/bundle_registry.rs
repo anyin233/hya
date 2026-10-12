@@ -498,7 +498,14 @@ impl BundleRegistry {
     }
 
     async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
-        sqlx::migrate!("./bundle_migrations").run(pool).await?;
+        // SQLite's sqlx migration lock is a no-op. Reserve the writer before
+        // reading migration history so concurrent openers cannot apply the
+        // same version from stale history. Individual migrations use savepoints.
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::migrate!("./bundle_migrations")
+            .run_direct(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 }
