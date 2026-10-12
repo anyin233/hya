@@ -337,6 +337,9 @@ test.describe("/compact", () => {
     await connected(term, backend)
     await term.type("hi")
     await term.press("Enter")
+    // Absence of the busy indicator can precede admission of this prompt.
+    // Wait for its reply before using idle as the compaction precondition.
+    await term.waitForText("hi there", 20_000)
     await term.waitForIdle(20_000)
     await term.type("/compact")
     await term.waitForText("▸ /compact")
