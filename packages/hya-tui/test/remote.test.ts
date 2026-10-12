@@ -41,7 +41,7 @@ const remoteFiles: Record<string, Uint8Array> = {
 }
 
 /** A fake server per base URL (local and remote), recording calls with the URL they went to. */
-function harness(options: { home?: boolean; bridgeError?: string; remote?: boolean; label?: string; lastLine?: string } = {}) {
+function harness(options: { home?: boolean; bridgeError?: string; remote?: boolean; label?: string; lastLine?: string; onScopeChanged?: () => Promise<void> } = {}) {
   const store = createAppStore()
   const statuses: string[] = []
   const setStatus = store.setStatus.bind(store)
@@ -133,6 +133,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
     store,
     directory: "/work/sub",
     ...(options.remote ? { remote: true } : {}),
+    onScopeChanged: options.onScopeChanged,
     probe: async () => false,
     reconnect: async (): Promise<ServerSwitch> => { reconnects.push(base); return { url: localUrl, pid: 7, started: true } },
     find: async () => undefined,
@@ -186,6 +187,26 @@ test("/connect-remote <link> starts the bridge and moves to it as a remote start
   expect(h.named("createSession").at(-1)).toEqual(["createSession", bridgeUrl, { projectId: "prj_remote" }])
   expect(h.visible()).not.toContain("SECRET")
   h.controller.dispose()
+})
+
+test("remote connection waits for the new extension catalog before reporting ready", async () => {
+  const started = Promise.withResolvers<void>()
+  const ready = Promise.withResolvers<void>()
+  const h = harness({ onScopeChanged: async () => { started.resolve(); await ready.promise } })
+  const connecting = h.controller.submit(`/connect-remote ${link}`)
+  try {
+    await started.promise
+    // Drain the connection continuation so this fails if the refresh was detached.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(h.store.state.status).not.toStartWith(`Connected to ${label}`)
+    ready.resolve()
+    await connecting
+    expect(h.store.state.status).toBe(`Connected to ${label} · choose a project, or t for a temporary session`)
+  } finally {
+    ready.resolve()
+    await connecting
+    h.controller.dispose()
+  }
 })
 
 test("the link never reaches a status line, the store, or the backend", async () => {

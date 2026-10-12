@@ -444,6 +444,12 @@ backend without restarting it; `/disconnect-remote` brings it back. Bare
 /disconnect-remote
 ```
 
+The backend switch waits for its pane-extension catalog to finish loading before
+opening Projects or reporting the connection ready. This prevents input entered
+into the new Project form from being lost when a local extension is replaced
+with its remote execution instance. The `/connect-remote` and
+`/disconnect-remote` command arguments and relay RPC contracts are unchanged.
+
 **Connecting.** The TUI runs `<hya> bridge - --json --exit-with-stdin
 [--transport T] [--relay-ca PEM]` (the same binary lookup as the daemon start:
 `--hya`, `HYA_BIN`, `hya` on PATH; bare `hya`, `--connect` included, passes
