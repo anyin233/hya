@@ -3968,7 +3968,10 @@ The display consumes the existing output contract: batch
 `summary: string`. Single-task output retains `metadata.sessionId` and
 `metadata.member`. The UI reconciles each entry by its own child session or
 handle with live member events, so siblings sharing a call ID cannot steal
-one another's state or click target. Failed batch entries without a session
+one another's state or click target. Built-in tool cards remain mounted during
+live projection refreshes, and child rows keep their native mouse targets by
+session ID (or member handle while awaiting a session). A status update therefore
+does not discard a click on the displayed child row. Failed batch entries without a session
 remain visible without an open link. Replayed outputs can populate every
 child before live roster state arrives. Top-level single-task labels are
 ignored for batches. See the
