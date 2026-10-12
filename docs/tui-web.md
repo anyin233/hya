@@ -289,6 +289,34 @@ the restored reply and removal of the revert marker before opening `/fork`.
 These conditions keep the shared browser and PTY scenarios tied to completed
 state transitions instead of text left over from an earlier frame.
 
+Session-changing commands also complete asynchronously. Use
+`createSession(term, options?)` from `e2e/hya.ts` for `/new`: it reads the old
+selection before submission, then polls `/status` until a different session
+ID is selected. Its options are `{ previousId?: string; temporary?: boolean }`;
+pass a known `previousId` when the old session has a title, and `temporary: true`
+to exercise `/new --temp`. For example, after resuming `terminalId` in another
+client, `const webId = await createSession(web, { previousId: terminalId })`
+waits for that client's new chat before sending work to it. A closed command
+menu or a readable old session ID does not establish completion.
+After the Project view's `t` shortcut, wait for the view to close before issuing
+another command, then verify the changed selection and temporary session kind.
+At startup, reopen `/status` until its expected metadata is drawn: initialization
+may restore Conversation after an early status command.
+
+Replies used as readiness markers must identify the current turn. Use distinct
+scripted replies for repeated turns and wait for the current reply and idle
+before asserting that no notification or permission prompt occurred. A common
+letter such as `a`, or a reply already present from a previous turn, can satisfy
+`waitForText` before the action under test starts.
+
+Wait for client catalog updates through a visible consumer, too. The Provider
+View live-update scenario waits for `/model gw/alpha` in command completion
+(which reads the TUI's model catalog without a refresh), then opens `/model`.
+It repeats the completion query by editing its final character, because the
+menu caches suggestions between edits.
+Backend discovery plus a guessed delay cannot establish that the TUI has
+received and applied the update.
+
 ##### Harness interface
 
 `tui-exp/terminal.ts` exports `PtyTerminal.launch(command: string[], options?)`.
@@ -535,9 +563,19 @@ When the steps run out, a request gets an empty `stop` reply.
 | `setUsage({ prompt, completion, reasoning })` | `(Usage) => void` | Attach a `usage` object to every finishing chunk from now on (title replies excepted). |
 | `setTitleReply(title)` | `(string) => void` | Answer the backend's background session-title requests with `title` (default: an empty reply, so the session stays untitled). |
 | `titleRequests()` | `() => unknown[]` | Title request bodies, in arrival order. |
-| `release()` | `() => void` | Release the oldest pending `hangStep`. |
-| `pendingHangs()` | `() => number` | Count of hangs currently holding a connection open. |
-| `stop()` | `() => Promise<void>` | Stop the server. |
+| `release()` | `() => void` | Release the oldest live `hangStep`; no effect when none remain. |
+| `pendingHangs()` | `() => number` | Count of hangs currently holding a connection open; excludes cancelled, timed-out, and released requests. |
+| `stop()` | `() => Promise<void>` | Settle pending hangs, clear their timers, close connections, and stop the server. |
+
+Use `hangStep()` without a deadline when a scenario needs a stable busy state
+until cancellation or explicit release. Each concurrent child needs its own
+step: `fake.route(childMarker, [hangStep(), hangStep()])` holds two child
+requests; a single step makes the other child finish with an empty reply.
+Wait for `pendingHangs()` to reach the expected count before inspecting those
+children. A timed hang removes itself when its deadline expires, and a client
+disconnect removes its hang, so `release()` always targets a live request.
+`e2e/fake-model-lifecycle.spec.ts` checks timeout, cancellation followed by a
+new release, and shutdown on both model protocols.
 
 The `backend` fixture (`e2e/hya.ts`) gains a `model` test option that wires
 the isolated `hya serve` to a fake model instead of the offline echo model:
