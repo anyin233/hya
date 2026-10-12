@@ -5,3 +5,7 @@ Use eight workers in CI, four by default locally. In a 46-case sessions/tools/su
 After fixing readiness races exposed by load, all 307 shared scenarios passed at eight workers/four CPUs in 249.193s with no retries. The three additional race cases also passed 15/15 stress repetitions. A 90-second process sample during the first full run peaked at 3400 MiB aggregate RSS (shared pages may be counted repeatedly), 43 processes. This is local evidence, not a guarantee about GitHub hardware or future memory peaks.
 
 Set HYA_TUI_EXP_WORKERS for direct parity runs; scripts/check-tui.sh uses HYA_TUI_TEST_WORKERS. Keep build/test artifacts under ~/data locally. Full reports: /home/zcm/data/hya-rust/tmp/workers-full-8-final/parity.json and workers-bench-{4-clean,8}/parity.json.
+
+## Superseded by GitHub evidence
+
+Run 38294165613 took 7.6 minutes and two multi-launch cases exceeded the unchanged 30-second test budget. Restore four CI workers: local CPU affinity did not reproduce GitHub throughput. The third failure exposed a frontend remote-extension reload ordering race. Do not treat a local pass as proof of CI concurrency headroom.
