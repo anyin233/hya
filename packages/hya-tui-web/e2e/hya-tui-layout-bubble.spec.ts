@@ -5,15 +5,19 @@ import { backendConfigDir, expect, hyaTui, statusSessionId, test } from "./hya"
 import type { PaneLayout, PaneNode, PaneSplit } from "../../hya-tui/src/state/panes"
 
 async function command(term: Tui, text: string) {
-  await term.press("Control+x"); await term.type(text); await term.press("Enter")
+  await term.press("Control+x")
+  await term.type(text)
+  await term.waitForText("Commands")
+  await term.waitForText(text)
+  await term.press("Enter")
   await expect.poll(() => term.find("Commands")).toBeNull()
 }
 async function click(term: Tui, text: string) {
   await term.waitForText(text)
   const at = (await term.find(text))!
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
-  await term.page.mouse.click(box.x + (at.col + .5) / cols * box.width, box.y + (at.row + .5) / rows * box.height)
+  await term.mouse.click(box.x + (at.col + .5) / cols * box.width, box.y + (at.row + .5) / rows * box.height)
 }
 function nodes(node: PaneNode): PaneNode[] { return node.type === "pane" ? [node] : [node, ...node.children.flatMap((child) => nodes(child.node))] }
 for (const width of [1100, 690]) {
@@ -52,6 +56,7 @@ for (const width of [1100, 690]) {
     await term.waitForText("draft preserved")
     await command(term, "/layout tree")
     await term.waitForText("Layout tree")
+    await expect.poll(async () => nodes((await saved()).root).some((node) => node.type === "pane" && node.kind === "layout")).toBe(true)
     const reordered = await saved()
     term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
     await term.waitForText("Layout tree")

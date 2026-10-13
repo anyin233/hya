@@ -4,7 +4,7 @@
 
 use hya_api::v1 as pb;
 use hya_proto::projection::{MemberProjection, MessageProjection, PartProjection, Projection};
-use hya_proto::{Envelope, Event, Role};
+use hya_proto::{ArchiveReason, Envelope, Event, Role, TeamProjection};
 use hya_proto::{FinishCause, FinishReason, MemberRunStatus, ReportOutcome, ToolPartState};
 
 /// Map a domain finish reason to the wire enum.
@@ -117,10 +117,13 @@ fn member_status(status: MemberRunStatus) -> i32 {
 }
 
 /// Map a folded member row to the wire member view.
-pub(crate) fn member_info(
-    member: &MemberProjection,
-    roster: &std::collections::BTreeMap<String, hya_proto::RosterEntry>,
-) -> pb::MemberInfo {
+pub(crate) fn member_info(member: &MemberProjection, team: &TeamProjection) -> pb::MemberInfo {
+    let active = member
+        .child
+        .and_then(|child| team.roster.values().find(|entry| entry.session == child));
+    let archived = member
+        .child
+        .and_then(|child| team.archived.values().find(|entry| entry.session == child));
     pb::MemberInfo {
         member: member.member.to_string(),
         child: member
@@ -138,16 +141,25 @@ pub(crate) fn member_info(
             .map(ToString::to_string)
             .unwrap_or_default(),
         depth: member.depth,
-        handle: member
-            .child
-            .as_ref()
-            .and_then(|child| {
-                roster
-                    .values()
-                    .find(|entry| entry.session == *child)
-                    .map(|entry| entry.handle.clone())
-            })
+        handle: active
+            .map(|entry| &entry.handle)
+            .or_else(|| archived.map(|entry| &entry.handle))
+            .cloned()
             .unwrap_or_default(),
+        archived: archived.map(|_| true).or_else(|| active.map(|_| false)),
+        archive_reason: archived
+            .map(|entry| archive_reason(entry.reason).to_owned())
+            .unwrap_or_default(),
+    }
+}
+
+fn archive_reason(reason: ArchiveReason) -> &'static str {
+    match reason {
+        ArchiveReason::Reported => "reported",
+        ArchiveReason::Killed => "killed",
+        ArchiveReason::RootTeardown => "root_teardown",
+        ArchiveReason::ArchivedByParent => "archived_by_parent",
+        ArchiveReason::Shutdown => "shutdown",
     }
 }
 
@@ -158,7 +170,7 @@ pub(crate) fn session_info(
     projection: &Projection,
     started_millis: i64,
     updated_millis: i64,
-    roster: &std::collections::BTreeMap<String, hya_proto::RosterEntry>,
+    team: &TeamProjection,
 ) -> pb::SessionInfo {
     let session = &projection.session;
     pb::SessionInfo {
@@ -195,7 +207,7 @@ pub(crate) fn session_info(
         members: session
             .members
             .iter()
-            .map(|member| member_info(member, roster))
+            .map(|member| member_info(member, team))
             .collect(),
         usage: (!session.usage.is_empty()).then(|| usage_totals(&session.usage.total())),
         forked_from: session.forked_from.map(|source| pb::ForkSource {
@@ -715,6 +727,7 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
                 .unwrap_or_default(),
             depth: *depth,
             handle: String::new(),
+            ..Default::default()
         }),
         Event::MemberStatusChanged { member, status, .. } => P::MemberUpdated(pb::MemberInfo {
             member: member.to_string(),
@@ -738,12 +751,14 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
         Event::SubagentReported {
             member,
             child,
+            handle,
             outcome,
             report,
             ..
         } => P::MemberUpdated(pb::MemberInfo {
             member: member.to_string(),
             child: child.to_string(),
+            handle: handle.clone(),
             status: member_status(match outcome {
                 ReportOutcome::Done => MemberRunStatus::Done,
                 ReportOutcome::Failed => MemberRunStatus::Failed,
@@ -751,6 +766,25 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             summary: report.clone(),
             ..Default::default()
         }),
+        Event::AgentArchived {
+            child,
+            handle,
+            reason,
+            ..
+        } => P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
+            child: child.to_string(),
+            handle: handle.clone(),
+            archived: true,
+            archive_reason: archive_reason(*reason).to_owned(),
+        }),
+        Event::AgentRestarted { child, handle, .. } => {
+            P::MemberLifecycleChanged(pb::MemberLifecycleChanged {
+                child: child.to_string(),
+                handle: handle.clone(),
+                archived: false,
+                archive_reason: String::new(),
+            })
+        }
         Event::Error {
             code,
             message: text,
@@ -913,7 +947,38 @@ mod tests {
             heartbeat_ms: 0,
             resident_work: None,
         };
-        let roster = std::collections::BTreeMap::from([("main/explorer-1".to_owned(), entry)]);
-        assert_eq!(member_info(&member, &roster).handle, "main/explorer-1");
+        let mut team = TeamProjection::default();
+        let unknown = member_info(&member, &team);
+        assert_eq!(unknown.archived, None);
+        team.roster.insert(entry.handle.clone(), entry);
+        let active = member_info(&member, &team);
+        assert_eq!(active.handle, "main/explorer-1");
+        assert_eq!(active.archived, Some(false));
+        team.roster.clear();
+        for reason in [
+            ArchiveReason::Reported,
+            ArchiveReason::Killed,
+            ArchiveReason::RootTeardown,
+            ArchiveReason::ArchivedByParent,
+            ArchiveReason::Shutdown,
+        ] {
+            team.archived.insert(
+                "main/explorer-1".into(),
+                hya_proto::ArchivedEntry {
+                    handle: "main/explorer-1".into(),
+                    session: child,
+                    agent_type: hya_proto::AgentName::new("explore"),
+                    reason,
+                },
+            );
+            let archived = member_info(&member, &team);
+            assert_eq!(archived.handle, "main/explorer-1");
+            assert_eq!(archived.archived, Some(true));
+            assert_eq!(
+                archived.archive_reason,
+                serde_json::to_value(reason).unwrap().as_str().unwrap()
+            );
+            assert_eq!(archived.status, active.status);
+        }
     }
 }

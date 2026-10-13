@@ -444,6 +444,12 @@ backend without restarting it; `/disconnect-remote` brings it back. Bare
 /disconnect-remote
 ```
 
+The backend switch waits for its pane-extension catalog to finish loading before
+opening Projects or reporting the connection ready. This prevents input entered
+into the new Project form from being lost when a local extension is replaced
+with its remote execution instance. The `/connect-remote` and
+`/disconnect-remote` command arguments and relay RPC contracts are unchanged.
+
 **Connecting.** The TUI runs `<hya> bridge - --json --exit-with-stdin
 [--transport T] [--relay-ca PEM]` (the same binary lookup as the daemon start:
 `--hya`, `HYA_BIN`, `hya` on PATH; bare `hya`, `--connect` included, passes
@@ -2004,8 +2010,42 @@ running on the server, and its transcript is re-read on return.
 `subagent-viewer` is a passive, read-only transcript pane. They let you monitor
 helpers alongside the parent conversation without replacing its transcript,
 changing its session, or sending the parent's draft to a child. Completed children
-stay in the list; nested children are indented, and pending requests show `waiting`.
+stay in the list until archived; nested children are indented, and pending requests show `waiting`.
 The existing parent permission/question prompt remains the place to answer asks.
+
+Archived actors are hidden from the selector and `/subagents` command completion
+by default. With the Subagents selector focused, **Ctrl+A** toggles their visibility.
+The pane title says `archived included` when they are shown, and its footer shows
+whether Ctrl+A will show or hide them. Visible archived rows retain their outcome,
+handle, and archive reason and can be selected or pinned like any other helper.
+The toggle is shared by the conversation's selectors, viewers, and command
+completion; switching conversations or relaunching resets it to hidden.
+
+For example, run `/subagents`, press Ctrl+A to inspect a finished helper's report,
+then press Ctrl+A again to hide archived helpers. Hiding repairs selection to the
+first visible helper, or clears it if none remain. Pinned viewers clear without
+losing their pin and resume when archives are shown again.
+
+`/subagents archived [show|hide|toggle]` exposes the same action: omitted mode
+means `toggle`; `show` and `hide` are idempotent. It requires an open conversation
+and changes only in-memory frontend state (`subagentsShowArchived: boolean`,
+default `false`); it performs no backend archive/revival write and saves no preference.
+The existing `MemberInfo.archived` and lifecycle events determine which agents are
+archived. `/keybind list pane` and `?` list Ctrl+A; `/keybind unset Ctrl+A` disables
+that physical key, `/keybind reset Ctrl+A` restores it. To assign another key use
+`/keybind set Alt+A --scope workspace /subagents archived`; that custom binding
+is deliberately workspace-wide, while the default Ctrl+A is selector-local.
+
+A successful `report` automatically archives its actor; idle or a terminal task
+outcome alone does not hide it. For example, open `/subagents`, select a helper,
+and pin it with Enter: once that helper reports and is archived, its row disappears
+and its pinned viewer shows “Pinned subagent unavailable in this conversation.”
+A following viewer moves to the next visible helper or clears when none remain.
+Pins are retained in the layout, so mail-driven revival restores both the row and
+its pinned transcript automatically. Reopening or reconnecting restores the same
+visibility from the backend projection, including nested helpers. Active descendants
+remain visible even if their parent actor is archived. Historical transcripts are
+still available explicitly through `/open <child-session-id>`.
 
 Run `/subagents` to add missing selector and viewer panes beside the workspace and
 focus the selector. Existing panes are reused. In the selector, Up/Down previews a
@@ -2050,6 +2090,20 @@ combination has one reference-counted watch. Reconnect gap-fills from its durabl
 sequence and refreshes the authoritative projection; transient live parts use the
 same overlay and Markdown/tool rendering as the main conversation. Viewer errors
 appear within that viewer and do not replace the parent's connection status.
+
+**Actor lifecycle interface (backend 0.45.7+):** member snapshots include
+`archived?: boolean`, `archiveReason: string`, and a `handle` retained after
+archival. Only `archived === true` hides an actor while the archive filter is off; false or absent keeps it visible.
+Hidden actors remain in background lifecycle tracking so revival can restore them.
+`archiveReason` is `reported`, `killed` (legacy), `root_teardown`,
+`archived_by_parent`, or `shutdown`; an absent `archived` means no binding is known.
+Durable `memberLifecycleChanged` events carry `{child: string, handle: string,
+archived: boolean, archiveReason: string}` on the team root's stream and on the
+lightweight global stream. The selector patches matching children and refreshes
+the authoritative parent/member projections; revival clears the reason even when
+protojson omits the false boolean. See [Actor archival and revival](protocol/README.md#actor-archival-and-revival)
+for replay, nested-member routing, and examples. To inspect it, run `/subagents`,
+select a reported helper, and press Enter to pin its retained transcript.
 Live deltas are transient: joining a response after its part-start frame may
 show that part only once its durable completed text is available. Keeping a
 following viewer open before spawning a helper shows its response as it streams.
@@ -3968,7 +4022,10 @@ The display consumes the existing output contract: batch
 `summary: string`. Single-task output retains `metadata.sessionId` and
 `metadata.member`. The UI reconciles each entry by its own child session or
 handle with live member events, so siblings sharing a call ID cannot steal
-one another's state or click target. Failed batch entries without a session
+one another's state or click target. Built-in tool cards remain mounted during
+live projection refreshes, and child rows keep their native mouse targets by
+session ID (or member handle while awaiting a session). A status update therefore
+does not discard a click on the displayed child row. Failed batch entries without a session
 remain visible without an open link. Replayed outputs can populate every
 child before live roster state arrives. Top-level single-task labels are
 ignored for batches. See the

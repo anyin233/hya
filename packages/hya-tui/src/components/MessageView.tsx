@@ -272,7 +272,12 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
       ...(args === undefined ? {} : { input: args }), ...(output ? { output } : {}), ...(card.error ? { error: card.error } : {}),
     }
   }
-  return <>{hooked(extensionManager.toolCall(input()), () => <BaseToolCard {...props} />)}</>
+  const trees = createMemo(() => extensionManager.toolCall(input()))
+  // Keep the built-in subtree mounted when a projection update only changes
+  // card data. Recreating it invalidates the previous frame's mouse hit IDs.
+  return <Show when={Boolean(trees().replace || trees().decorators.length)} fallback={<BaseToolCard {...props} />}>
+    {hooked(trees(), () => <BaseToolCard {...props} />)}
+  </Show>
 }
 
 function CardHeader(props: { status: ToolStatus | "waiting"; summary: string; duration?: string | undefined }) {
@@ -296,6 +301,10 @@ const childLabels: Record<ChildStatus, string> = {
 function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskInfo }) {
   const { store, controller } = useApp()
   const links = createMemo(() => taskLinks(props.task, props.block.callId, store.state.members))
+  const rows = createMemo(() => links().map((link, index) => ({
+    id: link.child ? `child:${link.child}` : link.member ? `member:${link.member.member}` : `pending:${index}`,
+    link,
+  })))
   const openSingle = () => {
     const id = links().length === 1 ? links()[0]?.child : undefined
     if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
@@ -310,7 +319,7 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
         <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>
       </Show>
       <Show when={props.block.card.status !== "failed"}>
-        <For each={links()}>{(link) => <TaskMemberRow link={link} />}</For>
+        <KeyedFor each={rows()}>{(row) => <TaskMemberRow link={row().link} />}</KeyedFor>
       </Show>
     </box>
   )

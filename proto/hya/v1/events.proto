@@ -109,7 +109,9 @@ message StreamGlobalEventsRequest {
   // `catalogUpdated` and `projectsUpdated` notices, and the session-list
   // frames of root sessions — durable `sessionStarted` and `sessionUpdated`
   // (title, agent, model, permission mode, archived), live
-  // `sessionUpdated.busy`, and live `sessionDeleted`. Every other engine
+  // `sessionUpdated.busy`, live `sessionDeleted`, and durable
+  // `memberLifecycleChanged` (actor archival/revival on the team root log).
+  // Every other engine
   // event (text, tools, messages, and any child session's list changes) is
   // skipped. A `resync` frame means session-list frames were lost: list the
   // sessions again. For a client that follows one session on its session
@@ -222,7 +224,23 @@ message StreamEvent {
     // stream only (also with `interactions_only`): `seq` is 0 and `session`
     // is empty. Re-read `ListProjects`.
     ProjectsUpdated projects_updated = 27;
+    // An actor archived or revived (durable, on the team root's log).
+    // Match members by child session, including nested members whose spawn
+    // belongs to another parent's log. This never changes the task outcome.
+    MemberLifecycleChanged member_lifecycle_changed = 28;
   }
+}
+
+// Actor lifecycle, separate from parent-local member task updates.
+message MemberLifecycleChanged {
+  // Child session identifier; stable across archival and revival.
+  string child = 1;
+  // Stable human-readable actor handle.
+  string handle = 2;
+  // True on archival, false on revival. False may be omitted in protojson.
+  bool archived = 3;
+  // Same vocabulary as MemberInfo.archive_reason; empty on revival.
+  string archive_reason = 4;
 }
 
 // A catalog changed.

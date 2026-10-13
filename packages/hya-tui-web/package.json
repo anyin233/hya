@@ -2,13 +2,18 @@
   "name": "@hya/tui-web",
   "version": "0.0.0",
   "private": true,
-  "hya": { "version-reference": "frontend" },
+  "hya": {
+    "version-reference": "frontend"
+  },
   "type": "module",
   "scripts": {
     "start": "bun src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./test",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:tui-exp": "bun run test:tui-exp:unit && bun run test:tui-exp:parity",
+    "test:tui-exp:unit": "bun test ./tui-exp --timeout 30000",
+    "test:tui-exp:parity": "bun --bun node_modules/@playwright/test/cli.js test --config tui-exp/playwright.config.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
@@ -17,6 +22,7 @@
   "devDependencies": {
     "@opentui/core": "0.5.12",
     "@playwright/test": "1.63.0",
+    "@xterm/headless": "6.0.0",
     "bun-types": "1.4.2",
     "typescript": "5.9.3"
   }

@@ -949,3 +949,27 @@ test("/layout bubble swaps siblings, persists them, completes arguments, and val
   expect(h.registry.complete("/layout bubble ", h.store.completionContext())).toContain("/layout bubble group-3")
   for (const line of ["/layout bubble", "/layout bubble pane-4", "/layout bubble pane-4 up", "/layout bubble pane-4 next extra"]) await expect(h.run(line)).rejects.toThrow("Usage: /layout bubble")
 })
+
+
+test("/subagents archived toggles or explicitly sets visibility and validates arguments", async () => {
+  const h = harness()
+  await expect(h.run("/subagents archived")).rejects.toThrow("Open a conversation")
+  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
+  h.store.setMembers([{ member: "m", child: "a", archived: true }])
+  await h.run("/subagents archived")
+  expect(h.store.state.subagentsShowArchived).toBe(true)
+  await h.run("/subagents select a")
+  await h.run("/subagents archived hide")
+  expect(h.store.state.subagentSelection).toBeUndefined()
+  await expect(h.run("/subagents select a")).rejects.toThrow("Choose a subagent")
+  await h.run("/subagents archived show")
+  await h.run("/subagents archived show")
+  expect(h.store.state.subagentsShowArchived).toBe(true)
+  await h.run("/subagents archived toggle")
+  expect(h.store.state.subagentsShowArchived).toBe(false)
+  await expect(h.run("/subagents archived invalid")).rejects.toThrow("Usage:")
+  await expect(h.run("/subagents archived show extra")).rejects.toThrow("Usage:")
+  expect(h.registry.complete("/subagents archived ", h.store.completionContext())).toEqual([
+    "/subagents archived hide", "/subagents archived show", "/subagents archived toggle",
+  ])
+})

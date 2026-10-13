@@ -15,9 +15,9 @@ async function focus(term: Tui, title: string) {
 }
 async function click(term: Tui, title: string) {
   const position = (await term.find(title))!
-  const screen = (await term.page.locator(".xterm-screen").boundingBox())!
+  const screen = await term.screenBox()
   const size = await term.size()
-  await term.page.mouse.click(screen.x + ((position.col + 0.5) / size.cols) * screen.width, screen.y + ((position.row + 0.5) / size.rows) * screen.height)
+  await term.mouse.click(screen.x + ((position.col + 0.5) / size.cols) * screen.width, screen.y + ((position.row + 0.5) / size.rows) * screen.height)
 }
 
 test("passive panes preserve focus on click and are skipped by navigation and rotation", async ({ tui, backend }, testInfo) => {
@@ -34,7 +34,7 @@ test("passive panes preserve focus on click and are skipped by navigation and ro
     await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
   }
   await term.type("not the draft")
-  await term.page.evaluate(() => window.hyaTerm.term.paste("not pasted either"))
+  await term.paste("not pasted either")
   await command(term, "/layout focus pane-4") // Passive id cannot take focus.
   await expect.poll(() => focus(term, "Sessions")).toBe("#73c8e8")
   await command(term, "/layout focus previous")
