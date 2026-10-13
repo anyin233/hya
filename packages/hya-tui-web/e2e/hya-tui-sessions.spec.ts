@@ -6,7 +6,7 @@
 // metadata is read explicitly through /status.
 
 import type { Tui } from "./harness"
-import { expectStatus, expect, hyaTui, statusSessionId, test, textStep } from "./hya"
+import { createSession, expectStatus, expect, hyaTui, statusSessionId, test, textStep } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 
@@ -18,17 +18,6 @@ async function prompt(term: Tui, text: string): Promise<void> {
   // previous action never drops characters and sends a shorter command instead.
   await term.waitForText(text)
   await term.press("Enter")
-}
-
-/** Create a session with `/new` and return its id from /status. */
-async function newSession(term: Tui, previousId?: string): Promise<string> {
-  await prompt(term, "/new")
-  let id = previousId ?? ""
-  await expect.poll(async () => {
-    id = await statusSessionId(term)
-    return id
-  }, { timeout: 20_000 }).not.toBe(previousId)
-  return id
 }
 
 /** The session the TUI opened on connect (a plain start creates one). */
@@ -61,7 +50,7 @@ test("lists a New session row first, then the tree with the open session marked;
   const term = await tui(hyaTui(backend))
   const first = await connected(term)
   await keep(term, "First session")
-  const second = await newSession(term, first)
+  const second = await createSession(term, { previousId: first })
 
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
@@ -81,10 +70,11 @@ test("lists a New session row first, then the tree with the open session marked;
 test("an empty session this TUI created is deleted when it opens another; a used one is kept", async ({ tui, backend }) => {
   const term = await tui(hyaTui(backend))
   const empty = await connected(term)
-  const kept = await newSession(term, empty)
+  const kept = await createSession(term, { previousId: empty })
   await prompt(term, "hello")
   await term.waitForText("First.", 20_000)
-  await newSession(term, kept)
+  await term.waitForIdle()
+  await createSession(term, { previousId: kept })
   const listed = async () => ((await (await fetch(`${backend.url}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
   await expect.poll(listed).not.toContain(empty)
   expect(await listed()).toContain(kept)
@@ -121,7 +111,7 @@ test("Ctrl+D shows a confirmation before deleting; Esc cancels, Enter deletes an
   const term = await tui(hyaTui(backend))
   const first = await connected(term)
   await keep(term, "First session")
-  const second = await newSession(term, first)
+  const second = await createSession(term, { previousId: first })
 
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
@@ -158,7 +148,7 @@ test("fits about 80 columns", async ({ tui, backend }, testInfo) => {
   const { cols } = await term.size()
   expect(cols).toBeLessThanOrEqual(84)
   await term.waitForText("Message, !shell, or @file · / commands")
-  await newSession(term)
+  await createSession(term)
   await prompt(term, "/sessions")
   await term.waitForText("Sessions")
   for (const line of await term.lines()) expect(line.length).toBeLessThanOrEqual(cols)

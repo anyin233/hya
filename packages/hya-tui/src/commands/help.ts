@@ -175,6 +175,7 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   bindingRows.push(
     { group: "Subagents", keys: "Up / Down", description: "Selector: preview the previous / next child without leaving the parent" },
     { group: "Subagents", keys: "Enter", description: "Selector: pin the preview to the first following viewer, or reuse the first pinned viewer" },
+    { group: "Subagents", keys: "Ctrl+A", description: "Selector: toggle archived helpers (/subagents archived); hidden by default" },
     { group: "Subagents", keys: "n", description: "Selector: add a separate viewer pinned to the preview" },
   )
   const commandRows: HelpRow[] = commands.map((entry) => ({

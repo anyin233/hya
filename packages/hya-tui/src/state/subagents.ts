@@ -2,8 +2,9 @@
 import type { AppState } from "./store"
 import { childSessionIds, childStatus } from "./members"
 
-export interface SubagentRow { id: string; label: string; depth: number; status: string; activity?: string }
-export function subagentRows(state: AppState): SubagentRow[] {
+export interface SubagentRow { id: string; label: string; depth: number; status: string; activity?: string; handle?: string; archived?: boolean; archiveReason?: string }
+/** Hidden actors stay available to background refreshes so revival can restore them. */
+export function subagentRows(state: AppState, options: { includeArchived?: boolean } = {}): SubagentRow[] {
   const root = state.selected?.id
   if (!root) return []
   const sessions = new Map(state.sessions.map((session) => [session.id, session]))
@@ -14,11 +15,13 @@ export function subagentRows(state: AppState): SubagentRow[] {
     if (seen.has(id)) return
     seen.add(id)
     const session = sessions.get(id), member = state.members.find((row) => row.child === id)
+      ?? (session?.parent ? state.children.get(session.parent)?.members?.find((row) => row.child === id) : undefined)
     const child = state.children.get(id) ?? (session ? { busy: session.busy === true } : undefined)
     rows.push({ id, depth, label: member?.description || session?.title || member?.agent || session?.agent || id,
-      status: state.interactions.some((ask) => ask.session === id) ? "waiting" : childStatus(member, child), activity: child?.activity })
+      status: state.interactions.some((ask) => ask.session === id) ? "waiting" : childStatus(member, child), activity: child?.activity,
+      handle: member?.handle, archived: member?.archived, archiveReason: member?.archiveReason })
     for (const nested of state.sessions) if (nested.parent === id) visit(nested.id, depth + 1)
   }
   for (const id of direct) visit(id, 0)
-  return rows
+  return (options.includeArchived ?? state.subagentsShowArchived) ? rows : rows.filter((row) => row.archived !== true)
 }

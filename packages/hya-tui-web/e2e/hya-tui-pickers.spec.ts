@@ -48,8 +48,9 @@ test.describe("/model picker", () => {
     // --continue with no earlier session: none is open (a plain start creates one).
     const term = await tui([...hyaTui(backend), "--continue"])
     await term.waitForText("Message, !shell, or @file · / commands")
+    await expectStatus(term, "Session", "none")
     await prompt(term, "/model")
-    await term.waitForText("Model")
+    await term.waitForText("─Model")
     await term.press("ArrowDown")
     await term.press("Enter")
     await expect.poll(() => term.find("─Model")).toBeNull()

@@ -6035,6 +6035,14 @@ pub struct MemberInfo {
     /// Readable team roster handle for the child session, when known.
     #[prost(string, tag = "9")]
     pub handle: ::prost::alloc::string::String,
+    /// Actor archival, independent of the member's task outcome and the root
+    /// chat session's archived flag. Absent when no actor binding is known.
+    #[prost(bool, optional, tag = "10")]
+    pub archived: ::core::option::Option<bool>,
+    /// Why the actor archived: reported, killed (legacy), root_teardown,
+    /// archived_by_parent, or shutdown. Empty while active or unknown.
+    #[prost(string, tag = "11")]
+    pub archive_reason: ::prost::alloc::string::String,
 }
 /// One file a session revert or unrevert wrote (or could not restore).
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -7673,7 +7681,9 @@ pub struct StreamGlobalEventsRequest {
     /// `catalogUpdated` and `projectsUpdated` notices, and the session-list
     /// frames of root sessions — durable `sessionStarted` and `sessionUpdated`
     /// (title, agent, model, permission mode, archived), live
-    /// `sessionUpdated.busy`, and live `sessionDeleted`. Every other engine
+    /// `sessionUpdated.busy`, live `sessionDeleted`, and durable
+    /// `memberLifecycleChanged` (actor archival/revival on the team root log).
+    /// Every other engine
     /// event (text, tools, messages, and any child session's list changes) is
     /// skipped. A `resync` frame means session-list frames were lost: list the
     /// sessions again. For a client that follows one session on its session
@@ -7726,7 +7736,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -7834,7 +7844,28 @@ pub mod stream_event {
         /// is empty. Re-read `ListProjects`.
         #[prost(message, tag = "27")]
         ProjectsUpdated(super::ProjectsUpdated),
+        /// An actor archived or revived (durable, on the team root's log).
+        /// Match members by child session, including nested members whose spawn
+        /// belongs to another parent's log. This never changes the task outcome.
+        #[prost(message, tag = "28")]
+        MemberLifecycleChanged(super::MemberLifecycleChanged),
     }
+}
+/// Actor lifecycle, separate from parent-local member task updates.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemberLifecycleChanged {
+    /// Child session identifier; stable across archival and revival.
+    #[prost(string, tag = "1")]
+    pub child: ::prost::alloc::string::String,
+    /// Stable human-readable actor handle.
+    #[prost(string, tag = "2")]
+    pub handle: ::prost::alloc::string::String,
+    /// True on archival, false on revival. False may be omitted in protojson.
+    #[prost(bool, tag = "3")]
+    pub archived: bool,
+    /// Same vocabulary as MemberInfo.archive_reason; empty on revival.
+    #[prost(string, tag = "4")]
+    pub archive_reason: ::prost::alloc::string::String,
 }
 /// A catalog changed.
 #[derive(Clone, PartialEq, ::prost::Message)]

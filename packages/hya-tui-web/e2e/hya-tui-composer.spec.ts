@@ -108,12 +108,12 @@ test.describe("multi-line input", () => {
     expect(box.rows[0]).toBe("row 4")
   })
 
-  test("a bracketed paste of several lines is inserted without sending", async ({ tui, backend, page }) => {
+  test("a bracketed paste of several lines is inserted without sending", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("paste: ")
     // xterm.js wraps the text in bracketed-paste markers (the TUI enables mode 2004) and sends CRs.
-    await page.evaluate(() => window.hyaTerm.term.paste("alpha\nbeta\ngamma"))
+    await term.paste("alpha\nbeta\ngamma")
     await expect.poll(() => composerText(term)).toBe("paste: alpha\nbeta\ngamma")
     const text = await term.text()
     expect(text).not.toContain("● hya-main")
@@ -179,7 +179,7 @@ test.describe("Esc and quitting", () => {
     await connected(term)
     await term.type("some text")
     await term.press("Control+c")
-    expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
+    expect(await term.exitStatus()).toBeNull()
     await expect.poll(() => composerText(term)).toBe("")
     await term.attach(testInfo, "quit-hint")
     await term.press("Control+c")
@@ -331,6 +331,7 @@ test.describe("@file references", () => {
     // Esc closed only the list; the text stays.
     expect(await composerText(term)).toBe("@file-")
     await term.press("Backspace")
+    await expect.poll(() => composerText(term)).toBe("@file")
     await term.type("-")
     await term.waitForText("▸ file-a.md")
     await term.press("ArrowDown")

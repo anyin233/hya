@@ -257,7 +257,7 @@ test.describe("command menu", () => {
     await expect.poll(() => commandText(term)).toBe("/status")
     await term.press("Escape")
     await expect.poll(async () => (await box(term, "Commands")) === undefined).toBe(true)
-    await term.page.evaluate(() => window.hyaTerm.term.paste("/help"))
+    await term.paste("/help")
     await expect.poll(() => composerText(term)).toBe("/help")
     await term.press("Enter")
     await term.waitForText("┃ /help")
@@ -337,6 +337,9 @@ test.describe("/compact", () => {
     await connected(term, backend)
     await term.type("hi")
     await term.press("Enter")
+    // Absence of the busy indicator can precede admission of this prompt.
+    // Wait for its reply before using idle as the compaction precondition.
+    await term.waitForText("hi there", 20_000)
     await term.waitForIdle(20_000)
     await term.type("/compact")
     await term.waitForText("▸ /compact")

@@ -161,7 +161,8 @@ fn session_stream(
 /// root-session list notices (`sessionUpdated {busy}`, `sessionDeleted`; see
 /// `crate::session_list`). With `interactions_only` the engine bus is
 /// narrowed to the durable list frames of root sessions (`sessionStarted`,
-/// `sessionUpdated`); its lag still yields `resync`.
+/// `sessionUpdated`) and team-root `memberLifecycleChanged` frames; its lag
+/// still yields `resync`.
 /// Permission and question frames are
 /// live-only (`seq == 0`): the pending queues are the authoritative
 /// listing, the streams are delivery. A session scope with `descendants`
@@ -299,7 +300,8 @@ pub(crate) fn frame_stream(
 
 /// The durable session-list frames of root sessions from the engine bus
 /// (the `interactions_only` global stream's share of it): `sessionStarted`
-/// and `sessionUpdated` (title, agent, model, permission mode, archived).
+/// and `sessionUpdated` (title, agent, model, permission mode, archived),
+/// plus team-root `memberLifecycleChanged` frames for clients of nested parents.
 /// A lag yields one `resync` frame: list frames were lost.
 #[allow(clippy::result_large_err)]
 fn session_list_engine_feed(
@@ -319,6 +321,8 @@ fn session_list_engine_feed(
             }
             let root = match &envelope.event {
                 hya_proto::Event::SessionCreated { parent, .. } => parent.is_none(),
+                hya_proto::Event::AgentArchived { .. }
+                | hya_proto::Event::AgentRestarted { .. } => true,
                 hya_proto::Event::SessionTitled { session, .. }
                 | hya_proto::Event::AgentSwitched { session, .. }
                 | hya_proto::Event::ModelSwitched { session, .. }

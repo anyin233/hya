@@ -596,10 +596,23 @@ migrations live under
 | Pool max | 8 | 8 |
 | Foreign keys | on | on |
 
+Opening the registry retries transient SQLite BUSY/LOCKED errors during connection
+setup and migrations for up to five seconds, with a 10ms asynchronous backoff.
+Migration history inspection and all pending migrations run under one
+`BEGIN IMMEDIATE` transaction. This serializes concurrent openers across
+processes before they decide which versions are missing; SQLx's SQLite
+migration lock alone does not provide that serialization.
+This lets simultaneous catalog refreshes open the same registry reliably. It
+does not change the zero-timeout writer contract above. No configuration is
+needed: `BundleRegistry::connect(path).await?` applies this policy automatically.
+Non-lock errors return immediately; exhausted setup retries return the original
+SQLite or migration error.
+
 ### API (`BundleRegistry`)
 
 | Method | Result |
 | --- | --- |
+| `connect(path: &str)` | `Result<BundleRegistry, StoreError>`; opens/migrates with bounded setup-lock retries |
 | `generation()` | Current registry generation |
 | `snapshot()` | `BundleRegistrySnapshot { generation, bundles: Vec<BundleRegistryRecord> }` |
 | `install_inspection(...)` | Install from a package inspection (public only; private → `PrivateActivationUnsupported`) |

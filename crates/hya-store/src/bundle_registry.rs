@@ -1,7 +1,7 @@
 //! Durable installed-bundle registry (separate SQLite DB from the session store).
 
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hya_bundle::{BundleCatalog, PreparedCatalog, PreparedInstallableBundle};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -163,7 +163,21 @@ pub fn is_downgrade(incoming: &str, installed: &str) -> bool {
 
 impl BundleRegistry {
     /// Open or create the registry database at `path` and run migrations (synchronous=Full).
+    /// Connection setup retries transient SQLite locks for up to five seconds;
+    /// registry mutations retain their zero busy timeout.
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match Self::connect_once(path).await {
+                Err(error) if setup_busy(&error) && Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn connect_once(path: &str) -> Result<Self, StoreError> {
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{path}"))?
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
@@ -174,7 +188,10 @@ impl BundleRegistry {
             .max_connections(8)
             .connect_with(options)
             .await?;
-        Self::migrate(&pool).await?;
+        if let Err(error) = Self::migrate(&pool).await {
+            pool.close().await;
+            return Err(error);
+        }
         Ok(Self { pool })
     }
 
@@ -481,7 +498,14 @@ impl BundleRegistry {
     }
 
     async fn migrate(pool: &sqlx::SqlitePool) -> Result<(), StoreError> {
-        sqlx::migrate!("./bundle_migrations").run(pool).await?;
+        // SQLite's sqlx migration lock is a no-op. Reserve the writer before
+        // reading migration history so concurrent openers cannot apply the
+        // same version from stale history. Individual migrations use savepoints.
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        sqlx::migrate!("./bundle_migrations")
+            .run_direct(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 }
@@ -634,6 +658,20 @@ async fn refuse<T>(
 ) -> Result<T, StoreError> {
     transaction.rollback().await?;
     Err(refused)
+}
+
+fn setup_busy(error: &StoreError) -> bool {
+    match error {
+        StoreError::Sqlite(error) => is_sqlite_busy_or_locked(error),
+        StoreError::Migrate(error) => match error.as_ref() {
+            sqlx::migrate::MigrateError::Execute(error)
+            | sqlx::migrate::MigrateError::ExecuteMigration(error, _) => {
+                is_sqlite_busy_or_locked(error)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn is_sqlite_busy_or_locked(error: &sqlx::Error) -> bool {

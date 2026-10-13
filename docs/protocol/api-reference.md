@@ -1755,7 +1755,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `directory` (1) | `string` | Ignored: this rpc does not depend on a directory. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
-| `interactions_only` (3) | `bool` | Deliver only interaction and session-list frames: the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session, the process-wide `catalogUpdated` and `projectsUpdated` notices, and the session-list frames of root sessions — durable `sessionStarted` and `sessionUpdated` (title, agent, model, permission mode, archived), live `sessionUpdated.busy`, and live `sessionDeleted`. Every other engine event (text, tools, messages, and any child session's list changes) is skipped. A `resync` frame means session-list frames were lost: list the sessions again. For a client that follows one session on its session stream and needs only the asks of the others and live session and Project lists. |
+| `interactions_only` (3) | `bool` | Deliver only interaction and session-list frames: the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every session, the process-wide `catalogUpdated` and `projectsUpdated` notices, and the session-list frames of root sessions — durable `sessionStarted` and `sessionUpdated` (title, agent, model, permission mode, archived), live `sessionUpdated.busy`, live `sessionDeleted`, and durable `memberLifecycleChanged` (actor archival/revival on the team root log). Every other engine event (text, tools, messages, and any child session's list changes) is skipped. A `resync` frame means session-list frames were lost: list the sessions again. For a client that follows one session on its session stream and needs only the asks of the others and live session and Project lists. |
 
 ### `StreamFrame`
 
@@ -1807,6 +1807,18 @@ One curated projected event from the event log.
 | `catalog_updated` (25) | `oneof `payload`: CatalogUpdated` | A catalog changed: the provider/model catalog (a provider was added, edited, or refreshed, a key was set or removed, or startup discovery finished; `project_id` empty), or one Project's catalog tier (its roots changed or it was deleted; `project_id` names it). Live-only and process-wide: `seq` is 0 and `session` is empty on every stream it reaches (global and session). Re-read `ListModels` / `ListProviders`, and the agent/command/skill catalogs of the affected scope (every scope when `project_id` is empty). |
 | `server_stopping` (26) | `oneof `payload`: ServerStopping` | The server is shutting down (ADR-0023): the last frame of every live stream (global and session, SSE and gRPC) before it ends, and the only frame of a stream opened while shutting down. Live-only and process-wide (`seq` 0, empty `session`). `reason` says whether a client should start the next server itself; see `ServerStopping`. |
 | `projects_updated` (27) | `oneof `payload`: ProjectsUpdated` | The Project list changed: a Project was created, updated, or deleted, a Project gained or lost a session, or a Project's `busy` flag changed. Live-only and process-wide, delivered on the global stream only (also with `interactions_only`): `seq` is 0 and `session` is empty. Re-read `ListProjects`. |
+| `member_lifecycle_changed` (28) | `oneof `payload`: MemberLifecycleChanged` | An actor archived or revived (durable, on the team root's log). Match members by child session, including nested members whose spawn belongs to another parent's log. This never changes the task outcome. |
+
+### `MemberLifecycleChanged`
+
+Actor lifecycle, separate from parent-local member task updates.
+
+| Field | Type | Description |
+|---|---|---|
+| `child` (1) | `string` | Child session identifier; stable across archival and revival. |
+| `handle` (2) | `string` | Stable human-readable actor handle. |
+| `archived` (3) | `bool` | True on archival, false on revival. False may be omitted in protojson. |
+| `archive_reason` (4) | `string` | Same vocabulary as MemberInfo.archive_reason; empty on revival. |
 
 ### `CatalogUpdated`
 
@@ -2551,6 +2563,8 @@ A subagent (member) spawned by a session, as recorded on the parent's log.
 | `call_id` (7) | `string` | Tool call (`ToolCallPart.call_id`) that spawned the member; empty for members started without a tool call. |
 | `depth` (8) | `uint32` | Depth in the subagent tree (children of a root session are 1). |
 | `handle` (9) | `string` | Readable team roster handle for the child session, when known. |
+| `archived` (10) | `optional bool` | Actor archival, independent of the member's task outcome and the root chat session's archived flag. Absent when no actor binding is known. |
+| `archive_reason` (11) | `string` | Why the actor archived: reported, killed (legacy), root_teardown, archived_by_parent, or shutdown. Empty while active or unknown. |
 
 ### `RevertedFile`
 

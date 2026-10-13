@@ -4,6 +4,7 @@ import { AppContext, useApp, type PaneInputHandle } from "../app/context"
 import type { SessionView } from "../app/sessionViews"
 import { paneLeaves } from "../state/panes"
 import { subagentRows } from "../state/subagents"
+import { isKeyOverridden } from "../keys/custom"
 import { colors } from "../theme"
 import { PaneFrame } from "./PaneFrame"
 import { Transcript } from "./Transcript"
@@ -18,7 +19,7 @@ export function SubagentsPane(props: PaneRenderProps) {
   let scroll: ScrollBoxRenderable | undefined
   createEffect(() => {
     const row = rows()[index()]
-    if (row && row.id !== store.state.subagentSelection) store.selectSubagent(row.id)
+    if (row?.id !== store.state.subagentSelection) store.selectSubagent(row?.id)
   })
   createEffect(() => {
     const at = index()
@@ -35,7 +36,11 @@ export function SubagentsPane(props: PaneRenderProps) {
   }
   const command = (text: string) => { void controller.submit(text, "command") }
   const input: PaneInputHandle = { onKey: (key) => {
-    if (key.ctrl || key.meta || key.shift) return
+    if (key.ctrl && !key.meta && !key.option && !key.super && !key.shift && key.name === "a") {
+      command("/subagents archived")
+      return
+    }
+    if (key.ctrl || key.meta || key.option || key.super || key.shift) return
     if (key.name === "up") move(-1)
     else if (key.name === "down") move(1)
     else if (key.name === "return" && rows()[index()]) {
@@ -54,19 +59,19 @@ export function SubagentsPane(props: PaneRenderProps) {
     ui.paneInputs ??= new Map(); ui.paneInputs.set(id, input)
     onCleanup(() => { if (ui.paneInputs?.get(id) === input) ui.paneInputs.delete(id) })
   })
-  return <PaneFrame kind="subagents" focused={props.focused} title="Subagents">
+  return <PaneFrame kind="subagents" focused={props.focused} title={store.state.subagentsShowArchived ? "Subagents · archived included" : "Subagents"}>
     <scrollbox ref={(element: ScrollBoxRenderable) => { scroll = element; props.scrollRef(element) }} width="100%" flexGrow={1}>
-      <Show when={rows().length} fallback={<text fg={colors.muted}>No subagents in this conversation.</text>}>
+      <Show when={rows().length} fallback={<text fg={colors.muted}>{store.state.subagentsShowArchived ? "No subagents in this conversation." : "No active subagents in this conversation."}</text>}>
         <For each={rows()}>{(row, at) => <box height={2} flexShrink={0} flexDirection="column" onMouseDown={(event: MouseEvent) => {
           if (event.button !== 0) return
           event.stopPropagation(); store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id }); store.selectSubagent(row.id)
         }}>
-          <text height={1} wrapMode="none" fg={at() === index() ? colors.accent : colors.fg}>{`${at() === index() ? "▸" : " "}${"  ".repeat(row.depth)}${row.label} · ${row.status}`}</text>
-          <text height={1} wrapMode="none" fg={colors.muted}>{`  ${row.activity || row.id}`}</text>
+          <text height={1} wrapMode="none" fg={at() === index() ? colors.accent : colors.fg}>{`${at() === index() ? "▸" : " "}${"  ".repeat(row.depth)}${row.label} · ${row.status}${row.archived ? " · archived" : ""}`}</text>
+          <text height={1} wrapMode="none" fg={colors.muted}>{`  ${row.archived ? `${row.handle || row.id}${row.archiveReason ? ` · ${row.archiveReason}` : ""}` : row.activity || row.id}`}</text>
         </box>}</For>
       </Show>
     </scrollbox>
-    <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>↑↓ preview · Enter pin · n new viewer · /subagents follow &lt;pane&gt;</text>
+    <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · Enter pin · n new viewer · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived`}</text>
   </PaneFrame>
 }
 

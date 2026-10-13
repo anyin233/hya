@@ -23,11 +23,10 @@ async function composerText(term: Tui): Promise<string> {
 
 /** Observe DECSCUSR through xterm's public parser API, without TUI internals. */
 async function cursorStyle(term: Tui): Promise<number | null> {
-  return term.page.evaluate(() => {
-    const state = window as typeof window & { observedCursor?: { style: number | null } }
+  return term.inspect((terminal, state) => {
     if (!state.observedCursor) {
       state.observedCursor = { style: null }
-      window.hyaTerm.term.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+      terminal.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
         state.observedCursor!.style = Number(params[0])
         return false
       })
@@ -99,7 +98,8 @@ test("/vim: insert and normal mode, motions, dd, undo, the cursor shape, and per
   // Enter in normal mode sends; the next input starts in insert mode.
   await term.press("Enter")
   await expect.poll(() => composerText(term)).toBe("Message, !shell, or @file · / commands")
-  expect(await term.find("next line")).not.toBeNull()
+  // Clearing the composer precedes the server event that adds the transcript row.
+  await term.waitForText("next line")
   await expect.poll(() => cursorStyle(term)).toBe(5)
 
   // A restarted TUI reads `vim: true` and starts in insert mode.

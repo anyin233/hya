@@ -8,8 +8,8 @@
 
 import { execFileSync } from "node:child_process"
 import { createServer } from "node:net"
-import { Tui } from "./harness"
-import { expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
+import { Tui, terminalDriver } from "./harness"
+import { createSession, expectStatus, api, daemonStatus, expect, fakeModelRef, hangStep, hyaBin, launchTest as test, selfLaunch, statusSessionId, textStep, tuiInstances, type Backend, type Workspace } from "./hya"
 
 type Session = { id: string; title?: string; archived?: boolean; busy?: boolean }
 
@@ -105,8 +105,7 @@ test.describe("archive on exit and resume", () => {
     await picking.attach(testInfo, "resume-picker")
     await picking.type("Older")
     await picking.press("Enter")
-    await prompt(picking, "/status")
-    await picking.waitForText(/Session\s+Older work/, 20_000)
+    await expectStatus(picking, "Session", "Older work")
     await expect.poll(async () => (await session(backend, older)).archived ?? false).toBe(false)
   })
 })
@@ -141,6 +140,8 @@ test.describe("/sessions archived toggle", () => {
   test("/sessions shows archived chats by default; Ctrl+A hides them and opening one unarchives it", async ({ tui, workspace }, testInfo) => {
     const term = await tui(...selfLaunch(workspace, [], { viewport: { width: 690, height: 640 } }))
     await term.waitForText("Message, !shell, or @file · / commands", 30_000)
+    // Finish startup selection before another client creates the archived fixture.
+    await statusSessionId(term)
     const backend = await backendOf(workspace)
     const hidden = await otherSession(backend, "Shelved work")
     await api(backend, "PATCH", `/v1/sessions/${hidden}`, { archived: true })
@@ -151,7 +152,7 @@ test.describe("/sessions archived toggle", () => {
     await term.waitForText("Ctrl+A hides archived")
     await term.press("Control+a")
     await term.waitForText("Ctrl+A shows archived")
-    expect(await term.text()).not.toContain("Shelved work")
+    await expect.poll(() => term.text()).not.toContain("Shelved work")
     await term.press("Control+a")
     await term.waitForText("Shelved work")
     await term.attach(testInfo, "archived-shown")
@@ -169,14 +170,15 @@ test.describe("/sessions archived toggle", () => {
   })
 })
 
-test.describe("WebUI tabs (bare hya)", () => {
+test.describe("WebUI tabs (bare hya)", { tag: "@browser-only" }, () => {
+  test.skip(terminalDriver === "pty", "Browser tab disconnect and WebUI-only commands require Chromium")
   test.use({ model: { steps: [hangStep(60_000), textStep("Spare."), textStep("Spare."), textStep("Spare.")] } })
 
   test("a tab offers no /to-background, Ctrl+D only shows a notice, and closing the tab leaves the session unarchived and running", async ({ tui, workspace, page, fakeModel }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
-    const webPage = await page.context().newPage()
+    const webPage = await term.page.context().newPage()
     await webPage.setViewportSize({ width: 690, height: 640 })
     await webPage.goto(`http://127.0.0.1:${port}/`)
     const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
@@ -217,7 +219,7 @@ test.describe("WebUI tabs (bare hya)", () => {
 test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
   test.use({ model: { steps: [textStep("Terminal reply."), textStep("Web reply."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("/resume in a tab opens the terminal's session, and the other way round", async ({ tui, workspace, page }, testInfo) => {
+  test("/resume in a tab opens the terminal's session, and the other way round", async ({ tui, workspace }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)
@@ -226,16 +228,19 @@ test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
     await term.waitForText("Terminal reply.", 20_000)
     await term.waitForIdle()
 
-    const webPage = await page.context().newPage()
-    await webPage.goto(`http://127.0.0.1:${port}/`)
-    const web = new Tui(webPage, `http://127.0.0.1:${port}/`)
+    const web = terminalDriver === "pty"
+      ? await tui(...selfLaunch(workspace, [], { independent: true }))
+      : await (async () => {
+          const webPage = await term.page.context().newPage()
+          await webPage.goto(`http://127.0.0.1:${port}/`)
+          return new Tui(webPage, `http://127.0.0.1:${port}/`)
+        })()
     // Plain launches restore the saved Project chat. Start a fresh chat explicitly
     // before testing cross-client resume in both directions.
     await web.waitForText("Message, !shell, or @file · / commands", 30_000)
     expect(await statusSessionId(web)).toBe(terminalId)
     await web.waitForText("Terminal reply.")
-    await prompt(web, "/new")
-    const webId = await statusSessionId(web)
+    const webId = await createSession(web, { previousId: terminalId })
     expect(webId).not.toBe(terminalId)
     expect(await web.text()).not.toContain("Terminal reply.")
     await prompt(web, "web work")

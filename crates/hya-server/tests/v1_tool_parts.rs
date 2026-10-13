@@ -136,6 +136,13 @@ async fn sse_frames_until(
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    sse_response_until(resp, done).await
+}
+
+async fn sse_response_until(
+    resp: axum::response::Response,
+    done: impl Fn(&Value) -> bool,
+) -> Vec<Value> {
     let mut stream = resp.into_body().into_data_stream();
     let mut frames = Vec::new();
     let mut buffer = String::new();
@@ -629,6 +636,7 @@ async fn resident_report_streams_as_a_terminal_member_update() {
             "child": child.to_string(),
             "status": "MEMBER_STATUS_FAILED",
             "summary": "turn error: model exploded",
+            "handle": "main/general-exusiai",
         })
     );
 
@@ -647,6 +655,237 @@ async fn resident_report_streams_as_a_terminal_member_update() {
         json!("turn error: model exploded")
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_actor_archival_and_revival_match_snapshots_replay_sse_and_grpc() {
+    let dir = tempdir("member-lifecycle");
+    let (state, _asks, engine) = state_with(
+        FakeProvider::scripted(vec![]),
+        PermissionRules::default(),
+        dir.clone(),
+    )
+    .await;
+    let app = router(state.clone());
+    let root_id = create_session(&app, &dir).await;
+    let root: SessionId = root_id.parse().unwrap();
+    let mut parent_id = root_id.clone();
+    let mut sessions = vec![root];
+    for _ in 0..2 {
+        let (status, info) = call(&app, Method::POST, "/v1/sessions", json!({ "parent": parent_id, "agent": "build", "model": "fake", "workdir": dir.to_string_lossy() })).await;
+        assert_eq!(status, StatusCode::OK, "{info}");
+        parent_id = info["session"]["id"].as_str().unwrap().to_owned();
+        sessions.push(parent_id.parse::<SessionId>().unwrap());
+    }
+    let lead = sessions[1];
+    let child = sessions[2];
+    let member = MemberId::new();
+    let handle = "main/lead/helper";
+    for event in [
+        Event::AgentRegistered {
+            session: root,
+            agent_session: root,
+            handle: "main".into(),
+            parent: None,
+            agent_type: AgentName::new("build"),
+            mode: hya_proto::SubagentMode::Resident,
+        },
+        Event::AgentRegistered {
+            session: root,
+            agent_session: lead,
+            handle: "lead".into(),
+            parent: Some("main".into()),
+            agent_type: AgentName::new("build"),
+            mode: hya_proto::SubagentMode::Resident,
+        },
+        Event::AgentRegistered {
+            session: root,
+            agent_session: child,
+            handle: "helper".into(),
+            parent: Some("main/lead".into()),
+            agent_type: AgentName::new("build"),
+            mode: hya_proto::SubagentMode::Resident,
+        },
+        Event::MemberSpawned {
+            session: lead,
+            member,
+            child: Some(child),
+            subagent_type: AgentName::new("build"),
+            description: "nested review".into(),
+            depth: 2,
+            directive: "review".into(),
+            tool_call: None,
+        },
+        Event::SubagentReported {
+            session: lead,
+            member,
+            child,
+            handle: handle.into(),
+            outcome: ReportOutcome::Done,
+            report: "review complete".into(),
+        },
+    ] {
+        engine
+            .store()
+            .append_event(event.session().unwrap(), &event)
+            .await
+            .unwrap();
+    }
+    let (_, active) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/sessions/{lead}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(active["members"][0]["archived"], false);
+
+    // Construct both subscriptions before publishing: no readiness sleeps.
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/sessions/{root}/events/stream"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    let endpoint = format!("http://{}", grpc_endpoint(state).await);
+    let mut events = pb::events_client::EventsClient::connect(endpoint.clone())
+        .await
+        .unwrap();
+    let mut live = events
+        .stream_global_events(pb::StreamGlobalEventsRequest {
+            interactions_only: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut session_client = pb::session_client::SessionClient::connect(endpoint)
+        .await
+        .unwrap();
+    let mut live_frames = Vec::new();
+    for (archived, event) in [
+        (
+            true,
+            Event::AgentArchived {
+                session: root,
+                child,
+                handle: handle.into(),
+                reason: hya_proto::ArchiveReason::Reported,
+            },
+        ),
+        (
+            false,
+            Event::AgentRestarted {
+                session: root,
+                child,
+                handle: handle.into(),
+                epoch: hya_proto::ActorEpoch::INITIAL,
+            },
+        ),
+    ] {
+        // Runtime revival re-registers the same child before its restart marker.
+        if !archived {
+            engine
+                .store()
+                .append_event(
+                    root,
+                    &Event::AgentRegistered {
+                        session: root,
+                        agent_session: child,
+                        handle: "helper".into(),
+                        parent: Some("main/lead".into()),
+                        agent_type: AgentName::new("build"),
+                        mode: hya_proto::SubagentMode::Resident,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let (seq, ts_millis) = engine.store().append_event(root, &event).await.unwrap();
+        engine.bus().publish(Envelope {
+            seq,
+            ts_millis,
+            event,
+        });
+        let frame = tokio::time::timeout(Duration::from_secs(5), live.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let json = serde_json::to_value(&frame).unwrap();
+        assert_eq!(json["event"]["session"], root_id);
+        assert_eq!(
+            json["event"]["memberLifecycleChanged"]["child"],
+            child.to_string()
+        );
+        assert_eq!(
+            json["event"]["memberLifecycleChanged"]["archived"]
+                .as_bool()
+                .unwrap_or(false),
+            archived
+        );
+        live_frames.push(json);
+        let (_, snapshot) = call(
+            &app,
+            Method::GET,
+            &format!("/v1/sessions/{lead}"),
+            Value::Null,
+        )
+        .await;
+        let row = &snapshot["members"][0];
+        assert_eq!(row["handle"], handle);
+        assert_eq!(row["archived"], archived);
+        assert_eq!(
+            row["archiveReason"].as_str().unwrap_or(""),
+            if archived { "reported" } else { "" }
+        );
+        assert_eq!(row["status"], "MEMBER_STATUS_DONE");
+        assert_eq!(row["summary"], "review complete");
+        let grpc_snapshot = session_client
+            .get_session(pb::GetSessionRequest {
+                session: lead.to_string(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            serde_json::to_value(grpc_snapshot).unwrap()["members"],
+            snapshot["members"]
+        );
+    }
+    let sse_frames = sse_response_until(sse, |frame| {
+        frame["event"]["memberLifecycleChanged"].is_object()
+            && frame["event"]["memberLifecycleChanged"]["archived"].as_bool() != Some(true)
+    })
+    .await;
+    assert_eq!(sse_frames, live_frames);
+    let (_, replay) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/sessions/{root}/events"),
+        Value::Null,
+    )
+    .await;
+    let lifecycle: Vec<_> = replay["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["memberLifecycleChanged"].is_object())
+        .cloned()
+        .collect();
+    assert_eq!(
+        lifecycle,
+        live_frames
+            .iter()
+            .map(|frame| frame["event"].clone())
+            .collect::<Vec<_>>()
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test(flavor = "multi_thread")]

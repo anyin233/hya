@@ -17666,6 +17666,12 @@ impl serde::Serialize for MemberInfo {
         if !self.handle.is_empty() {
             len += 1;
         }
+        if self.archived.is_some() {
+            len += 1;
+        }
+        if !self.archive_reason.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.MemberInfo", len)?;
         if !self.member.is_empty() {
             struct_ser.serialize_field("member", &self.member)?;
@@ -17696,6 +17702,12 @@ impl serde::Serialize for MemberInfo {
         if !self.handle.is_empty() {
             struct_ser.serialize_field("handle", &self.handle)?;
         }
+        if let Some(v) = self.archived.as_ref() {
+            struct_ser.serialize_field("archived", v)?;
+        }
+        if !self.archive_reason.is_empty() {
+            struct_ser.serialize_field("archiveReason", &self.archive_reason)?;
+        }
         struct_ser.end()
     }
 }
@@ -17716,6 +17728,9 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
             "callId",
             "depth",
             "handle",
+            "archived",
+            "archive_reason",
+            "archiveReason",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17729,6 +17744,8 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
             CallId,
             Depth,
             Handle,
+            Archived,
+            ArchiveReason,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17759,6 +17776,8 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                             "callId" | "call_id" => Ok(GeneratedField::CallId),
                             "depth" => Ok(GeneratedField::Depth),
                             "handle" => Ok(GeneratedField::Handle),
+                            "archived" => Ok(GeneratedField::Archived),
+                            "archiveReason" | "archive_reason" => Ok(GeneratedField::ArchiveReason),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17787,6 +17806,8 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                 let mut call_id__ = None;
                 let mut depth__ = None;
                 let mut handle__ = None;
+                let mut archived__ = None;
+                let mut archive_reason__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Member => {
@@ -17845,6 +17866,18 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                             }
                             handle__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Archived => {
+                            if archived__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archived"));
+                            }
+                            archived__ = map_.next_value()?;
+                        }
+                        GeneratedField::ArchiveReason => {
+                            if archive_reason__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archiveReason"));
+                            }
+                            archive_reason__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(MemberInfo {
@@ -17857,10 +17890,155 @@ impl<'de> serde::Deserialize<'de> for MemberInfo {
                     call_id: call_id__.unwrap_or_default(),
                     depth: depth__.unwrap_or_default(),
                     handle: handle__.unwrap_or_default(),
+                    archived: archived__,
+                    archive_reason: archive_reason__.unwrap_or_default(),
                 })
             }
         }
         deserializer.deserialize_struct("hya.v1.MemberInfo", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MemberLifecycleChanged {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.child.is_empty() {
+            len += 1;
+        }
+        if !self.handle.is_empty() {
+            len += 1;
+        }
+        if self.archived {
+            len += 1;
+        }
+        if !self.archive_reason.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.MemberLifecycleChanged", len)?;
+        if !self.child.is_empty() {
+            struct_ser.serialize_field("child", &self.child)?;
+        }
+        if !self.handle.is_empty() {
+            struct_ser.serialize_field("handle", &self.handle)?;
+        }
+        if self.archived {
+            struct_ser.serialize_field("archived", &self.archived)?;
+        }
+        if !self.archive_reason.is_empty() {
+            struct_ser.serialize_field("archiveReason", &self.archive_reason)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MemberLifecycleChanged {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "child",
+            "handle",
+            "archived",
+            "archive_reason",
+            "archiveReason",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Child,
+            Handle,
+            Archived,
+            ArchiveReason,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "child" => Ok(GeneratedField::Child),
+                            "handle" => Ok(GeneratedField::Handle),
+                            "archived" => Ok(GeneratedField::Archived),
+                            "archiveReason" | "archive_reason" => Ok(GeneratedField::ArchiveReason),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MemberLifecycleChanged;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.MemberLifecycleChanged")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MemberLifecycleChanged, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut child__ = None;
+                let mut handle__ = None;
+                let mut archived__ = None;
+                let mut archive_reason__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Child => {
+                            if child__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("child"));
+                            }
+                            child__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Handle => {
+                            if handle__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("handle"));
+                            }
+                            handle__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Archived => {
+                            if archived__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archived"));
+                            }
+                            archived__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ArchiveReason => {
+                            if archive_reason__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("archiveReason"));
+                            }
+                            archive_reason__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(MemberLifecycleChanged {
+                    child: child__.unwrap_or_default(),
+                    handle: handle__.unwrap_or_default(),
+                    archived: archived__.unwrap_or_default(),
+                    archive_reason: archive_reason__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.MemberLifecycleChanged", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for MemberStatus {
@@ -29618,6 +29796,9 @@ impl serde::Serialize for StreamEvent {
                 stream_event::Payload::ProjectsUpdated(v) => {
                     struct_ser.serialize_field("projectsUpdated", v)?;
                 }
+                stream_event::Payload::MemberLifecycleChanged(v) => {
+                    struct_ser.serialize_field("memberLifecycleChanged", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -29682,6 +29863,8 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             "serverStopping",
             "projects_updated",
             "projectsUpdated",
+            "member_lifecycle_changed",
+            "memberLifecycleChanged",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -29713,6 +29896,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             CatalogUpdated,
             ServerStopping,
             ProjectsUpdated,
+            MemberLifecycleChanged,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -29761,6 +29945,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             "catalogUpdated" | "catalog_updated" => Ok(GeneratedField::CatalogUpdated),
                             "serverStopping" | "server_stopping" => Ok(GeneratedField::ServerStopping),
                             "projectsUpdated" | "projects_updated" => Ok(GeneratedField::ProjectsUpdated),
+                            "memberLifecycleChanged" | "member_lifecycle_changed" => Ok(GeneratedField::MemberLifecycleChanged),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -29972,6 +30157,13 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                                 return Err(serde::de::Error::duplicate_field("projectsUpdated"));
                             }
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::ProjectsUpdated)
+;
+                        }
+                        GeneratedField::MemberLifecycleChanged => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("memberLifecycleChanged"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::MemberLifecycleChanged)
 ;
                         }
                     }

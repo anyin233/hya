@@ -284,7 +284,7 @@ async fn projection_info_at(
         root_projection = st.engine.read_projection_shared(parent).await?;
         current = parent;
     }
-    let mut info = session_info(&projection, started, updated, &root_projection.team.roster);
+    let mut info = session_info(&projection, started, updated, &root_projection.team);
     if let Some(model) = projection.session.model.as_ref() {
         // Same resolver as the turn loop, including the session Agent's
         // runtime/configured effort. An authored bundle `model_policy`

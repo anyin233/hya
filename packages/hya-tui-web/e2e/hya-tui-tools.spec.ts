@@ -39,9 +39,9 @@ async function match(term: Tui, pattern: RegExp): Promise<{ row: number; col: nu
 
 /** Click the terminal cell at `row`, `col`. */
 async function click(term: Tui, row: number, col: number): Promise<void> {
-  const screen = (await term.page.locator(".xterm-screen").boundingBox())!
+  const screen = await term.screenBox()
   const size = await term.size()
-  await term.page.mouse.click(screen.x + ((col + 0.5) / size.cols) * screen.width, screen.y + ((row + 0.5) / size.rows) * screen.height)
+  await term.mouse.click(screen.x + ((col + 0.5) / size.cols) * screen.width, screen.y + ((row + 0.5) / size.rows) * screen.height)
 }
 
 test.describe("read card", () => {
@@ -260,11 +260,13 @@ test.describe("batch subagents", () => {
         ] }),
         textStep("Launched both helpers."),
       ])
-      fakeModel!.route("Finish your task with `report`", [hangStep(20_000)])
+      // One held response per child; an exhausted route finishes immediately.
+      fakeModel!.route("Finish your task with `report`", [hangStep(), hangStep()])
       const term = await tui(hyaTui(backend), { viewport: { width, height: 640 } })
       await term.waitForText("Message, !shell, or @file · / commands")
       await prompt(term, "delegate both inspections")
       await term.waitForText("Launched both helpers.", 20_000)
+      await expect.poll(() => fakeModel!.pendingHangs()).toBe(2)
       await term.waitForText("hya-task · map routes · 2 members")
       const sessions = async () => [...(await term.text()).matchAll(/\/open (hysec_\w+)/g)].map((match) => match[1]!)
       await expect.poll(async () => new Set(await sessions()).size).toBe(2)

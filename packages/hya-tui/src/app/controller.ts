@@ -96,6 +96,7 @@ import { helpPickerHint, helpPickerRows } from "../commands"
 import { initialSessionId } from "../launch"
 import { askSessionLabel, currentModel, modelReference, otherAskNotice, webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
+import { subagentRows } from "../state/subagents"
 import { editText } from "../composer/editor"
 import { loadPaneLayout, savePreferences } from "../prefs"
 import { notificationBody, notificationSequence, shouldNotify, type NotifyKind } from "../notify"
@@ -374,7 +375,10 @@ export function createController({ client, store, directory, remote: startedRemo
     if (!selected) return
     const row = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(selected.id)}`)
     const current = store.state.selected
-    if (current?.id === row.id) store.setSelected(sessionRow(current, row))
+    if (current?.id === row.id) {
+      store.setSelected(sessionRow(current, row))
+      store.setMembers(row.members ?? [])
+    }
   }
 
   /** `GET /v1/interactions` into the pending list (after a (re)subscribe or `resync`: frames before it are not replayed). */
@@ -449,15 +453,18 @@ export function createController({ client, store, directory, remote: startedRemo
 
   /** Read one child session: its busy flag, agent, latest activity, and whether its newest reply failed. */
   async function readChild(id: string): Promise<void> {
+    const generation = childGeneration
     const [session, messages] = await Promise.all([
       client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
       client.listMessages(id),
     ])
+    if (generation !== childGeneration || closing) return
     const last = [...messages].reverse().find((message: MessageInfo) => message.role === "ROLE_ASSISTANT")
     const activity = childActivity(messages)
     store.setChild(id, {
       busy: session.busy === true,
       agent: session.agent,
+      members: session.members ?? [],
       ...(activity ? { activity } : {}),
       ...(last?.error || last?.finish === "FINISH_REASON_ERROR" ? { failed: true } : {}),
     })
@@ -480,7 +487,7 @@ export function createController({ client, store, directory, remote: startedRemo
 
   function readChildren(): void {
     childTimer = undefined
-    const ids = childSessionIds(store.state.members, store.state.messages)
+    const ids = subagentRows(store.state, { includeArchived: true }).map((row) => row.id)
     if (!ids.length) return
     const generation = childGeneration
     childReading = true
@@ -493,7 +500,10 @@ export function createController({ client, store, directory, remote: startedRemo
       if (generation !== childGeneration) return
       childReading = false
       const busy = ids.some((id) => store.state.children.get(id)?.busy)
-      if (childAgain || busy || store.state.running) trackChildren()
+      // The listing may discover another generation of descendants after the
+      // reads began. Load their member snapshots even if the whole team is idle.
+      const discovered = subagentRows(store.state, { includeArchived: true }).some((row) => !ids.includes(row.id))
+      if (childAgain || busy || discovered || store.state.running) trackChildren()
     })
   }
 
@@ -510,7 +520,8 @@ export function createController({ client, store, directory, remote: startedRemo
       return
     }
     const effect = store.applyEvent(event)
-    if (event.memberUpdated && effect.durable) trackChildren()
+    if ((event.memberUpdated || event.memberLifecycleChanged) && effect.durable) trackChildren()
+    if (event.memberLifecycleChanged && effect.durable) sessionDue = true
     if (effect.changed) scheduleFlush()
     // Text deltas only feed the overlay. Other durable frames (message and
     // part boundaries, tool state, errors) and live interaction frames
@@ -628,9 +639,12 @@ export function createController({ client, store, directory, remote: startedRemo
   async function onGlobalFrame(frame: StreamFrame): Promise<void> {
     if (onStopping(frame.event)) return
     if (frame.resync) {
-      // Session-list and ask frames in the gap are both lost: list both again.
-      await client.listSessions().then((rows) => store.setSessions(rows)).catch(() => undefined)
-      await refreshInteractions().catch(() => undefined)
+      // Recover list, ask, and team-root lifecycle frames lost in the gap.
+      await Promise.allSettled([
+        client.listSessions().then((rows) => store.setSessions(rows)),
+        refreshInteractions(), refreshSession(),
+      ])
+      trackChildren()
       return
     }
     const event = frame.event
@@ -648,6 +662,18 @@ export function createController({ client, store, directory, remote: startedRemo
       return
     }
     const sessionId = event.session
+    // Actor lifecycle belongs to the team root, even when this client has
+    // opened a nested parent. Re-read projections without applying another
+    // session's sequence watermark to the open transcript.
+    if (event.memberLifecycleChanged) {
+      const child = event.memberLifecycleChanged.child
+      if (sessionId === store.state.selected?.id || subagentRows(store.state, { includeArchived: true }).some((row) => row.id === child)) {
+        sessionDue = true
+        scheduleRefresh()
+        trackChildren()
+      }
+      return
+    }
     // A session created elsewhere (another client, a headless writer, a fork): not enough here
     // (agent/model/workdir, no title yet) to build a row cheaply, so re-list, debounced.
     if (sessionId && event.sessionStarted) {
@@ -718,8 +744,10 @@ export function createController({ client, store, directory, remote: startedRemo
               catalogStale = false
               await refresh().catch(() => { catalogStale = true })
             }
-            // Asks raised before this subscription are not replayed: list them once.
-            await refreshInteractions().catch(() => undefined)
+            // Asks and root lifecycle notifications before this subscription
+            // are not replayed here; refresh nested parents' member state too.
+            await Promise.allSettled([refreshInteractions(), refreshSession()])
+            trackChildren()
           })
         } catch {
           // Silent: the session stream owns the connection state; this one only adds other sessions' asks.
@@ -1522,7 +1550,12 @@ export function createController({ client, store, directory, remote: startedRemo
       catalogStale = true
       detail += ` · ${String(error)}`
     }
-    if (ok) { startGlobalStream(); void onScopeChanged?.() }
+    if (ok) {
+      startGlobalStream()
+      // Local/remote trust changes can replace the pane instance. Finish that
+      // replacement before exposing Projects to input on the new backend.
+      await onScopeChanged?.()
+    }
     if (remote) {
       if (!store.state.activeProjectId) openProjectOverlay()
     } else if (ok) {

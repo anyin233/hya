@@ -21,7 +21,7 @@ async function prompt(term: Tui, text: string): Promise<void> {
 /** Empty the input (the first Ctrl+C clears it). */
 async function clearInput(term: Tui): Promise<void> {
   await term.press("Control+c")
-  expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
+  expect(await term.exitStatus()).toBeNull()
 }
 
 test.describe("undo and redo", () => {
@@ -42,6 +42,7 @@ test.describe("undo and redo", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "write notes")
     await term.waitForText("Wrote the notes.", 20_000)
+    await term.waitForIdle()
     await expect.poll(() => existsSync(file)).toBe(true)
 
     await prompt(term, "/undo")
@@ -73,6 +74,10 @@ test.describe("undo and redo", () => {
     await term.type("/undo")
     await term.press("Enter")
     await expect.poll(() => existsSync(file)).toBe(false)
+    // File restoration precedes the client undo response and composer prefill.
+    await expect.poll(() => term.find("Wrote the notes.")).toBeNull()
+    await term.waitForText(/↶ \d+ messages reverted · \/redo restores them/)
+    await term.waitForText("write notes")
     await clearInput(term)
     await prompt(term, "something else")
     await term.waitForText("Second reply.", 20_000)
@@ -148,10 +153,15 @@ test.describe("fork", () => {
     await term.waitForText("↶ 2 messages reverted · /redo restores")
     // The line wraps at the width instead of running off the edge.
     await term.waitForText(/the\s+next\s+prompt\s+makes\s+it\s+permanent/)
+    // The revert marker arrives before the transcript read and input prefill.
+    // Let undo finish so the old reply cannot satisfy the later redo wait.
+    await expect.poll(() => term.find("First reply.")).toBeNull()
+    await term.waitForText("│ alpha question")
     await term.attach(testInfo, "narrow-after-undo")
     await clearInput(term)
     await prompt(term, "/redo")
     await term.waitForText("First reply.")
+    await expect.poll(() => term.find("↶")).toBeNull()
     // /fork opens the fork picker.
     await term.press("Control+x")
     await term.type("/fork")

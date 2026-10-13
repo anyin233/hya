@@ -23,7 +23,7 @@ test.describe("compact conversation dock", () => {
       await term.waitForIdle()
       await expect.poll(() => gap(term)).toBeLessThanOrEqual(2)
       await term.attach(testInfo, "compact-idle")
-      await term.page.evaluate(() => window.hyaTerm.term.paste("FIRST DRAFT ROW\nSECOND DRAFT ROW\nTHIRD DRAFT ROW"))
+      await term.paste("FIRST DRAFT ROW\nSECOND DRAFT ROW\nTHIRD DRAFT ROW")
       for (const row of ["FIRST DRAFT ROW", "SECOND DRAFT ROW", "THIRD DRAFT ROW"]) await term.waitForText(row)
       const first = (await term.find("FIRST DRAFT ROW"))!
       const third = (await term.find("THIRD DRAFT ROW"))!

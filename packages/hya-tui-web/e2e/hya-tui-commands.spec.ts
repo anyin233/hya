@@ -85,7 +85,7 @@ test.describe("hya TUI commands and look", () => {
     await term.waitForText("Message, !shell, or @file · / commands")
     // The renderer no longer quits on the first Ctrl+C (see hya-tui-composer.spec.ts).
     await term.press("Control+c")
-    expect(await term.page.evaluate(() => window.hyaTerm.exitCode)).toBeNull()
+    expect(await term.exitStatus()).toBeNull()
     await term.press("Control+c")
     expect(await term.waitForExit()).toBe(0)
   })

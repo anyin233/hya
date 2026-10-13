@@ -1,8 +1,8 @@
 /** The independent frontend release version. */
-export const frontendVersion = "0.44.17"
+export const frontendVersion = "0.44.22"
 
 /** The oldest backend release this frontend can use. */
-export const minimumBackendVersion = "0.45.3"
+export const minimumBackendVersion = "0.45.7"
 
 type ReleaseVersion = readonly [number, number, number]
 

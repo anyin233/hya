@@ -25,9 +25,9 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (backend version `0.45.5`, frontend version
-`0.44.17`, `MIT OR Apache-2.0`). The frontend requires a backend at least
-`0.45.3`. Backend and frontend releases are independent; release tags are
+hya is under active development (backend version `0.45.8`, frontend version
+`0.44.22`, `MIT OR Apache-2.0`). The frontend requires a backend at least
+`0.45.7`. Backend and frontend releases are independent; release tags are
 `backend/<version>` and `frontend/<version>`, so there is no single complete
 `v<version>` package. APIs, config, and command surfaces may still change.
 

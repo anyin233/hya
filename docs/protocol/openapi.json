@@ -2834,6 +2834,27 @@
           },
           "projects_updated": {
             "$ref": "#/components/schemas/ProjectsUpdated"
+          },
+          "member_lifecycle_changed": {
+            "$ref": "#/components/schemas/MemberLifecycleChanged"
+          }
+        }
+      },
+      "MemberLifecycleChanged": {
+        "type": "object",
+        "description": "Actor lifecycle, separate from parent-local member task updates.",
+        "properties": {
+          "child": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "archive_reason": {
+            "type": "string"
           }
         }
       },
@@ -4064,6 +4085,12 @@
             "format": "int64"
           },
           "handle": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "archive_reason": {
             "type": "string"
           }
         }
