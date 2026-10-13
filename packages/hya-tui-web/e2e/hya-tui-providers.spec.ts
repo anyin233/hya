@@ -76,17 +76,20 @@ test.describe("hya TUI Provider View", () => {
       // up): the global stream's live `catalogUpdated` frame is what must
       // carry it to the `/model` picker.
       await addOverApi(backend, fake, "k-1")
-      // The picker's rows are a snapshot taken when `/model` runs (not
-      // reactive), so wait for the server-side discovery to finish, then for
-      // the TUI's own debounced re-read (`catalogRefreshLater`, at most
-      // 400 ms) to catch up, before opening it once — instead of racing the
-      // `/model` command against that update.
+      // Completion reads the TUI's live model catalog without refreshing it.
+      // Wait for that visible update before opening the picker's snapshot;
+      // server-side discovery alone does not mean this client caught up.
+      await term.type("/model gw/")
       await expect.poll(async () => {
-        const models = await api<{ models?: Array<{ id?: string }> }>(backend, "GET", "/v1/models")
-        return (models.models ?? []).some((model) => model.id === "gw/alpha")
-      }, { timeout: 20_000 }).toBe(true)
-      await term.page.waitForTimeout(600)
-      await term.type("/model")
+        // Recompute completion against the current catalog; the menu caches
+        // its entries between edits. This does not issue a catalog refresh.
+        await term.press("Backspace")
+        await term.type("/")
+        return term.find("/model gw/alpha")
+      }, { timeout: 20_000 }).not.toBeNull()
+      // Remove the argument in the same command pane. Esc preserves its draft.
+      for (let index = 0; index < " gw/".length; index++) await term.press("Backspace")
+      await term.waitForText("▸ /model ")
       await term.press("Enter")
       await term.waitForText(/alpha\s+\[gw\]/, 5_000)
       await term.press("Escape")

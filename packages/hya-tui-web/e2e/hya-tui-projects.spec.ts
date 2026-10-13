@@ -8,7 +8,7 @@ import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, expect, expectStatus, statusSessionId, hyaTui, test, textStep, tuiMain } from "./hya"
+import { api, createSession, expect, expectStatus, statusSessionId, hyaTui, test, textStep, tuiMain } from "./hya"
 
 const narrow = { width: 690, height: 640 }
 const wide = { width: 1500, height: 640 }
@@ -28,7 +28,7 @@ async function esc(term: Tui, thenGone: string | RegExp): Promise<void> {
 
 /** Center of one terminal cell in page pixels (see hya-tui-sidebar-resize.spec.ts). */
 async function cellPoint(term: Tui, row: number, col: number): Promise<{ x: number; y: number }> {
-  const box = (await term.page.locator(".xterm-screen").boundingBox())!
+  const box = await term.screenBox()
   const { cols, rows } = await term.size()
   return { x: box.x + ((col + 0.5) / cols) * box.width, y: box.y + ((row + 0.5) / rows) * box.height }
 }
@@ -57,12 +57,16 @@ test.describe("Projects sidebar", () => {
     // Create a second Project via /project, then switch to it from the sidebar with Alt+0, Down, Enter.
     await prompt(term, "/project")
     await term.waitForText("Projects")
+    await term.waitForText("Up/Down move · Enter opens/switches")
     await term.press("n")
+    await term.waitForText("New project name")
     await term.type("second")
     await term.press("Enter")
+    await term.waitForText("Root 1 (primary)")
     const secondRoot = await mkdtemp(join(tmpdir(), "hya-e2e-second-"))
     await term.type(secondRoot)
     await term.press("Enter")
+    await term.waitForText("Root 2 (Enter empty to finish)")
     await term.press("Enter")
     await term.waitForText(/Created second/)
     await esc(term, "Created second")
@@ -99,7 +103,7 @@ test.describe("Projects sidebar", () => {
 
     // A click on the row switches (Enter and the Project view do the same).
     const point = await cellPoint(term, row.row, row.col + 2)
-    await term.page.mouse.click(point.x, point.y)
+    await term.mouse.click(point.x, point.y)
     await expectStatus(term, "Directory", secondRoot)
     await term.attach(testInfo, "sidebar-clicked")
   })
@@ -137,8 +141,10 @@ test.describe("Project view", () => {
 
     // Create: name, then two roots (Enter on an empty root finishes).
     await term.press("n")
+    await term.waitForText("New project name")
     await term.type("multi-root")
     await term.press("Enter")
+    await term.waitForText("Root 1 (primary)")
     const rootA = await mkdtemp(join(tmpdir(), "hya-e2e-a-"))
     const rootB = await mkdtemp(join(tmpdir(), "hya-e2e-b-"))
     await term.type(rootA)
@@ -173,12 +179,17 @@ test.describe("Project view", () => {
   test("`t` starts a temporary session from the Project view; /new --temp does the same", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
+    const initial = await statusSessionId(term)
     await prompt(term, "/project")
     await term.waitForText("Projects")
+    await term.waitForText("Up/Down move · Enter opens/switches")
     await term.press("t")
-    const first = await statusSessionId(term)
-    await prompt(term, "/new --temp")
-    expect(await statusSessionId(term)).not.toBe(first)
+    await expect.poll(() => term.find("t temporary session")).toBeNull()
+    let first = initial
+    await expect.poll(async () => (first = await statusSessionId(term))).not.toBe(initial)
+    expect((await api<{ kind: string }>(backend, "GET", `/v1/sessions/${first}`)).kind).toBe("SESSION_KIND_TEMPORARY")
+    const second = await createSession(term, { previousId: first, temporary: true })
+    expect((await api<{ kind: string }>(backend, "GET", `/v1/sessions/${second}`)).kind).toBe("SESSION_KIND_TEMPORARY")
   })
 })
 
@@ -204,13 +215,14 @@ test.describe("--remote start", () => {
 })
 
 test.describe("/sessions is scoped to the active Project", () => {
-  test.use({ model: { steps: [textStep("a"), textStep("b")] } })
+  test.use({ model: { steps: [textStep("First project reply."), textStep("Other project reply.")] } })
 
   test("the picker shows only the active Project's sessions and temporary ones, until F3 shows every Project", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wide })
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "hello")
-    await term.waitForText("a", 20_000)
+    await term.waitForText("First project reply.", 20_000)
+    await term.waitForIdle()
     const firstId = await statusSessionId(term)
 
     // A second Project with its own session.
@@ -226,7 +238,8 @@ test.describe("/sessions is scoped to the active Project", () => {
       return otherId
     }).not.toBe(firstId)
     await prompt(term, "hello other")
-    await term.waitForText("b", 20_000)
+    await term.waitForText("Other project reply.", 20_000)
+    await term.waitForIdle()
 
     await prompt(term, "/sessions")
     await term.waitForText("F3 all")
@@ -235,7 +248,10 @@ test.describe("/sessions is scoped to the active Project", () => {
     await term.waitForText("Sessions · all projects")
     // The other Project's session is listed without a number: `/open <n>` counts only this Project's.
     await term.waitForText(firstId)
-    expect((await term.lines()).find((line) => line.includes(firstId))).not.toMatch(/\d\. hysec_/)
+    const otherPosition = (await term.find(firstId))!
+    // Check this picker entry's prefix; the same row can also contain a numbered sidebar entry.
+    const otherPrefix = (await term.lines())[otherPosition.row]!.slice(Math.max(0, otherPosition.col - 6), otherPosition.col)
+    expect(otherPrefix).not.toMatch(/\d\.\s*$/)
     await term.waitForText(`1. ${otherId}`)
     await esc(term, "Sessions · all projects")
 

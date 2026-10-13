@@ -11,7 +11,7 @@
 // and submits its prompt while focused, then blurs the terminal — the
 // realistic order: the user sends a prompt, then looks away.
 
-import type { Tui } from "./harness"
+import { terminalDriver, type Tui } from "./harness"
 import { expect, headlessTurn, hyaTui, test, textStep, toolStep } from "./hya"
 
 declare global {
@@ -22,26 +22,26 @@ declare global {
 
 /** Record every OSC 9 payload the terminal receives from now on. */
 async function captureOsc9(term: Tui): Promise<void> {
-  await term.page.evaluate(() => {
-    window.osc9 = []
-    window.hyaTerm.term.parser.registerOscHandler(9, (data: string) => {
-      window.osc9!.push(data)
+  await term.inspect((terminal, state) => {
+    state.osc9 = []
+    terminal.parser.registerOscHandler(9, (data: string) => {
+      state.osc9!.push(data)
       return true
     })
   })
 }
 
 async function osc9Payloads(term: Tui): Promise<string[]> {
-  return term.page.evaluate(() => window.osc9 ?? [])
+  return term.inspect((_terminal, state) => state.osc9 ?? [])
 }
 
 /** xterm.js only reports terminal focus to the program when the running program asked for it (CSI ?1004h) — the TUI does. */
 async function blurTerminal(term: Tui): Promise<void> {
-  await term.page.evaluate(() => document.querySelector<HTMLElement>(".xterm-helper-textarea")?.blur())
+  await term.focus(false)
 }
 
 async function focusTerminal(term: Tui): Promise<void> {
-  await term.page.evaluate(() => document.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus())
+  await term.focus(true)
 }
 
 /** Type and submit while focused (required for keys to reach the terminal at all), then blur. */
@@ -53,7 +53,7 @@ async function promptThenBlur(term: Tui, text: string): Promise<void> {
 }
 
 test.describe("desktop notifications: turn end", () => {
-  test.use({ model: { steps: [textStep("Notify me please.", { chunkSize: 4, delayMs: 30 }), textStep("Notify me please.", { chunkSize: 4, delayMs: 30 }), textStep("Notify me please.", { chunkSize: 4, delayMs: 30 })] } })
+  test.use({ model: { steps: [textStep("Focused turn reply.", { chunkSize: 4, delayMs: 30 }), textStep("Unfocused turn reply.", { chunkSize: 4, delayMs: 30 }), textStep("Notifications off reply.", { chunkSize: 4, delayMs: 30 })] } })
 
   test("notifies over OSC 9 only while unfocused, and not when /notifications is off", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
@@ -64,13 +64,15 @@ test.describe("desktop notifications: turn end", () => {
     await focusTerminal(term)
     await term.type("say it")
     await term.press("Enter")
-    await term.waitForText("Notify me please.", 20_000)
+    await term.waitForText("Focused turn reply.", 20_000)
+    await term.waitForIdle()
     expect(await osc9Payloads(term)).toEqual([])
 
     // Submitted focused, then unfocused before the turn finishes: notifies.
     await captureOsc9(term)
     await promptThenBlur(term, "say it again")
-    await term.waitForText("Notify me please.", 20_000)
+    await term.waitForText("Unfocused turn reply.", 20_000)
+    await term.waitForIdle()
     // A fresh session has no title yet (the backend titles it in the background), so the body is bare.
     await expect.poll(() => osc9Payloads(term)).toEqual(["Turn finished"])
 
@@ -80,7 +82,8 @@ test.describe("desktop notifications: turn end", () => {
     await term.press("Enter")
     await captureOsc9(term)
     await promptThenBlur(term, "say it once more")
-    await term.waitForText("Notify me please.", 20_000)
+    await term.waitForText("Notifications off reply.", 20_000)
+    await term.waitForIdle()
     expect(await osc9Payloads(term)).toEqual([])
   })
 })
@@ -123,7 +126,8 @@ test.describe("desktop notifications: another session's ask", () => {
   })
 })
 
-test.describe("desktop notifications: browser Notification", () => {
+test.describe("desktop notifications: browser Notification", { tag: "@browser-only" }, () => {
+  test.skip(terminalDriver === "pty", "Browser Notification API requires Chromium")
   test.use({ model: { steps: [textStep("Notify me please.", { chunkSize: 4, delayMs: 30 })] } })
 
   test("the host shows exactly one browser Notification per event, only while the page is hidden or unfocused", async ({ tui, backend, page }) => {

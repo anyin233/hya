@@ -81,7 +81,8 @@ export type HttpErrorStep = {
  * busy/working state (and test cancellation) before the turn ever finishes.
  * Resolved by calling `release()` on the fake (releases the oldest pending
  * hang), or automatically after `ms` (default: never) with an empty `stop`
- * reply, so a spec that forgets to release one does not hang forever.
+ * reply. Cancelled requests are removed without needing release(). Use an
+ * indefinite hang when a test must observe a stable busy state under load.
  */
 export type HangStep = {
   type: "hang"
@@ -214,7 +215,7 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   const requests: unknown[] = []
   const routes: Route[] = []
   let usage: Usage | undefined
-  const hangs: Array<() => void> = []
+  const hangs = new Set<() => void>()
   const titleRequests: unknown[] = []
   let titleReply = ""
   /** `GET /v1/models` ids (`setModelList`); `undefined` answers 404. */
@@ -361,10 +362,19 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
 
   async function handleHang(res: ServerResponse, protocol: Protocol, step: HangStep): Promise<void> {
     await new Promise<void>((resolve) => {
-      hangs.push(resolve)
-      if (step.ms !== undefined) setTimeout(resolve, step.ms)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = () => {
+        hangs.delete(finish)
+        clearTimeout(timer)
+        res.off("close", finish)
+        resolve()
+      }
+      hangs.add(finish)
+      res.once("close", finish)
+      if (step.ms !== undefined) timer = setTimeout(finish, step.ms)
+      if (res.destroyed) finish()
     })
-    await streamStep(res, protocol, { type: "text", text: "" })
+    if (!res.destroyed) await streamStep(res, protocol, { type: "text", text: "" })
   }
 
   const paths: Record<string, Protocol> = { "/v1/chat/completions": "chat", "/v1/responses": "responses" }
@@ -449,12 +459,14 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
     modelListRequests: () => listAuth.length,
     modelListAuth: () => [...listAuth],
     release: () => {
-      hangs.shift()?.()
+      hangs.values().next().value?.()
     },
-    pendingHangs: () => hangs.length,
+    pendingHangs: () => hangs.size,
     stop: () =>
       new Promise((resolve, reject) => {
+        for (const finish of hangs) finish()
         server.close((err) => (err ? reject(err) : resolve()))
+        server.closeAllConnections()
       }),
   }
 }

@@ -138,35 +138,19 @@ jobs:
       - name: build hya and bundle packager
         if: ${{ !cancelled() }}
         run: cargo build --locked -p hya-backend --bin hya -p xtask --bin xtask
-      - name: install Playwright Chromium
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-web
-        run: |
-          for attempt in 1 2 3; do
-            bunx playwright install --with-deps chromium && exit 0
-            echo "Playwright install attempt ${attempt} failed; retrying"
-            sleep $(( attempt * 10 ))
-          done
-          exit 1
-      - name: hya-tui-web browser e2e
+      - name: direct PTY protocol checks and full terminal suite
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-web
         env:
           HYA_BIN: ${{ github.workspace }}/target/debug/hya
-        # Keep this identical to the documented local gate: the complete
-        # browser suite, including current pane, command and session flows.
-        run: bun run test:e2e
-      - name: upload playwright test-results on failure
-        if: ${{ failure() }}
+          TMPDIR: ${{ runner.temp }}
+          HYA_TUI_EXP_WORKERS: 4
+          HYA_TUI_EXP_OUTPUT_DIR: ${{ runner.temp }}/tui-exp-results
+        run: bun run test:tui-exp
+      - name: upload terminal screens, output and timings
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tui-web-test-results
-          path: packages/hya-tui-web/test-results/
-          if-no-files-found: ignore
-      - name: upload playwright report
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: tui-web-playwright-report
-          path: packages/hya-tui-web/playwright-report/
+          name: tui-exp-results
+          path: ${{ runner.temp }}/tui-exp-results/
           if-no-files-found: ignore
