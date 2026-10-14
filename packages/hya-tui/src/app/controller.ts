@@ -297,7 +297,11 @@ export function createController({ client, store, directory, remote: startedRemo
   const turns = createTurnRunner({
     store,
     client,
-    onEnd: (outcome) => sendNotification(outcome.ok ? "turnFinished" : "turnFailed", outcome.ok ? (store.state.selected?.title ?? "") : outcome.detail),
+    onEnd: (outcome) => {
+      // The terminal title's `✓`/`✗` until the terminal is focused again (src/title.ts).
+      if (!store.state.focused) store.setUnseenOutcome(outcome.ok ? "finished" : "failed")
+      sendNotification(outcome.ok ? "turnFinished" : "turnFailed", outcome.ok ? (store.state.selected?.title ?? "") : outcome.detail)
+    },
   })
   const modes = createModeSwitcher({
     store,
