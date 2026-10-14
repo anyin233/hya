@@ -52,6 +52,8 @@ import { loadPreferences, preferencesPath } from "../prefs"
 import { setCustomKeybindings } from "../keys/custom"
 import { colors, setTheme } from "../theme"
 import { createAppStore, type BackendInfo } from "../state/store"
+import { TitleWriter, titleFromState } from "../title"
+import { createEffect, createRoot } from "solid-js"
 import { App } from "./App"
 import { AppContext } from "./context"
 import { createController, type Controller } from "./controller"
@@ -84,6 +86,8 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   let controller: Controller | undefined
   let grpcClient: GrpcHyaClient | undefined
   const store = createAppStore()
+  // The terminal title (src/title.ts): written straight to stdout like the notification sequences below.
+  const title = new TitleWriter((sequence) => { process.stdout.write(sequence) })
   let stopping = false
   const shutdown = async (code: number, mode: ExitMode): Promise<void> => {
     // Once: `renderer.destroy()` re-enters here synchronously (its "destroy" event).
@@ -94,6 +98,8 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
     } catch {
       // The terminal is being torn down anyway.
     }
+    // After the renderer's own teardown, which clears the title: restore the one saved at start.
+    title.stop()
     await extensionManager.stopAll().catch(() => undefined)
     await controller?.close(mode).catch(() => undefined)
     grpcClient?.close()
@@ -306,6 +312,8 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   // OpenTUI's own signal handlers destroy the renderer; finish the shutdown from there.
   // Only reached when nothing above started the shutdown (a signal OpenTUI caught first): never archive.
   renderer.once("destroy", () => void shutdown(0, "signal"))
+  title.start()
+  createRoot(() => createEffect(() => title.update(titleFromState(store.state, options.directory))))
   const starting = controller.start()
   const active = controller
   if (launch.reloaded?.draft) active.ui.composerInput = launch.reloaded.draft
