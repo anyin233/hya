@@ -18,6 +18,9 @@ verifies each archive against that release's `SHA256SUMS`, and installs it.
 Building from a source checkout (`./install.sh`) is still supported and remains
 a separate source-install path; see the [README](../README.md#build-from-source).
 
+On Windows, install inside WSL 2; see
+[Install on Windows with WSL](install-wsl.md).
+
 ## Install
 
 ```sh
