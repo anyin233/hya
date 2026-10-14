@@ -657,6 +657,10 @@ impl SessionEngine {
                 },
             )
             .await?;
+            // Explicit reads consume mail before the next automatic steer
+            // drain. Acknowledge that delivery to the supervisor as well,
+            // otherwise it schedules a synthesis for results already seen.
+            self.notify_mail_consumed(session);
         }
         Ok(ChannelHistoryRead {
             channel: normalized,
