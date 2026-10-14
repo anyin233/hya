@@ -1,5 +1,6 @@
-# 0.44.22
+# 0.44.23-dev.1
 
-## Remote backends
+## Terminal title
 
-- Finish reloading pane extensions before opening Projects after a backend switch, so initial keystrokes are not lost to a replaced pane instance.
+- Name the terminal tab after the open session and its Project, with a marker for what it needs: `●` a turn is running, `?` a permission or question ask is waiting, `✓`/`✗` a turn ended while the terminal was unfocused (cleared on focus). The terminal's own title is restored on exit.
+- The WebUI's browser tab title follows the terminal title.

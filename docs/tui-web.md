@@ -158,6 +158,15 @@ also passes `tag` (`notificationTag`, title+body) to `new Notification`, so
 the browser's own notification center coalesces a duplicate the window
 missed instead of stacking it.
 
+### Tab title
+
+The page (`web/client.ts`) shows the terminal title as the browser tab's
+`document.title`, as a terminal emulator shows it in its tab bar (ADR-0030):
+xterm.js reports each OSC 0/2 title the program sets (`onTitleChange`), and
+an empty one shows the page's own title (`hya`) again (`src/title.ts`
+`pageTitle`). Generic: the page does not know who set the title or what it
+means. The hya TUI is one program that sets it ([tui.md](tui.md#terminal-title)).
+
 ### Running the tests
 
 ```sh

@@ -144,6 +144,8 @@ export interface AppState {
   readonly notifications: boolean
   /** Whether the terminal (or browser tab) is focused, tracked through the terminal's focus reporting (app/run.tsx, app/controller.ts); default true (assume focused until told otherwise). */
   readonly focused: boolean
+  /** A turn of the open session ended while the terminal was unfocused; cleared on focus (the title's `✓`/`✗`, src/title.ts). */
+  readonly unseenOutcome: "finished" | "failed" | undefined
   /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
   readonly reasoningToggles: ReadonlyMap<string, boolean>
   /** Global tool-card switch (`/tools`); `undefined` = the defaults (collapsed, shell turns expanded). */
@@ -348,6 +350,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     vimPending: "",
     notifications: true,
     focused: true,
+    unseenOutcome: undefined,
     reasoningToggles: new Map(),
     tools: undefined,
     toolToggles: new Map(),
@@ -859,7 +862,12 @@ export function createAppStore() {
     /** Turn desktop notifications on or off (`/notifications`). */
     setNotifications(on: boolean): void { set("notifications", on) },
     /** The terminal's (or browser tab's) focus state, from the renderer's focus reporting. */
-    setFocused(focused: boolean): void { set("focused", focused) },
+    setFocused(focused: boolean): void {
+      set("focused", focused)
+      if (focused) set("unseenOutcome", undefined)
+    },
+    /** Record a turn outcome the user has not seen (the terminal is unfocused). */
+    setUnseenOutcome(outcome: "finished" | "failed" | undefined): void { set("unseenOutcome", outcome) },
 
     /** Expand or collapse every reasoning block; forgets per-part toggles. */
     setThinking(expanded: boolean): void {

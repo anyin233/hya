@@ -2673,6 +2673,48 @@ The WebUI (ADR-0021, [tui-web.md](tui-web.md#desktop-notifications)) maps
 both sequences to a browser `Notification`, generically — the host does not
 know they are hya's.
 
+### Terminal title
+
+The TUI names its terminal tab or window after the open session, with a
+marker for what that session needs, so a tab bar of several hya terminals
+shows at a glance which one is waiting for you. Always on.
+
+| State | Title |
+| --- | --- |
+| No titled session yet | `hya · <project>` |
+| Idle | `<session title> · <project>` |
+| This TUI's turn is running | `● <session title> · <project>` |
+| A permission or question ask waits in the open session tree | `? <session title> · <project>` |
+| A turn ended (success / error) while the terminal was unfocused | `✓ <session title>` / `✗ <session title>`, until the terminal is focused again |
+
+The most specific text comes first, because tab bars cut long titles off on
+the right. `<project>` is the active Project's name, else the workspace
+directory's base name. An ask outranks a running turn, which outranks an
+unseen outcome. "Unfocused" uses the same terminal focus reporting as
+[Desktop notifications](#desktop-notifications).
+
+The title is written as OSC 0 (`ESC ] 0 ; <title> BEL`), only when it
+changes, so a streaming turn does not send a title per token. When the TUI
+starts it saves the terminal's current title with XTWINOPS "push title"
+(`CSI 22 ; 0 t`), and when it exits it restores it with "pop title"
+(`CSI 23 ; 0 t`), after OpenTUI's own teardown (which clears the title).
+Terminals without a title stack ignore both; there the title stays empty
+after exit until the shell sets its own.
+
+**Interfaces.** `src/title.ts`: `terminalTitle({ session, project,
+activity })` builds the text (control characters, C1 included, stripped; the
+session part capped so the Project still fits; at most 80 characters),
+`titleActivity({ waiting, working, unseenOutcome })` picks the marker,
+`titleFromState(state, directory)` reads both from the store, and
+`TitleWriter` writes OSC 0 only on change between one push (`start`) and one
+pop (`stop`). `app/run.tsx` starts it with the renderer, updates it from a
+store effect, and stops it in `shutdown`. `app/controller.ts` records
+`unseenOutcome` when the open session's turn ends while unfocused, and
+`setFocused(true)` clears it.
+
+The WebUI mirrors the title into the browser tab (ADR-0030,
+[tui-web.md](tui-web.md#tab-title)).
+
 ## Permission and question prompts
 
 The backend asks before some tool calls run (under the default permission
