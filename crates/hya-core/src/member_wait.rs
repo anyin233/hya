@@ -187,6 +187,7 @@ pub(crate) async fn wait_for_members(
                         },
                     )
                     .await?;
+                engine.notify_mail_consumed(caller);
             }
             for (member, last) in &standing.stalled {
                 supervisor.record_wait_stall(caller, *member, *last);

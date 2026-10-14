@@ -20,7 +20,10 @@ that wakes the main agent to synthesize.
 - Mail consumed by the lead's active turn is marked delivered before the turn
   lease is released; that already-seen work does not cause an empty synthesis
   follow-up. Mail arriving after the final in-turn drain remains queued and
-  still wakes the lead normally.
+  still wakes the lead normally. Explicit `read channel://…` reads and `wait`
+  results acknowledge the supervisor after committing `MailConsumed`, just as
+  automatic steering does; advancing only the durable cursor leaves a stale
+  quiescence wake in memory.
 - Resident spawns are **non-blocking** (parent gets the handle and continues), which diverges from
   the transient `run_team` join model — the two spawn paths coexist.
 - User input never wakes a resident: residents wake *only* via mail. This is what lets the TUI bind
