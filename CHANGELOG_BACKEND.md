@@ -1,5 +1,5 @@
-# 0.45.8
+# 0.45.9
 
-## Storage
+## Runtime
 
-- Serialize bundle-registry migration discovery and application so concurrent first opens cannot apply the same migration twice. Setup retains its bounded lock retries and registry mutations remain fail-fast.
+- Fixed a redundant `TEAM QUIESCED` synthesis after the parent had already consumed subagent results through `wait` or `read channel://…`. Both delivery paths now acknowledge the resident supervisor after committing the inbox cursor, as automatic in-turn steering already does. Genuinely late unread mail still wakes the parent.
