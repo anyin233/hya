@@ -18,6 +18,8 @@ export interface UiHandles {
   transcript?: TranscriptScroller
   /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
   panes?: Map<string, DiffScroller>
+  /** Scroll actions of mounted subagent viewers, keyed by their pane id; the selector drives them. */
+  viewers?: Map<string, TranscriptScroller>
   diff?: DiffScroller
   command?: CommandPaneHandle
   composerHistory?: InputHistory

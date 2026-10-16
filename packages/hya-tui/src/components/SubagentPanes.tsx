@@ -4,6 +4,7 @@ import { AppContext, useApp, type PaneInputHandle } from "../app/context"
 import type { SessionView } from "../app/sessionViews"
 import { paneLeaves } from "../state/panes"
 import { subagentRows } from "../state/subagents"
+import { resolveBinding } from "../keys/bindings"
 import { isKeyOverridden } from "../keys/custom"
 import { colors } from "../theme"
 import { PaneFrame } from "./PaneFrame"
@@ -36,6 +37,16 @@ export function SubagentsPane(props: PaneRenderProps) {
   }
   const command = (text: string) => { void controller.submit(text, "command") }
   const input: PaneInputHandle = { onKey: (key) => {
+    // Paging keys scroll the viewer Enter would pin to; the parent's transcript stays put.
+    const action = resolveBinding(key, { composerEmpty: true })
+    if (action === "pageUp" || action === "pageDown" || action === "scrollTop" || action === "scrollBottom") {
+      const viewer = controllerViewer()
+      const scroller = viewer ? ui.viewers?.get(viewer) : undefined
+      if (action === "pageUp" || action === "pageDown") scroller?.page(action === "pageUp" ? -1 : 1)
+      else if (action === "scrollTop") scroller?.top()
+      else scroller?.bottom()
+      return
+    }
     if (key.ctrl && !key.meta && !key.option && !key.super && !key.shift && key.name === "a") {
       command("/subagents archived")
       return
@@ -71,13 +82,15 @@ export function SubagentsPane(props: PaneRenderProps) {
         </box>}</For>
       </Show>
     </scrollbox>
-    <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · Enter pin · n new viewer · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived`}</text>
+    <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · PgUp/PgDn scroll · Enter pin · n new viewer · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived`}</text>
   </PaneFrame>
 }
 
 /** Each instance owns its scrollbox; identical child sessions share their live watch. */
 export function SubagentViewer(props: PaneRenderProps) {
   const app = useApp()
+  // Read once: a closed pane's props are gone by the time its transcript cleans up.
+  const pane = props.node.id
   const [view, setView] = createSignal<SessionView>()
   const id = () => props.node.session ?? app.store.state.subagentSelection ?? subagentRows(app.store.state)[0]?.id
   const target = createMemo(() => {
@@ -99,7 +112,11 @@ export function SubagentViewer(props: PaneRenderProps) {
         openSession: async (child: string) => { if (subagentRows(app.store.state).some((row) => row.id === child)) app.store.selectSubagent(child) },
       } }}>
         <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{current.store.state.status || `${current.store.state.selected?.agent || "Loading"} · ${id()}`}</text>
-        <Transcript secondary />
+        <Transcript secondary scroller={(scroller, mounted) => {
+          app.ui.viewers ??= new Map()
+          if (mounted) app.ui.viewers.set(pane, scroller)
+          else if (app.ui.viewers.get(pane) === scroller) app.ui.viewers.delete(pane)
+        }} />
       </AppContext.Provider>}
     </Show>
   </PaneFrame>
