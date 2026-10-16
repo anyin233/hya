@@ -180,6 +180,7 @@ export function CommandPane() {
         textColor={colors.fg}
         focusedTextColor={colors.fg}
         cursorColor={colors.accent}
+        cursorStyle={{ style: "line", blinking: true }}
         focused={keyboardOwner(store.state, active()) === "commands"}
         onSubmit={submit}
         onContentChange={sync}

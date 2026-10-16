@@ -1,4 +1,4 @@
-# 0.44.23-dev.2
+# 0.44.23-dev.3
 
 ## Terminal title
 
@@ -8,3 +8,7 @@
 ## Subagent viewer scrolling
 
 - With the Subagents selector focused, PgUp/PgDn scroll the subagent viewer it previews in (the one Enter pins to), and Home/End jump to its top and newest line. The parent's transcript stays put; with the message editor focused, PgUp/PgDn still scroll the parent's transcript.
+
+## Cursor
+
+- The message editor and the command pane show a blinking bar cursor instead of a block. Vim mode still uses a block in normal mode.

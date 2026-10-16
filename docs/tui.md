@@ -2164,7 +2164,8 @@ under its header, in the error color:
 The input at the bottom of the main column is a multi-line message editor
 (OpenTUI's built-in `<textarea>`). It receives keyboard focus only when Conversation
 is selected and no command input or modal owns the keyboard. Its placeholder is
-`Message, !shell, or @file · / commands`.
+`Message, !shell, or @file · / commands`. Its cursor is a blinking bar, as is the
+command pane's; [Vim mode](#vim-mode) switches to a block in normal mode.
 
 **Writing.** Enter sends the whole input as a prompt or `!command` shell turn.
 Commands are entered in the separate [command pane](#command-pane). A slash
@@ -2558,7 +2559,7 @@ Off by default.
 
 **Usage.** `/vim` toggles it (`/vim on`, `/vim off` set it); the choice is
 saved as `vim` in the [preferences file](#preferences-file) and applies to
-every later start. When on, the cursor is a bar in insert mode and a block in normal mode. The input starts in insert mode, where every key works as
+every later start. When on, the cursor is a bar in insert mode (as without Vim) and a block in normal mode. The input starts in insert mode, where every key works as
 usual. Esc switches to normal mode (the cursor steps back onto the last
 character, as in vim). After a send, the next input starts in insert mode
 again.
