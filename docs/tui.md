@@ -2052,8 +2052,12 @@ focus the selector. Existing panes are reused. In the selector, Up/Down previews
 child in every following viewer; Enter pins it to the first following viewer (or
 replaces the first pin if all are pinned); `n` adds a new pinned viewer. Unsupported
 keys stay in the selector. Alt+arrows navigate selectable panes as usual. A viewer
-has no border and does not take keyboard focus; use its mouse wheel to scroll.
-Each viewer scrolls independently, even when two show the same child.
+has no border and does not take keyboard focus. Scroll it with its mouse wheel, or
+with PgUp/PgDn (Home/End for the top and the newest line) while the selector is
+focused; those keys move the viewer Enter would pin to and leave the parent's
+transcript where it is. With the message editor focused, PgUp/PgDn scroll the
+parent's transcript as usual. Each viewer scrolls independently, even when two
+show the same child.
 
 Commands (arguments are exact session and pane IDs, with dropdown completion):
 
