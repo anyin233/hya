@@ -91,6 +91,35 @@ test.describe("subagent panes", () => {
     await term.attach(testInfo, "live-child")
   })
 
+  test("PgUp/PgDn and Home/End in the selector scroll the previewed viewer, not the parent", async ({ tui, backend, fakeModel }) => {
+    const rows = Array.from({ length: 80 }, (_, at) => `child row ${at + 1}.`).join("\n\n")
+    fakeModel!.route("NEVER call `report`", [
+      toolStep("task", { description: "long helper", prompt: "long child prompt", subagent_type: "hya-task" }),
+      textStep("Parent scroll marker."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [textStep(rows), hangStep(40_000)])
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    for (const pane of ["projects", "sessions", "todos", "context"]) await command(term, `/layout close ${pane}`)
+    await command(term, "/subagents")
+    await command(term, "/layout focus pane-1")
+    await command(term, "delegate long")
+    await term.waitForText("Parent scroll marker.", 20_000)
+    await term.waitForText("child row 80.", 20_000)
+    await command(term, "/layout focus pane-8")
+
+    await term.press("PageUp")
+    await expect.poll(() => term.find("child row 80.")).toBeNull()
+    await term.press("Home")
+    await term.waitForText("child row 1.")
+    await term.press("PageDown")
+    await expect.poll(() => term.find("child row 1.")).toBeNull()
+    await term.press("End")
+    await term.waitForText("child row 80.")
+    // The parent's transcript did not move.
+    await term.waitForText("Parent scroll marker.")
+  })
+
   test("a pin stays on one child while the selector previews and opens another", async ({ tui, backend, fakeModel }) => {
     fakeModel!.route("NEVER call `report`", [toolsStep([
       { name: "task", arguments: { description: "Alpha helper", prompt: "alpha-child-prompt", subagent_type: "hya-task" } },
