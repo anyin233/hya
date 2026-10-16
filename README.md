@@ -26,7 +26,7 @@ keys while you set things up.
 ## Status
 
 hya is under active development (backend version `0.45.9`, frontend version
-`0.44.23-dev.2`, `MIT OR Apache-2.0`). The frontend requires a backend at least
+`0.44.23-dev.3`, `MIT OR Apache-2.0`). The frontend requires a backend at least
 `0.45.7`. Backend and frontend releases are independent; release tags are
 `backend/<version>` and `frontend/<version>`, so there is no single complete
 `v<version>` package. APIs, config, and command surfaces may still change.

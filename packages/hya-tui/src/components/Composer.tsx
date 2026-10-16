@@ -773,7 +773,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
           textColor={colors.fg}
           focusedTextColor={colors.fg}
           cursorColor={colors.accent}
-          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
+          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "line", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
           focused={composerFocused()}
