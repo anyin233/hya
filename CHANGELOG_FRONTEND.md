@@ -1,4 +1,4 @@
-# 0.44.23-dev.3
+# 0.44.23-dev.4
 
 ## Terminal title
 
@@ -12,3 +12,7 @@
 ## Cursor
 
 - The message editor and the command pane show a blinking bar cursor instead of a block. Vim mode still uses a block in normal mode.
+
+## Fixes
+
+- A scrolled-up transcript no longer jumps to the bottom while a turn streams. Each session-list refresh (about every 1.5 s while a subagent or another session is busy) was treated as opening the session again.

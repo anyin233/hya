@@ -62,7 +62,9 @@ export function Transcript(props: { secondary?: boolean; scroller?: (scroller: T
 
   // A submitted prompt jumps to the newest line; another session starts at its bottom.
   createEffect(on(() => store.state.followTick, () => scroller.bottom(), { defer: true }))
-  createEffect(on(() => store.state.selected?.id, () => {
+  // A memo, so a refreshed row of the same session (setSessions) is not a switch.
+  const sessionId = createMemo(() => store.state.selected?.id)
+  createEffect(on(sessionId, () => {
     follow.reset()
     setUnseen(false)
     scroller.bottom()
