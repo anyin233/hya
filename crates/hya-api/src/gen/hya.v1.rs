@@ -15362,6 +15362,39 @@ pub struct RevertSessionResponse {
     #[prost(message, repeated, tag = "2")]
     pub files: ::prost::alloc::vec::Vec<RevertedFile>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArchiveSubagentRequest {
+    /// Subagent (child) session identifier.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArchiveSubagentResponse {
+    /// Team handle of the archived subagent.
+    #[prost(string, tag = "1")]
+    pub handle: ::prost::alloc::string::String,
+    /// Whether an in-flight turn was cancelled.
+    #[prost(bool, tag = "2")]
+    pub cancelled_turn: bool,
+    /// Handles of live descendants archived first (deepest first).
+    #[prost(string, repeated, tag = "3")]
+    pub descendants: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SteerSubagentRequest {
+    /// Subagent (child) session identifier.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+    /// Message text; surrounding whitespace is trimmed.
+    #[prost(string, tag = "2")]
+    pub text: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SteerSubagentResponse {
+    /// Team handle the message was sent from (the subagent's parent).
+    #[prost(string, tag = "1")]
+    pub from: ::prost::alloc::string::String,
+}
 /// Source of a session's effective reasoning effort.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -15782,6 +15815,71 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "RevertSession"));
             self.inner.unary(req, path, codec).await
         }
+        /// Archive a subagent session on the user's behalf, as its team lead's
+        /// `archive` tool does: its in-flight turn is cancelled (cause
+        /// `archived`), live descendants archive first, then it leaves the live
+        /// roster (`archive_reason` `archived_by_parent`). Its transcript stays
+        /// readable and `SteerSubagent` wakes it again under the same session.
+        /// `invalid_argument` for a root session or an already archived subagent.
+        /// To stop a subagent's turn without archiving it, use `CancelTurn` on its
+        /// session.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/archive
+        pub async fn archive_subagent(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ArchiveSubagentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ArchiveSubagentResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Session/ArchiveSubagent",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Session", "ArchiveSubagent"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Steer a subagent session with a message from the user. It is delivered
+        /// on the DM from the subagent's parent, prefixed `[user] `: a running
+        /// subagent sees it after its next tool call, an idle one wakes for it,
+        /// and an archived one is revived by it. `invalid_argument` for a root
+        /// session, empty text, or a subagent whose parent is archived.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/steer
+        pub async fn steer_subagent(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SteerSubagentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SteerSubagentResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Session/SteerSubagent",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Session", "SteerSubagent"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -15891,6 +15989,37 @@ pub mod session_server {
             request: tonic::Request<super::RevertSessionRequest>,
         ) -> std::result::Result<
             tonic::Response<super::RevertSessionResponse>,
+            tonic::Status,
+        >;
+        /// Archive a subagent session on the user's behalf, as its team lead's
+        /// `archive` tool does: its in-flight turn is cancelled (cause
+        /// `archived`), live descendants archive first, then it leaves the live
+        /// roster (`archive_reason` `archived_by_parent`). Its transcript stays
+        /// readable and `SteerSubagent` wakes it again under the same session.
+        /// `invalid_argument` for a root session or an already archived subagent.
+        /// To stop a subagent's turn without archiving it, use `CancelTurn` on its
+        /// session.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/archive
+        async fn archive_subagent(
+            &self,
+            request: tonic::Request<super::ArchiveSubagentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ArchiveSubagentResponse>,
+            tonic::Status,
+        >;
+        /// Steer a subagent session with a message from the user. It is delivered
+        /// on the DM from the subagent's parent, prefixed `[user] `: a running
+        /// subagent sees it after its next tool call, an idle one wakes for it,
+        /// and an archived one is revived by it. `invalid_argument` for a root
+        /// session, empty text, or a subagent whose parent is archived.
+        ///
+        /// hya.http: POST /v1/sessions/{session}/steer
+        async fn steer_subagent(
+            &self,
+            request: tonic::Request<super::SteerSubagentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SteerSubagentResponse>,
             tonic::Status,
         >;
     }
@@ -16362,6 +16491,96 @@ pub mod session_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RevertSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Session/ArchiveSubagent" => {
+                    #[allow(non_camel_case_types)]
+                    struct ArchiveSubagentSvc<T: Session>(pub Arc<T>);
+                    impl<
+                        T: Session,
+                    > tonic::server::UnaryService<super::ArchiveSubagentRequest>
+                    for ArchiveSubagentSvc<T> {
+                        type Response = super::ArchiveSubagentResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ArchiveSubagentRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Session>::archive_subagent(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ArchiveSubagentSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Session/SteerSubagent" => {
+                    #[allow(non_camel_case_types)]
+                    struct SteerSubagentSvc<T: Session>(pub Arc<T>);
+                    impl<
+                        T: Session,
+                    > tonic::server::UnaryService<super::SteerSubagentRequest>
+                    for SteerSubagentSvc<T> {
+                        type Response = super::SteerSubagentResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SteerSubagentRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Session>::steer_subagent(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SteerSubagentSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

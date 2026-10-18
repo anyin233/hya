@@ -64,6 +64,7 @@ mod fork;
 mod handoff;
 mod mailbox;
 pub(crate) use mailbox::dm_channel_between;
+mod member_control;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
@@ -570,6 +571,25 @@ pub trait ArchiveReviver: Send + Sync {
     /// `root` and stop the resident tasks. Event emission happens engine-side
     /// before this is called.
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
+
+    /// Archive `target` (a handle or session id) on behalf of `caller`, as
+    /// the `archive` tool does: cancel its turn, archive live descendants
+    /// first, then the target itself.
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] when the target cannot be archived by `caller`,
+    /// or when this reviver does not supervise residents.
+    async fn archive_member(
+        &self,
+        caller: SessionId,
+        target: &str,
+        reason: &str,
+    ) -> Result<hya_tool::ArchiveReceipt, CoreError> {
+        let _ = (caller, target, reason);
+        Err(CoreError::Invalid(
+            "subagents are not supervised by this process".to_string(),
+        ))
+    }
 }
 
 impl SessionEngine {
