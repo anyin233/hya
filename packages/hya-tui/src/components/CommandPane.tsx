@@ -72,12 +72,16 @@ export function CommandPane() {
     setMenu(undefined)
   }
 
-  function open(): void {
-    if (active()) return
+  function open(text?: string): void {
+    if (active()) {
+      if (text !== undefined) replace(text)
+      return
+    }
     originSidebar = store.state.projectsFocus
     ui.commandInput = { text: editor?.plainText ?? "", active: true, originSidebar }
     setActive(true)
-    if (!editor?.plainText.startsWith("/")) replace("/")
+    if (text !== undefined) replace(text)
+    else if (!editor?.plainText.startsWith("/")) replace("/")
     else updateMenu()
   }
 

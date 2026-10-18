@@ -120,6 +120,52 @@ test.describe("subagent panes", () => {
     await term.waitForText("Parent scroll marker.")
   })
 
+  test("x interrupts, s steers, and d archives the selected subagent", async ({ tui, backend, fakeModel }) => {
+    test.setTimeout(60_000)
+    fakeModel!.route("NEVER call `report`", [
+      toolStep("task", { description: "steerable helper", prompt: "steer-child-prompt", subagent_type: "hya-task" }),
+      textStep("Parent left it running."),
+      textStep("Parent synthesis one."),
+      textStep("Parent synthesis two."),
+      textStep("Parent synthesis three."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [hangStep(40_000), textStep("child-heard-the-user"), hangStep(40_000)])
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    for (const pane of ["projects", "sessions", "todos", "context"]) await command(term, `/layout close ${pane}`)
+    await command(term, "/subagents")
+    await command(term, "/layout focus pane-1")
+    await command(term, "delegate steerable")
+    await term.waitForText("Parent left it running.", 20_000)
+    await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
+    await command(term, "/layout focus pane-8")
+    await term.waitForText("x interrupt · s steer")
+
+    // x: the child's turn is cancelled; the parent is untouched.
+    await term.press("x")
+    await term.waitForText("! Cancelled", 10_000)
+    await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 10_000 }).toBe(0)
+    await term.waitForText("Parent left it running.")
+
+    // s: the command pane opens prefilled; the message wakes the idle child.
+    await term.press("s")
+    await term.waitForText(/\/subagents steer \S+/)
+    await term.type("steer-marker please")
+    await term.press("Enter")
+    await term.waitForText("child-heard-the-user", 20_000)
+    await term.waitForText("[user] steer-marker please")
+
+    // d asks first; any other key keeps the child, Enter archives it.
+    await term.press("d")
+    await term.waitForText(/Archive .*\? Enter confirms/)
+    await term.press("ArrowDown")
+    await expect.poll(() => term.find("Enter confirms")).toBeNull()
+    await term.press("d")
+    await term.waitForText("Enter confirms")
+    await term.press("Enter")
+    await term.waitForText("No active subagents in this conversation.", 15_000)
+  })
+
   test("a pin stays on one child while the selector previews and opens another", async ({ tui, backend, fakeModel }) => {
     fakeModel!.route("NEVER call `report`", [toolsStep([
       { name: "task", arguments: { description: "Alpha helper", prompt: "alpha-child-prompt", subagent_type: "hya-task" } },

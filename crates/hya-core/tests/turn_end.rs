@@ -812,6 +812,104 @@ async fn archive_cancels_a_busy_member_turn_with_cause_archived() {
     );
 }
 
+/// A user archive from a client (`archive_subagent`, by child session) takes
+/// the `archive` tool path: the busy member's turn closes with cause
+/// archived and it leaves the live roster.
+#[tokio::test]
+async fn user_archive_of_a_busy_subagent_cancels_its_turn_and_archives_it() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
+    provider.script(worker, Script::Hang);
+    supervisor
+        .register_existing_resident(
+            root,
+            worker,
+            "worker".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { engine.turn_active(worker) }).await,
+        "the member is mid-turn"
+    );
+
+    let receipt = engine.archive_subagent(worker).await.unwrap();
+    assert_eq!(receipt.handle, "main/worker");
+    assert!(receipt.cancelled_turn, "{receipt:?}");
+    assert!(!engine.turn_active(worker));
+    let finishes = assistant_finishes(&engine.replay(worker).await.unwrap(), worker);
+    assert_eq!(
+        finishes[0].1,
+        vec![(FinishReason::Cancelled, Some(FinishCause::Archived))]
+    );
+    let team = engine.read_projection(root).await.unwrap().team;
+    assert!(!team.roster.contains_key("main/worker"));
+    assert_eq!(
+        team.archived.get("main/worker").map(|entry| entry.reason),
+        Some(ArchiveReason::ArchivedByParent)
+    );
+    // A root session is not a subagent.
+    let refused = engine.archive_subagent(root).await.unwrap_err().to_string();
+    assert!(refused.contains("not a subagent"), "{refused}");
+}
+
+/// Interrupting a subagent (`CancelTurn` on its session) stops only its
+/// turn: it stays on the roster, idle, and is not immediately re-run.
+#[tokio::test]
+async fn interrupting_a_subagent_cancels_only_its_turn() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
+    provider.script(worker, Script::Hang);
+    supervisor
+        .register_existing_resident(
+            root,
+            worker,
+            "worker".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async {
+            engine.turn_active(worker) && open_tool_parts(&engine, worker).await == 1
+        })
+        .await,
+        "the member is mid-turn with an open tool part"
+    );
+
+    assert!(engine.cancel_turn(worker, FinishCause::UserCancel));
+    assert!(
+        eventually(|| async { !engine.turn_active(worker) }).await,
+        "the member's turn ends"
+    );
+    let finishes = assistant_finishes(&engine.replay(worker).await.unwrap(), worker);
+    assert_eq!(
+        finishes[0].1,
+        vec![(FinishReason::Cancelled, Some(FinishCause::UserCancel))]
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        provider.streams_for(worker),
+        1,
+        "no follow-up turn after an interrupt"
+    );
+    assert!(!engine.turn_active(worker));
+    let team = engine.read_projection(root).await.unwrap().team;
+    assert!(
+        team.roster.contains_key("main/worker"),
+        "an interrupt does not archive"
+    );
+}
+
 /// An aborted restart handoff strands nothing: a turn that cannot reach its
 /// round boundary in time (here: parked mid-provider-stream) is neither
 /// cancelled nor closed, the quiesce lifts so the old harness keeps serving,

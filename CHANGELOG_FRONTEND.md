@@ -1,4 +1,4 @@
-# 0.44.23-dev.4
+# 0.44.23-dev.5
 
 ## Terminal title
 
@@ -12,6 +12,11 @@
 ## Cursor
 
 - The message editor and the command pane show a blinking bar cursor instead of a block. Vim mode still uses a block in normal mode.
+
+## Subagent control
+
+- In the Subagents selector, `x` interrupts the selected subagent's turn, `s` opens `/subagents steer <session> ` to send it a message, and `d` archives it after Enter confirms. The same actions are `/subagents interrupt|steer|archive <session>`. Interrupting the parent with Esc still leaves its subagents running.
+- Requires backend 0.45.9 or later.
 
 ## Fixes
 
