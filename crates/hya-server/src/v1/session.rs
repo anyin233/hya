@@ -1,4 +1,5 @@
-//! `/v1` session domain: lifecycle, fork, compact, summarize, revert.
+//! `/v1` session domain: lifecycle, fork, compact, summarize, revert, and
+//! the user's control of a subagent session (archive, steer).
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -29,6 +30,8 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/sessions/:id/compact", post(compact_session))
         .route("/v1/sessions/:id/summarize", post(summarize_session))
         .route("/v1/sessions/:id/revert", post(revert_session))
+        .route("/v1/sessions/:id/archive", post(archive_subagent))
+        .route("/v1/sessions/:id/steer", post(steer_subagent))
 }
 
 pub(crate) fn parse_session(id: &str) -> Result<SessionId, V1Error> {
@@ -703,6 +706,49 @@ async fn revert_session(
         session: Some(projection_info(&st, session).await?),
         files: files.iter().map(super::convert::reverted_file).collect(),
     }))
+}
+
+async fn archive_subagent(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(_request): Json<pb::ArchiveSubagentRequest>,
+) -> Result<Json<pb::ArchiveSubagentResponse>, V1Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    let receipt = st
+        .engine
+        .archive_subagent(session)
+        .await
+        .map_err(subagent_error)?;
+    Ok(Json(pb::ArchiveSubagentResponse {
+        handle: receipt.handle,
+        cancelled_turn: receipt.cancelled_turn,
+        descendants: receipt.descendants,
+    }))
+}
+
+async fn steer_subagent(
+    State(st): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<pb::SteerSubagentRequest>,
+) -> Result<Json<pb::SteerSubagentResponse>, V1Error> {
+    let session = parse_session(&id)?;
+    session_exists(&st, session).await?;
+    let receipt = st
+        .engine
+        .steer_subagent(session, &request.text)
+        .await
+        .map_err(subagent_error)?;
+    Ok(Json(pb::SteerSubagentResponse { from: receipt.from }))
+}
+
+/// A refusal the caller can act on (not a subagent, already archived, empty
+/// text) is `invalid_argument`; anything else keeps the default mapping.
+fn subagent_error(error: hya_core::CoreError) -> V1Error {
+    match error {
+        hya_core::CoreError::Invalid(message) => V1Error::invalid_argument(message),
+        other => other.into(),
+    }
 }
 
 fn revert_error(error: hya_core::RevertError) -> V1Error {

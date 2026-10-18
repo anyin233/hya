@@ -794,6 +794,8 @@ every turn, message, and projection read hangs off a session id.
 | `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
 | `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
 | `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
+| `ArchiveSubagent` | `POST /v1/sessions/{session}/archive` | `hya.v1.Session.ArchiveSubagent` | `ArchiveSubagentRequest` | `ArchiveSubagentResponse` |
+| `SteerSubagent` | `POST /v1/sessions/{session}/steer` | `hya.v1.Session.SteerSubagent` | `SteerSubagentRequest` | `SteerSubagentResponse` |
 
 ### `Session.CreateSession`
 
@@ -850,6 +852,27 @@ one), or undo the pending revert (`undo`). A revert hides that user
 message and every later message and restores the files their tool
 calls changed; the next prompt or shell turn commits it. Fails with
 `session_busy` while a turn runs.
+
+
+### `Session.ArchiveSubagent`
+
+Archive a subagent session on the user's behalf, as its team lead's
+`archive` tool does: its in-flight turn is cancelled (cause
+`archived`), live descendants archive first, then it leaves the live
+roster (`archive_reason` `archived_by_parent`). Its transcript stays
+readable and `SteerSubagent` wakes it again under the same session.
+`invalid_argument` for a root session or an already archived subagent.
+To stop a subagent's turn without archiving it, use `CancelTurn` on its
+session.
+
+
+### `Session.SteerSubagent`
+
+Steer a subagent session with a message from the user. It is delivered
+on the DM from the subagent's parent, prefixed `[user] `: a running
+subagent sees it after its next tool call, an idle one wakes for it,
+and an archived one is revived by it. `invalid_argument` for a root
+session, empty text, or a subagent whose parent is archived.
 
 
 ## Service `Turn`
@@ -3201,6 +3224,37 @@ components.
 |---|---|---|
 | `session` (1) | `SessionInfo` | Projection summary after the revert (`revert` set after a revert, unset after an undo). |
 | `files` (2) | `repeated RevertedFile` | Files this call wrote (or could not restore). |
+
+### `ArchiveSubagentRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Subagent (child) session identifier. |
+
+### `ArchiveSubagentResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `handle` (1) | `string` | Team handle of the archived subagent. |
+| `cancelled_turn` (2) | `bool` | Whether an in-flight turn was cancelled. |
+| `descendants` (3) | `repeated string` | Handles of live descendants archived first (deepest first). |
+
+### `SteerSubagentRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Subagent (child) session identifier. |
+| `text` (2) | `string` | Message text; surrounding whitespace is trimmed. |
+
+### `SteerSubagentResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `from` (1) | `string` | Team handle the message was sent from (the subagent's parent). |
 
 ### `PromptTurn`
 

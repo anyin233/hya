@@ -2644,6 +2644,15 @@ impl ArchiveReviver for ResidentSupervisor {
         self.revive_child(root, parent, child_handle, body).await
     }
 
+    async fn archive_member(
+        &self,
+        caller: SessionId,
+        target: &str,
+        reason: &str,
+    ) -> Result<ArchiveReceipt, CoreError> {
+        ResidentSupervisor::archive_member(self, caller, target, reason).await
+    }
+
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError> {
         let claims = {
             let team = self.teams().get(&root).cloned();

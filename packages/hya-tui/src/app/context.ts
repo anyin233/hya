@@ -38,7 +38,8 @@ export interface PaneInputHandle {
 /** One command input, independent of the message composer. */
 export interface CommandPaneHandle {
   active(): boolean
-  open(): void
+  /** Open the pane; `text` replaces its input (a prefilled command to finish typing). */
+  open(text?: string): void
   /** Returns true when the key was handled and must not reach the editor. */
   key(event: KeyEvent): boolean
   paste(text: string): void

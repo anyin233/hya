@@ -870,6 +870,27 @@ written before the `task` result, and the first `_RUNNING` may land before or
 after it. Cancelling the parent's turn after `task` returned does not cancel
 the member.
 
+A client controls one member through its child session id (0.45.9):
+
+- **Interrupt:** `CancelTurn` on the child session cancels only its turn
+  (`cause: user_cancel`). The member stays on the roster, idle, and is not
+  re-run until mail wakes it.
+- **Steer:** `SteerSubagent` (`POST /v1/sessions/{child}/steer`, `{"text"}`)
+  appends the text, prefixed `[user] `, as mail from the member's parent on
+  their DM. A running member sees it after its next tool call, an idle one
+  wakes for it, and an archived one is revived by it (same handle and
+  session). The response's `from` is the parent's handle.
+- **Archive:** `ArchiveSubagent` (`POST /v1/sessions/{child}/archive`) runs
+  the parent's `archive` tool path: the turn is cancelled with `cause:
+  archived`, live descendants archive first (deepest first), and the member
+  leaves the roster with `archiveReason` `archived_by_parent`. The response
+  lists the archived `handle`, `cancelledTurn`, and `descendants`.
+
+Both new calls answer `invalid_argument` for a root session, an archived
+member (archive), empty text (steer), or a member whose parent is archived
+(steer); a backend that does not supervise the team answers
+`invalid_argument` too.
+
 Link a tool card to its child:
 
 - live: `memberUpdated.callId` equals the spawning `ToolCallPart.callId`,

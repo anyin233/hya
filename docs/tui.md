@@ -2051,7 +2051,20 @@ Run `/subagents` to add missing selector and viewer panes beside the workspace a
 focus the selector. Existing panes are reused. In the selector, Up/Down previews a
 child in every following viewer; Enter pins it to the first following viewer (or
 replaces the first pin if all are pinned); `n` adds a new pinned viewer. Unsupported
-keys stay in the selector. Alt+arrows navigate selectable panes as usual. A viewer
+keys stay in the selector.
+
+The selector also controls the selected subagent:
+
+- `x` interrupts its turn (`CancelTurn` on its session). It stays on the list,
+  idle, and keeps what it has done. Esc in the message editor interrupts only
+  the parent's turn and leaves its subagents running.
+- `s` opens the command pane with `/subagents steer <session> ` so you can type a
+  message; Enter sends it. The subagent receives it on its parent's DM as
+  `[user] <text>`: a running subagent sees it after its next tool call, an idle
+  one wakes for it, and an archived one is revived by it.
+- `d` asks `Archive <name>? Enter confirms · any other key cancels`; Enter
+  archives it as its parent's `archive` tool would (its turn is cancelled and
+  live nested subagents archive first). Steer it to wake it again. Alt+arrows navigate selectable panes as usual. A viewer
 has no border and does not take keyboard focus. Scroll it with its mouse wheel, or
 with PgUp/PgDn (Home/End for the top and the newest line) while the selector is
 focused; those keys move the viewer Enter would pin to and leave the parent's
@@ -2068,6 +2081,9 @@ Commands (arguments are exact session and pane IDs, with dropdown completion):
 | `/subagents pin <viewer-pane> [session]` | Persist a pin on that viewer; omitted session uses the current preview or first child. |
 | `/subagents follow <viewer-pane>` | Remove that viewer's pin and follow the selector again. |
 | `/subagents view <session>` | Add a separate pinned viewer, preserving keyboard focus. |
+| `/subagents interrupt <session>` | Cancel that subagent's running turn (`CancelTurn`); it stays available. Status `Interrupted <name>`, or `<name> is not running`. |
+| `/subagents steer <session> <text>` | Send the text to that subagent (`SteerSubagent`) on its parent's DM, marked `[user]`; wakes or revives it. |
+| `/subagents archive <session>` | Archive that subagent (`ArchiveSubagent`), as its parent's `archive` tool does. Requires backend 0.45.9. |
 
 For example, run `/subagents`, use Down to choose a helper, press Enter to pin it,
 then choose another helper and press `n` to watch both. Use `/layout show` to find

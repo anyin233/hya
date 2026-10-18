@@ -36,7 +36,15 @@ export function SubagentsPane(props: PaneRenderProps) {
     if (row) store.selectSubagent(row.id)
   }
   const command = (text: string) => { void controller.submit(text, "command") }
+  // `d` asks first: the next Enter archives this row, any other key keeps it.
+  const [confirmArchive, setConfirmArchive] = createSignal<string>()
   const input: PaneInputHandle = { onKey: (key) => {
+    const confirming = confirmArchive()
+    if (confirming) {
+      setConfirmArchive(undefined)
+      if (key.name === "return" && !key.ctrl && !key.meta && !key.shift) command(`/subagents archive ${confirming}`)
+      return
+    }
     // Paging keys scroll the viewer Enter would pin to; the parent's transcript stays put.
     const action = resolveBinding(key, { composerEmpty: true })
     if (action === "pageUp" || action === "pageDown" || action === "scrollTop" || action === "scrollBottom") {
@@ -60,7 +68,15 @@ export function SubagentsPane(props: PaneRenderProps) {
       if (viewer) command(`/subagents pin ${viewer} ${rows()[index()]!.id}`)
       else command(`/subagents view ${rows()[index()]!.id}`)
     } else if (key.name === "n" && rows()[index()]) command(`/subagents view ${rows()[index()]!.id}`)
+    else if (key.name === "x" && rows()[index()]) command(`/subagents interrupt ${rows()[index()]!.id}`)
+    else if (key.name === "s" && rows()[index()]) ui.command?.open(`/subagents steer ${rows()[index()]!.id} `)
+    else if (key.name === "d" && rows()[index()]) {
+      const row = rows()[index()]!
+      if (row.archived) store.setStatus(`${row.label} is already archived · s steers it awake`)
+      else setConfirmArchive(row.id)
+    }
   } }
+  const archiveLabel = () => rows().find((row) => row.id === confirmArchive())?.label
   const controllerViewer = () => {
     const viewers = paneLeaves(store.state.paneLayout.root).filter((pane) => pane.kind === "subagent-viewer")
     return (viewers.find((pane) => !pane.session) ?? viewers[0])?.id
@@ -82,7 +98,11 @@ export function SubagentsPane(props: PaneRenderProps) {
         </box>}</For>
       </Show>
     </scrollbox>
-    <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · PgUp/PgDn scroll · Enter pin · n new viewer · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived`}</text>
+    <Show when={archiveLabel()} fallback={
+      <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · Enter pin · n new · x interrupt · s steer · d archive · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived · PgUp/PgDn scroll`}</text>
+    }>
+      {(label) => <text height={2} flexShrink={0} wrapMode="word" fg={colors.warning}>{`Archive ${label()}? Enter confirms · any other key cancels`}</text>}
+    </Show>
   </PaneFrame>
 }
 
