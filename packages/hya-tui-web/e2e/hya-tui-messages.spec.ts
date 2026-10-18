@@ -4,7 +4,7 @@
 // "Messages".
 
 import type { Tui } from "./harness"
-import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep } from "./hya"
+import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep, toolStep } from "./hya"
 
 const colors = {
   bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
@@ -224,5 +224,35 @@ test.describe("scrolling", () => {
     await expect.poll(async () => (await term.text()).includes("row 90 of the long reply")).toBe(false)
     await term.press("End")
     await term.waitForText("row 90 of the long reply")
+  })
+})
+
+test.describe("scrolling while a subagent works", () => {
+  test.use({ model: { steps: [] } })
+
+  // A busy child keeps the session list refreshing, which re-reads the open
+  // session's row; that is not a session switch and must not jump to the bottom.
+  test("a scrolled-up view stays put while session list refreshes arrive", async ({ tui, backend, fakeModel }) => {
+    const rows = Array.from({ length: 60 }, (_, index) => `early row ${index + 1}`).join("\n\n")
+    fakeModel!.route("NEVER call `report`", [
+      textStep(rows),
+      toolStep("task", { description: "busy helper", prompt: "keep busy", subagent_type: "hya-task" }),
+      textStep("Parent handed off."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [hangStep(40_000)])
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await prompt(term, "first")
+    await term.waitForText("early row 60", 20_000)
+    await term.waitForIdle()
+    await prompt(term, "delegate")
+    await term.waitForText("Parent handed off.", 20_000)
+    for (let page = 0; page < 4; page++) await term.press("PageUp")
+    await term.waitForText("early row 1")
+    // Several refreshes of the busy child's session list (about one per 1.5 s).
+    for (let tick = 0; tick < 8; tick++) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect(await term.find("early row 1")).not.toBeNull()
+    }
   })
 })
