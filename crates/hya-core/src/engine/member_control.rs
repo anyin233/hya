@@ -3,7 +3,7 @@
 //! and go through the same paths the parent agent uses — the `archive` tool
 //! and a downward DM — so the supervisor's lifecycle rules apply unchanged.
 //! Interrupting a subagent needs nothing here: `CancelTurn` on its session
-//! cancels its in-flight turn through the turn gate.
+//! is [`SessionEngine::cancel_user_turn`], which stops its subtree.
 
 use hya_proto::{MailEndpoint, MailKind, SessionId, scope};
 use hya_tool::{ArchiveReceipt, MailReceipt};
@@ -52,6 +52,9 @@ impl SessionEngine {
             return Err(CoreError::Invalid("a steer message needs text".to_string()));
         }
         let root = self.subagent_root(child).await?;
+        // The user acts on this subagent again: a cancel's stop lifts first,
+        // so the steer below is neither refused nor held back.
+        self.resume_after_user_stop(child);
         let projection = self.read_projection(root).await?;
         let target =
             resolve_member_target(&projection, root, scope::ROOT_HANDLE, &child.to_string())?;

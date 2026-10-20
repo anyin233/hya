@@ -170,7 +170,7 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
     }
     if has("wait") && has("task") {
         lines.push(
-            "- To block until your subagents finish (they call `report` or are archived; going idle is not finishing), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you (each message once). If it reports a subagent stalled (its turn ended without a report), mail it to continue or `archive` it — waiting again will not restart it. It is the only correct way to wait: never loop on status tools.",
+            "- To block until your subagents finish (they call `report` or are archived; going idle is not finishing), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you (each message once). If it reports a subagent stalled (its turn ended without a report), mail it to continue or `archive` it — waiting again will not restart it. A subagent the user stopped is listed `stopped by the user`: never try to restart it; tell the user what you need from it. It is the only correct way to wait: never loop on status tools.",
         );
     } else if has("wait") && mail {
         lines.push(

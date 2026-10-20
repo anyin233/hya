@@ -590,6 +590,28 @@ pub trait ArchiveReviver: Send + Sync {
             "subagents are not supervised by this process".to_string(),
         ))
     }
+
+    /// The user cancelled `session`'s turn: stop `session` and every live
+    /// subagent below it, so the harness starts none of their turns (mail
+    /// wakes, quiescence synthesis) until the user acts on them again.
+    /// Returns the stopped sessions, `session` included when it is
+    /// supervised; the caller cancels their in-flight turns.
+    fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
+        let _ = session;
+        Vec::new()
+    }
+
+    /// The user acted on `session` again (a prompt or a steer): lift a
+    /// [`stop_for_user`](Self::stop_for_user) from it and its subtree.
+    fn resume_for_user(&self, session: SessionId) {
+        let _ = session;
+    }
+
+    /// Whether the user stopped the live member at `handle` on team `root`.
+    fn stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
+        let _ = (root, handle);
+        false
+    }
 }
 
 impl SessionEngine {

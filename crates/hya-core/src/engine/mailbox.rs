@@ -250,6 +250,34 @@ impl SessionEngine {
                 "channel policy denies send for this agent and topology role".to_string(),
             ));
         }
+        // A subagent the user stopped (`cancel_user_turn`) is not restarted
+        // by mail from above it: the user decides when it continues.
+        if let Some(reviver) = self.archive_reviver() {
+            let peer = match &to {
+                MailEndpoint::Handle(handle) => {
+                    Some(policy_projection.team.canonical_member(handle))
+                }
+                MailEndpoint::Channel(channel) => policy_projection
+                    .team
+                    .channels
+                    .get(&policy_projection.team.canonical_channel(channel))
+                    .filter(|state| {
+                        state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
+                    })
+                    .and_then(|state| state.members.iter().find(|member| **member != from))
+                    .cloned(),
+            };
+            if let Some(peer) = peer
+                && peer
+                    .strip_prefix(from.as_str())
+                    .is_some_and(|rest| rest.starts_with(scope::PATH_SEPARATOR))
+                && reviver.stopped_by_user(root, &peer)
+            {
+                return Err(CoreError::Invalid(format!(
+                    "the user stopped `{peer}`; it stays stopped until the user prompts or steers it. Do not try to restart it: tell the user what you need from it instead"
+                )));
+            }
+        }
         #[cfg(test)]
         if matches!(&to, MailEndpoint::Handle(_))
             && let Some(gate) = self.direct_mail_pre_append_gate.as_ref()
