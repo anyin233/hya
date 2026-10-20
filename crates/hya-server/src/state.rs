@@ -434,12 +434,11 @@ impl ServerState {
     }
 
     /// Cancel every execution surface for a Session: the engine turn first
-    /// (recording `cause: user_cancel` on its closing `MessageFinished`), then
-    /// the parent-model run and the Workflow run.
+    /// (recording `cause: user_cancel` on its closing `MessageFinished`) along
+    /// with every subagent's below it, which stay stopped until the user acts
+    /// on them again, then the parent-model run and the Workflow run.
     pub(crate) fn cancel_run(&self, session: hya_proto::SessionId) -> bool {
-        let turn = self
-            .engine
-            .cancel_turn(session, hya_proto::FinishCause::UserCancel);
+        let turn = self.engine.cancel_user_turn(session);
         let model = self.runs.cancel(session);
         let workflow = self.workflow_control.cancel(session);
         turn || model || workflow

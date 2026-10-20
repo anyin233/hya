@@ -870,11 +870,22 @@ written before the `task` result, and the first `_RUNNING` may land before or
 after it. Cancelling the parent's turn after `task` returned does not cancel
 the member.
 
+`CancelTurn` on any session stops its subtree (0.45.9): the turns of the
+session and of every live member below it are cancelled (`cause:
+user_cancel`), and the harness starts none of their turns — no mail wake, no
+`TEAM QUIESCED` synthesis — until the user acts again. A parent's mail to a
+stopped member is refused (`invalid_argument`, naming the member), and its
+`wait` lists the member as `stopped_by_user` without waking for it. Nothing is
+archived. `CreateTurn` on a session lifts the stop from it and its subtree,
+and `SteerSubagent` from that member and its subtree; queued mail then wakes
+them, and the others stay idle until mailed. `CancelTurn` reports
+`TURN_STATE_CANCELLED` when any of those turns was running.
+
 A client controls one member through its child session id (0.45.9):
 
-- **Interrupt:** `CancelTurn` on the child session cancels only its turn
-  (`cause: user_cancel`). The member stays on the roster, idle, and is not
-  re-run until mail wakes it.
+- **Interrupt:** `CancelTurn` on the child session cancels its turn and its
+  own members' (`cause: user_cancel`). They stay on the roster, idle, and
+  stopped (see below).
 - **Steer:** `SteerSubagent` (`POST /v1/sessions/{child}/steer`, `{"text"}`)
   appends the text, prefixed `[user] `, as mail from the member's parent on
   their DM. A running member sees it after its next tool call, an idle one

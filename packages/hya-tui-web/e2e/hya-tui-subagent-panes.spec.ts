@@ -166,6 +166,34 @@ test.describe("subagent panes", () => {
     await term.waitForText("No active subagents in this conversation.", 15_000)
   })
 
+  test("Esc stops working subagents and nothing restarts them until the user writes", async ({ tui, backend, fakeModel }) => {
+    test.setTimeout(60_000)
+    fakeModel!.route("NEVER call `report`", [
+      toolStep("task", { description: "stoppable helper", prompt: "stop-child-prompt", subagent_type: "hya-task" }),
+      textStep("Parent left it running."),
+      textStep("Parent next turn."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [hangStep(40_000), textStep("child-restarted")])
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await command(term, "delegate stoppable")
+    await term.waitForText("Parent left it running.", 20_000)
+    await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
+
+    // The parent's turn is over; Esc stops the subagent still working.
+    await term.waitForText("running", 10_000)
+    await term.press("Escape")
+    await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 10_000 }).toBe(0)
+    // Neither the idle team's synthesis nor the parent restarts anything.
+    await new Promise((resolve) => setTimeout(resolve, 3_000))
+    expect(await term.find("Parent next turn.")).toBeNull()
+    expect(await term.find("child-restarted")).toBeNull()
+
+    // A message from the user lifts the stop; the parent answers it.
+    await command(term, "carry on")
+    await term.waitForText("Parent next turn.", 20_000)
+  })
+
   test("a pin stays on one child while the selector previews and opens another", async ({ tui, backend, fakeModel }) => {
     fakeModel!.route("NEVER call `report`", [toolsStep([
       { name: "task", arguments: { description: "Alpha helper", prompt: "alpha-child-prompt", subagent_type: "hya-task" } },

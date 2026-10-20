@@ -79,6 +79,13 @@ test("Esc closes the file menu, then cancels a running turn, then clears the inp
   expect(escapeAction({ menuOpen: false, running: false, inputEmpty: true })).toBe("none")
 })
 
+test("with the parent's own turn over, Esc clears a draft first, then stops working subagents", () => {
+  expect(escapeAction({ menuOpen: false, running: false, subagentsWorking: true, inputEmpty: true })).toBe("cancelTurn")
+  expect(escapeAction({ menuOpen: false, running: false, subagentsWorking: true, inputEmpty: false })).toBe("clearInput")
+  expect(escapeAction({ menuOpen: true, running: false, subagentsWorking: true, inputEmpty: true })).toBe("closeMenu")
+  expect(escapeAction({ menuOpen: false, running: false, subagentsWorking: true, inputEmpty: true, childView: true })).toBe("returnToParent")
+})
+
 test("Esc in a subagent's read-only view returns to the parent once no list is open", () => {
   expect(escapeAction({ menuOpen: true, running: false, inputEmpty: true, childView: true })).toBe("closeMenu")
   expect(escapeAction({ menuOpen: false, running: false, inputEmpty: false, childView: true })).toBe("returnToParent")

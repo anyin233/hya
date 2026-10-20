@@ -18,6 +18,7 @@ import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
+import { subagentsWorking } from "../state/subagents"
 import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
@@ -542,7 +543,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
+        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, subagentsWorking: subagentsWorking(store.state), inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()
