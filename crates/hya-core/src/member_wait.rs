@@ -23,6 +23,9 @@
 //!   or live subagent of its own) will not continue by itself. That is not a
 //!   finish; the wait says so once per stopped turn (`woke_by: stalled`, the
 //!   member `idle` under `running`) and a repeated wait blocks.
+//! - **User stops**: a target the user stopped (it or an agent above it was
+//!   cancelled) is listed `stopped_by_user` under `running` and never wakes
+//!   the wait — the caller is not prompted to restart what the user stopped.
 //! - Only `timeout_secs: 0` returns the current state without blocking;
 //!   `nothing_to_wait_for` returns at once when there is no target left to
 //!   wait on (no live subagent, or every target already finished).
@@ -312,7 +315,13 @@ async fn evaluate(
                 .roster
                 .keys()
                 .any(|path| scope::parent_path(path) == Some(target.handle.as_str()));
-            let state = if busy || leads_live {
+            // A member the user stopped is neither working nor stalled: it
+            // waits for the user, so it must not wake the caller to restart it.
+            let stopped = supervisor.member_stopped_by_user(root, target.session)
+                && !engine.turn_active(target.session);
+            let state = if stopped {
+                WaitMemberState::StoppedByUser
+            } else if busy || leads_live {
                 WaitMemberState::Working
             } else {
                 standing

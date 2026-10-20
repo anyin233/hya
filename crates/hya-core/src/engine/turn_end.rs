@@ -158,6 +158,34 @@ impl SessionEngine {
         self.turn_gate.cancel(session, cause)
     }
 
+    /// The user cancelled `session`: cancel its in-flight turn and those of
+    /// every live subagent below it (`cause: user_cancel`), and stop them so
+    /// the harness does not restart them — no mail wake, no quiescence
+    /// synthesis, and their parents' mail to them is refused — until the user
+    /// prompts or steers them ([`resume_after_user_stop`](Self::resume_after_user_stop)).
+    /// Nothing is archived. `false` when none of them had an active turn.
+    pub fn cancel_user_turn(&self, session: SessionId) -> bool {
+        let stopped = self
+            .archive_reviver()
+            .map(|reviver| reviver.stop_for_user(session))
+            .unwrap_or_default();
+        let mut cancelled = self.cancel_turn(session, FinishCause::UserCancel);
+        for member in stopped.into_iter().filter(|member| *member != session) {
+            cancelled |= self.cancel_turn(member, FinishCause::UserCancel);
+        }
+        cancelled
+    }
+
+    /// The user acted on `session` again: lift a
+    /// [`cancel_user_turn`](Self::cancel_user_turn) stop from it and every
+    /// subagent below it. Their queued mail wakes them; the rest stay idle
+    /// until mailed.
+    pub fn resume_after_user_stop(&self, session: SessionId) {
+        if let Some(reviver) = self.archive_reviver() {
+            reviver.resume_for_user(session);
+        }
+    }
+
     /// Stop `session`'s in-flight turn with `cause` and wait (up to
     /// `deadline`) for it to close its own message; a turn still running at
     /// the deadline has its open messages closed here, as a drain would.

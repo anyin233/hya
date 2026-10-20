@@ -666,7 +666,7 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
 | `/` with an empty message, or Ctrl+X then `/` while drafting | Focus the separate command pane. The message draft stays in place (see [Command pane](#command-pane)). |
 | `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
-| Esc | In the command pane, return to the message composer; with a file list open, close it; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
+| Esc | In the command pane, return to the message composer; with a file list open, close it; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn (which stops every subagent too); else clear the input; else, with subagents still working after the turn, stop them. |
 | Ctrl+C | In the command pane, close it. In the composer, clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits and archives the session (like `/exit`). |
 | Ctrl+D | On an empty input: quit and leave the session running (like `/to-background`); in a WebUI tab it only shows `Close the tab to leave this session running`. With text it deletes the character under the cursor. |
 | `/exit`, `/quit` | Quit and archive the session (an unused one is left for the daemon to delete). See [Quit and keep running, or archive](#quit-and-keep-running-or-archive). |
@@ -693,7 +693,7 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
 | `/answer <id> <text>` | Answer a question request. |
-| `/cancel` or Esc | Cancel the running turn: the controller status state shows `Cancelling…`, then `Cancelled · Ready`. |
+| `/cancel` or Esc | Cancel the running turn and stop every subagent below the session: the controller status state shows `Cancelling…`, then `Cancelled · Ready`. With the session's own turn over but subagents still working, Esc in an empty editor (or `/cancel`) stops just them (`Stopping subagents…`, then `Stopped subagents · Ready`). Stopped subagents stay available and are not restarted by the parent or the harness until you send the parent a message or steer them. |
 | `/refresh` | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
 | `/reconnect` | Find the database's backend daemon or start it, now, and switch to it: after `hya serve stop` (see [When the server goes away](#when-the-server-goes-away)), or any time. Says `Connected · pid N` when the current server is the database's live one. With `--server` and no `--db`, or on a remote backend, it only resubscribes to that URL (never a local daemon). |
 | `/connect-remote [link] [--transport auto\|grpc\|ws] [--relay-ca <pem>]` | Move this TUI to a remote backend through a relay link: starts a local `hya bridge` child and uses its loopback URL. Without a link a concealed `Relay link` entry asks for it. See [Remote backends](#remote-backends-connect-remote). |
@@ -2055,9 +2055,12 @@ keys stay in the selector.
 
 The selector also controls the selected subagent:
 
-- `x` interrupts its turn (`CancelTurn` on its session). It stays on the list,
-  idle, and keeps what it has done. Esc in the message editor interrupts only
-  the parent's turn and leaves its subagents running.
+- `x` interrupts its turn (`CancelTurn` on its session) and those of its own
+  subagents. It stays on the list, idle, and keeps what it has done. It stays
+  stopped: its parent's mail to it is refused, and its parent's `wait` lists
+  it as stopped by the user instead of waking to restart it. Steer it to let it
+  continue. Esc in the message editor stops the parent and every subagent the
+  same way.
 - `s` opens the command pane with `/subagents steer <session> ` so you can type a
   message; Enter sends it. The subagent receives it on its parent's DM as
   `[user] <text>`: a running subagent sees it after its next tool call, an idle
@@ -2081,7 +2084,7 @@ Commands (arguments are exact session and pane IDs, with dropdown completion):
 | `/subagents pin <viewer-pane> [session]` | Persist a pin on that viewer; omitted session uses the current preview or first child. |
 | `/subagents follow <viewer-pane>` | Remove that viewer's pin and follow the selector again. |
 | `/subagents view <session>` | Add a separate pinned viewer, preserving keyboard focus. |
-| `/subagents interrupt <session>` | Cancel that subagent's running turn (`CancelTurn`); it stays available. Status `Interrupted <name>`, or `<name> is not running`. |
+| `/subagents interrupt <session>` | Cancel that subagent's running turn and its own subagents' (`CancelTurn`); they stay available and stopped until steered. Status `Interrupted <name>`, or `<name> is not running` (it is still stopped). |
 | `/subagents steer <session> <text>` | Send the text to that subagent (`SteerSubagent`) on its parent's DM, marked `[user]`; wakes or revives it. |
 | `/subagents archive <session>` | Archive that subagent (`ArchiveSubagent`), as its parent's `archive` tool does. Requires backend 0.45.9. |
 
