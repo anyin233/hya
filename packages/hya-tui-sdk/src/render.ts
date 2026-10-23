@@ -6,7 +6,7 @@
 import type { JsonValue } from "./protocol";
 
 export interface TextStyle {
-  /** `#rrggbb` or a theme token: `fg`, `accent`, `muted`, `error`, `warning`, `success`, `border`. */
+  /** `#rrggbb` or a theme token: `fg`, `muted`, `focus`, `heading`, `link`, `activity`, `success`, `warning`, `error`, `border`. `accent` is a legacy alias for `focus`. */
   readonly color?: string;
   readonly background?: string;
   readonly bold?: boolean;

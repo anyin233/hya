@@ -1,4 +1,4 @@
-import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core"
+import { TextAttributes, type MouseEvent, type ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp, type PaneInputHandle } from "../app/context"
@@ -70,17 +70,17 @@ export function LayoutPane(props: PaneRenderProps) {
   }
   return <PaneFrame kind="layout" focused={props.focused} title={`Layout tree · ${props.node.id}`}>
     <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{layoutEditorHeading(state())}</text>
-    <Show when={layoutEditorPreview(state())}>{(preview) => <text height={1} width="100%" wrapMode="none" flexShrink={0} fg={colors.accent}>{`─ ${preview()}`}</text>}</Show>
+    <Show when={layoutEditorPreview(state())}>{(preview) => <text height={1} width="100%" wrapMode="none" flexShrink={0} fg={colors.muted}>{`─ ${preview()}`}</text>}</Show>
     <Show when={state().stage.type !== "weight"} fallback={
       <box width="100%" flexGrow={1} flexDirection="column">
-        <text height={1} wrapMode="none" fg={colors.accent}>{state().stage.type === "weight" ? `${(state().stage as { value: string }).value}▏` : ""}</text>
+        <text height={1} wrapMode="none" fg={colors.focus}>{state().stage.type === "weight" ? `${(state().stage as { value: string }).value}▏` : ""}</text>
         <text width="100%" wrapMode="word" fg={colors.muted}>Relative to siblings. Content uses the pane's needed height in a column.</text>
       </box>
     }>
       <scrollbox ref={(element: ScrollBoxRenderable) => { scroll = element; props.scrollRef(element) }} width="100%" flexGrow={1}>
         <For each={rows()}>{(row, at) => <text height={1} flexShrink={0} wrapMode="none"
           onMouseDown={(event: MouseEvent) => mouse(event, () => apply(layoutEditorChoose(store.state.paneLayout, state(), row.id)))}
-          fg={at() === index() ? colors.accent : colors.fg}>
+          fg={at() === index() ? colors.focus : colors.fg}>
           {`${at() === index() ? "▸" : " "}${treeVisible() && state().marked === row.id ? "◆" : " "}${"  ".repeat(Math.min(row.depth ?? 0, Math.max(0, Math.floor((props.width - 24) / 2))))}${row.label}${treeVisible() && row.id.startsWith("pane-") && !visible().has(row.id) ? " (hidden)" : ""}`}
         </text>}</For>
       </scrollbox>
@@ -90,7 +90,7 @@ export function LayoutPane(props: PaneRenderProps) {
     </text>
     <text height={hintHeight()} flexShrink={0} width="100%" wrapMode="word" fg={colors.muted}>{hint()}</text>
     <box height={1} flexShrink={0} flexDirection="row" gap={2}>
-      <text fg={colors.accent} onMouseDown={(event: MouseEvent) => mouse(event, () => key(state().stage.type === "wrap" ? "escape" : "return"))}>{state().stage.type === "tree" ? "[Edit]" : state().stage.type === "wrap" ? "[Cancel]" : state().stage.type === "weight" ? "[Save]" : "[Choose]"}</text>
+      <text fg={colors.link} attributes={TextAttributes.UNDERLINE} onMouseDown={(event: MouseEvent) => mouse(event, () => key(state().stage.type === "wrap" ? "escape" : "return"))}>{state().stage.type === "tree" ? "[Edit]" : state().stage.type === "wrap" ? "[Cancel]" : state().stage.type === "weight" ? "[Save]" : "[Choose]"}</text>
       <Show when={state().stage.type !== "tree"}><text fg={colors.muted} onMouseDown={(event: MouseEvent) => mouse(event, () => setState(layoutEditorBack(state())))}>[Back]</text></Show>
     </box>
   </PaneFrame>

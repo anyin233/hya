@@ -109,7 +109,7 @@ function hint(view: View): string {
   return "Up/Down move · Enter opens/switches · n new · e edit roots · r rename · d delete · t temporary session · Esc close";
 }
 
-const noticeColor = (notice: Notice): string => notice.tone === "error" ? "error" : notice.tone === "ok" ? "accent" : "fg";
+const noticeColor = (notice: Notice): string => notice.tone === "error" ? "error" : notice.tone === "ok" ? "success" : "fg";
 
 /** The first rows that keep row `index` visible in `height` rows. */
 function windowStart(count: number, index: number, height: number): number {
@@ -128,15 +128,15 @@ function render(view: View, projects: Projects, width: number, height: number, n
     rows.push({
       kind: "row",
       children: [
-        text(project.id === view.highlighted ? "▸ " : "  ", "accent", action),
+        text(project.id === view.highlighted ? "▸ " : "  ", "focus", action),
         text(project.busy ? "● " : "  ", project.busy ? "warning" : "fg", action),
-        text(truncate(project.name, Math.max(1, Math.floor(room * 0.4))), project.id === projects.active ? "accent" : "fg", action),
+        text(truncate(project.name, Math.max(1, Math.floor(room * 0.4))), project.id === view.highlighted ? "focus" : "fg", action),
         text(`  ${sessions} session${sessions === 1 ? "" : "s"} · ${truncate(project.roots[0] ?? "", Math.max(1, Math.floor(room * 0.4)))}`, "muted", action),
       ],
     });
   }
   if (!items.length) rows.push(text("  No projects yet · n creates one", "muted"));
-  const prompt = (label: string, input: string, after: RenderNode[] = []): RenderNode => ({ kind: "row", children: [text(label, "muted"), text(input, "fg"), text("▏", "accent"), ...after] });
+  const prompt = (label: string, input: string, after: RenderNode[] = []): RenderNode => ({ kind: "row", children: [text(label, "muted"), text(input, "fg"), text("▏", "focus"), ...after] });
   if (view.create) {
     const flow = view.create;
     const label = flow.step === "name" ? "New project name " : `Root ${flow.roots.length + 1} (${flow.roots.length ? "Enter empty to finish" : "primary"}) `;
@@ -148,7 +148,7 @@ function render(view: View, projects: Projects, width: number, height: number, n
     rows.push(text("Roots (first = primary):", "muted"));
     flow.roots.forEach((root, index) => rows.push({
       kind: "row",
-      children: [text(index === flow.selected ? "▸ " : "  ", "accent"), text(index === 0 ? `${root} (primary)` : root, index === 0 ? "accent" : "fg")],
+      children: [text(index === flow.selected ? "▸ " : "  ", "focus"), text(index === 0 ? `${root} (primary)` : root, index === flow.selected ? "focus" : "fg")],
     }));
     if (flow.adding) rows.push(prompt("Add root ", flow.input));
   }
@@ -156,7 +156,7 @@ function render(view: View, projects: Projects, width: number, height: number, n
   if (confirmed) rows.push(text(`Delete ${confirmed.name}? Enter confirms · Esc cancels`, "warning"));
   if (view.busy) {
     const seconds = view.busy.startedAt ? Math.max(0, Math.floor((now - view.busy.startedAt) / 1000)) : 0;
-    rows.push({ kind: "row", children: [text(spinnerFrames[Math.floor(now / 100) % spinnerFrames.length]!, "accent"), text(` ${view.busy.label}… ${seconds}s`, "fg")] });
+    rows.push({ kind: "row", children: [text(spinnerFrames[Math.floor(now / 100) % spinnerFrames.length]!, "activity"), text(` ${view.busy.label}… ${seconds}s`, "fg")] });
   }
   // A failed read of the Project list shows until a later read succeeds.
   const notice = view.notice ?? (projects.error ? { tone: "error" as const, text: `Refresh failed: ${projects.error}` } : undefined);

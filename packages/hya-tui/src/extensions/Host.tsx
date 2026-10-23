@@ -45,7 +45,7 @@ export function ExtensionOverlay() {
   return (
     <Show when={store.state.extensionOverlay} keyed>
       {(panelKey) => (
-        <box position="absolute" top={0} left={0} width="100%" height="100%" zIndex={50} border borderColor={colors.accent} title={extensionManager.panels().find((panel) => panel.key === panelKey)?.title ?? panelKey} backgroundColor={colors.bg} flexDirection="column">
+        <box position="absolute" top={0} left={0} width="100%" height="100%" zIndex={50} border borderColor={colors.focus} titleColor={colors.heading} title={extensionManager.panels().find((panel) => panel.key === panelKey)?.title ?? panelKey} backgroundColor={colors.bg} flexDirection="column">
           <ExtensionPanel panelKey={panelKey} width={size().width - 4} height={size().height - 2} />
         </box>
       )}
@@ -57,7 +57,7 @@ export function ExtensionOverlay() {
 export function ExtensionPanelBox(props: { panel: PanelEntry | undefined; panelKey: string; width: number; height: number; highlighted?: boolean; scrollRef?: (element: ScrollBoxRenderable) => void }) {
   return (
     <box width="100%" height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
-      <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{props.panel?.title ?? props.panelKey}</text>
+      <text height={1} flexShrink={0} wrapMode="none" fg={colors.heading}>{props.panel?.title ?? props.panelKey}</text>
       <ExtensionPanel panelKey={props.panelKey} width={props.width - 2} height={props.height - 1} {...(props.scrollRef ? { scrollRef: props.scrollRef } : {})} />
     </box>
   )

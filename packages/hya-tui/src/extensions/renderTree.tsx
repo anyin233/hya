@@ -1,6 +1,6 @@
 import { TextAttributes } from "@opentui/core"
 import { For, type JSX } from "solid-js"
-import { colors, toolColors } from "../theme"
+import { colors } from "../theme"
 import { extensionManager, type HookTree, type HookTrees } from "./manager"
 import type { ExtensionAction, RenderNode } from "./wire"
 
@@ -12,9 +12,8 @@ export interface TreeHost {
 
 const themed = (color: string | undefined): string | undefined => {
   if (color === undefined || color.startsWith("#")) return color
-  if (color === "success") return toolColors.done
-  if (color === "border") return colors.border
-  return colors[color as "fg" | "accent" | "muted" | "error" | "warning"]
+  if (color === "accent") return colors.focus // Legacy extension spelling.
+  return colors[color as "fg" | "focus" | "heading" | "link" | "activity" | "muted" | "error" | "warning" | "success" | "border"]
 }
 
 /**
@@ -32,11 +31,11 @@ export function RenderTree(props: { node: RenderNode; host?: TreeHost; inRow?: b
       const action = node.action
       const onAction = props.host?.onAction
       // An unstyled clickable text is marked as a link; a styled one is drawn exactly as styled.
-      const link = action !== undefined && node.style === undefined
+      const link = (action !== undefined && node.style === undefined) || node.style?.color === "link"
       return (
         <text
           {...(props.inRow ? { wrapMode: "none" as const, flexShrink: 0 } : { wrapMode: "word" as const })}
-          fg={themed(node.style?.color) ?? (link ? colors.accent : colors.fg)}
+          fg={themed(node.style?.color) ?? (link ? colors.link : colors.fg)}
           {...(node.style?.background ? { bg: themed(node.style.background) } : {})}
           attributes={(node.style?.bold ? TextAttributes.BOLD : 0) | (node.style?.italic ? TextAttributes.ITALIC : 0) | (node.style?.underline || link ? TextAttributes.UNDERLINE : 0)}
           {...(action && onAction ? { onMouseDown: (event: { button: number; x: number; y: number; stopPropagation(): void }) => { if (event.button === 0 || event.button === 2) { event.stopPropagation(); onAction({ ...action, button: event.button === 2 ? "right" : "left" }, { x: event.x, y: event.y }) } } } : {})}
@@ -48,7 +47,7 @@ export function RenderTree(props: { node: RenderNode; host?: TreeHost; inRow?: b
     case "box":
       return (
         <box flexDirection="column" width="100%" padding={node.padding ?? 0}>
-          {node.title ? <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{node.title}</text> : null}
+          {node.title ? <text height={1} flexShrink={0} wrapMode="none" fg={colors.heading}>{node.title}</text> : null}
           <For each={node.children}>{child}</For>
         </box>
       )
