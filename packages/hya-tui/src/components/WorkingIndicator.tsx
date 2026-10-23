@@ -32,7 +32,7 @@ export function WorkingIndicator() {
     <Show when={text()}>
       {(line) => (
         <text height={1} wrapMode="none">
-          <span style={{ fg: colors.accent }}>{frame()}</span>
+          <span style={{ fg: colors.activity }}>{frame()}</span>
           <span style={{ fg: colors.muted }}>{` ${line()}`}</span>
         </text>
       )}

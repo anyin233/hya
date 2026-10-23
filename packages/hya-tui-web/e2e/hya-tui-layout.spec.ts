@@ -4,7 +4,7 @@
 import type { Tui } from "./harness"
 import { expect, hyaTui, statusSessionId, test, textStep, toolStep, wideViewport } from "./hya"
 
-const colors = { bg: "default", panel: "default", accent: "#73c8e8", border: "#405366", muted: "#9caab9" }
+const colors = { bg: "default", panel: "default", focus: "#73c8e8", border: "#405366", muted: "#9caab9" }
 const narrow = { width: 690, height: 640 }
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -64,7 +64,7 @@ test.describe("layout", () => {
     await term.type("still editing here")
     await term.waitForText("still editing here")
     const input = (await term.find("still editing here"))!
-    expect((await term.cell(input.row - 1, input.col))?.fg).toBe(colors.accent)
+    expect((await term.cell(input.row - 1, input.col))?.fg).toBe(colors.focus)
     await term.attach(testInfo, "named-close")
     term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")

@@ -1,4 +1,11 @@
-# 0.44.23-dev.5
+# 0.44.23-dev.6
+
+## Semantic colors
+
+- Reserve the blue focus color for focused borders, input cursors, and highlighted choices. Window and Markdown titles and assistant identities now use neutral heading text; window titles do not inherit a focused border color.
+- Simplify code highlighting to purple keywords, warm-gold literals, neutral names/operators, and gray comments; make diff location headers neutral.
+- Use green for successful results, amber for attention/waiting, red for errors, and neutral activity spinners. Links use an underline; current-value markers and shortcuts no longer paint unrelated rows blue.
+- Expose semantic theme tokens to TUI extensions, retaining `accent` as a compatibility alias for `focus`. First-party panes follow the same roles. Requires backend 0.45.10 or later.
 
 ## Terminal title
 

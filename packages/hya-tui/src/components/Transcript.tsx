@@ -100,7 +100,7 @@ export function Transcript(props: { secondary?: boolean; scroller?: (scroller: T
       </scrollbox>
       <Show when={unseen()}>
         <box position="absolute" bottom={0} right={2} height={1} backgroundColor={colors.panel} paddingX={1}>
-          <text fg={colors.accent} wrapMode="none">↓ New messages below · End jumps</text>
+          <text fg={colors.muted} wrapMode="none">↓ New messages below · End jumps</text>
         </box>
       </Show>
     </box>
