@@ -22,12 +22,12 @@ test("the default theme inherits the terminal background and preserves text colo
   expect(defaultThemeName).toBe("hya")
   expect(themeName()).toBe("hya")
   expect({ ...colors }).toEqual({
-    bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
+    bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", heading: "#e8edf3", link: "#e8edf3", activity: "#9caab9", success: "#a5d6a7", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
   })
   expect({ ...toolColors }).toEqual({ done: "#a5d6a7" })
-  expect({ ...diffColors }).toEqual({ add: "#a5d6a7", remove: "#f07878", hunk: "#82aaff", context: "#9caab9" })
+  expect({ ...diffColors }).toEqual({ add: "#a5d6a7", remove: "#f07878", hunk: "#e8edf3", context: "#9caab9" })
   expect({ ...syntaxColors }).toEqual({
-    keyword: "#c792ea", string: "#a5d6a7", number: "#f78c6c", comment: "#7a8a9c", function: "#82aaff", type: "#ffcb6b", operator: "#89ddff", inlineCode: "#f2a97a",
+    keyword: "#c792ea", string: "#d6bb8d", number: "#d6bb8d", comment: "#7a8a9c", function: "#e8edf3", type: "#e8edf3", operator: "#e8edf3", inlineCode: "#d6bb8d",
   })
 })
 
@@ -82,10 +82,31 @@ test("an unknown theme name is rejected and the palette stays", () => {
 test("syntax styles are derived from a theme's palette", () => {
   const styles = syntaxStylesFor(themes.hya)
   expect(styles.default).toEqual({ fg: "#e8edf3" })
-  expect(styles["markup.heading.2"]).toEqual({ fg: "#73c8e8", bold: true })
+  expect(styles["markup.heading.2"]).toEqual({ fg: "#e8edf3", bold: true })
   expect(styles.keyword).toEqual({ fg: "#c792ea" })
   expect(styles.comment).toEqual({ fg: "#7a8a9c", italic: true })
   const light = (Object.values(themes) as ThemeDefinition[]).find((theme) => theme.kind === "light")!
   expect(syntaxStylesFor(light).keyword).toEqual({ fg: light.syntaxColors.keyword })
   expect(syntaxStylesFor(light).default).toEqual({ fg: light.colors.fg })
+})
+
+test("every theme reserves focus for navigation and keeps status and structure distinct", () => {
+  for (const theme of Object.values(themes)) {
+    const ui = theme.colors
+    for (const role of ["heading", "link", "activity", "success", "warning", "error"] as const) expect(ui[role]).not.toBe(ui.focus)
+    expect(ui.heading).toBe(ui.fg)
+    expect(ui.activity).toBe(ui.muted)
+    expect(theme.toolColors.done).toBe(ui.success)
+    expect(theme.diffColors.add).toBe(ui.success)
+    expect(theme.diffColors.remove).toBe(ui.error)
+    expect(theme.diffColors.hunk).toBe(ui.heading)
+    expect(theme.syntaxColors.string).toBe(theme.syntaxColors.number)
+    expect(theme.syntaxColors.inlineCode).toBe(theme.syntaxColors.string)
+    for (const role of ["function", "type", "operator"] as const) expect(theme.syntaxColors[role]).toBe(ui.fg)
+    const styles = syntaxStylesFor(theme)
+    expect(styles["markup.heading"]).toEqual({ fg: ui.heading, bold: true })
+    expect(styles["markup.link.label"]).toEqual({ fg: ui.link, underline: true })
+    expect(styles["markup.list"]).toEqual({ fg: ui.fg })
+    expect(styles["markup.list.checked"]).toEqual({ fg: ui.success })
+  }
 })

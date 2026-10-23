@@ -1158,7 +1158,7 @@ responsive hiding; hidden and zero-area panes are excluded. No extra default
 shortcuts are installed.
 
 Clicking a passive pane preserves keyboard ownership; mouse scrolling and text
-selection remain available. One accent border belongs to the focused editor,
+selection remain available. One focus-colored border belongs to the focused editor,
 selectable side pane, or active overlay. A hidden, removed, zero-area, or newly
 passive focus target falls back to a visible editor or another visible
 selectable pane. Focus changes do not rebuild the tree. Pane instances mount
@@ -1601,26 +1601,53 @@ same width.
 The colors come from the theme in effect (see [Themes](#themes)). The
 default `hya` theme:
 
-| Name | Value | Used for |
+Color is a UI language, shared by native views and first-party panes. Blue
+identifies a selected choice, keyboard focus, or the editing cursor. Titles do
+not inherit the focused window's border color. Ordinary content stays neutral;
+shape, labels, bold text, and underlining carry meaning alongside color.
+
+| Role/token | Default value | Meaning and usage |
 | --- | --- | --- |
-| `bg` | Terminal default | Screen and transcript background. |
-| `panel` | Terminal default | Boxes, user message blocks, code blocks, the input. |
-| `fg` | `#e8edf3` | Text. |
-| `muted` | `#9caab9` | Controller status state, instructions, `Thinking` lines, model names, queued prompts. |
-| `accent` | `#73c8e8` | Header, user message bar, assistant name, headings, list markers. |
-| `border` | `#405366` | Box borders and titles. |
-| `error` | `#f07878` | Error notices and failed tool calls. |
-| `warning` | `#e5c07b` | Length-limit and cancel notices. |
+| `focus` | `#73c8e8` | Keyboard ownership and highlighted choices: focused borders, selected list rows, input cursors. |
+| `heading` | `#e8edf3` | Structure: window titles, assistant identity, Markdown headings. Markdown headings are bold. |
+| `fg` | `#e8edf3` | Ordinary content and current-value markers. A marker such as `●` conveys the saved choice independently of the highlighted row. |
+| `muted` | `#9caab9` | Secondary information: metadata, explanations, queued prompts, navigation hints. |
+| `activity` | `#9caab9` | Work in progress: spinners and running labels. The animation and text distinguish activity from static metadata. |
+| `success` | `#a5d6a7` | Successful result or completion: completed tool calls, todos, and successful notices. |
+| `warning` | `#e5c07b` | Attention or waiting: permission/question prompts, blocked todos, cancellation and length limits. |
+| `error` | `#f07878` | Failure or danger: failed turns/tools, errors, and the yolo warning. |
+| `link` | `#e8edf3` | An action or link, distinguished with an underline instead of selection blue. |
+| `border` | `#405366` | Inactive frames and transcript gutters; not a focus indicator. |
+| `selection` | `#2f4d6b` | Background of a mouse-selected text range. |
+| `bg`, `panel` | Terminal default | Screen, transcript, editor, code blocks and overlays inherit the terminal background. |
 
-Tool cards add `toolColors.done` `#a5d6a7` (the ✓ of a finished call and an
-idle or done subagent) and `diffColors`: added rows `#a5d6a7`, removed rows
-`#f07878`, hunk and file headers `#82aaff`, context rows `#9caab9` (muted).
-A running spinner uses `accent`, a failed call `error`, a call waiting for a
-permission answer `warning`, a pending one `muted`.
+The same meanings apply in Light, High contrast and Ember; their exact shades
+adapt to contrast and text warmth. Ember also uses a blue focus color so it
+cannot be mistaken for an amber warning. No new setting is needed: start the TUI
+normally. For example, `/theme` draws its title in neutral text and its highlighted
+row in the focus color; moving Down changes the selected row, and Enter saves the
+theme. A response's headings remain neutral after the picker closes.
 
-Code block tokens use `syntaxColors` (keyword `#c792ea`, string `#a5d6a7`,
-number `#f78c6c`, comment `#7a8a9c`, function `#82aaff`, type `#ffcb6b`,
-operator `#89ddff`) and inline code `#f2a97a`.
+Tool cards keep the compatibility group `toolColors.done`, equal to `success`.
+`diffColors` describes content changes rather than navigation: `add` (green,
+`#a5d6a7`) means added content; `remove` (red, `#f07878`) means removed content;
+`hunk` (neutral, `#e8edf3`) identifies diff location headers; `context` (muted,
+`#9caab9`) means unchanged content. These are scoped to diff content, not selection.
+
+`syntaxColors` applies only to code grammar, with a deliberately small palette:
+
+| Syntax tokens | Default value | Meaning |
+| --- | --- | --- |
+| `keyword` | Purple, `#c792ea` | Language structure and control flow. |
+| `string`, `number`, `inlineCode` | Warm gold, `#d6bb8d` | Literal data: strings, numbers, booleans, and inline commands/identifiers. |
+| `function`, `type`, `operator` | Normal text, `#e8edf3` | Names and separators; no navigation-blue functions or cyan operators. |
+| `comment` | Gray, `#7a8a9c`, italic | Explanatory code comments. |
+
+Variables and ordinary punctuation use normal/muted text. Code highlighting
+never identifies the keyboard target; mouse selection uses its background without
+replacing the grammar foreground colors. Plain Markdown list markers use normal
+text, and checked items use `success`. The meaning of these roles stays the same
+in every theme; only the shades change.
 
 ## Themes
 
@@ -1632,10 +1659,10 @@ file when it starts.
 
 | Name | Kind | Look |
 | --- | --- | --- |
-| `hya` | dark | The default: terminal background, light text and cyan accents (the palette in [Layout](#layout)). |
+| `hya` | dark | The default: terminal background, light text and blue focus highlights (the palette in [Layout](#layout)). |
 | `light` | light | Dark text (`#1f2933`) for terminals with a light background. |
 | `contrast` | dark | White text and saturated accents on the terminal background. |
-| `ember` | dark | Warm text and amber accents on the terminal background. |
+| `ember` | dark | Warm text and blue focus highlights on the terminal background. |
 
 All themes inherit the terminal background, including any transparency configured
 in your terminal emulator. No TUI setting is needed: restart the TUI to apply it.
@@ -1703,7 +1730,7 @@ interface TuiPreferences {
 
 **Interfaces for components.** `src/theme.ts` exports the palette of the
 theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
-`accent`, `border`, `error`, `warning`, `selection` — the mouse-selection
+`focus`, `heading`, `link`, `activity`, `success`, `border`, `error`, `warning`, `selection` — the mouse-selection
 background), `toolColors` (`done`), `diffColors`
 (`add`, `remove`, `hunk`, `context`), and `syntaxColors` (`keyword`,
 `string`, `number`, `comment`, `function`, `type`, `operator`,
@@ -1713,7 +1740,10 @@ repaints; a module-level copy (`const c = colors.fg`) is a snapshot that
 never updates. `themeName()` is the reactive name of the theme in effect,
 `currentTheme()` its `ThemeDefinition`, `setTheme(name)` switches (returns
 `false` for an unknown name), `themes` lists the built-ins, and
-`syntaxStylesFor(theme)` gives the Markdown/tree-sitter scope styles.
+`syntaxStylesFor(theme)` gives the Markdown/tree-sitter scope styles. The generic
+`colors.accent` property is replaced by `colors.focus`; use the specific role
+in every component. Extension trees accept the same foreground roles; the old
+`accent` token is retained only as an alias for `focus` (see [TUI extensions](tui-extensions.md#wire-contract-api_version-1)).
 `components/Markdown.tsx` keeps one OpenTUI `SyntaxStyle` per theme and, on
 a switch, sets it and rebuilds the blocks so fenced-code boxes repaint too.
 A new theme is one more `ThemeDefinition` entry in `themes` with every key
@@ -1773,8 +1803,8 @@ when a session opens and then kept current by the session stream: every
 todo tool call that changes the list (`todo__update_status`,
 `todo__update_content`, …) sends a durable `todoUpdated { items }` frame
 with the whole new list, which replaces the box's rows at once (no re-read). Each item is one line, a status
-glyph and its text: pending `○` (muted), in progress `◐` (accent),
-completed `✓` (green), blocked `✗` (muted — the `TodoStatus` enum has no
+glyph and its text: pending `○` (muted), in progress `◐` (activity),
+completed `✓` (green), blocked `✗` (warning — the `TodoStatus` enum has no
 `cancelled` status, so `blocked` takes the glyph and color that status would
 otherwise use). The box shows at most 6 items, then a `+N more` row, so a
 long list cannot push the `Context` section below the visible area. `/todos`
@@ -1843,11 +1873,11 @@ from the checkout used to build that `hya` binary.
 
 Each message in the transcript is drawn by role:
 
-- **User** prompts are panel-colored blocks with a heavy accent bar (`┃`) on
+- **User** prompts are panel-colored blocks with a heavy neutral bar (`┃`) on
   the left. A queued prompt (see below) uses a muted bar and text and a
   `queued` tag on its right.
 - **Assistant** messages start with a header, `● <agent> · <provider/model>`:
-  the agent name in the accent color, the model muted. The v1 server does not
+  the agent name in neutral heading text, the model muted. The v1 server does not
   fill `MessageInfo.agent` and `.model` yet, so the header shows the open
   session's agent and model. Then come the parts, in order, and at most one
   notice.
@@ -1864,7 +1894,7 @@ Each message in the transcript is drawn by role:
 | `FINISH_REASON_ERROR` or an `error` on the message | `✗ <code>: <message>` (error color), for example `✗ provider_error: http status 400: bad request`; `✗ Turn failed` when no error text was recorded. The error shows as soon as `errorReported` arrives. |
 
 **Markdown.** Assistant text is rendered by OpenTUI's built-in `<markdown>`
-renderable (`@opentui/core` 0.5.12): headings (accent, bold, `#` hidden),
+renderable (`@opentui/core` 0.5.12): headings (neutral, bold, `#` hidden),
 **bold**, *italic*, strikethrough, `inline code`, links (the label followed by
 the URL in parentheses, since terminals may not support hyperlinks), bullet
 and numbered lists with nested indentation, task lists, block quotes (a bar on
@@ -1881,10 +1911,10 @@ as plain text until it closes. When the reply finishes, its final text is
 parsed again from the start.
 
 A streamed ATX heading (`#` through `######` followed by a space) keeps its
-accent color and bold style as its text arrives. A marker-only chunk such as
+neutral heading color and bold style as its text arrives. A marker-only chunk such as
 `### ` waits for heading text instead of flashing literal hashes. For
 example, ask the model to reply with `### Summary` followed by a paragraph;
-the TUI shows `Summary` in accent as it streams, with no key or setting to
+the TUI shows `Summary` in neutral heading text as it streams, with no key or setting to
 enable. The input contract is unchanged: `partAppended {message, part,
 textDelta}` on the session event stream extends an assistant `text` part,
 `partReplaced {message, part, text}` may replace it, and `messageFinished`
@@ -2252,7 +2282,7 @@ explain these two functions:          ← Ctrl+J
 
 An input that starts with `!` runs the rest of the line as a shell command in
 the open session (a session is created first if none is open). The input box
-shows the shell mode while you type: its title reads `! shell`; its accent border
+shows the shell mode while you type: its title reads `! shell`; its focus-colored border
 continues to indicate keyboard focus, like an ordinary message. The command goes
 through the prompt queue like a prompt, so it waits while a turn runs.
 
@@ -2296,7 +2326,7 @@ then reads `Cancelled · Ready`.
 Type `@` and at least one character (at the start of the input or after a
 space) to see up to 8 files and directories under `--dir` whose relative
 path contains the text. The list is a `Files` box above the input; the
-selected row is marked `▸` in the accent color. Up/Down move the selection;
+selected row is marked `▸` in the focus color. Up/Down move the selection;
 Tab or Enter replaces the `@text` token with `@<relative path>` and a space;
 Esc closes the list until you edit the token again. The lookup runs 120 ms
 after the last keystroke. Matching is case-sensitive (the server's glob), and
@@ -2830,7 +2860,7 @@ Key order, first match wins:
 2. The command pane takes its own input and keys. An open `@file` list takes
    Up/Down, Tab, Shift+Tab (highlight up), Enter, and Esc.
 3. The prompt, with an empty input: `1`–`9` choose that option at once;
-   Up/Down move the highlight (`▸`, accent color); Enter chooses the
+   Up/Down move the highlight (`▸`, focus color); Enter chooses the
    highlighted option; Esc declines. With text in the input, a question takes
    Enter as its answer.
 4. The composer: history, sending, Esc's other meanings (return from a

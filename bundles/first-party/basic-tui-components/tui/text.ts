@@ -20,7 +20,7 @@ export function formatTokens(value: number): string {
   return `${(Math.floor(value / 100_000) / 10).toFixed(1).replace(/\.0$/, "")}M`;
 }
 
-/** One text node; `color` is a theme token (`fg`, `accent`, `muted`, `warning`, `error`, `success`, `border`). */
+/** One text node; `color` is a theme token (`fg`, `focus`, `heading`, `link`, `activity`, `muted`, `warning`, `error`, `success`, `border`). */
 export function text(value: string, color: string, action?: NodeAction): RenderNode {
   return { kind: "text", text: value, style: { color }, ...(action ? { action } : {}) };
 }

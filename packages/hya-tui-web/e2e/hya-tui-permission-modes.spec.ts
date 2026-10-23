@@ -11,7 +11,7 @@ import { dirname, join } from "node:path"
 import type { Tui } from "./harness"
 import { createSession, expectStatus, approverBundle, expect, hyaTui, statusSessionId, test, textStep, toolCardBlock, toolStep, type Backend } from "./hya"
 
-const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
+const colors = { fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", error: "#f07878", warning: "#e5c07b" }
 const narrow = { width: 690, height: 640 }
 const confirmLine = "Enable yolo? Every tool call runs without asking · Enter confirms · Esc cancels"
 
@@ -141,7 +141,7 @@ test.describe("/permissions picker", () => {
     await term.waitForText("2 of 2")
     await term.waitForText("↑↓ select · Enter chooses · Esc closes · type to filter")
     const highlighted = await at(term, "▸ ● Manual")
-    expect((await term.cell(highlighted.row, highlighted.col))?.fg).toBe(colors.accent)
+    expect((await term.cell(highlighted.row, highlighted.col))?.fg).toBe(colors.focus)
     await term.attach(testInfo, "picker")
 
     // Typing filters (the input does not receive the text).

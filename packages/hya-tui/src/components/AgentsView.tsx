@@ -13,7 +13,7 @@ import { keyboardOwner } from "../state/focus"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: AgentsViewNotice): string {
-  return notice.tone === "error" ? colors.error : notice.tone === "ok" ? colors.accent : colors.fg
+  return notice.tone === "error" ? colors.error : notice.tone === "ok" ? colors.success : colors.fg
 }
 
 function BusyLine(props: { busy: AgentsViewBusy }) {
@@ -24,7 +24,7 @@ function BusyLine(props: { busy: AgentsViewBusy }) {
   const seconds = () => Math.max(0, Math.floor((now() - props.busy.startedAt) / 1000))
   return (
     <text height={1} wrapMode="none">
-      <span style={{ fg: colors.accent }}>{frame()}</span>
+      <span style={{ fg: colors.activity }}>{frame()}</span>
       <span style={{ fg: colors.fg }}>{` ${props.busy.label}… ${seconds()}s`}</span>
       <span style={{ fg: colors.muted }}>{" · Esc cancels"}</span>
     </text>
@@ -59,8 +59,8 @@ export function AgentsView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "agents" ? colors.accent : colors.border}
-            title="Agents"
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "agents" ? colors.focus : colors.border}
+            titleColor={colors.heading} title="Agents"
             backgroundColor={colors.bg}
             flexDirection="column"
             paddingX={1}
@@ -79,9 +79,9 @@ export function AgentsView() {
                         const on = () => agent().row.agentId === open().agent
                         return (
                           <text height={1} wrapMode="none">
-                            <span style={{ fg: colors.accent }}>{on() ? "▸" : " "}</span>
-                            <span style={{ fg: colors.accent }}>{agent().row.agentId === current() ? "● " : "  "}</span>
-                            <span style={{ fg: on() ? colors.accent : colors.fg }}>{agentLine(agent().row, lineWidth())}</span>
+                            <span style={{ fg: colors.focus }}>{on() ? "▸" : " "}</span>
+                            <span style={{ fg: colors.fg }}>{agent().row.agentId === current() ? "● " : "  "}</span>
+                            <span style={{ fg: on() ? colors.focus : colors.fg }}>{agentLine(agent().row, lineWidth())}</span>
                           </text>
                         )
                       }}
@@ -103,7 +103,7 @@ export function AgentsView() {
               <text height={1} wrapMode="none">
                 <span style={{ fg: colors.muted }}>Filter </span>
                 <span style={{ fg: colors.fg }}>{open().filter}</span>
-                <span style={{ fg: colors.accent }}>{open().filtering ? "▏" : ""}</span>
+                <span style={{ fg: colors.focus }}>{open().filtering ? "▏" : ""}</span>
               </text>
             </Show>
             <text width="100%" wrapMode="word" fg={colors.muted}>{agentsViewHint(open())}</text>

@@ -73,8 +73,8 @@ export function Picker() {
             width={width()}
             zIndex={100}
             border
-            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "picker" ? colors.accent : colors.border}
-            title={open().contextMenu ? undefined : open().title}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "picker" ? colors.focus : colors.border}
+            titleColor={colors.heading} title={open().contextMenu ? undefined : open().title}
             backgroundColor={colors.panel}
             flexDirection="column"
             paddingX={1}
@@ -87,7 +87,7 @@ export function Picker() {
                     <text height={1} wrapMode="none">
                       <span style={{ fg: colors.muted }}>New title </span>
                       <span style={{ fg: colors.fg }}>{open().editValue ?? ""}</span>
-                      <span style={{ fg: colors.accent }}>▏</span>
+                      <span style={{ fg: colors.focus }}>▏</span>
                     </text>
                     <text height={1} wrapMode="none" fg={colors.muted}>Enter renames · Esc cancels</text>
                   </Show>
@@ -101,7 +101,7 @@ export function Picker() {
               <text height={1} wrapMode="none">
                 <span style={{ fg: colors.muted }}>Filter </span>
                 <span style={{ fg: colors.fg }}>{open().query}</span>
-                <span style={{ fg: colors.accent }}>▏</span>
+                <span style={{ fg: colors.focus }}>▏</span>
                 <span style={{ fg: colors.muted }}>{`  ${rows().length} of ${open().rows.length}`}</span>
               </text>
               <Show when={open().columns}>
@@ -115,17 +115,17 @@ export function Picker() {
                   const highlighted = () => item.at === open().index
                   return (
                     <text height={1} wrapMode="none" onMouseDown={(event) => { if (event.button === 0) controller.choosePickerRow(item.row) }}>
-                      <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
-                      <span style={{ fg: colors.accent }}>{item.row.current ? "● " : "  "}</span>
+                      <span style={{ fg: highlighted() ? colors.focus : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
+                      <span style={{ fg: colors.fg }}>{item.row.current ? "● " : "  "}</span>
                       <Show when={open().columns} fallback={
                         <>
-                          <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{pad(item.row.label)}</span>
+                          <span style={{ fg: highlighted() ? colors.focus : colors.fg }}>{pad(item.row.label)}</span>
                           <span style={{ fg: colors.muted }}>{tagWidth() ? `  ${padTag(item.row.tag)}` : ""}</span>
                           <span style={{ fg: colors.muted }}>{item.row.detail ? `  ${item.row.detail}` : ""}</span>
                         </>
                       }>
-                        <span style={{ fg: colors.accent }}>{column(item.row.shortcut ?? "", shortcutWidth())}</span>
-                        <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`  ${column(item.row.label, actionWidth())}`}</span>
+                        <span style={{ fg: highlighted() ? colors.focus : colors.muted }}>{column(item.row.shortcut ?? "", shortcutWidth())}</span>
+                        <span style={{ fg: highlighted() ? colors.focus : colors.fg }}>{`  ${column(item.row.label, actionWidth())}`}</span>
                         <span style={{ fg: colors.muted }}>{`  ${column(item.row.tag ?? "", scopeWidth())}`}</span>
                       </Show>
                     </text>
@@ -137,7 +137,7 @@ export function Picker() {
               </Show>
               <Show when={open().detailPane && highlighted()?.detail}>
                 <text width="100%" wrapMode="word" fg={colors.fg} marginTop={1}>
-                  <span style={{ fg: colors.accent }}>{`${highlighted()!.label}  `}</span>
+                  <span style={{ fg: colors.focus }}>{`${highlighted()!.label}  `}</span>
                   {highlighted()!.detail!}
                 </text>
               </Show>

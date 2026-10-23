@@ -48,12 +48,12 @@ function contextFields(status: NonNullable<ExtensionContext["status"]>): Field[]
   if (status.vim) {
     const mode = status.vim.normal ? "NORMAL" : "INSERT";
     const pending = status.vim.pending ? ` ${status.vim.pending}` : "";
-    add({ label: "Vim", value: `${mode}${pending}`, short: `-- ${mode} --${pending}`, tone: status.vim.normal ? "accent" : "plain", cut: "end", priority: 0 });
+    add({ label: "Vim", value: `${mode}${pending}`, short: `-- ${mode} --${pending}`, tone: "plain", cut: "end", priority: 0 });
   }
   add({ label: "Mode", value: status.mode.text, short: `mode ${status.mode.text}`, tone: status.mode.tone, cut: "end", priority: 0 });
   const session = status.session;
   const title = session ? session.title || session.id : status.ready ? "none" : "connecting…";
-  add({ label: "Session", value: title, short: title, tone: "accent", priority: 1 });
+  add({ label: "Session", value: title, short: title, tone: "strong", priority: 1 });
   if (session) {
     if (session.forked) add({ label: "Forked", value: session.forked.replace(/^forked /, ""), short: session.forked, cut: "end", priority: 9 });
     add({ label: "Agent", value: session.agent, short: session.agent, priority: 4 });
@@ -80,7 +80,7 @@ function contextFields(status: NonNullable<ExtensionContext["status"]>): Field[]
 }
 
 /** Box value color: plain and strong values in the text color, the rest in their theme color. */
-const boxColor = (tone: Tone): string => tone === "plain" || tone === "strong" ? "fg" : tone;
+const boxColor = (tone: Tone): string => tone === "plain" || tone === "strong" || tone === "accent" ? "fg" : tone;
 
 /** The Context pane: one row per field, the value cut to `width` minus the label column. */
 function contextBox(fields: readonly Field[], width: number): RenderNode {

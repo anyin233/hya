@@ -7,8 +7,8 @@ import type { Tui } from "./harness"
 import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep, toolStep } from "./hya"
 
 const colors = {
-  bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
-  error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#a5d6a7", inlineCode: "#f2a97a",
+  bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", heading: "#e8edf3", border: "#405366",
+  error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#d6bb8d", inlineCode: "#d6bb8d",
 }
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -25,7 +25,7 @@ async function at(term: Tui, needle: string) {
 test.describe("roles", () => {
   test.use({ model: { steps: [textStep("Plain answer from the assistant")] } })
 
-  test("user messages are panel blocks with an accent bar; assistant messages have an agent · model header", async ({ tui, backend }) => {
+  test("user messages are panel blocks with a neutral bar; assistant messages have an agent · model header", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "question from the user")
@@ -35,13 +35,13 @@ test.describe("roles", () => {
     const user = await at(term, "question from the user")
     const bar = await term.cell(user.row, user.col - 2)
     expect(bar?.char).toBe("┃")
-    expect(bar?.fg).toBe(colors.accent)
+    expect(bar?.fg).toBe(colors.border)
     expect((await term.cell(user.row, user.col))?.bg).toBe(colors.panel)
     expect((await term.cell(user.row, user.col))?.fg).toBe(colors.fg)
 
     const header = await at(term, "hya-main · fake/model")
     expect(header.row).toBeGreaterThan(user.row)
-    expect((await term.cell(header.row, header.col))?.fg).toBe(colors.accent)
+    expect((await term.cell(header.row, header.col))?.fg).toBe(colors.heading)
     expect((await term.cell(header.row, header.col + "hya-main · ".length))?.fg).toBe(colors.muted)
     const answer = await at(term, "Plain answer from the assistant")
     expect(answer.row).toBe(header.row + 1)
@@ -80,7 +80,7 @@ test.describe("markdown", () => {
     await term.waitForIdle()
 
     const heading = await at(term, "Release plan")
-    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.accent)
+    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.heading)
     expect((await term.cell(heading.row, heading.col))?.bold).toBe(true)
     expect(await term.find("# Release plan")).toBeNull()
 
@@ -197,7 +197,7 @@ test.describe("scrolling", () => {
     await expect.poll(async () => (await term.text()).includes("row 24 of the long reply")).toBe(false)
     await term.waitForText("↓ New messages below", 10_000)
     const hint = await at(term, "↓ New messages below")
-    expect((await term.cell(hint.row, hint.col))?.fg).toBe(colors.accent)
+    expect((await term.cell(hint.row, hint.col))?.fg).toBe(colors.muted)
     await term.attach(testInfo, "scrolled-up-hint")
 
     // The reply finishes while scrolled up: the view stays put.
