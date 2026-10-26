@@ -18,3 +18,4 @@
 ## Runtime
 
 - Fixed a redundant `TEAM QUIESCED` synthesis after the parent had already consumed subagent results through `wait` or `read channel://…`. Both delivery paths now acknowledge the resident supervisor after committing the inbox cursor, as automatic in-turn steering already does. Genuinely late unread mail still wakes the parent, and so does unread mail a `read channel://…` did not show (another channel, or beyond `last`).
+- In-memory stores keep their database when a cancelled query drops the pool's connection.
