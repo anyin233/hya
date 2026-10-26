@@ -26,6 +26,7 @@ import { batch } from "solid-js"
 import { HttpError, type HyaClient, type PromptAttachment } from "../client"
 import { assistantRole, toolCallsFinish, type FinishedInfo, type OverlayEffect } from "../state/overlay"
 import type { AppStore, QueuedPrompt } from "../state/store"
+import { subagentsWorking } from "../state/subagents"
 
 export interface TurnRunnerOptions {
   store: AppStore
@@ -201,9 +202,19 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
       await draining
     },
 
-    /** Cancel the running turn (`CancelTurn`); throws when none runs. */
+    /**
+     * Cancel the running turn (`CancelTurn`), which also stops every subagent
+     * below the session; with the session's own turn over, it stops just the
+     * working subagents. Throws when nothing runs.
+     */
     async cancel(): Promise<void> {
       const session = store.state.selected?.id
+      if (session && !store.state.running && subagentsWorking(store.state)) {
+        status("Stopping subagents…")
+        await client.cancelTurn(session, "current")
+        status("Stopped subagents · Ready")
+        return
+      }
       if (!session || !store.state.running) throw new Error("No active turn")
       cancelRequested = true
       status("Cancelling…")

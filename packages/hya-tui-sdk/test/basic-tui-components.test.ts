@@ -101,7 +101,7 @@ test("Sessions: a click opens the session, a right click asks for its menu", asy
 test("Todos: one line per item with its glyph and color", async () => {
   const panel = await open();
   expect(lines(await panel.render("todos"))).toEqual(["○ plan", "◐ build", "✗ wait", "✓ ship"]);
-  expect(texts(await panel.render("todos")).filter((_, index) => index % 2 === 0).map((node) => node.color)).toEqual(["muted", "accent", "muted", "success"]);
+  expect(texts(await panel.render("todos")).filter((_, index) => index % 2 === 0).map((node) => node.color)).toEqual(["muted", "activity", "warning", "success"]);
   await panel.context({ ...base, todos: [] });
   expect(lines(await panel.render("todos"))).toEqual(["No todos yet"]);
   panel.vm.dispose();
@@ -173,6 +173,7 @@ test("Project view: Tab completes a root path through fs.complete", async () => 
 
 test("Context: ordered labelled rows; occupancy warns at 80% and alarms at 95%", async () => {
   const panel = await open();
+  expect(texts(await panel.render("context", 40)).find((node) => node.text === "Work")?.color).toBe("fg");
   expect(lines(await panel.render("context", 40))).toEqual([
     "Mode     manual", "Session  Work", "Agent    build", "Model    acme/m1:high", "Messages 3",
     "Context  42% · 42k/100k", "Tokens   1.2k", "Dir      /home/me/work", "Branch   main",

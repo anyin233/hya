@@ -796,6 +796,30 @@ impl pb::session_server::Session for V1Grpc {
                 .await?,
         )
     }
+
+    async fn archive_subagent(
+        &self,
+        request: GrpcRequest<pb::ArchiveSubagentRequest>,
+    ) -> Result<GrpcResponse<pb::ArchiveSubagentResponse>, Status> {
+        let (ctx, inner) = split(request);
+        let session = field(&inner, "session");
+        into_response(
+            self.post(&ctx, &format!("/v1/sessions/{session}/archive"), &inner)
+                .await?,
+        )
+    }
+
+    async fn steer_subagent(
+        &self,
+        request: GrpcRequest<pb::SteerSubagentRequest>,
+    ) -> Result<GrpcResponse<pb::SteerSubagentResponse>, Status> {
+        let (ctx, inner) = split(request);
+        let session = field(&inner, "session");
+        into_response(
+            self.post(&ctx, &format!("/v1/sessions/{session}/steer"), &inner)
+                .await?,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -501,6 +501,204 @@ async fn mail_to_the_lead_mid_turn_is_delivered_at_the_turn_boundary() {
     assert_eq!(max_open_assistant(&events, root), 1);
 }
 
+/// Reading results during the lead turn must not trigger a redundant synthesis.
+#[tokio::test]
+async fn channel_read_during_lead_turn_does_not_repeat_synthesis() {
+    consumed_results_do_not_repeat_synthesis(false, false).await;
+}
+
+#[tokio::test]
+async fn wait_during_lead_turn_does_not_repeat_synthesis() {
+    consumed_results_do_not_repeat_synthesis(true, false).await;
+}
+
+#[tokio::test]
+async fn mail_after_channel_read_still_wakes_the_lead() {
+    consumed_results_do_not_repeat_synthesis(false, true).await;
+}
+
+async fn consumed_results_do_not_repeat_synthesis(via_wait: bool, late_mail: bool) {
+    let (engine, agent, provider) = engine_with_gate().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    provider.gate(root);
+
+    engine
+        .admit_user_prompt(root, "lead the team".to_string())
+        .await
+        .unwrap();
+    let lead = {
+        let engine = engine.clone();
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            engine
+                .run_turn(root, &agent, CancellationToken::new())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+        .await
+        .expect("lead turn reaches the provider");
+
+    register_main(&supervisor, &engine, &agent, root).await;
+    let scout = make_session(&engine, Some(root), "hya-task").await;
+    supervisor
+        .register_existing_resident(root, scout, "scout".to_string(), agent.clone(), None)
+        .await
+        .unwrap();
+    engine
+        .mail_send(
+            scout,
+            MailEndpoint::Handle("^parent".to_string()),
+            MailKind::Message,
+            "findings ready".to_string(),
+        )
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        assistant_starts(&engine, root).await,
+        1,
+        "mail must not open a concurrent lead turn"
+    );
+
+    if via_wait {
+        let (lifecycle, rx) = hya_tool::LifecyclePlane::new();
+        let service = tokio::spawn(hya_core::run_lifecycle_service(
+            engine.clone(),
+            supervisor.clone(),
+            rx,
+        ));
+        let outcome = lifecycle
+            .for_session(root)
+            .wait(
+                hya_tool::WaitSpec::parse(&serde_json::json!({"timeout_secs": 0}), true).unwrap(),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.mail.len(), 1);
+        assert!(outcome.mail[0].preview.contains("findings ready"));
+        service.abort();
+    } else {
+        let read = engine
+            .read_channel_history(root, "scout", None)
+            .await
+            .unwrap();
+        assert_eq!(read.messages[0].1, "findings ready");
+        assert_eq!(read.unread_remaining, 0);
+    }
+    if late_mail {
+        engine
+            .mail_send(
+                scout,
+                MailEndpoint::Handle("^parent".to_string()),
+                MailKind::Message,
+                "new findings after the read".to_string(),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    provider.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), lead)
+        .await
+        .expect("lead turn finishes")
+        .unwrap()
+        .unwrap();
+    if late_mail {
+        assert!(
+            eventually(|| async { provider.streams_for(root) == 2 }).await,
+            "new unread results must still wake the lead"
+        );
+        return;
+    }
+    // A bounded negative observation lets an erroneous wake start if queued.
+    // Poll against a deadline instead of `timeout`: cancelling a store read
+    // mid-query discards the in-memory pool's only connection, and with it
+    // the database.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    while tokio::time::Instant::now() < deadline {
+        assert!(
+            provider.streams_for(root) <= 1 && !has_quiesced_notice(&engine, root).await,
+            "already-read results must not trigger another synthesis"
+        );
+        tokio::task::yield_now().await;
+    }
+    let events = engine.replay(root).await.unwrap();
+    assert_eq!(max_open_assistant(&events, root), 1);
+}
+
+/// Reading one channel commits the whole inbox cursor, but it acknowledges
+/// only what it showed: a report that arrived on another channel keeps the
+/// lead's synthesis, so the lead still hears of it.
+#[tokio::test]
+async fn reading_another_channel_keeps_the_synthesis_for_unseen_mail() {
+    let (engine, agent, provider) = engine_with_gate().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    provider.gate(root);
+
+    engine
+        .admit_user_prompt(root, "lead the team".to_string())
+        .await
+        .unwrap();
+    let lead = {
+        let engine = engine.clone();
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            engine
+                .run_turn(root, &agent, CancellationToken::new())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+        .await
+        .expect("lead turn reaches the provider");
+
+    register_main(&supervisor, &engine, &agent, root).await;
+    let mut scouts = Vec::new();
+    for handle in ["scout", "other"] {
+        let scout = make_session(&engine, Some(root), "hya-task").await;
+        supervisor
+            .register_existing_resident(root, scout, handle.to_string(), agent.clone(), None)
+            .await
+            .unwrap();
+        scouts.push(scout);
+    }
+    for (scout, body) in [(scouts[0], "findings ready"), (scouts[1], "other report")] {
+        engine
+            .mail_send(
+                scout,
+                MailEndpoint::Handle("^parent".to_string()),
+                MailKind::Message,
+                body.to_string(),
+            )
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let read = engine
+        .read_channel_history(root, "scout", None)
+        .await
+        .unwrap();
+    assert_eq!(read.messages[0].1, "findings ready");
+
+    provider.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), lead)
+        .await
+        .expect("lead turn finishes")
+        .unwrap()
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(root) == 2 }).await,
+        "the unseen report on the other DM still wakes the lead"
+    );
+}
+
 /// Two `run_turn` calls on one session serialize: the second waits for the
 /// first to end instead of streaming beside it.
 #[tokio::test]

@@ -158,6 +158,46 @@ impl SessionEngine {
         self.turn_gate.cancel(session, cause)
     }
 
+    /// The user cancelled `session`: cancel its in-flight turn and those of
+    /// every live subagent below it (`cause: user_cancel`), and stop them so
+    /// the harness does not restart them — no mail wake, no quiescence
+    /// synthesis, and their parents' mail to them is refused — until the user
+    /// prompts or steers them ([`resume_after_user_stop`](Self::resume_after_user_stop)).
+    /// Nothing is archived. When none of them is running or owes a turn
+    /// nothing is stopped either. `false` when none of them had an active turn
+    /// and no stop took effect.
+    pub fn cancel_user_turn(&self, session: SessionId) -> bool {
+        let stopped = self
+            .archive_reviver()
+            .map(|reviver| reviver.stop_for_user(session))
+            .unwrap_or_default();
+        // A stop held back an owed turn even when no turn was in flight.
+        let mut cancelled = !stopped.is_empty();
+        cancelled |= self.cancel_turn(session, FinishCause::UserCancel);
+        for member in stopped.into_iter().filter(|member| *member != session) {
+            cancelled |= self.cancel_turn(member, FinishCause::UserCancel);
+        }
+        cancelled
+    }
+
+    /// Whether a [`cancel_user_turn`](Self::cancel_user_turn) stop holds
+    /// `session`: nothing but the user may start its next turn.
+    #[must_use]
+    pub fn stopped_by_user(&self, session: SessionId) -> bool {
+        self.archive_reviver()
+            .is_some_and(|reviver| reviver.session_stopped_by_user(session))
+    }
+
+    /// The user acted on `session` again: lift a
+    /// [`cancel_user_turn`](Self::cancel_user_turn) stop from it and every
+    /// subagent below it. Their queued mail wakes them; the rest stay idle
+    /// until mailed.
+    pub fn resume_after_user_stop(&self, session: SessionId) {
+        if let Some(reviver) = self.archive_reviver() {
+            reviver.resume_for_user(session);
+        }
+    }
+
     /// Stop `session`'s in-flight turn with `cause` and wait (up to
     /// `deadline`) for it to close its own message; a turn still running at
     /// the deadline has its open messages closed here, as a drain would.

@@ -39,7 +39,7 @@ export default defineTuiExtension({
     api.registerPanel({
       id: "git", title: "Git",
       render: ({ context }) => ({ kind: "column", children: [
-        { kind: "text", text: `⎇ ${context.git?.branch ?? "detached"}`, style: { color: "accent", bold: true } },
+        { kind: "text", text: `⎇ ${context.git?.branch ?? "detached"}`, style: { color: "fg", bold: true } },
         { kind: "text", text: `${context.git?.dirty ?? 0} changed · ↑${context.git?.ahead ?? 0} ↓${context.git?.behind ?? 0}` },
       ] }),
     })
@@ -231,7 +231,7 @@ captured keys are delivered through `tui/key`. A handler can return
 `RenderNode` is a tagged object (`kind`):
 
 ```json
-{ "kind": "text", "text": "Review complete", "style": { "color": "accent", "bold": true }, "action": { "name": "open", "data": 3 } }
+{ "kind": "text", "text": "Review complete", "style": { "color": "success", "bold": true }, "action": { "name": "open", "data": 3 } }
 { "kind": "row", "children": [], "gap": 1 }
 { "kind": "column", "children": [] }
 { "kind": "box", "title": "Summary", "children": [], "padding": 1 }
@@ -249,15 +249,20 @@ warning can use `{ "kind": "text", "text": "Disk nearly full", "style": {
 "color": "warning" } }` inside a titled box and remains borderless.
 
 `style.color` and `style.background` are `#rrggbb` or a theme token (`fg`,
-`accent`, `muted`, `error`, `warning`, `success`, `border`). `gap` and `padding` are integers 0–100.
+`muted`, `focus`, `heading`, `link`, `activity`, `success`, `warning`, `error`, `border`).
+`focus` is reserved for selection/cursors; titles use `heading`, in-flight work
+uses `activity`, and successful notices use `success`. `accent` remains accepted
+as a legacy alias for `focus`. Color values are strings; `#rrggbb` remains valid
+for custom content styling. Native panes and extension trees resolve these tokens
+from the same reactive theme (see [Color roles](tui.md#layout)). `gap` and `padding` are integers 0–100.
 `action` (clickable text) needs `tui.action`; without it the text is drawn
 inert. `slot` is allowed only in decorating renderers, exactly once. The host
 rejects unknown kinds or fields, trees deeper than 32 or larger than 2000
 nodes, and strings over 32 KiB, and strips terminal escape and control
 characters.
 Text in a `row` is clipped at the edge and never wraps; other text wraps at
-word boundaries. An unstyled clickable text is rendered as an accented,
-underlined link. A styled clickable text keeps exactly its supplied style.
+word boundaries. An unstyled clickable text is rendered as a neutral-colored,
+underlined link. A styled clickable text keeps its supplied style; the explicit `link` token also adds an underline.
 
 ## Catalog and files
 

@@ -210,6 +210,10 @@ struct SlotState {
     /// An `archive` is stopping this slot: it owes no more turns, whatever
     /// mail arrives before the archive marker commits.
     archiving: bool,
+    /// The user cancelled this slot's or an ancestor's turn: the harness
+    /// starts no turn on it (owed work stays queued) until the user acts on
+    /// it again with a prompt or a steer.
+    user_stopped: bool,
     /// How many of this handle's inbox messages have already been injected.
     cursor: usize,
     /// Epoch-ms of the last engine activity observed on the bus for this
@@ -582,7 +586,8 @@ impl TeamActor {
         }
         // A failed lead is never woken by the harness: its owed work (mail)
         // waits for the user to resume it.
-        if slot.has_work() && !(slot.is_main && lead_failed) {
+        // Nor is a slot the user stopped: its work waits for the user too.
+        if slot.has_work() && !(slot.is_main && lead_failed) && !slot.user_stopped {
             // Single active turn per session: when this session already has a
             // turn (e.g. the lead's own interactive turn while it is the main
             // actor), keep the owed work queued. The turn-boundary observer
@@ -804,6 +809,15 @@ impl TeamActor {
         if st.killed || st.busy != 0 || st.lead_failed {
             return;
         }
+        // Nor does a lead the user stopped: the user, not the harness, says
+        // what happens next (the synthesis re-fires after its next turn).
+        if st
+            .main_session
+            .and_then(|main| st.residents.get(&main))
+            .is_some_and(|slot| slot.user_stopped)
+        {
+            return;
+        }
         // A member (usually the lead) whose own turn is still running is not
         // idle, even when the supervisor did not start that turn. Quiescence
         // is re-checked when that turn's lease is released.
@@ -827,17 +841,26 @@ impl TeamActor {
         }
     }
 
-    /// In-turn steering consumed the lead's queued mail. Do not replay that
-    /// already-seen work as a quiescence synthesis wake when the lease ends.
-    fn on_mail_consumed(&self, session: SessionId) {
+    /// In-turn steering (or an explicit read, or `wait`) consumed the lead's
+    /// queued mail, as of the inbox snapshot taken after `mark` (the team's
+    /// `work_seq` then). Do not replay that already-seen work as a quiescence
+    /// synthesis wake when the lease ends. Work counted after `mark` was not in
+    /// that snapshot: it keeps its wake and its synthesis.
+    fn on_mail_consumed(&self, session: SessionId, mark: u64) {
         let mut st = self.lock();
         if st.main_session != Some(session) {
             return;
         }
-        if let Some(slot) = st.residents.get_mut(&session) {
+        if st.work_seq == mark
+            && let Some(slot) = st.residents.get_mut(&session)
+        {
             slot.pending = false;
         }
-        st.last_synth_work_seq = st.work_seq;
+        // Never move the synthesis mark backwards past a synthesis that
+        // already fired (`u64::MAX`: none has yet).
+        if st.last_synth_work_seq == u64::MAX || st.last_synth_work_seq < mark {
+            st.last_synth_work_seq = mark;
+        }
     }
 
     /// A turn on `session` ended (its lease was released). Deliver work that
@@ -876,6 +899,87 @@ impl TeamActor {
         if st.main_session == Some(session) {
             st.lead_failed = false;
         }
+    }
+
+    /// The sessions of `session`'s slot and every slot below it: the whole
+    /// team for the lead (or the root when it has no main slot).
+    fn subtree(st: &TeamState, root: SessionId, session: SessionId) -> Vec<SessionId> {
+        let handle = st
+            .residents
+            .get(&session)
+            .filter(|slot| !slot.is_main && session != root)
+            .map(|slot| slot.handle.clone());
+        if handle.is_none() && session != root {
+            return Vec::new();
+        }
+        st.residents
+            .iter()
+            .filter(|(_, slot)| {
+                handle.as_deref().is_none_or(|handle| {
+                    slot.handle == handle
+                        || slot
+                            .handle
+                            .strip_prefix(handle)
+                            .is_some_and(|rest| rest.starts_with(scope::PATH_SEPARATOR))
+                })
+            })
+            .map(|(member, _)| *member)
+            .collect()
+    }
+
+    /// The user cancelled `session`'s turn: stop its slot and every slot below
+    /// it. Their queued mail wakes stay owed but held (a pending synthesis is
+    /// dropped): the harness starts none of their turns until
+    /// [`resume_for_user`](Self::resume_for_user) delivers them. Returns the
+    /// stopped sessions, whose in-flight turns the caller cancels — none, and
+    /// nothing is stopped, when neither `session` nor any slot below it is
+    /// running or owes a turn (there is nothing to interrupt).
+    fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
+        let mut st = self.lock();
+        if st.killed {
+            return Vec::new();
+        }
+        let stopped = Self::subtree(&st, self.root, session);
+        let running = self.engine.turn_active(session)
+            || stopped.iter().any(|member| {
+                self.engine.turn_active(*member)
+                    || st.residents.get(member).is_some_and(|slot| {
+                        slot.status == SlotStatus::Busy || (slot.has_work() && !slot.user_stopped)
+                    })
+            });
+        if !running {
+            return Vec::new();
+        }
+        for member in &stopped {
+            if let Some(slot) = st.residents.get_mut(member) {
+                slot.user_stopped = true;
+                slot.synth_pending = false;
+            }
+        }
+        stopped
+    }
+
+    /// The user acted on `session` again (a prompt or a steer): lift the stop
+    /// from its slot and every slot below it, waking those with mail queued
+    /// before or during the stop.
+    fn resume_for_user(&self, session: SessionId) {
+        let mut st = self.lock();
+        for member in Self::subtree(&st, self.root, session) {
+            if let Some(slot) = st.residents.get_mut(&member)
+                && std::mem::take(&mut slot.user_stopped)
+                && slot.has_work()
+            {
+                slot.notify.notify_one();
+            }
+        }
+    }
+
+    /// Whether the user stopped the live slot at `handle`.
+    fn handle_stopped_by_user(&self, handle: &str) -> bool {
+        self.lock()
+            .residents
+            .values()
+            .any(|slot| slot.handle == handle && slot.user_stopped)
     }
 
     /// Mark the team killed and cancel every in-flight turn. Idempotent. Wakes all
@@ -2605,9 +2709,14 @@ fn unread_mail_rejection(
 /// the owning team re-wakes that slot if work was deferred behind the turn and
 /// re-checks quiescence.
 impl TurnBoundaryObserver for ResidentSupervisor {
-    fn mail_consumed(&self, session: SessionId) {
+    fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.team_with_resident(session)
+            .map(|team| team.lock().work_seq)
+    }
+
+    fn mail_consumed(&self, session: SessionId, mark: u64) {
         if let Some(team) = self.team_with_resident(session) {
-            team.on_mail_consumed(session);
+            team.on_mail_consumed(session, mark);
         }
     }
 
@@ -2642,6 +2751,50 @@ impl ArchiveReviver for ResidentSupervisor {
         body: String,
     ) -> Result<(), CoreError> {
         self.revive_child(root, parent, child_handle, body).await
+    }
+
+    async fn archive_member(
+        &self,
+        caller: SessionId,
+        target: &str,
+        reason: &str,
+    ) -> Result<ArchiveReceipt, CoreError> {
+        ResidentSupervisor::archive_member(self, caller, target, reason).await
+    }
+
+    async fn archive_member_for_user(
+        &self,
+        root: SessionId,
+        target: &str,
+    ) -> Result<ArchiveReceipt, CoreError> {
+        self.archive_member_noted(root, target, "archived by the user".to_string())
+            .await
+    }
+
+    fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
+        self.team_of(session)
+            .map(|team| team.stop_for_user(session))
+            .unwrap_or_default()
+    }
+
+    fn resume_for_user(&self, session: SessionId) {
+        if let Some(team) = self.team_of(session) {
+            team.resume_for_user(session);
+        }
+    }
+
+    fn stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
+        let team = self.teams().get(&root).cloned();
+        team.is_some_and(|team| team.handle_stopped_by_user(handle))
+    }
+
+    fn session_stopped_by_user(&self, session: SessionId) -> bool {
+        self.team_of(session).is_some_and(|team| {
+            team.lock()
+                .residents
+                .get(&session)
+                .is_some_and(|slot| slot.user_stopped)
+        })
     }
 
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError> {
@@ -2852,6 +3005,24 @@ impl ResidentSupervisor {
                 .get(&session)
                 .is_some_and(|slot| slot.archiving)
         })
+    }
+
+    /// Whether the user stopped `session`'s slot (see
+    /// [`ArchiveReviver::stop_for_user`]).
+    pub(crate) fn member_stopped_by_user(&self, root: SessionId, session: SessionId) -> bool {
+        self.teams().get(&root).cloned().is_some_and(|team| {
+            team.lock()
+                .residents
+                .get(&session)
+                .is_some_and(|slot| slot.user_stopped)
+        })
+    }
+
+    /// The team `session` belongs to: the one it leads, or the one it is a
+    /// member of.
+    fn team_of(&self, session: SessionId) -> Option<Arc<TeamActor>> {
+        let led = self.teams().get(&session).cloned();
+        led.or_else(|| self.team_with_resident(session))
     }
 
     /// Whether `caller`'s `wait` already reported `member` as stopped at the
@@ -3200,6 +3371,22 @@ impl ResidentSupervisor {
         target: &str,
         reason: &str,
     ) -> Result<ArchiveReceipt, CoreError> {
+        let note = if reason.trim().is_empty() {
+            "archived by parent".to_string()
+        } else {
+            format!("archived by parent: {}", reason.trim())
+        };
+        self.archive_member_noted(caller, target, note).await
+    }
+
+    /// [`archive_member`](Self::archive_member) with the archive `note`
+    /// recorded on the member row and handoff, naming who archived it.
+    async fn archive_member_noted(
+        &self,
+        caller: SessionId,
+        target: &str,
+        note: String,
+    ) -> Result<ArchiveReceipt, CoreError> {
         let (root, _) = self.engine.session_lineage(caller).await?;
         let caller_path = self.engine.resolve_handle(root, caller).await?;
         let projection = self.engine.read_projection(root).await?;
@@ -3226,11 +3413,6 @@ impl ResidentSupervisor {
                 resolved.handle
             )));
         }
-        let note = if reason.trim().is_empty() {
-            "archived by parent".to_string()
-        } else {
-            format!("archived by parent: {}", reason.trim())
-        };
         let mut descendants: Vec<(String, SessionId)> = projection
             .team
             .roster
@@ -3510,6 +3692,7 @@ impl ResidentSupervisor {
                         initial_directive: None,
                         pending_archive: None,
                         archiving: false,
+                        user_stopped: false,
                         synth_pending: false,
                         claim: None,
                         kill_finalized: false,
@@ -4043,6 +4226,7 @@ impl ResidentSupervisor {
                     initial_directive: initial,
                     pending_archive: None,
                     archiving: false,
+                    user_stopped: false,
                     synth_pending: false,
                     claim: Some(claim),
                     kill_finalized: false,
@@ -4114,6 +4298,7 @@ impl ResidentSupervisor {
                     initial_directive: None,
                     pending_archive: None,
                     archiving: false,
+                    user_stopped: false,
                     synth_pending: false,
                     claim: Some(recovered.claim),
                     kill_finalized: false,

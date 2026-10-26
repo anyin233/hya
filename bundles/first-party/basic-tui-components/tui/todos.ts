@@ -6,8 +6,8 @@ type Todo = NonNullable<ExtensionContext["todos"]>[number];
 
 const glyphs: Record<Todo["status"], string> = { pending: "○", in_progress: "◐", blocked: "✗", completed: "✓" };
 
-/** Pending and blocked muted, in progress accent, completed green. */
-const glyphColor = (status: Todo["status"]): string => status === "in_progress" ? "accent" : status === "completed" ? "success" : "muted";
+/** Pending muted, in progress activity, blocked warning, completed success. */
+const glyphColor = (status: Todo["status"]): string => status === "in_progress" ? "activity" : status === "completed" ? "success" : status === "blocked" ? "warning" : "muted";
 
 function render(todos: ExtensionContext["todos"], width: number): RenderNode {
   if (!todos?.length) return text("No todos yet", "muted");

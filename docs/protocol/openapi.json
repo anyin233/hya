@@ -910,6 +910,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/sessions/{session}/archive": {
+      "post": {
+        "operationId": "Session.ArchiveSubagent",
+        "summary": "Archive a subagent session on the user's behalf, as its team lead's",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.ArchiveSubagent",
+        "x-server-streaming": false
+      }
+    },
     "/v1/sessions/{session}/bundles/{bundle}/{path}": {
       "get": {
         "operationId": "BundleApi.InvokeSessionBundleApi.get",
@@ -1047,6 +1058,17 @@
           "Session"
         ],
         "x-grpc-method": "hya.v1.Session.RevertSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/steer": {
+      "post": {
+        "operationId": "Session.SteerSubagent",
+        "summary": "Steer a subagent session with a message from the user. It is delivered",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.SteerSubagent",
         "x-server-streaming": false
       }
     },
@@ -5174,6 +5196,54 @@
             "items": {
               "$ref": "#/components/schemas/RevertedFile"
             }
+          }
+        }
+      },
+      "ArchiveSubagentRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "ArchiveSubagentResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "cancelled_turn": {
+            "type": "boolean"
+          },
+          "descendants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SteerSubagentRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "SteerSubagentResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "from": {
+            "type": "string"
           }
         }
       },

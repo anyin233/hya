@@ -1157,6 +1157,24 @@ export class HyaClient {
     return this.request("GET", this.scoped("/v1/vcs"))
   }
 
+  /**
+   * `ArchiveSubagent` (`POST /v1/sessions/{id}/archive`): archive a subagent
+   * as its parent's `archive` tool does (turn cancelled, descendants first).
+   * `400 invalid_argument` for a root session or an archived subagent.
+   */
+  async archiveSubagent(session: string): Promise<{ handle?: string; cancelledTurn?: boolean; descendants?: string[] }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/archive`, { session })
+  }
+
+  /**
+   * `SteerSubagent` (`POST /v1/sessions/{id}/steer`): the user's message to a
+   * subagent, delivered on its parent's DM as `[user] <text>`; it wakes an
+   * idle subagent and revives an archived one.
+   */
+  async steerSubagent(session: string, text: string): Promise<{ from?: string }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/steer`, { session, text })
+  }
+
   async cancelTurn(session: string, turn: string): Promise<unknown> {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/cancel`, {})
   }

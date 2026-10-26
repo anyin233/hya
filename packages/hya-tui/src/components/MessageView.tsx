@@ -86,7 +86,7 @@ function UserMessage(props: { view: MessageView }) {
       flexDirection="column"
       border={["left"]}
       borderStyle="heavy"
-      borderColor={props.view.queued ? colors.muted : colors.accent}
+      borderColor={props.view.queued ? colors.muted : colors.border}
       backgroundColor={colors.panel}
       paddingLeft={1}
       paddingRight={1}
@@ -114,11 +114,11 @@ function AssistantMessage(props: { view: MessageView }) {
   return (
     <box width="100%" flexDirection="column">
       <text height={1} wrapMode="none">
-        <Show when={waitingForBody()} fallback={<span style={{ fg: colors.accent }}>● </span>}>
+        <Show when={waitingForBody()} fallback={<span style={{ fg: colors.muted }}>● </span>}>
           <RunningIcon />
-          <span style={{ fg: colors.accent }}> </span>
+          <span style={{ fg: colors.muted }}> </span>
         </Show>
-        <b style={{ fg: colors.accent }}>{name()}</b>
+        <b style={{ fg: colors.heading }}>{name()}</b>
         <span style={{ fg: colors.muted }}>{model() ? ` · ${model()}` : ""}</span>
       </text>
       <KeyedFor each={props.view.blocks}>
@@ -206,7 +206,7 @@ function StatusIcon(props: { status: ToolStatus | "waiting" }) {
 
 function RunningIcon() {
   const frame = useSpinner()
-  return <span style={{ fg: colors.accent }}>{frame()}</span>
+  return <span style={{ fg: colors.activity }}>{frame()}</span>
 }
 
 function iconGlyph(status: ToolStatus | "waiting"): string {
@@ -345,8 +345,9 @@ function TaskMemberRow(props: { link: TaskMemberLink }) {
   }
   const statusColor = () => {
     switch (status()) {
-      case "running": return colors.accent
-      case "idle": case "done": return toolColors.done
+      case "running": return colors.activity
+      case "idle": return colors.muted
+      case "done": return colors.success
       case "failed": return colors.error
       case "cancelled": return colors.warning
       default: return colors.muted
