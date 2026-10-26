@@ -24,11 +24,15 @@
 //!   finish; the wait says so once per stopped turn (`woke_by: stalled`, the
 //!   member `idle` under `running`) and a repeated wait blocks.
 //! - **User stops**: a target the user stopped (it or an agent above it was
-//!   cancelled) is listed `stopped_by_user` under `running` and never wakes
-//!   the wait — the caller is not prompted to restart what the user stopped.
+//!   cancelled) is listed `stopped_by_user` under `running`. It is not a
+//!   finish and not a stall — the caller is not prompted to restart what the
+//!   user stopped — but it is nothing left to wait on either: an `all` wait
+//!   completes once every other target finished, and a wait whose remaining
+//!   targets are all stopped returns `nothing_to_wait_for`.
 //! - Only `timeout_secs: 0` returns the current state without blocking;
 //!   `nothing_to_wait_for` returns at once when there is no target left to
-//!   wait on (no live subagent, or every target already finished).
+//!   wait on (no live subagent, or every target already finished or was
+//!   stopped by the user).
 //!
 //! The waiter usually runs INSIDE the lead's own turn (it is the model's tool
 //! call), holding that session's turn lease. It therefore never relies on a
@@ -134,6 +138,8 @@ pub(crate) async fn wait_for_members(
     let mail_only = targets.is_empty() && spec.wake_on_mail && caller != root;
     let deadline = tokio::time::Instant::now() + spec.timeout;
     loop {
+        // Taken before the snapshot below: work counted later stays owed.
+        let mark = engine.mail_mark(caller);
         // Shared cached fold: each wake folds only the root's new events.
         let projection = engine.read_projection_shared(root).await?;
         let standing = evaluate(
@@ -154,15 +160,21 @@ pub(crate) async fn wait_for_members(
             &standing,
             spec.wake_on_mail,
         );
+        // A target the user stopped will not finish until the user acts, so
+        // it is nothing to keep waiting on.
+        let only_stopped_running = standing
+            .running
+            .iter()
+            .all(|member| member.state == WaitMemberState::StoppedByUser);
         let members_done = match spec.mode {
             WaitMode::Any => !standing.finished.is_empty(),
-            WaitMode::All => !standing.finished.is_empty() && standing.running.is_empty(),
+            WaitMode::All => !standing.finished.is_empty() && only_stopped_running,
         };
         let new_stall = standing
             .stalled
             .iter()
             .any(|(member, last)| !supervisor.wait_stall_reported(caller, *member, *last));
-        let nothing_left = standing.finished.is_empty() && standing.running.is_empty();
+        let nothing_left = standing.finished.is_empty() && only_stopped_running;
         let woke_by = if members_done {
             Some(WaitWake::Members)
         } else if !inbox.mail.is_empty() {
@@ -170,7 +182,8 @@ pub(crate) async fn wait_for_members(
         } else if new_stall {
             Some(WaitWake::Stalled)
         } else if nothing_left && !mail_only {
-            // No live subagent, or every target already finished.
+            // No live subagent, or every target already finished or was
+            // stopped by the user.
             Some(WaitWake::NothingToWaitFor)
         } else if tokio::time::Instant::now() >= deadline {
             Some(WaitWake::Timeout)
@@ -190,7 +203,7 @@ pub(crate) async fn wait_for_members(
                         },
                     )
                     .await?;
-                engine.notify_mail_consumed(caller);
+                engine.notify_mail_consumed(caller, mark);
             }
             for (member, last) in &standing.stalled {
                 supervisor.record_wait_stall(caller, *member, *last);

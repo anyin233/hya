@@ -194,6 +194,32 @@ impl SessionEngine {
         actor_claim: Option<&hya_store::ActorClaim>,
         channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
+        self.mail_send_checked(
+            from_session,
+            to,
+            kind,
+            body,
+            actor_claim,
+            channel_policy,
+            false,
+        )
+        .await
+    }
+
+    /// The mail send. `user_steer`: the user, not the sending agent, wrote
+    /// this mail, so a target the user stopped accepts it (it stays held
+    /// until the caller lifts the stop).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn mail_send_checked(
+        &self,
+        from_session: SessionId,
+        to: MailEndpoint,
+        kind: MailKind,
+        body: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
+        channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
+        user_steer: bool,
+    ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
         // ADR-0016 `dm` default: a subordinate omits `to` (or writes the
@@ -252,7 +278,7 @@ impl SessionEngine {
         }
         // A subagent the user stopped (`cancel_user_turn`) is not restarted
         // by mail from above it: the user decides when it continues.
-        if let Some(reviver) = self.archive_reviver() {
+        if !user_steer && let Some(reviver) = self.archive_reviver() {
             let peer = match &to {
                 MailEndpoint::Handle(handle) => {
                     Some(policy_projection.team.canonical_member(handle))
@@ -623,6 +649,8 @@ impl SessionEngine {
     ) -> Result<ChannelHistoryRead, CoreError> {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
+        // Taken before the snapshot below: work counted later stays owed.
+        let mark = self.mail_mark(session);
         let projection = self.read_projection(root).await?;
         // Models write `##X`, `#X`, or whitespace-padded ids when reading mail
         // history. Normalize (trim + strip every leading `#`; case stays
@@ -664,16 +692,25 @@ impl SessionEngine {
             .take(last_n)
             .map(|message| (message.from.clone(), message.body.clone()))
             .collect();
-        let inbox_len = projection
-            .team
-            .inboxes
-            .get(&handle)
-            .map_or(0, |inbox| inbox.len() as u64);
+        let inbox = projection.team.inboxes.get(&handle);
+        let inbox_len = inbox.map_or(0, |inbox| inbox.len() as u64);
         let cursor = projection
             .team
             .roster
             .get(&handle)
             .map_or(0, |entry| entry.resident_cursor);
+        // Whether this read showed every unread message: only then has the
+        // caller seen what the cursor commit below consumes.
+        let showed_all_unread = inbox.is_none_or(|inbox| {
+            inbox
+                .iter()
+                .skip(usize::try_from(cursor).unwrap_or(usize::MAX))
+                .all(|unread| {
+                    messages
+                        .iter()
+                        .any(|(from, body)| *from == unread.from && *body == unread.body)
+                })
+        });
         if cursor < inbox_len {
             self.emit_for_actor(
                 None,
@@ -687,8 +724,12 @@ impl SessionEngine {
             .await?;
             // Explicit reads consume mail before the next automatic steer
             // drain. Acknowledge that delivery to the supervisor as well,
-            // otherwise it schedules a synthesis for results already seen.
-            self.notify_mail_consumed(session);
+            // otherwise it schedules a synthesis for results already seen —
+            // but only when the read showed all of it: unread mail on other
+            // channels (or past `last`) keeps its wake and synthesis.
+            if showed_all_unread {
+                self.notify_mail_consumed(session, mark);
+            }
         }
         Ok(ChannelHistoryRead {
             channel: normalized,

@@ -241,7 +241,7 @@ pub enum WaitMemberState {
     Working,
     /// The user cancelled it (or an agent above it): it continues only when
     /// the user prompts or steers it, and mail from you is refused. Never
-    /// counts as finished, and never wakes a `wait`.
+    /// counts as finished or stalled, and a `wait` does not keep waiting on it.
     StoppedByUser,
 }
 

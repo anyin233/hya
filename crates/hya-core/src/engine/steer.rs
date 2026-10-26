@@ -361,6 +361,8 @@ impl SteerMailbox {
     /// Drain pending mail into a notice appended to a tool result, advancing
     /// the durable cursor via `MailConsumed`. `None` when nothing is pending.
     pub async fn drain(&mut self, engine: &SessionEngine) -> Result<Option<String>, CoreError> {
+        // Taken before anything below sees the inbox: work counted later stays owed.
+        let mark = engine.mail_mark(self.session);
         self.poll_live();
         if self.handle.is_empty() {
             return Ok(None);
@@ -393,7 +395,7 @@ impl SteerMailbox {
             )
             .await?;
         self.committed_through = through;
-        engine.notify_mail_consumed(self.session);
+        engine.notify_mail_consumed(self.session, mark);
         if shown.is_empty() {
             return Ok(None);
         }

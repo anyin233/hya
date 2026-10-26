@@ -372,10 +372,11 @@ async fn a_member_that_ends_its_turn_without_reporting_is_stalled_not_finished()
     assert!(again.finished.is_empty());
 }
 
-/// A member the user stopped mid-turn is not `stalled`: the wait does not
-/// wake the lead to restart it, and lists it as stopped by the user.
+/// A member the user stopped mid-turn is not `stalled` (the lead is not
+/// prompted to restart it) but it is nothing left to wait on: the wait returns
+/// `nothing_to_wait_for` at once and lists it as stopped by the user.
 #[tokio::test]
-async fn a_member_the_user_stopped_never_wakes_the_wait() {
+async fn a_wait_on_only_user_stopped_members_has_nothing_to_wait_for() {
     let team = team().await;
     let _lead_turn = hold_lead_turn(&team);
     let (child, handle) = spawn(&team, team.root, true).await;
@@ -387,12 +388,12 @@ async fn a_member_the_user_stopped_never_wakes_the_wait() {
     }
     assert!(team.engine.cancel_user_turn(child), "it is mid-turn");
     let started = std::time::Instant::now();
-    let outcome = wait(&team, team.root, json!({"timeout_secs": 1}), true).await;
+    let outcome = wait(&team, team.root, json!({"timeout_secs": 30}), true).await;
     assert!(
-        started.elapsed() >= Duration::from_millis(900),
-        "a stopped member must not end the wait: {outcome:?}"
+        started.elapsed() < Duration::from_secs(10),
+        "a stopped member must not hold the wait to its timeout: {outcome:?}"
     );
-    assert_eq!(outcome.woke_by, WaitWake::Timeout, "{outcome:?}");
+    assert_eq!(outcome.woke_by, WaitWake::NothingToWaitFor, "{outcome:?}");
     assert_eq!(outcome.running.len(), 1, "{outcome:?}");
     assert_eq!(outcome.running[0].handle, handle);
     assert_eq!(outcome.running[0].state, WaitMemberState::StoppedByUser);

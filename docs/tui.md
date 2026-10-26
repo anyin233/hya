@@ -2086,9 +2086,10 @@ keys stay in the selector.
 The selector also controls the selected subagent:
 
 - `x` interrupts its turn (`CancelTurn` on its session) and those of its own
-  subagents. It stays on the list, idle, and keeps what it has done. It stays
+  subagents; on an idle subagent it does nothing and says it is not running. It stays on the list, idle, and keeps what it has done. It stays
   stopped: its parent's mail to it is refused, and its parent's `wait` lists
-  it as stopped by the user instead of waking to restart it. Steer it to let it
+  it as stopped by the user instead of reporting it stalled, and stops
+  waiting on it. Steer it to let it
   continue. Esc in the message editor stops the parent and every subagent the
   same way.
 - `s` opens the command pane with `/subagents steer <session> ` so you can type a
@@ -2097,7 +2098,9 @@ The selector also controls the selected subagent:
   one wakes for it, and an archived one is revived by it.
 - `d` asks `Archive <name>? Enter confirms · any other key cancels`; Enter
   archives it as its parent's `archive` tool would (its turn is cancelled and
-  live nested subagents archive first). Steer it to wake it again. Alt+arrows navigate selectable panes as usual. A viewer
+  live nested subagents archive first), noted as archived by the user. If the
+  row leaves the list before you answer, Enter archives nothing. Steer it to
+  wake it again. Alt+arrows navigate selectable panes as usual. A viewer
 has no border and does not take keyboard focus. Scroll it with its mouse wheel, or
 with PgUp/PgDn (Home/End for the top and the newest line) while the selector is
 focused; those keys move the viewer Enter would pin to and leave the parent's

@@ -841,17 +841,26 @@ impl TeamActor {
         }
     }
 
-    /// In-turn steering consumed the lead's queued mail. Do not replay that
-    /// already-seen work as a quiescence synthesis wake when the lease ends.
-    fn on_mail_consumed(&self, session: SessionId) {
+    /// In-turn steering (or an explicit read, or `wait`) consumed the lead's
+    /// queued mail, as of the inbox snapshot taken after `mark` (the team's
+    /// `work_seq` then). Do not replay that already-seen work as a quiescence
+    /// synthesis wake when the lease ends. Work counted after `mark` was not in
+    /// that snapshot: it keeps its wake and its synthesis.
+    fn on_mail_consumed(&self, session: SessionId, mark: u64) {
         let mut st = self.lock();
         if st.main_session != Some(session) {
             return;
         }
-        if let Some(slot) = st.residents.get_mut(&session) {
+        if st.work_seq == mark
+            && let Some(slot) = st.residents.get_mut(&session)
+        {
             slot.pending = false;
         }
-        st.last_synth_work_seq = st.work_seq;
+        // Never move the synthesis mark backwards past a synthesis that
+        // already fired (`u64::MAX`: none has yet).
+        if st.last_synth_work_seq == u64::MAX || st.last_synth_work_seq < mark {
+            st.last_synth_work_seq = mark;
+        }
     }
 
     /// A turn on `session` ended (its lease was released). Deliver work that
@@ -919,32 +928,40 @@ impl TeamActor {
     }
 
     /// The user cancelled `session`'s turn: stop its slot and every slot below
-    /// it. Their queued wakes are dropped (the mail stays in the inbox, read on
-    /// the next wake) and the harness starts none of their turns until
-    /// [`resume_for_user`](Self::resume_for_user). Returns the stopped
-    /// sessions, whose in-flight turns the caller cancels.
+    /// it. Their queued mail wakes stay owed but held (a pending synthesis is
+    /// dropped): the harness starts none of their turns until
+    /// [`resume_for_user`](Self::resume_for_user) delivers them. Returns the
+    /// stopped sessions, whose in-flight turns the caller cancels — none, and
+    /// nothing is stopped, when neither `session` nor any slot below it is
+    /// running or owes a turn (there is nothing to interrupt).
     fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
         let mut st = self.lock();
         if st.killed {
             return Vec::new();
         }
         let stopped = Self::subtree(&st, self.root, session);
+        let running = self.engine.turn_active(session)
+            || stopped.iter().any(|member| {
+                self.engine.turn_active(*member)
+                    || st.residents.get(member).is_some_and(|slot| {
+                        slot.status == SlotStatus::Busy || (slot.has_work() && !slot.user_stopped)
+                    })
+            });
+        if !running {
+            return Vec::new();
+        }
         for member in &stopped {
             if let Some(slot) = st.residents.get_mut(member) {
                 slot.user_stopped = true;
                 slot.synth_pending = false;
-                // A member that never ran keeps its first wake for later.
-                if slot.initial_directive.is_none() {
-                    slot.pending = false;
-                }
             }
         }
         stopped
     }
 
     /// The user acted on `session` again (a prompt or a steer): lift the stop
-    /// from its slot and every slot below it, waking those with mail that
-    /// arrived meanwhile.
+    /// from its slot and every slot below it, waking those with mail queued
+    /// before or during the stop.
     fn resume_for_user(&self, session: SessionId) {
         let mut st = self.lock();
         for member in Self::subtree(&st, self.root, session) {
@@ -2692,9 +2709,14 @@ fn unread_mail_rejection(
 /// the owning team re-wakes that slot if work was deferred behind the turn and
 /// re-checks quiescence.
 impl TurnBoundaryObserver for ResidentSupervisor {
-    fn mail_consumed(&self, session: SessionId) {
+    fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.team_with_resident(session)
+            .map(|team| team.lock().work_seq)
+    }
+
+    fn mail_consumed(&self, session: SessionId, mark: u64) {
         if let Some(team) = self.team_with_resident(session) {
-            team.on_mail_consumed(session);
+            team.on_mail_consumed(session, mark);
         }
     }
 
@@ -2740,6 +2762,15 @@ impl ArchiveReviver for ResidentSupervisor {
         ResidentSupervisor::archive_member(self, caller, target, reason).await
     }
 
+    async fn archive_member_for_user(
+        &self,
+        root: SessionId,
+        target: &str,
+    ) -> Result<ArchiveReceipt, CoreError> {
+        self.archive_member_noted(root, target, "archived by the user".to_string())
+            .await
+    }
+
     fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
         self.team_of(session)
             .map(|team| team.stop_for_user(session))
@@ -2755,6 +2786,15 @@ impl ArchiveReviver for ResidentSupervisor {
     fn stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
         let team = self.teams().get(&root).cloned();
         team.is_some_and(|team| team.handle_stopped_by_user(handle))
+    }
+
+    fn session_stopped_by_user(&self, session: SessionId) -> bool {
+        self.team_of(session).is_some_and(|team| {
+            team.lock()
+                .residents
+                .get(&session)
+                .is_some_and(|slot| slot.user_stopped)
+        })
     }
 
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError> {
@@ -3331,6 +3371,22 @@ impl ResidentSupervisor {
         target: &str,
         reason: &str,
     ) -> Result<ArchiveReceipt, CoreError> {
+        let note = if reason.trim().is_empty() {
+            "archived by parent".to_string()
+        } else {
+            format!("archived by parent: {}", reason.trim())
+        };
+        self.archive_member_noted(caller, target, note).await
+    }
+
+    /// [`archive_member`](Self::archive_member) with the archive `note`
+    /// recorded on the member row and handoff, naming who archived it.
+    async fn archive_member_noted(
+        &self,
+        caller: SessionId,
+        target: &str,
+        note: String,
+    ) -> Result<ArchiveReceipt, CoreError> {
         let (root, _) = self.engine.session_lineage(caller).await?;
         let caller_path = self.engine.resolve_handle(root, caller).await?;
         let projection = self.engine.read_projection(root).await?;
@@ -3357,11 +3413,6 @@ impl ResidentSupervisor {
                 resolved.handle
             )));
         }
-        let note = if reason.trim().is_empty() {
-            "archived by parent".to_string()
-        } else {
-            format!("archived by parent: {}", reason.trim())
-        };
         let mut descendants: Vec<(String, SessionId)> = projection
             .team
             .roster
