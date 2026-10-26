@@ -211,6 +211,11 @@ pub struct SessionStore {
     pool: sqlx::SqlitePool,
     runtime_owner: Arc<RuntimeOwnerState>,
     projections: Arc<ProjectionCache>,
+    /// In-memory stores only: an idle connection that keeps the database
+    /// alive. SQLite drops an in-memory database with its last connection,
+    /// and the pool closes its one connection when a query future is dropped
+    /// mid-flight (a cancelled turn), reconnecting to a fresh, empty database.
+    _memory_keeper: Option<Arc<Mutex<sqlx::SqliteConnection>>>,
 }
 
 /// One session row from `list_sessions`: id, time bounds, and event count.
@@ -280,6 +285,7 @@ impl SessionStore {
             pool,
             runtime_owner: Arc::new(RuntimeOwnerState::file(lock_path)),
             projections: Arc::new(ProjectionCache::new()),
+            _memory_keeper: None,
         })
     }
 
@@ -310,9 +316,12 @@ impl SessionStore {
 
     /// Open an in-memory store (single connection) and run migrations.
     pub async fn connect_memory() -> Result<Self, StoreError> {
+        // sqlx names each `:memory:` database uniquely in shared-cache mode,
+        // so connections from these options all reach the same database.
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")?
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(5));
+        let keeper = sqlx::ConnectOptions::connect(&opts).await?;
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)
@@ -322,6 +331,7 @@ impl SessionStore {
             pool,
             runtime_owner: Arc::new(RuntimeOwnerState::memory()),
             projections: Arc::new(ProjectionCache::new()),
+            _memory_keeper: Some(Arc::new(Mutex::new(keeper))),
         })
     }
 

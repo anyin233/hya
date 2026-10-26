@@ -56,13 +56,13 @@ test.describe("streamed Markdown heading", () => {
       const screen = await term.text()
       if (/^\s*###(?:\s|$)/m.test(screen)) rawHeadingFrame = screen
       const heading = await term.find("Stre")
-      if (heading && (await term.cell(heading.row, heading.col))?.fg !== "#73c8e8") unstyledHeadingFrame = screen
+      if (heading && (await term.cell(heading.row, heading.col))?.fg !== "#e8edf3") unstyledHeadingFrame = screen
       return screen.includes("After heading.")
     }, { intervals: [10], timeout: 20_000 }).toBe(true)
     await term.waitForIdle()
     await term.attach(testInfo, "settled-heading")
     expect(rawHeadingFrame, "the streamed heading briefly exposed its Markdown markers").toBe("")
-    expect(unstyledHeadingFrame, "the streamed heading briefly lost its accent color").toBe("")
+    expect(unstyledHeadingFrame, "the streamed heading briefly lost its heading color").toBe("")
   })
 })
 
