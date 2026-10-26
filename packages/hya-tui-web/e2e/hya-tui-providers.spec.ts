@@ -40,7 +40,7 @@ test.describe("hya TUI Provider View", () => {
     await term.press("?")
     await term.waitForText("Help · keys and commands")
     await term.type("/key")
-    await term.waitForText(/\/key\s+\[local\]\s+Open the Provider View/)
+    await term.waitForText(/\/key\s+\[login <provider>\]\s+\[local\]\s+Open the Provider View/)
     await term.press("Backspace")
     await term.press("Backspace")
     await term.press("Backspace")
@@ -59,7 +59,7 @@ test.describe("hya TUI Provider View", () => {
     await term.waitForText(/PROVIDER\s+PROTOCOL\s+KEY\s+STATUS\s+MODELS/)
     await term.waitForText(/hya\s+offline\s+no key\s+offline\s+1 model/)
     await term.waitForText("0 configured")
-    await term.waitForText("↑↓ move · Enter open · l ChatGPT login · a add · k key · x remove key · r refresh · / filter · Esc close")
+    await term.waitForText("↑↓ move · Enter open · a add · k login · x remove key · r refresh · / filter · Esc close")
     // The offline provider takes no key.
     await term.type("k")
     await term.waitForText("hya is the built-in offline provider")
@@ -349,8 +349,9 @@ for (const protocol of ["http", "grpc"] as const) {
 test(`Continue with ChatGPT starts a pending OAuth flow without terminal tokens over ${protocol}`, async ({ tui, backend }) => {
   const argv = protocol === "http" ? hyaTui(backend) : ["bun", tuiMain, "--grpc", new URL(backend.url).host, "--dir", backend.dir]
   const term = await tui(argv)
-  await openProviders(term)
-  await term.press("l")
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await term.type("/key login chatgpt")
+  await term.press("Enter")
   await term.waitForText("Continue with ChatGPT")
   await term.waitForText("https://auth.openai.com/api/accounts/authorize")
   await term.waitForText("Callback URL")
@@ -362,3 +363,24 @@ test(`Continue with ChatGPT starts a pending OAuth flow without terminal tokens 
 })
 
 }
+
+test("/key login deepseek opens the concealed key step with official defaults, and custom IDs ask for connection details", async ({ tui, backend }) => {
+  const term = await tui(hyaTui(backend))
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await term.type("/key login deepseek")
+  await term.press("Enter")
+  await term.waitForText("Login · deepseek · 4/4")
+  await term.waitForText("https://api.deepseek.com")
+  await term.waitForText("API key")
+  await term.type("dummy-concealed-key")
+  expect(await term.find("dummy-concealed-key")).toBeNull()
+  await term.press("Escape")
+  await term.waitForText("Cancelled")
+  await term.press("Escape")
+  await expect.poll(() => term.find("changes apply at once, no restart")).toBeNull()
+  await term.type("/key login custom-gateway")
+  await term.press("Enter")
+  await term.waitForText("Login · custom-gateway · 2/4")
+  await term.waitForText("Protocol")
+  expect((await config(backend))).not.toContain("api.deepseek.com")
+})

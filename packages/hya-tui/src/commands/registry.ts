@@ -28,8 +28,8 @@ export interface AppActions {
   switchProject(projectId: string): Promise<void>
   /** Re-read `ListProjects` into `state.projects` (also done on every `projectsUpdated` frame). */
   refreshProjects(): Promise<void>
-  /** Open the full-screen Provider View (`/key`; state/providers.ts, app/providers.ts). */
-  openProviders(): void
+  /** Open provider management, or enter the shared `/key login <provider>` flow when a target is supplied. */
+  openProviders(loginProvider?: string): void
   /** Open the full-screen Diff View (`/diff`; state/diff.ts, app/diff.ts). */
   openDiff(): void
   /** Open the full-screen MCP view (`/mcp`; state/mcp.ts, app/mcp.ts). */

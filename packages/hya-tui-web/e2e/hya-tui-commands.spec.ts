@@ -33,7 +33,7 @@ test.describe("hya TUI commands and look", () => {
     await term.press("Enter")
     await term.waitForText("Help · keys and commands")
     await term.type("/key")
-    await term.waitForText(/\/key\s+\[local\]\s+Open the Provider View/)
+    await term.waitForText(/\/key\s+\[login <provider>\]\s+\[local\]\s+Open the Provider View/)
     await term.press("Escape")
     await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
 

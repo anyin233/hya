@@ -2131,6 +2131,6 @@ startup. `HYA_STARTUP_TRACE=1|true` continues to emit backend marks on stderr.
 `kind: openai-chatgpt` connects the official public Responses API using Sign in
 with ChatGPT and an explicit plan-usage grant. Its base is exactly
 `https://api.openai.com/v1`; models are discovered from that account. Run
-`hya oauth login --provider chatgpt --type openai-chatgpt`, or press `l` in `/key`.
+`hya oauth login --provider chatgpt --type openai-chatgpt`, or run `/key login chatgpt`.
 See [ChatGPT plan connection](chatgpt-plan.md) for an example, account/refresh
 metadata, logout, and the OAuth HTTP/RPC schemas.

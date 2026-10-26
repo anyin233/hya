@@ -1127,7 +1127,7 @@ export function createController({ client, store, directory, remote: startedRemo
     newTemporarySession: (agent, model) => newSession(agent, model, { temporary: true }),
     switchProject,
     refreshProjects,
-    openProviders: () => providers.open(),
+    openProviders: (provider) => providers.open(provider),
     openDiff: () => diffView.open(),
     openMcp: () => mcp.open(),
     openBundles: () => bundles.open(),

@@ -1010,6 +1010,7 @@ export function createAppStore() {
 
     completionContext(): CompletionContext {
       return {
+        providers: state.providers.map((provider) => provider.id),
         subagents: subagentRows(state).map((row) => row.id),
         panes: paneLeaves(state.paneLayout.root).map(({ id, kind }) => ({ id, kind })),
         layoutContainers: paneNodes(state.paneLayout.root).flatMap((node) => node.type === "pane" ? [] : [{ id: node.id, children: node.children.map((child) => child.node.id), removable: paneLeaves(node).every((pane) => pane.kind !== "conversation" && pane.kind !== "composer") }]),

@@ -187,13 +187,12 @@ export interface ProviderKeyRow {
 export const providerKeyRows: readonly ProviderKeyRow[] = [
   { keys: "Up / Down", description: "Move the highlight over providers or models", hint: "↑↓ move", screens: ["list", "detail"] },
   { keys: "Enter", description: "Open the highlighted provider's models", hint: "Enter open", screens: ["list"] },
-  { keys: "l", description: "Continue with ChatGPT: authorize use of your ChatGPT plan", hint: "l ChatGPT login", screens: ["list", "detail"] },
   { keys: "a", description: "Add a provider: name, protocol, base URL, key; its models are fetched right after", hint: "a add", screens: ["list"] },
   { keys: "t", description: "Test the highlighted model: sends hi with 1 output token and shows the reply, finish, and latency", hint: "t test", screens: ["detail"] },
   { keys: "m", description: "Add a model by hand (written to the provider's models: in config.yaml)", hint: "m add model", screens: ["detail"] },
   { keys: "e", description: "Edit the highlighted model's display name, context / output limits, and reasoning (config.yaml)", hint: "e edit", screens: ["detail"] },
   { keys: "d", description: "Delete the highlighted model's config.yaml entry (asks first); a remote model stays listed", hint: "d delete override", screens: ["detail"] },
-  { keys: "k", description: "Set or replace the provider's API key (hidden input; applies at once)", hint: "k key", screens: ["list", "detail"] },
+  { keys: "k", description: "Log in to the selected provider (same flow as /key login <provider>)", hint: "k login", screens: ["list", "detail"] },
   { keys: "x", description: "Remove the provider's saved key (asks first)", hint: "x remove key", screens: ["list", "detail"] },
   { keys: "r", description: "Fetch the provider's latest model list", hint: "r refresh", screens: ["list", "detail"] },
   { keys: "/", description: "Filter the rows by typing; Enter keeps the filter, Esc clears it", hint: "/ filter", screens: ["list", "detail"] },
@@ -606,15 +605,14 @@ export function providerViewKey(view: ProviderViewState, key: KeyLike, data: Pro
     return provider ? { type: "update", view: openProviderDetail(view, provider.id, data) } : { type: "none" }
   }
   const action = key.sequence
-  if (!"lakxrtmed".includes(action) || action.length !== 1) return { type: "none" }
+  if (!"akxrtmed".includes(action) || action.length !== 1) return { type: "none" }
   if (view.busy) return note(view, `Busy: ${view.busy.label} · Esc cancels`)
-  if (action === "l") return { type: "command", command: { kind: "login", provider: provider?.kind === "openai-chatgpt" ? provider.id : "chatgpt" } }
   if (action === "a") return { type: "update", view: { ...view, notice: undefined, form: addProviderForm(data.providers.map((row) => row.id)) } }
   if (!provider) return note(view, "No provider selected · a adds one")
   const offline = provider.id === offlineProviderId
   if (offline && "kxrmed".includes(action)) return note(view, "hya is the built-in offline provider: no key, no model list to fetch or edit")
   switch (action) {
-    case "k": return { type: "update", view: { ...view, notice: undefined, form: setKeyForm(provider.id) } }
+    case "k": return { type: "command", command: { kind: "login", provider: provider.id } }
     case "x":
       if (provider.keySource !== "saved" && provider.keySource !== "oauth") {
         return note(view, `${provider.id} has no saved key${provider.keySource === "config" ? " (its key comes from config.yaml)" : ""}`)

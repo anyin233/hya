@@ -18,10 +18,11 @@ and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-
 
 ## Connect from the TUI
 
-1. Run `/key`, then press **l** (lowercase L) for **Continue with ChatGPT**.
-   This uses provider name `chatgpt`, or reconnects the selected provider when
-   its kind is already `openai-chatgpt`. An existing provider with another kind
-   is never overwritten by login.
+1. Run **`/key login chatgpt`** for **Continue with ChatGPT**. For an existing
+   named ChatGPT connection use `/key login <provider-id>`. The common command
+   chooses authentication from that provider's configured protocol; it never
+   overwrites an existing URL or protocol. In `/key`, `k` logs in to the selected
+   provider through the same flow.
 2. Open the displayed authorization URL in your browser. Choose the account or
    workspace and allow ChatGPT plan usage. The callback listener already runs
    on the backend's `127.0.0.1` with a fresh available port.
@@ -35,7 +36,7 @@ and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-
    usage. The preview route does not accept an output-token cap, even though
    other providers' model tests request one.
 
-For example, `/key` → `l` → browser consent → Enter connects provider `chatgpt`.
+For example, `/key login chatgpt` → browser consent → Enter connects provider `chatgpt`.
 Run `/model`, select a `chatgpt/<account-model-slug>` row returned by the server,
 and say `hello`. No guessed model is saved when discovery fails; reconnect or
 refresh with `r` after resolving the error.
@@ -66,7 +67,7 @@ login is not part of this flow. Each provider label retains its own issued
 registration and validated identity; reconnecting must match that identity.
 Use a new provider label for a different account. In the TUI, add another named
 provider with protocol `openai-chatgpt`, the public base below and no API key,
-then select it and press `l`. Selecting its model selects that registration.
+then select it and press `k` (or run `/key login <provider-id>`). Selecting its model selects that registration.
 
 Removing the saved credential with `x` in `/key` attempts remote revocation and
 then clears the local tokens. A warning says when remote revocation was not

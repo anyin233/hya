@@ -1,6 +1,6 @@
-# 0.44.23-dev.7
+# 0.44.23-dev.8
 
-## Continue with ChatGPT
+## Provider login
 
-- In `/key`, press `l` to authorize ChatGPT plan usage, complete the browser login, and discover the account's available models without restarting. Supports a masked full callback URL for remote/SSH backends and separate named provider registrations. Requires backend 0.45.11.
-- Surface unconfirmed remote sign-out warnings after local credential removal.
+- Add `/key login <provider>` with nested completion for presets and configured IDs. ChatGPT uses browser authorization; new DeepSeek/OpenAI API connections open concealed key entry with defaults; custom names open connection setup. Existing routes retain their URL and protocol.
+- Replace the dedicated ChatGPT key with the shared provider-view `k` login action.

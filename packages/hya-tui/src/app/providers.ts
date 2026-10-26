@@ -17,6 +17,7 @@
  * the view with the new provider's first model highlighted.
  */
 import type { HyaClient } from "../client"
+import { providerLogin } from "../state/providerLogin"
 import { SecretEntry } from "../completion"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
@@ -53,6 +54,7 @@ type Outcome<T> = { ok: true; value: T } | { ok: false; cancelled: boolean; erro
 export function createProviderController({ store, client, refresh, pickModel }: ProviderControllerOptions) {
   const secret = new SecretEntry()
   let abort: AbortController | undefined
+  let generation = 0
 
   const view = (): ProviderViewState | undefined => store.state.providerView
   const data = () => ({ providers: store.state.providers, models: store.state.models })
@@ -72,13 +74,26 @@ export function createProviderController({ store, client, refresh, pickModel }: 
     }
   }
 
-  function open(): void {
+  function open(loginProvider?: string): void {
+    const opened = ++generation
+    abort?.abort()
     secret.clear()
     store.setProviderView(initialProviderView(store.state.providers))
-    void reload().then(() => patch((current) => current.provider ? current : initialProviderView(store.state.providers)))
+    void (async () => {
+      // Resolve the target against a fresh catalog before choosing setup or
+      // re-login: a stale list must not replace an existing provider's route.
+      await refresh()
+      if (generation !== opened || !view()) return
+      patch((current) => settleProviderView(current, data()))
+      if (!loginProvider) return
+      await command({ kind: "login", provider: loginProvider })
+    })().catch((error: unknown) => {
+      if (generation === opened) notify({ tone: "error", text: errorText(error) })
+    })
   }
 
   function close(): void {
+    generation++
     abort?.abort()
     abort = undefined
     secret.clear()
@@ -181,6 +196,8 @@ export function createProviderController({ store, client, refresh, pickModel }: 
   async function command(next: ProviderCommand): Promise<void> {
     if (next.kind === "login") {
       secret.clear()
+      const target = providerLogin(next.provider, store.state.providers)
+      if (target.kind === "form") { patch((current) => ({ ...current, form: target.form, notice: undefined })); return }
       const started = await run<{ authorizationUrl: string; state: string }>({ kind: "oauth", label: "Starting Continue with ChatGPT", provider: next.provider },
         (signal) => client.request("POST", `/v1/auth/${encodeURIComponent(next.provider)}/oauth/start`, {}, signal))
       if (!started.ok) { notify({ tone: "error", text: started.cancelled ? "Sign-in cancelled" : errorText(started.error) }); return }
@@ -215,7 +232,7 @@ export function createProviderController({ store, client, refresh, pickModel }: 
     secret.clear()
     if (!outcome.ok) {
       patch((current) => ({ ...current, form: undefined, oauth: undefined }))
-      notify({ tone: outcome.cancelled ? "info" : "error", text: `${outcome.cancelled ? "Sign-in cancelled locally; the backend may still finish received consent" : errorText(outcome.error)} · l starts a new login` })
+      notify({ tone: outcome.cancelled ? "info" : "error", text: `${outcome.cancelled ? "Sign-in cancelled locally; the backend may still finish received consent" : errorText(outcome.error)} · /key login ${oauth.provider} starts a new login` })
       await reload()
       return
     }
@@ -276,5 +293,5 @@ export function createProviderController({ store, client, refresh, pickModel }: 
     }
   }
 
-  return { open, close, key, paste, dispose: () => { abort?.abort(); secret.clear() } }
+  return { open, close, key, paste, dispose: () => { generation++; abort?.abort(); secret.clear() } }
 }

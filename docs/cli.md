@@ -1244,7 +1244,7 @@ uses OpenAI's dynamic registration and browser loopback flow for the public
 Responses API. `--no-browser` prints the URL without opening it; `--device` is
 not supported. `hya oauth logout <provider>` attempts revocation and removes
 local tokens while retaining the registration. The TUI offers the same login
-with `l` in `/key` and a concealed full-callback-URL field for SSH clients.
+with `/key login chatgpt` and a concealed full-callback-URL field for SSH clients.
 See [ChatGPT plan connection](chatgpt-plan.md) for the worked example, stored
 credential fields, refresh, and exact OAuth HTTP/RPC requests and responses.
 

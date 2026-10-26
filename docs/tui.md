@@ -683,7 +683,7 @@ where the reason identifies installation, catalog unavailability, or extension s
 | `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
 | Shift+Tab in a list | Move the highlight up in command suggestions, file lists and pickers. It does not switch the permission mode. |
-| `/key` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
+| `/key [login <provider>]` | Open the full-screen [Provider View](#provider-view): list providers, add one, set or remove a key, fetch a provider's models, test a model, add a model or edit its metadata. No arguments. |
 | `/diff` | Open the full-screen [Diff view](#diff-view): the working tree diff, split per file. |
 | `/mcp` | Open the full-screen [MCP servers](#mcp-servers) view: server status, tools, connect/disconnect, login. |
 | `/bundles` | Open the full-screen [Bundles](#bundles) view: every bundle of the scope with its components and TUI extension; install, uninstall, enable, disable, trust. |
@@ -3371,7 +3371,7 @@ key line wraps.
 | Up / Down | Move over providers | Move over models |
 | Enter | Open the provider | — |
 | `a` | Add a provider (the pop-up below) | — |
-| `k` | Set or replace the highlighted provider's API key | The open provider's |
+| `k` | Log in to the highlighted provider (OAuth or concealed key entry) | Log in to the open provider |
 | `x` | Remove the provider's saved key (asks first) | The open provider's |
 | `r` | Fetch the provider's latest model list | The open provider's |
 | `t` | — | Test the highlighted model |
@@ -3477,7 +3477,7 @@ Add a local OpenAI-compatible server and switch the session to it:
 
 ### Provider View interfaces
 
-**Continue with ChatGPT:** press `l` in `/key`, open the authorization URL, allow
+**Continue with ChatGPT:** run `/key login chatgpt`, open the authorization URL, allow
 ChatGPT plan usage, and press Enter to complete. Remote users may paste the full
 redirected callback URL into the concealed field. Then choose an account model
 with `/model`. This uses the existing OAuth start/callback API and requires
@@ -4182,3 +4182,58 @@ budget variables enforce milliseconds from the test wrapper’s `frontend_spawn`
 readiness. With neither variable set it verifies correctness without asserting
 hardware-dependent timing. Record whether the package/native cache and database
 were fresh; do not confuse repeated daemon starts with first-install latency.
+
+### Unified provider login commands
+
+`/key login <provider>` is the shared entry for provider authentication. It scales
+without adding a new command or dedicated key for each provider. `/key` still
+opens provider management; its `k` action uses the same login flow for the
+selected provider. `/key login` without a provider and unsupported arguments
+show `Usage: /key [login <provider>]` rather than opening an unrelated view.
+
+Type `/key ` to complete `login`, then `/key login ` to see built-in presets and
+configured provider IDs. For example:
+
+```text
+/key login chatgpt
+/key login deepseek
+/key login openai
+/key login my-gateway
+```
+
+- `chatgpt` starts browser authorization for ChatGPT plan usage (see
+  [ChatGPT plan connection](chatgpt-plan.md)).
+- New `deepseek` and `openai` connections open concealed key entry with the
+  connection defaults below. Nothing is saved or requested from the provider
+  until you submit the form. Their model lists come from discovery.
+- An existing provider retains its protocol and base URL. API providers open
+  key replacement; `openai-chatgpt` providers reauthorize the named account.
+- An unknown name such as `my-gateway` pre-fills that name in the existing
+  setup wizard and asks for protocol, URL, and optional key. After saving,
+  subsequent `/key login my-gateway` commands go directly to authentication.
+- Existing `openai-codex` and `grok-build` routes retain their CLI login flows;
+  the TUI shows the exact `hya oauth login --provider <id> --type <kind>` command
+  instead of replacing their OAuth credentials with a pasted API key.
+
+**Interfaces.** The command takes exactly `login` plus one provider ID, with the
+same 1–64 letters/digits/underscore/hyphen rule used by provider setup; `hya` is
+reserved. It uses the connected backend's existing OAuth or provider APIs,
+including over gRPC. Keys and callback URLs go into concealed fields, not slash
+arguments or command history. No backend contract or preference field is added.
+
+The table is implemented by `state/providerLogin.ts`'s shared
+`providerLoginPresets: readonly ProviderLoginPreset[]`, where each entry is
+`{id:string,kind:string,baseUrl:string,auth:"chatgpt"|"apiKey"}`. Completion uses
+`providerLoginNames(configured:string[])`; `providerLogin(id, configured)` returns
+`{kind:"oauth",provider:string}` or `{kind:"form",form:FormState}`. Configured
+providers take precedence over presets.
+
+| New provider ID | Kind | Base URL | Authentication |
+| --- | --- | --- | --- |
+| `chatgpt` | `openai-chatgpt` | `https://api.openai.com/v1` | Existing `StartOauth` / `CompleteOauth` flow |
+| `deepseek` | `openai` | `https://api.deepseek.com` | `UpsertProvider` with the concealed API key |
+| `openai` | `openai-response` | `https://api.openai.com/v1` | `UpsertProvider` with the concealed API key |
+
+Existing API-provider key replacement uses `SetProviderAuth`; new declarations
+use `UpsertProvider`, which applies the route live and discovers models. The
+DeepSeek default follows its [official connection guide](https://api-docs.deepseek.com/quick_start/agent_integrations/).

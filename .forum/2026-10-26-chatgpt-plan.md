@@ -2,7 +2,7 @@
 
 Use the new `openai-chatgpt` provider and OAuth type, backed by the public Responses API and OpenAI's dynamic registration flow. This is separate from existing API-key Responses and ChatGPT Codex backend routes. The implementation was based on origin/main 90bd9e47 after PR #33 merged.
 
-`hya oauth login --provider chatgpt --type openai-chatgpt` and `l` in `/key` share the same registration, verified OIDC identity, scope checks, protected credentials and refresh. The existing v1 OAuth methods now delegate through ProviderControl; their default trait methods remain unavailable for runtimes without a provider manager. Manual completion takes the entire callback URL so a new issued client_id can be validated; sending a bare code loses that information.
+`hya oauth login --provider chatgpt --type openai-chatgpt` and `/key login chatgpt` share the same registration, verified OIDC identity, scope checks, protected credentials and refresh. The existing v1 OAuth methods now delegate through ProviderControl; their default trait methods remain unavailable for runtimes without a provider manager. Manual completion takes the entire callback URL so a new issued client_id can be validated; sending a bare code loses that information.
 
 Never use dynamic_agent_client for token exchange or refresh. Save the issued registration before exchanging the code, preserve host ID and account mapping through sign-out, and reject returning sign-ins that change identity. State, nonce, PKCE, signed issuer/audience/expiry validation, plan-use scope checks and refresh serialization are required. Do not reuse Codex's hard-coded client ID or another tool's token store.
 

@@ -141,9 +141,9 @@ test("Continue with ChatGPT completes the existing OAuth API without putting cal
       models: [offlineModel, { id: "chatgpt/account-model", providerId: "chatgpt", modelId: "account-model", source: "remote" }] })
     return { status: "AUTH_STATUS_CREDENTIALED" } as never
   } }, { providers: [offline], models: [offlineModel] })
-  h.providers.open()
+  h.providers.open("chatgpt")
   await settle()
-  await h.press([key("l")])
+  await settle()
   expect(h.store.state.providerView?.form?.kind).toBe("chatgpt")
   expect(h.store.state.providerView?.oauth?.authorizationUrl).toContain("auth.openai.com")
   const callback = "http://127.0.0.1:1455/auth/callback?code=private-code&state=pending&client_id=issued"
@@ -156,4 +156,44 @@ test("Continue with ChatGPT completes the existing OAuth API without putting cal
   expect(h.store.state.providerView?.screen).toBe("detail")
   expect(h.picks).toEqual(["chatgpt"])
   expect(h.store.state.providers.find((p) => p.id === "chatgpt")?.keySource).toBe("oauth")
+})
+
+test("/key login deepseek asks only for its key and writes discovered connection defaults", async () => {
+  const sent: unknown[] = []
+  const h = harness({ upsertProvider: async (id, body) => { sent.push({ id, body }); return {} } }, { providers: [offline], models: [offlineModel] })
+  h.providers.open("deepseek")
+  await settle()
+  await settle()
+  expect(h.store.state.providerView?.form).toMatchObject({ kind: "addProvider", step: 3 })
+  h.providers.paste("test-private-key")
+  expect(JSON.stringify(h.store.state.providerView)).not.toContain("test-private-key")
+  await h.press([key("return")])
+  expect(sent).toEqual([{ id: "deepseek", body: { kind: "openai", baseUrl: "https://api.deepseek.com", apiKey: "test-private-key" } }])
+})
+
+test("login to a configured provider uses key replacement and never upserts its custom route", async () => {
+  const sent: unknown[] = []
+  const h = harness({ setProviderKey: async (provider, key) => { sent.push({ provider, key }); return {} } },
+    { providers: [offline, { id: "deepseek", kind: "openai-response", baseUrl: "http://custom.invalid/v1" }], models: [offlineModel] })
+  h.providers.open("deepseek")
+  await settle()
+  await settle()
+  expect(h.store.state.providerView?.form?.kind).toBe("setKey")
+  h.providers.paste("replacement")
+  await h.press([key("return")])
+  expect(sent).toEqual([{ provider: "deepseek", key: "replacement" }])
+})
+
+test("closing provider login while its catalog is loading does not reopen a stale login", async () => {
+  const store = createAppStore()
+  let release!: () => void
+  let requests = 0
+  const controller = createProviderController({ store, client: { request: async () => { requests++; return {} } } as unknown as HyaClient,
+    refresh: () => new Promise<void>((resolve) => { release = resolve }), pickModel: () => undefined })
+  controller.open("chatgpt")
+  controller.close()
+  release()
+  await settle()
+  expect(store.state.providerView).toBeUndefined()
+  expect(requests).toBe(0)
 })

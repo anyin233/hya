@@ -9,6 +9,8 @@ export interface CompletionContext {
   subagents?: string[]
   panes?: { id: string; kind: string }[]
   layoutContainers?: { id: string; children: string[]; removable: boolean }[]
+  /** Configured provider IDs; built-in login presets are added by /key. */
+  providers?: string[]
   backendCommands: string[]
   models: string[]
   /** Listed sessions; `/open` and `/resume` show a titled one as `title (id)`. */

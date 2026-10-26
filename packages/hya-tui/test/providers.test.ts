@@ -105,11 +105,10 @@ test("/ filters the list; Esc clears the filter before it closes the view", () =
   expect(cleared.view.filter).toBe("")
 })
 
-test("a opens the add-provider wizard; k the key form; x asks before removing a saved key", () => {
+test("a opens the add-provider wizard; k requests generic login; x confirms removal", () => {
   const start = initialProviderView(providers)
   expect(press(start, [key("a")]).view.form?.kind).toBe("addProvider")
-  const keyForm = press(start, [key("k")]).view.form
-  expect(keyForm).toMatchObject({ kind: "setKey", provider: "gw" })
+  expect(press(start, [key("k")]).outcomes).toEqual([{ type: "command", command: { kind: "login", provider: "gw" } }])
   const confirm = press(start, [key("x")]).view.form
   expect(confirm).toMatchObject({ kind: "confirm", action: "removeKey", provider: "gw" })
   expect(confirm?.confirmText).toContain("gw")
@@ -281,7 +280,7 @@ test("discovery and test results read as one line each", () => {
 
 test("the footer hint and the help rows come from one key table", () => {
   const list = providerViewHint(initialProviderView(providers))
-  for (const text of ["Enter", "a add", "k key", "r refresh", "Esc"]) expect(list).toContain(text)
+  for (const text of ["Enter", "a add", "k login", "r refresh", "Esc"]) expect(list).toContain(text)
   const detail = providerViewHint({ ...initialProviderView(providers), screen: "detail" })
   for (const text of ["t test", "m add model", "e edit", "d delete", "Esc back"]) expect(detail).toContain(text)
   const keys = providerKeyRows.map((row) => row.keys)

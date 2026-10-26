@@ -25,7 +25,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     newTemporarySession: async () => { calls.push("new temp") },
     switchProject: async (id) => { calls.push(`project ${id}`) },
     refreshProjects: async () => { calls.push("projects") },
-    openProviders: () => { calls.push("providers") },
+    openProviders: (provider) => { calls.push(provider ? `providers login ${provider}` : "providers") },
     openDiff: () => { calls.push("diff") },
     openMcp: () => { calls.push("mcp") },
     openBundles: () => { calls.push("bundles") },
@@ -120,9 +120,9 @@ test("/model on a config-pinned agent switches only the session", async () => {
 test("registers every native slash command with a description", () => {
   const { registry } = harness()
   for (const name of registry.names()) expect(registry.get(name)?.description.length).toBeGreaterThan(0)
-  // `/key` opens the Provider View and takes no arguments; `/keys` and `/login` are gone.
-  expect(registry.get("/key")?.argumentHint).toBeUndefined()
-  expect(registry.get("/key")?.complete).toBeUndefined()
+  // `/key login` extends the provider entry; standalone `/keys` and `/login` stay absent.
+  expect(registry.get("/key")?.argumentHint).toBe("[login <provider>]")
+  expect(registry.get("/key")?.complete).toBeDefined()
   expect(registry.get("/keys")).toBeUndefined()
   expect(registry.get("/login")).toBeUndefined()
 })
@@ -1006,4 +1006,21 @@ test("/subagents archived toggles or explicitly sets visibility and validates ar
   expect(h.registry.complete("/subagents archived ", h.store.completionContext())).toEqual([
     "/subagents archived hide", "/subagents archived show", "/subagents archived toggle",
   ])
+})
+
+test("/key login dispatches one provider target, completes configured IDs and presets, and rejects incomplete syntax", async () => {
+  const h = harness()
+  await h.run("/key login chatgpt")
+  await h.run("/key login deepseek")
+  expect(h.calls.slice(-2)).toEqual(["providers login chatgpt", "providers login deepseek"])
+  for (const text of ["/key login", "/key other deepseek", "/key login deepseek extra"]) {
+    await expect(h.run(text)).rejects.toThrow("Usage: /key [login <provider>]")
+  }
+  h.store.setProviderCatalog([{ id: "my-profile", kind: "openai-chatgpt" }, { id: "hya" }], [])
+  const context = h.store.completionContext()
+  expect(h.registry.complete("/key ", context)).toEqual(["/key login"])
+  expect(h.registry.complete("/key login ", context)).toEqual([
+    "/key login chatgpt", "/key login deepseek", "/key login my-profile", "/key login openai",
+  ])
+  expect(h.registry.complete("/key login d", context)).toEqual(["/key login deepseek"])
 })

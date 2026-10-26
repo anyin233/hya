@@ -1,4 +1,5 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
+import { providerLoginNames } from "../state/providerLogin"
 import { subagentsCommand } from "./subagents"
 import { brief, operations } from "../api"
 import { HttpError, parseApiCommand, type SessionInfo } from "../client"
@@ -766,7 +767,17 @@ export const nativeCommandSpecs: CommandSpec[] = [
   {
     name: "/key",
     description: "Open the Provider View: providers, keys, add a provider, fetch and test models, edit model metadata",
-    run: ({ actions }) => { actions.openProviders() },
+    argumentHint: "[login <provider>]",
+    complete: ({ words, current, head }, context) => {
+      if (words.length === 1) return matchValues(head, current, ["login"])
+      if (words.length === 2 && words[0] === "login") return matchValues(head, current, providerLoginNames(context.providers))
+      return []
+    },
+    run: ({ actions }, { args }) => {
+      if (!args.length) { actions.openProviders(); return }
+      if (args[0] !== "login" || args.length !== 2) throw new Error("Usage: /key [login <provider>]")
+      actions.openProviders(args[1])
+    },
   },
   {
     name: "/diff",
