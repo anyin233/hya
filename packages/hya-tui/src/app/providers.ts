@@ -19,6 +19,7 @@
 import type { HyaClient } from "../client"
 import { providerLogin } from "../state/providerLogin"
 import { SecretEntry } from "../completion"
+import { copyNotice } from "../composer/clipboard"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
 import {
@@ -43,6 +44,8 @@ import {
 export interface ProviderControllerOptions {
   store: AppStore
   client: HyaClient
+  /** Send text to the client terminal's clipboard, including over SSH. */
+  copyText(text: string): boolean
   /** The full catalog refresh (app/controller.ts `refresh`). */
   refresh(): Promise<void>
   /** Open the `/model` picker with `provider`'s first model highlighted; `onChosen` runs with the chosen `provider/model`. */
@@ -51,7 +54,7 @@ export interface ProviderControllerOptions {
 
 type Outcome<T> = { ok: true; value: T } | { ok: false; cancelled: boolean; error?: unknown }
 
-export function createProviderController({ store, client, refresh, pickModel }: ProviderControllerOptions) {
+export function createProviderController({ store, client, copyText, refresh, pickModel }: ProviderControllerOptions) {
   const secret = new SecretEntry()
   let abort: AbortController | undefined
   let generation = 0
@@ -194,6 +197,14 @@ export function createProviderController({ store, client, refresh, pickModel }: 
   }
 
   async function command(next: ProviderCommand): Promise<void> {
+    if (next.kind === "copyLoginUrl") {
+      const current = view()
+      if (current?.form?.kind !== "chatgpt" || !current.oauth) return
+      const url = current.oauth.authorizationUrl
+      const sent = copyText(url)
+      notify({ tone: sent ? "ok" : "error", text: sent ? "Login URL copied to clipboard" : copyNotice(url, false) })
+      return
+    }
     if (next.kind === "login") {
       secret.clear()
       const target = providerLogin(next.provider, store.state.providers)

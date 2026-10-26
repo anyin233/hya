@@ -23,8 +23,11 @@ and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-
    chooses authentication from that provider's configured protocol; it never
    overwrites an existing URL or protocol. In `/key`, `k` logs in to the selected
    provider through the same flow.
-2. Open the displayed authorization URL in your browser. Choose the account or
-   workspace and allow ChatGPT plan usage. The callback listener already runs
+2. Press **F2** in the login window to copy the full authorization URL and
+   paste it into your browser. Where OpenTUI recognizes hyperlink support,
+   you can also Ctrl+click the URL; its link target survives display wrapping.
+   Choose the account or workspace and allow ChatGPT plan usage.
+   The callback listener already runs
    on the backend's `127.0.0.1` with a fresh available port.
 3. Return to Hya and press Enter with the callback field empty. Hya waits for
    the local callback, verifies the signed identity and granted scopes, stores
@@ -37,6 +40,18 @@ and [preview limitations](https://developers.openai.com/siwc/token-sharing-open-
    other providers' model tests request one.
 
 For example, `/key login chatgpt` → browser consent → Enter connects provider `chatgpt`.
+For Windows Terminal over SSH, F2 sends the URL to the terminal on your local
+computer; it does not use a clipboard program on the remote host. The login
+window shows a copy notice. If your terminal disables OSC 52 clipboard writes,
+allow them in the terminal. The TUI can detect a local
+send failure, but cannot confirm that the terminal accepted the clipboard write.
+
+The current OpenTUI 0.5.12 native renderer does not recognize Windows Terminal
+XTVERSION as hyperlink-capable over SSH, so an explicit link alone does not
+guarantee Ctrl+click there. F2 is the supported Windows Terminal path while
+that upstream [terminal detection limitation](https://github.com/anomalyco/opentui/blob/v0.5.12/packages/native/src/terminal.zig) remains. This does not affect
+OAuth completion or the copied URL.
+
 Run `/model`, select a `chatgpt/<account-model-slug>` row returned by the server,
 and say `hello`. No guessed model is saved when discovery fails; reconnect or
 refresh with `r` after resolving the error.
@@ -131,3 +146,22 @@ ID-token verification checks OpenAI's JWKS signature, issuer, issued-client
 audience, expiry, required identity claims and the attempt's nonce. Tokens are
 never returned by these OAuth endpoints or copied from another application's
 credential store. The frontend requires backend **0.45.11** for this feature.
+
+## Login window terminal interface
+
+The authorization text carries OpenTUI hyperlink metadata for OSC 8, targeting the exact
+`StartOauth.authorizationUrl: string` returned by the backend. When emitted by the renderer, opening it is
+handled by the client terminal, without launching a browser on the backend host.
+The URL remains visible as text in terminals without hyperlink support.
+
+While the ChatGPT login form and a pending OAuth URL are present, unmodified
+**F2** invokes the contextual `ProviderCommand` `{kind: "copyLoginUrl"}`. It
+sends that same full URL, without display wrapping or truncation, through the
+existing terminal `copyText(text: string): boolean` transport (OSC 52 clipboard
+selection `c`, UTF-8 encoded as base64). A `true` transport result displays
+`Login URL copied to clipboard`; `false` displays the existing OSC 52 copy
+failure message. This is a send result, not a terminal clipboard acknowledgement.
+The action makes no RPC, changes no provider configuration, and leaves the
+concealed callback field intact. F2 outside this form has no provider copy
+action; Ctrl/Alt/Shift+F2 do not invoke it. Existing Enter/Esc behavior and
+HTTP/gRPC OAuth contracts are unchanged.

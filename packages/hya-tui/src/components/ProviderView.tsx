@@ -121,7 +121,9 @@ function FormBox(props: { view: ProviderViewState; form: FormState }) {
       paddingX={1}
     >
       <Show when={props.form.kind === "chatgpt" && props.view.oauth}>
-        {(oauth) => <text width="100%" wrapMode="word" fg={colors.fg}>{oauth().authorizationUrl}</text>}
+        {(oauth) => <text width="100%" wrapMode="word" fg={colors.fg}>
+          <a href={oauth().authorizationUrl}>{oauth().authorizationUrl}</a>
+        </text>}
       </Show>
       <Show
         when={props.form.kind !== "confirm"}
@@ -133,6 +135,9 @@ function FormBox(props: { view: ProviderViewState; form: FormState }) {
       </Show>
       <Show when={props.form.error}>
         <text width="100%" wrapMode="word" fg={colors.error}>{`✗ ${props.form.error}`}</text>
+      </Show>
+      <Show when={props.form.kind === "chatgpt" && props.view.notice}>
+        {(notice) => <text width="100%" wrapMode="word" fg={noticeColor(notice())}>{notice().text}</text>}
       </Show>
       <Show when={props.view.busy} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{providerViewHint(props.view)}</text>}>
         {(busy) => <BusyLine busy={busy()} />}
@@ -212,7 +217,7 @@ export function ProviderView() {
             <Show when={!open().form && open().busy}>
               {(busy) => <BusyLine busy={busy()} />}
             </Show>
-            <Show when={open().notice}>
+            <Show when={open().form?.kind !== "chatgpt" && open().notice}>
               {(notice) => <text width="100%" wrapMode="word" fg={noticeColor(notice())}>{notice().text}</text>}
             </Show>
             <Show when={open().filtering || open().filter}>

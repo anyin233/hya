@@ -45,7 +45,7 @@ export const providerProtocols: readonly ChoiceOption[] = [
   { id: "openai-response", label: "openai-response", detail: "OpenAI Responses API" },
   { id: "anthropic", label: "anthropic", detail: "Anthropic Messages API" },
   { id: "google", label: "google", detail: "Google Gemini API" },
-  { id: "openai-chatgpt", label: "openai-chatgpt", detail: "ChatGPT plan · public Responses API; connect with l" },
+  { id: "openai-chatgpt", label: "openai-chatgpt", detail: "ChatGPT plan · public Responses API; /key login chatgpt" },
 ]
 
 const reasoningOptions: readonly ChoiceOption[] = [
@@ -153,6 +153,7 @@ export interface ProviderData {
 }
 
 export type ProviderCommand =
+  | { kind: "copyLoginUrl" }
   | { kind: "login"; provider: string }
   | { kind: "refresh"; provider: string }
   | { kind: "test"; provider: string; model: string }
@@ -193,6 +194,7 @@ export const providerKeyRows: readonly ProviderKeyRow[] = [
   { keys: "e", description: "Edit the highlighted model's display name, context / output limits, and reasoning (config.yaml)", hint: "e edit", screens: ["detail"] },
   { keys: "d", description: "Delete the highlighted model's config.yaml entry (asks first); a remote model stays listed", hint: "d delete override", screens: ["detail"] },
   { keys: "k", description: "Log in to the selected provider (same flow as /key login <provider>)", hint: "k login", screens: ["list", "detail"] },
+  { keys: "F2", description: "Copy the authorization URL while the ChatGPT login form is open", screens: ["list", "detail"] },
   { keys: "x", description: "Remove the provider's saved key (asks first)", hint: "x remove key", screens: ["list", "detail"] },
   { keys: "r", description: "Fetch the provider's latest model list", hint: "r refresh", screens: ["list", "detail"] },
   { keys: "/", description: "Filter the rows by typing; Enter keeps the filter, Esc clears it", hint: "/ filter", screens: ["list", "detail"] },
@@ -577,6 +579,9 @@ const note = (view: ProviderViewState, text: string, tone: ProviderNotice["tone"
 /** One key while the Provider View is open (the controller runs commands and submissions). */
 export function providerViewKey(view: ProviderViewState, key: KeyLike, data: ProviderData): ProviderViewOutcome {
   if (view.form) {
+    if (view.form.kind === "chatgpt" && view.oauth && key.name === "f2" && !key.ctrl && !key.meta && !key.shift) {
+      return { type: "command", command: { kind: "copyLoginUrl" } }
+    }
     if (view.busy) return key.name === "escape" ? { type: "cancelBusy" } : { type: "none" }
     const outcome = formKey(view.form, key)
     if (outcome.type === "update") return { type: "update", view: { ...view, form: outcome.form } }
@@ -637,7 +642,7 @@ export function providerViewHint(view: ProviderViewState): string {
   const form = view.form
   if (form) {
     if (view.busy) return `${view.busy.label}… · Esc cancels`
-    if (form.kind === "chatgpt") return "Open the URL, allow ChatGPT plan usage, then Enter · SSH: paste the full callback URL · Esc cancels"
+    if (form.kind === "chatgpt") return "F2 copy URL · open in browser, allow ChatGPT plan usage, then Enter · SSH: paste the full callback URL · Esc cancels"
     if (form.kind === "confirm") return "Enter confirms · Esc cancels"
     const field = form.fields[form.step]
     const last = form.step + 1 >= form.fields.length

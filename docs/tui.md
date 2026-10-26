@@ -3477,8 +3477,13 @@ Add a local OpenAI-compatible server and switch the session to it:
 
 ### Provider View interfaces
 
-**Continue with ChatGPT:** run `/key login chatgpt`, open the authorization URL, allow
-ChatGPT plan usage, and press Enter to complete. Remote users may paste the full
+**Continue with ChatGPT:** run `/key login chatgpt` and press **F2** in the
+login window to copy the full authorization URL into your local clipboard
+(also over SSH). Allow ChatGPT plan usage in the browser and press Enter to
+complete. F2 sends the original URL through OSC 52 and shows copy feedback
+in the form. The URL also carries an explicit hyperlink where OpenTUI detects
+support; its current Windows Terminal over SSH detection has a limitation,
+so use F2 there. Remote users may paste the full
 redirected callback URL into the concealed field. Then choose an account model
 with `/model`. This uses the existing OAuth start/callback API and requires
 backend 0.45.11; see [ChatGPT plan connection](chatgpt-plan.md) for usage,

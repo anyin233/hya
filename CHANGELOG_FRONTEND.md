@@ -1,6 +1,6 @@
-# 0.44.23-dev.8
+# 0.44.23-dev.9
 
-## Provider login
+## Login links and clipboard
 
-- Add `/key login <provider>` with nested completion for presets and configured IDs. ChatGPT uses browser authorization; new DeepSeek/OpenAI API connections open concealed key entry with defaults; custom names open connection setup. Existing routes retain their URL and protocol.
-- Replace the dedicated ChatGPT key with the shared provider-view `k` login action.
+- Attach an explicit terminal hyperlink to the ChatGPT authorization URL so wrapped text retains its complete target where OpenTUI detects hyperlink support. Document its current Windows Terminal over SSH detection limitation.
+- Add F2 in the login form to copy the full authorization URL through OSC 52, including over SSH, with visible success or local failure feedback. Callback entry stays concealed and untouched.

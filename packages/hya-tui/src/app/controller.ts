@@ -1039,6 +1039,7 @@ export function createController({ client, store, directory, remote: startedRemo
   const providers = createProviderController({
     store,
     client,
+    copyText: (text) => terminal?.copy(text) ?? false,
     refresh,
     pickModel: (provider, onChosen) => openModelPicker({ store, client, actions }, { title: `Model · pick one of ${provider}'s models for this session`, highlight: provider, onChosen }),
   })

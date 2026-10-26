@@ -10,19 +10,21 @@ const key = (name: string, extra: Partial<KeyLike> = {}): KeyLike => ({
 const type = (text: string): KeyLike[] => [...text].map((char) => key(char, { sequence: char }))
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-function harness(client: Partial<HyaClient>, catalog: { providers: ProviderSummary[]; models: ModelSummary[] }) {
+function harness(client: Partial<HyaClient>, catalog: { providers: ProviderSummary[]; models: ModelSummary[] }, acceptsCopy = true) {
   const store = createAppStore()
   store.applyBootstrap({ agents: [{ name: "hya-main", model: { providerId: "hya", modelId: "offline" } }], models: catalog.models })
   const picks: string[] = []
+  const copies: string[] = []
   let current = catalog
   const providers = createProviderController({
     store,
     client: client as HyaClient,
+    copyText: (text) => { copies.push(text); return acceptsCopy },
     refresh: async () => { store.setProviderCatalog(current.providers, current.models) },
     pickModel: (provider) => { picks.push(provider) },
   })
   return {
-    store, picks, providers,
+    store, picks, copies, providers,
     setCatalog: (next: typeof catalog) => { current = next },
     press: async (keys: KeyLike[]) => { for (const pressed of keys) providers.key(pressed); await settle(); await settle() },
   }
@@ -149,6 +151,10 @@ test("Continue with ChatGPT completes the existing OAuth API without putting cal
   const callback = "http://127.0.0.1:1455/auth/callback?code=private-code&state=pending&client_id=issued"
   h.providers.paste(callback)
   expect(JSON.stringify(h.store.state.providerView)).not.toContain("private-code")
+  await h.press([key("f2")])
+  expect(h.copies).toEqual(["https://auth.openai.com/api/accounts/authorize?state=pending"])
+  expect(h.store.state.providerView?.notice?.text).toBe("Login URL copied to clipboard")
+  expect(h.store.state.providerView?.form?.fields[0]?.masked).toBe(callback.length)
   await h.press([key("return")])
   expect(calls[1]).toEqual({ path: "/v1/auth/chatgpt/oauth/callback", body: { state: "pending", code: callback } })
   expect(h.store.state.providerView?.form).toBeUndefined()
@@ -156,6 +162,22 @@ test("Continue with ChatGPT completes the existing OAuth API without putting cal
   expect(h.store.state.providerView?.screen).toBe("detail")
   expect(h.picks).toEqual(["chatgpt"])
   expect(h.store.state.providers.find((p) => p.id === "chatgpt")?.keySource).toBe("oauth")
+})
+
+test("login URL copy failure stays in the login form and modified F2 does not copy", async () => {
+  const h = harness({ request: async () => ({ authorizationUrl: "https://auth.openai.com/authorize?state=pending", state: "pending" }) as never },
+    { providers: [offline], models: [offlineModel] }, false)
+  h.providers.open("chatgpt")
+  await settle()
+  await settle()
+  await h.press([key("f2", { ctrl: true }), key("f2", { shift: true }), key("f2", { meta: true })])
+  expect(h.copies).toEqual([])
+  await h.press([key("f2")])
+  expect(h.copies).toEqual(["https://auth.openai.com/authorize?state=pending"])
+  expect(h.store.state.providerView?.notice).toMatchObject({ tone: "error", text: expect.stringContaining("OSC 52") })
+  expect(h.store.state.providerView?.form?.kind).toBe("chatgpt")
+  await h.press([key("escape"), key("f2")])
+  expect(h.copies).toHaveLength(1)
 })
 
 test("/key login deepseek asks only for its key and writes discovered connection defaults", async () => {
@@ -189,7 +211,7 @@ test("closing provider login while its catalog is loading does not reopen a stal
   let release!: () => void
   let requests = 0
   const controller = createProviderController({ store, client: { request: async () => { requests++; return {} } } as unknown as HyaClient,
-    refresh: () => new Promise<void>((resolve) => { release = resolve }), pickModel: () => undefined })
+    refresh: () => new Promise<void>((resolve) => { release = resolve }), pickModel: () => undefined, copyText: () => false })
   controller.open("chatgpt")
   controller.close()
   release()
