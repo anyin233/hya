@@ -85,9 +85,18 @@ async fn t2_31_wait_returns_when_the_worker_reports_inside_the_lead_turn() {
                 env.diagnostics()
             )
         });
-    env.wait_route_contains(ROOT, "ROOT_AFTER_WAIT", timeout)
-        .await
-        .unwrap_or_else(|error| panic!("lead did not continue: {error}; {}", env.diagnostics()));
+    // The lead's reply after the waits lands in its own transcript. No later
+    // request carries it: the waits consumed the report, so no TEAM QUIESCED
+    // synthesis follows.
+    hya_e2e::wait_until("lead continued past wait", timeout, || async {
+        Ok(env
+            .session_context(&session)
+            .await?
+            .to_string()
+            .contains("ROOT_AFTER_WAIT"))
+    })
+    .await
+    .unwrap_or_else(|error| panic!("lead did not continue: {error}; {}", env.diagnostics()));
     let dump = env.route_dump(ROOT).expect("root route");
     assert!(
         !dump.contains("[NEW MAIL · answer"),
