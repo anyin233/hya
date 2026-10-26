@@ -64,6 +64,7 @@ mod fork;
 mod handoff;
 mod mailbox;
 pub(crate) use mailbox::dm_channel_between;
+mod member_control;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
@@ -570,6 +571,69 @@ pub trait ArchiveReviver: Send + Sync {
     /// `root` and stop the resident tasks. Event emission happens engine-side
     /// before this is called.
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
+
+    /// Archive `target` (a handle or session id) on behalf of `caller`, as
+    /// the `archive` tool does: cancel its turn, archive live descendants
+    /// first, then the target itself.
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] when the target cannot be archived by `caller`,
+    /// or when this reviver does not supervise residents.
+    async fn archive_member(
+        &self,
+        caller: SessionId,
+        target: &str,
+        reason: &str,
+    ) -> Result<hya_tool::ArchiveReceipt, CoreError> {
+        let _ = (caller, target, reason);
+        Err(CoreError::Invalid(
+            "subagents are not supervised by this process".to_string(),
+        ))
+    }
+
+    /// Archive `target` (a handle or session id) on team `root` for the user,
+    /// as [`archive_member`](Self::archive_member) does for the lead, but
+    /// recorded as archived by the user, not by its parent.
+    ///
+    /// # Errors
+    /// As [`archive_member`](Self::archive_member).
+    async fn archive_member_for_user(
+        &self,
+        root: SessionId,
+        target: &str,
+    ) -> Result<hya_tool::ArchiveReceipt, CoreError> {
+        self.archive_member(root, target, "requested by the user")
+            .await
+    }
+
+    /// The user cancelled `session`'s turn: stop `session` and every live
+    /// subagent below it, so the harness starts none of their turns (mail
+    /// wakes, quiescence synthesis) until the user acts on them again.
+    /// Returns the stopped sessions, `session` included when it is
+    /// supervised; the caller cancels their in-flight turns.
+    fn stop_for_user(&self, session: SessionId) -> Vec<SessionId> {
+        let _ = session;
+        Vec::new()
+    }
+
+    /// The user acted on `session` again (a prompt or a steer): lift a
+    /// [`stop_for_user`](Self::stop_for_user) from it and its subtree.
+    fn resume_for_user(&self, session: SessionId) {
+        let _ = session;
+    }
+
+    /// Whether the user stopped the live member at `handle` on team `root`.
+    fn stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
+        let _ = (root, handle);
+        false
+    }
+
+    /// Whether the user stopped `session`'s own slot (see
+    /// [`stop_for_user`](Self::stop_for_user)).
+    fn session_stopped_by_user(&self, session: SessionId) -> bool {
+        let _ = session;
+        false
+    }
 }
 
 impl SessionEngine {
@@ -995,10 +1059,22 @@ impl SessionEngine {
         self.turn_gate.set_observer(observer);
     }
 
-    /// Notify the turn-boundary observer that this turn consumed its mail.
-    pub(crate) fn notify_mail_consumed(&self, session: SessionId) {
-        if let Some(observer) = self.turn_gate.observer() {
-            observer.mail_consumed(session);
+    /// The turn-boundary observer's work mark for `session`: take it before
+    /// snapshotting the inbox a read will consume, and pass it to
+    /// [`notify_mail_consumed`](Self::notify_mail_consumed).
+    pub(crate) fn mail_mark(&self, session: SessionId) -> Option<u64> {
+        self.turn_gate
+            .observer()
+            .and_then(|observer| observer.mail_mark(session))
+    }
+
+    /// Notify the turn-boundary observer that this turn consumed its mail up
+    /// to the snapshot taken after `mark` ([`mail_mark`](Self::mail_mark)).
+    pub(crate) fn notify_mail_consumed(&self, session: SessionId, mark: Option<u64>) {
+        if let Some(mark) = mark
+            && let Some(observer) = self.turn_gate.observer()
+        {
+            observer.mail_consumed(session, mark);
         }
     }
 

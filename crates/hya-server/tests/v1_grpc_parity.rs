@@ -555,3 +555,80 @@ fn urlencode(text: &str) -> String {
         })
         .collect()
 }
+
+/// `ArchiveSubagent` and `SteerSubagent` refuse what is no subagent the same
+/// way on both transports: a root session, and a child the supervisor does
+/// not run.
+#[tokio::test]
+async fn subagent_control_refusals_match_over_http_and_grpc() {
+    let app_state = state().await;
+    let app = router(app_state.clone());
+    let address = grpc_endpoint(app_state).await;
+    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut session = pb::session_client::SessionClient::new(channel);
+    let workdir = std::env::temp_dir().to_string_lossy().into_owned();
+    let (status, root) = http_json(
+        &app,
+        Method::POST,
+        "/v1/sessions",
+        json!({ "agent": "build", "model": "fake", "workdir": workdir }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    let root = root["session"]["id"].as_str().unwrap().to_owned();
+    let (status, child) = http_json(
+        &app,
+        Method::POST,
+        "/v1/sessions",
+        json!({ "parent": root, "agent": "build", "model": "fake", "workdir": workdir }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{child}");
+    let child = child["session"]["id"].as_str().unwrap().to_owned();
+
+    for (id, expected) in [(&root, "not a subagent"), (&child, "not supervised")] {
+        let (status, body) = http_json(
+            &app,
+            Method::POST,
+            &format!("/v1/sessions/{id}/archive"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], json!("invalid_argument"));
+        let message = body["error"]["message"].as_str().unwrap().to_owned();
+        assert!(message.contains(expected), "{message}");
+        let grpc = session
+            .archive_subagent(tonic::Request::new(pb::ArchiveSubagentRequest {
+                session: id.clone(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(grpc.code(), tonic::Code::InvalidArgument);
+        assert_eq!(grpc.message(), message);
+    }
+
+    let (status, body) = http_json(
+        &app,
+        Method::POST,
+        &format!("/v1/sessions/{root}/steer"),
+        json!({ "text": "hello" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let message = body["error"]["message"].as_str().unwrap().to_owned();
+    assert!(message.contains("not a subagent"), "{message}");
+    let grpc = session
+        .steer_subagent(tonic::Request::new(pb::SteerSubagentRequest {
+            session: child.clone(),
+            text: "  ".into(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(grpc.code(), tonic::Code::InvalidArgument);
+    assert!(grpc.message().contains("needs text"), "{}", grpc.message());
+}

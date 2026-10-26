@@ -18,6 +18,7 @@ import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { isKeyDisabled, resolveCommandBinding } from "../keys/custom"
 import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } from "../state/layout"
 import { paneLeaves } from "../state/panes"
+import { subagentsWorking } from "../state/subagents"
 import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
@@ -542,7 +543,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
+        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, subagentsWorking: subagentsWorking(store.state), inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()
@@ -717,10 +718,10 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     <box width="100%" flexShrink={0} flexDirection="column">
       <Show when={menu()}>
         {(open) => (
-          <box width="100%" flexShrink={0} border borderColor={colors.border} title="Files" backgroundColor={colors.panel} flexDirection="column" paddingX={1}>
+          <box width="100%" flexShrink={0} border borderColor={colors.border} titleColor={colors.heading} title="Files" backgroundColor={colors.panel} flexDirection="column" paddingX={1}>
             <For each={open().items}>
               {(path, row) => (
-                <text height={1} wrapMode="none" fg={row() === open().index ? colors.accent : colors.fg}>
+                <text height={1} wrapMode="none" fg={row() === open().index ? colors.focus : colors.fg}>
                   {`${row() === open().index ? "▸" : " "} ${path}`}
                 </text>
               )}
@@ -738,7 +739,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
       </Show>
       <Show when={store.state.secretEntry}>
         {(entry) => (
-          <box width="100%" height={4} flexShrink={0} border borderColor={colors.accent} title={entry().title} backgroundColor={colors.panel} paddingX={1} flexDirection="column">
+          <box width="100%" height={4} flexShrink={0} border borderColor={colors.focus} titleColor={colors.heading} title={entry().title} backgroundColor={colors.panel} paddingX={1} flexDirection="column">
             <text height={1} wrapMode="none" fg={colors.fg}>{secretMask(entry().length)}</text>
             <text height={1} wrapMode="none" fg={colors.muted}>{entry().hint}</text>
           </box>
@@ -749,8 +750,8 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         height={rows() + 2}
         flexShrink={0}
         border
-        borderColor={composerFocused() ? colors.accent : colors.border}
-        title={shell() ? "! shell" : undefined}
+        borderColor={composerFocused() ? colors.focus : colors.border}
+        titleColor={colors.heading} title={shell() ? "! shell" : undefined}
         backgroundColor={colors.panel}
         paddingX={1}
         visible={!store.state.secretEntry}
@@ -772,8 +773,8 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
           placeholder={readOnly() ? "Read-only subagent view · / opens commands · Esc returns" : "Message, !shell, or @file · / commands"}
           textColor={colors.fg}
           focusedTextColor={colors.fg}
-          cursorColor={colors.accent}
-          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
+          cursorColor={colors.focus}
+          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "line", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
           focused={composerFocused()}

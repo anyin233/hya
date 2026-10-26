@@ -4,11 +4,11 @@
 // "Messages".
 
 import type { Tui } from "./harness"
-import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep } from "./hya"
+import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep, toolStep } from "./hya"
 
 const colors = {
-  bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8",
-  error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#a5d6a7", inlineCode: "#f2a97a",
+  bg: "default", panel: "default", fg: "#e8edf3", muted: "#9caab9", heading: "#e8edf3", border: "#405366",
+  error: "#f07878", warning: "#e5c07b", keyword: "#c792ea", string: "#d6bb8d", inlineCode: "#d6bb8d",
 }
 
 async function prompt(term: Tui, text: string): Promise<void> {
@@ -25,7 +25,7 @@ async function at(term: Tui, needle: string) {
 test.describe("roles", () => {
   test.use({ model: { steps: [textStep("Plain answer from the assistant")] } })
 
-  test("user messages are panel blocks with an accent bar; assistant messages have an agent · model header", async ({ tui, backend }) => {
+  test("user messages are panel blocks with a neutral bar; assistant messages have an agent · model header", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "question from the user")
@@ -35,13 +35,13 @@ test.describe("roles", () => {
     const user = await at(term, "question from the user")
     const bar = await term.cell(user.row, user.col - 2)
     expect(bar?.char).toBe("┃")
-    expect(bar?.fg).toBe(colors.accent)
+    expect(bar?.fg).toBe(colors.border)
     expect((await term.cell(user.row, user.col))?.bg).toBe(colors.panel)
     expect((await term.cell(user.row, user.col))?.fg).toBe(colors.fg)
 
     const header = await at(term, "hya-main · fake/model")
     expect(header.row).toBeGreaterThan(user.row)
-    expect((await term.cell(header.row, header.col))?.fg).toBe(colors.accent)
+    expect((await term.cell(header.row, header.col))?.fg).toBe(colors.heading)
     expect((await term.cell(header.row, header.col + "hya-main · ".length))?.fg).toBe(colors.muted)
     const answer = await at(term, "Plain answer from the assistant")
     expect(answer.row).toBe(header.row + 1)
@@ -80,7 +80,7 @@ test.describe("markdown", () => {
     await term.waitForIdle()
 
     const heading = await at(term, "Release plan")
-    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.accent)
+    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.heading)
     expect((await term.cell(heading.row, heading.col))?.bold).toBe(true)
     expect(await term.find("# Release plan")).toBeNull()
 
@@ -197,7 +197,7 @@ test.describe("scrolling", () => {
     await expect.poll(async () => (await term.text()).includes("row 24 of the long reply")).toBe(false)
     await term.waitForText("↓ New messages below", 10_000)
     const hint = await at(term, "↓ New messages below")
-    expect((await term.cell(hint.row, hint.col))?.fg).toBe(colors.accent)
+    expect((await term.cell(hint.row, hint.col))?.fg).toBe(colors.muted)
     await term.attach(testInfo, "scrolled-up-hint")
 
     // The reply finishes while scrolled up: the view stays put.
@@ -224,5 +224,35 @@ test.describe("scrolling", () => {
     await expect.poll(async () => (await term.text()).includes("row 90 of the long reply")).toBe(false)
     await term.press("End")
     await term.waitForText("row 90 of the long reply")
+  })
+})
+
+test.describe("scrolling while a subagent works", () => {
+  test.use({ model: { steps: [] } })
+
+  // A busy child keeps the session list refreshing, which re-reads the open
+  // session's row; that is not a session switch and must not jump to the bottom.
+  test("a scrolled-up view stays put while session list refreshes arrive", async ({ tui, backend, fakeModel }) => {
+    const rows = Array.from({ length: 60 }, (_, index) => `early row ${index + 1}`).join("\n\n")
+    fakeModel!.route("NEVER call `report`", [
+      textStep(rows),
+      toolStep("task", { description: "busy helper", prompt: "keep busy", subagent_type: "hya-task" }),
+      textStep("Parent handed off."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [hangStep(40_000)])
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await prompt(term, "first")
+    await term.waitForText("early row 60", 20_000)
+    await term.waitForIdle()
+    await prompt(term, "delegate")
+    await term.waitForText("Parent handed off.", 20_000)
+    for (let page = 0; page < 4; page++) await term.press("PageUp")
+    await term.waitForText("early row 1")
+    // Several refreshes of the busy child's session list (about one per 1.5 s).
+    for (let tick = 0; tick < 8; tick++) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect(await term.find("early row 1")).not.toBeNull()
+    }
   })
 })

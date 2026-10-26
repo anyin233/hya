@@ -170,9 +170,9 @@ impl WaitSpec {
 #[must_use]
 pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
     let description = if wake_on_mail {
-        "Block until your subagents finish — a subagent finishes only when it calls `report` or is archived, never merely by going idle — OR new mail arrives for you (a message from a subagent or your parent, or a harness notice such as LEADER FAILED), whichever comes first, up to a timeout. Returns why it woke (`members`, `mail`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), the ones still running, and the new mail (each message is returned once and then marked read). `stalled` means a subagent ended its turn without reporting and has nothing queued: it will not continue until you `send` it mail (or `archive` it). Use it instead of polling `list_channel` or sleeping. Cancelling your turn aborts the wait."
+        "Block until your subagents finish — a subagent finishes only when it calls `report` or is archived, never merely by going idle — OR new mail arrives for you (a message from a subagent or your parent, or a harness notice such as LEADER FAILED), whichever comes first, up to a timeout. Returns why it woke (`members`, `mail`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), the ones still running, and the new mail (each message is returned once and then marked read). `stalled` means a subagent ended its turn without reporting and has nothing queued: it will not continue until you `send` it mail (or `archive` it). A subagent listed `stopped by the user` was stopped by the user: do not try to restart it; tell the user what you need instead. Use it instead of polling `list_channel` or sleeping. Cancelling your turn aborts the wait."
     } else {
-        "Block until your subagents finish — a subagent finishes only when it calls `report` or is archived, never merely by going idle — up to a timeout. Returns why it woke (`members`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), and the ones still running. `stalled` means a subagent ended its turn without reporting and has nothing queued: it will not continue until you mail it (or `archive` it). Use it instead of polling or sleeping. Cancelling your turn aborts the wait."
+        "Block until your subagents finish — a subagent finishes only when it calls `report` or is archived, never merely by going idle — up to a timeout. Returns why it woke (`members`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), and the ones still running. `stalled` means a subagent ended its turn without reporting and has nothing queued: it will not continue until you mail it (or `archive` it). A subagent listed `stopped by the user` was stopped by the user: do not try to restart it; tell the user what you need instead. Use it instead of polling or sleeping. Cancelling your turn aborts the wait."
     };
     ToolSchema {
         name: hya_proto::ToolName::new("wait"),
@@ -239,6 +239,10 @@ pub enum WaitMemberState {
     /// Running a turn, owing one, finishing an accepted report, or waiting on
     /// its own live subagents.
     Working,
+    /// The user cancelled it (or an agent above it): it continues only when
+    /// the user prompts or steers it, and mail from you is refused. Never
+    /// counts as finished or stalled, and a `wait` does not keep waiting on it.
+    StoppedByUser,
 }
 
 /// One target's state in a [`WaitOutcome`].
@@ -425,6 +429,12 @@ impl WaitOutcome {
                     member.handle
                 ));
             }
+            if member.state == WaitMemberState::StoppedByUser {
+                lines.push(format!(
+                    "- {} [stopped by the user: do not restart it; tell the user what you need from it]",
+                    member.handle
+                ));
+            }
         }
         let working: Vec<&str> = self
             .running
@@ -547,6 +557,7 @@ fn state_label(state: WaitMemberState) -> &'static str {
         WaitMemberState::Archived => "archived",
         WaitMemberState::Idle => "idle",
         WaitMemberState::Working => "working",
+        WaitMemberState::StoppedByUser => "stopped by the user",
     }
 }
 

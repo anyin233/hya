@@ -157,7 +157,9 @@ fn spawn_background_reclaim_driver(state: ServerState) {
                 Err(_) => break,
             };
             let Some(session) = session else { continue };
-            if state.is_busy(session) {
+            // A session the user stopped waits for the user: the admitted
+            // reclaim prompt is seen by the next turn the user starts on it.
+            if state.is_busy(session) || state.engine.stopped_by_user(session) {
                 continue;
             }
             let Some(run) = state.start_run(session) else {

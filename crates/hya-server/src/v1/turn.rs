@@ -184,6 +184,8 @@ async fn create_turn(
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
             // A new turn brings an archived session back.
             super::session::unarchive_for_turn(&st, session).await?;
+            // The user acts on the team again: lift a cancel's stop.
+            st.engine.resume_after_user_stop(session);
             let message = st
                 .engine
                 .admit_user_prompt_with_attachments(session, prompt.text, attachments)
@@ -239,6 +241,8 @@ async fn create_turn(
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
             // A new turn brings an archived session back.
             super::session::unarchive_for_turn(&st, session).await?;
+            // The user acts on the team again: lift a cancel's stop.
+            st.engine.resume_after_user_stop(session);
             let explicit_model = native_request.model_ref();
             if let Some(model) = &explicit_model {
                 st.engine.switch_model(session, model.clone()).await?;

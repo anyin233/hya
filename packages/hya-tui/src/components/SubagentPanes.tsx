@@ -4,6 +4,7 @@ import { AppContext, useApp, type PaneInputHandle } from "../app/context"
 import type { SessionView } from "../app/sessionViews"
 import { paneLeaves } from "../state/panes"
 import { subagentRows } from "../state/subagents"
+import { resolveBinding } from "../keys/bindings"
 import { isKeyOverridden } from "../keys/custom"
 import { colors } from "../theme"
 import { PaneFrame } from "./PaneFrame"
@@ -35,7 +36,28 @@ export function SubagentsPane(props: PaneRenderProps) {
     if (row) store.selectSubagent(row.id)
   }
   const command = (text: string) => { void controller.submit(text, "command") }
+  // `d` asks first: the next Enter archives this row, any other key keeps it.
+  const [confirmArchive, setConfirmArchive] = createSignal<string>()
   const input: PaneInputHandle = { onKey: (key) => {
+    const confirming = confirmArchive()
+    if (confirming) {
+      setConfirmArchive(undefined)
+      // Only the row the hint still names: one that left the list (archived
+      // elsewhere, or hidden) cancels the confirmation instead.
+      const shown = rows().some((row) => row.id === confirming)
+      if (shown && key.name === "return" && !key.ctrl && !key.meta && !key.shift) command(`/subagents archive ${confirming}`)
+      return
+    }
+    // Paging keys scroll the viewer Enter would pin to; the parent's transcript stays put.
+    const action = resolveBinding(key, { composerEmpty: true })
+    if (action === "pageUp" || action === "pageDown" || action === "scrollTop" || action === "scrollBottom") {
+      const viewer = controllerViewer()
+      const scroller = viewer ? ui.viewers?.get(viewer) : undefined
+      if (action === "pageUp" || action === "pageDown") scroller?.page(action === "pageUp" ? -1 : 1)
+      else if (action === "scrollTop") scroller?.top()
+      else scroller?.bottom()
+      return
+    }
     if (key.ctrl && !key.meta && !key.option && !key.super && !key.shift && key.name === "a") {
       command("/subagents archived")
       return
@@ -49,7 +71,15 @@ export function SubagentsPane(props: PaneRenderProps) {
       if (viewer) command(`/subagents pin ${viewer} ${rows()[index()]!.id}`)
       else command(`/subagents view ${rows()[index()]!.id}`)
     } else if (key.name === "n" && rows()[index()]) command(`/subagents view ${rows()[index()]!.id}`)
+    else if (key.name === "x" && rows()[index()]) command(`/subagents interrupt ${rows()[index()]!.id}`)
+    else if (key.name === "s" && rows()[index()]) ui.command?.open(`/subagents steer ${rows()[index()]!.id} `)
+    else if (key.name === "d" && rows()[index()]) {
+      const row = rows()[index()]!
+      if (row.archived) store.setStatus(`${row.label} is already archived · s steers it awake`)
+      else setConfirmArchive(row.id)
+    }
   } }
+  const archiveLabel = () => rows().find((row) => row.id === confirmArchive())?.label
   const controllerViewer = () => {
     const viewers = paneLeaves(store.state.paneLayout.root).filter((pane) => pane.kind === "subagent-viewer")
     return (viewers.find((pane) => !pane.session) ?? viewers[0])?.id
@@ -66,18 +96,24 @@ export function SubagentsPane(props: PaneRenderProps) {
           if (event.button !== 0) return
           event.stopPropagation(); store.setPaneLayout({ ...store.state.paneLayout, active: props.node.id }); store.selectSubagent(row.id)
         }}>
-          <text height={1} wrapMode="none" fg={at() === index() ? colors.accent : colors.fg}>{`${at() === index() ? "▸" : " "}${"  ".repeat(row.depth)}${row.label} · ${row.status}${row.archived ? " · archived" : ""}`}</text>
+          <text height={1} wrapMode="none" fg={at() === index() ? colors.focus : colors.fg}>{`${at() === index() ? "▸" : " "}${"  ".repeat(row.depth)}${row.label} · ${row.status}${row.archived ? " · archived" : ""}`}</text>
           <text height={1} wrapMode="none" fg={colors.muted}>{`  ${row.archived ? `${row.handle || row.id}${row.archiveReason ? ` · ${row.archiveReason}` : ""}` : row.activity || row.id}`}</text>
         </box>}</For>
       </Show>
     </scrollbox>
-    <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · Enter pin · n new viewer · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived`}</text>
+    <Show when={archiveLabel()} fallback={
+      <text height={2} flexShrink={0} wrapMode="word" fg={colors.muted}>{`↑↓ preview · Enter pin · n new · x interrupt · s steer · d archive · ${isKeyOverridden("Ctrl+A") ? "/subagents archived" : "Ctrl+A"} ${store.state.subagentsShowArchived ? "hide" : "show"} archived · PgUp/PgDn scroll`}</text>
+    }>
+      {(label) => <text height={2} flexShrink={0} wrapMode="word" fg={colors.warning}>{`Archive ${label()}? Enter confirms · any other key cancels`}</text>}
+    </Show>
   </PaneFrame>
 }
 
 /** Each instance owns its scrollbox; identical child sessions share their live watch. */
 export function SubagentViewer(props: PaneRenderProps) {
   const app = useApp()
+  // Read once: a closed pane's props are gone by the time its transcript cleans up.
+  const pane = props.node.id
   const [view, setView] = createSignal<SessionView>()
   const id = () => props.node.session ?? app.store.state.subagentSelection ?? subagentRows(app.store.state)[0]?.id
   const target = createMemo(() => {
@@ -99,7 +135,11 @@ export function SubagentViewer(props: PaneRenderProps) {
         openSession: async (child: string) => { if (subagentRows(app.store.state).some((row) => row.id === child)) app.store.selectSubagent(child) },
       } }}>
         <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{current.store.state.status || `${current.store.state.selected?.agent || "Loading"} · ${id()}`}</text>
-        <Transcript secondary />
+        <Transcript secondary scroller={(scroller, mounted) => {
+          app.ui.viewers ??= new Map()
+          if (mounted) app.ui.viewers.set(pane, scroller)
+          else if (app.ui.viewers.get(pane) === scroller) app.ui.viewers.delete(pane)
+        }} />
       </AppContext.Provider>}
     </Show>
   </PaneFrame>

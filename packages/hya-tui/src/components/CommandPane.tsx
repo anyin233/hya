@@ -72,12 +72,16 @@ export function CommandPane() {
     setMenu(undefined)
   }
 
-  function open(): void {
-    if (active()) return
+  function open(text?: string): void {
+    if (active()) {
+      if (text !== undefined) replace(text)
+      return
+    }
     originSidebar = store.state.projectsFocus
     ui.commandInput = { text: editor?.plainText ?? "", active: true, originSidebar }
     setActive(true)
-    if (!editor?.plainText.startsWith("/")) replace("/")
+    if (text !== undefined) replace(text)
+    else if (!editor?.plainText.startsWith("/")) replace("/")
     else updateMenu()
   }
 
@@ -167,7 +171,7 @@ export function CommandPane() {
   })
 
   return (
-    <box position="absolute" top={2} left={left()} width={width()} zIndex={90} flexShrink={0} border borderColor={keyboardOwner(store.state, active()) === "commands" ? colors.accent : colors.border} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
+    <box position="absolute" top={2} left={left()} width={width()} zIndex={90} flexShrink={0} border borderColor={keyboardOwner(store.state, active()) === "commands" ? colors.focus : colors.border} titleColor={colors.heading} title="Commands" backgroundColor={colors.panel} flexDirection="column" paddingX={1} visible={active()}>
       <input
         ref={(element: InputRenderable) => {
           editor = element
@@ -179,7 +183,8 @@ export function CommandPane() {
         placeholder="/command [arguments]"
         textColor={colors.fg}
         focusedTextColor={colors.fg}
-        cursorColor={colors.accent}
+        cursorColor={colors.focus}
+        cursorStyle={{ style: "line", blinking: true }}
         focused={keyboardOwner(store.state, active()) === "commands"}
         onSubmit={submit}
         onContentChange={sync}
@@ -188,7 +193,7 @@ export function CommandPane() {
         {(shown) => (
           <For each={shown().items}>
             {(entry, row) => (
-              <text height={1} wrapMode="none" fg={row() === shown().index ? colors.accent : colors.fg}>
+              <text height={1} wrapMode="none" fg={row() === shown().index ? colors.focus : colors.fg}>
                 {`${row() === shown().index ? "▸" : " "} ${entry.label}`}
               </text>
             )}

@@ -10,7 +10,7 @@ import type { Tui } from "./harness"
 import { expect, hangStep, hyaTui, toolCardBlock, test, textStep, toolStep, toolsStep, wideViewport } from "./hya"
 
 const colors = {
-  fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b",
+  fg: "#e8edf3", muted: "#9caab9", activity: "#9caab9", error: "#f07878", warning: "#e5c07b",
   done: "#a5d6a7", add: "#a5d6a7", remove: "#f07878",
 }
 
@@ -178,7 +178,7 @@ test.describe("running tool", () => {
     const running = await match(term, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
     const spinner = await term.cell(running.row, running.col)
     expect(spinner?.char).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
-    expect(spinner?.fg).toBe(colors.accent)
+    expect(spinner?.fg).toBe(colors.activity)
     await term.waitForText("Slept.", 20_000)
     await term.waitForText(toolCardBlock("✓", "bash", '"command":"sleep 2"'))
     const done = await at(term, "✓")
@@ -207,8 +207,8 @@ test.describe("subagents", () => {
     await term.waitForText(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running/, 15_000)
     await term.waitForText("↳ read notes.txt", 15_000)
     const status = await match(term, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running/)
-    expect((await term.cell(status.row, status.col))?.fg).toBe(colors.accent)
-    expect((await term.cell(status.row, status.col + 2))?.fg).toBe(colors.accent)
+    expect((await term.cell(status.row, status.col))?.fg).toBe(colors.activity)
+    expect((await term.cell(status.row, status.col + 2))?.fg).toBe(colors.activity)
     // The sidebar nests the child session under its parent.
     await term.waitForText("↳ 1.1 ")
     await term.attach(testInfo, "task-running")

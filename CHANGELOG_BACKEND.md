@@ -1,5 +1,5 @@
-# 0.45.8
+# 0.45.10
 
-## Storage
+## First-party TUI panes
 
-- Serialize bundle-registry migration discovery and application so concurrent first opens cannot apply the same migration twice. Setup retains its bounded lock retries and registry mutations remain fail-fast.
+- Use semantic colors in the basic TUI components: selection uses focus, progress uses activity, successful actions use success, blocked todos use warning, and Context values stay neutral.

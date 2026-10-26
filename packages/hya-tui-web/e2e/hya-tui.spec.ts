@@ -23,9 +23,9 @@ test.describe("hya TUI in the browser", () => {
     await term.waitForText("● hya-main · hya/offline", 20_000)
     await term.waitForText("No live provider is available")
     const text = await term.text()
-    // The user's prompt is a block with the accent bar, not a `user · stop` header.
+    // The user's prompt is a block with the neutral bar, not a `user · stop` header.
     const prompt = (await term.find("┃ hello from the browser"))!
-    expect((await term.cell(prompt.row, prompt.col))?.fg).toBe("#73c8e8")
+    expect((await term.cell(prompt.row, prompt.col))?.fg).toBe("#405366")
     expect(text).not.toContain("user · stop")
     // The offline model echoes the prompt back, so it shows up in both messages.
     expect(text.match(/hello from the browser/g)?.length ?? 0).toBeGreaterThanOrEqual(2)

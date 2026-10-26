@@ -48,6 +48,12 @@ communication half (ADR-0011).
   Per-team turn/message budget kills stay as the runaway backstop. An idle
   agent without a report is *never* auto-archived — it may be awaiting an
   answer from its parent.
+- **A user cancel stops the subtree without archiving it** (0.45.9). Cancelling
+  a session's turn cancels every live member's turn below it and holds them:
+  the harness starts none of their turns (mail wakes, quiescence synthesis)
+  and a parent's mail to a held member is refused, so the model cannot undo
+  the user's stop. Only the user lifts it — a new prompt on the session, or a
+  steer to the member. A user interrupt is never a stall.
 
 ## Consequences
 

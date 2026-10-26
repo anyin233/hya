@@ -5,7 +5,8 @@
  *
  * Scrolling: PgUp/PgDn, Home/End (with an empty
  * composer), and the mouse wheel. The key handler reaches the scroll actions
- * through `ui.transcript` (app/context.ts). When new content arrives below a
+ * through `ui.transcript` (app/context.ts); a secondary transcript hands them
+ * to its owner through `scroller` instead. When new content arrives below a
  * scrolled-up view, a `↓ New messages below` hint shows until the bottom is
  * reached again (state/scroll.ts).
  *
@@ -22,7 +23,7 @@ import { pageStep, ScrollFollow } from "../state/scroll"
 import { colors } from "../theme"
 import { KeyedFor, MessageItem } from "./MessageView"
 
-export function Transcript(props: { secondary?: boolean } = {}) {
+export function Transcript(props: { secondary?: boolean; scroller?: (scroller: TranscriptScroller, mounted: boolean) => void } = {}) {
   const { store, ui } = useApp()
   const renderer = useRenderer()
   const views = createMemo(() => transcriptViews(store.state))
@@ -44,6 +45,7 @@ export function Transcript(props: { secondary?: boolean } = {}) {
     },
   }
   if (!props.secondary) ui.transcript = scroller
+  props.scroller?.(scroller, true)
 
   // Once per rendered frame: raise or clear the "new messages below" hint.
   const onFrame = async (): Promise<void> => {
@@ -55,11 +57,14 @@ export function Transcript(props: { secondary?: boolean } = {}) {
   onCleanup(() => {
     renderer.removeFrameCallback(onFrame)
     if (ui.transcript === scroller) ui.transcript = undefined
+    props.scroller?.(scroller, false)
   })
 
   // A submitted prompt jumps to the newest line; another session starts at its bottom.
   createEffect(on(() => store.state.followTick, () => scroller.bottom(), { defer: true }))
-  createEffect(on(() => store.state.selected?.id, () => {
+  // A memo, so a refreshed row of the same session (setSessions) is not a switch.
+  const sessionId = createMemo(() => store.state.selected?.id)
+  createEffect(on(sessionId, () => {
     follow.reset()
     setUnseen(false)
     scroller.bottom()
@@ -95,7 +100,7 @@ export function Transcript(props: { secondary?: boolean } = {}) {
       </scrollbox>
       <Show when={unseen()}>
         <box position="absolute" bottom={0} right={2} height={1} backgroundColor={colors.panel} paddingX={1}>
-          <text fg={colors.accent} wrapMode="none">↓ New messages below · End jumps</text>
+          <text fg={colors.muted} wrapMode="none">↓ New messages below · End jumps</text>
         </box>
       </Show>
     </box>
