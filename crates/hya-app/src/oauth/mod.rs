@@ -3,6 +3,7 @@
 //! Supported types: `openai-codex` (ChatGPT/Codex) and `grok-build` (xAI CLI).
 
 mod callback;
+pub mod chatgpt;
 mod ensure;
 mod grok_build;
 mod models_catalog;
@@ -158,8 +159,39 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
         ));
     }
     validate_provider_id(provider)?;
+    if options.oauth_type == OAuthType::OpenaiChatgpt
+        && options
+            .base_url
+            .as_deref()
+            .is_some_and(|u| u != chatgpt::RESOURCE)
+    {
+        return Err(OAuthError::Protocol(
+            "ChatGPT plan credentials require https://api.openai.com/v1".into(),
+        ));
+    }
 
     let credential = match options.oauth_type {
+        OAuthType::OpenaiChatgpt => {
+            if options.device {
+                return Err(OAuthError::Protocol(
+                    "ChatGPT plan login uses a loopback browser callback, not device login".into(),
+                ));
+            }
+            let dir = options
+                .auth_dir
+                .clone()
+                .or_else(crate::auth::auth_dir)
+                .ok_or_else(|| OAuthError::Config("no auth directory".into()))?;
+            let pending = chatgpt::ChatgptLogin::start(&dir, provider, options.timeout).await?;
+            println!(
+                "Continue with ChatGPT:\n{}\nWaiting for the browser callback. For SSH, forward the callback port to this host.",
+                pending.authorization_url
+            );
+            if !options.no_browser {
+                open_browser(&pending.authorization_url);
+            }
+            pending.finish("").await?
+        }
         OAuthType::OpenaiCodex => {
             // Codex CLI default: device-code, print URL/code, no local callback.
             // Loopback PKCE is opt-in via `loopback`.
@@ -182,6 +214,11 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
         .ok_or_else(|| {
             OAuthError::Config("no config directory (set HOME or XDG_CONFIG_HOME)".into())
         })?;
+    let _credential_guard = if options.oauth_type == OAuthType::OpenaiChatgpt {
+        Some(chatgpt::lock_refresh(&auth_dir, provider).await?)
+    } else {
+        None
+    };
     let auth_cred = AuthCredential::OAuth(credential.clone());
     crate::auth::save_credential_in(&auth_dir, provider, &auth_cred)?;
     let auth_path = auth_dir.join(format!("{provider}.yaml"));
@@ -245,7 +282,8 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
 }
 
 fn validate_provider_id(provider: &str) -> Result<(), OAuthError> {
-    if provider.contains('/')
+    if provider.is_empty()
+        || provider.contains('/')
         || provider.contains('\\')
         || provider.contains("..")
         || provider.contains(char::is_whitespace)

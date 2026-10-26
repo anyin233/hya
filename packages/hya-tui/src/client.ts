@@ -925,8 +925,8 @@ export class HyaClient {
   }
 
   /** `RemoveProviderAuth` (`DELETE /v1/auth/{id}`): delete the saved key (applies live). */
-  async removeProviderKey(provider: string, signal?: AbortSignal): Promise<void> {
-    await this.request("DELETE", `/v1/auth/${encodeURIComponent(provider)}`, undefined, signal)
+  async removeProviderKey(provider: string, signal?: AbortSignal): Promise<void | { warning?: string }> {
+    return this.request("DELETE", `/v1/auth/${encodeURIComponent(provider)}`, undefined, signal)
   }
 
   /** `UpsertProvider` (`PUT /v1/providers/{id}`): write kind / base URL to config.yaml, save a non-empty key, fetch the models. */

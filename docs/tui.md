@@ -3477,6 +3477,14 @@ Add a local OpenAI-compatible server and switch the session to it:
 
 ### Provider View interfaces
 
+**Continue with ChatGPT:** press `l` in `/key`, open the authorization URL, allow
+ChatGPT plan usage, and press Enter to complete. Remote users may paste the full
+redirected callback URL into the concealed field. Then choose an account model
+with `/model`. This uses the existing OAuth start/callback API and requires
+backend 0.45.11; see [ChatGPT plan connection](chatgpt-plan.md) for usage,
+configuration, account registration and the exact HTTP/RPC contracts.
+
+
 The view uses the v1 routes of
 [Protocol guide — Providers and keys](protocol/README.md#providers-and-keys);
 after every write it re-reads `GET /v1/providers` and `GET /v1/models` (with

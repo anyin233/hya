@@ -131,3 +131,29 @@ test("closing the view drops it and aborts a running call", async () => {
   expect(aborted).toBe(true)
   expect(h.store.state.providerView).toBeUndefined()
 })
+
+test("Continue with ChatGPT completes the existing OAuth API without putting callback credentials in view state", async () => {
+  const calls: { path: string; body: unknown }[] = []
+  const h = harness({ request: async (_method: string, path: string, body: unknown) => {
+    calls.push({ path, body })
+    if (path.endsWith("/start")) return { authorizationUrl: "https://auth.openai.com/api/accounts/authorize?state=pending", state: "pending" } as never
+    h.setCatalog({ providers: [offline, { id: "chatgpt", kind: "openai-chatgpt", keySource: "oauth", modelCount: 1 }],
+      models: [offlineModel, { id: "chatgpt/account-model", providerId: "chatgpt", modelId: "account-model", source: "remote" }] })
+    return { status: "AUTH_STATUS_CREDENTIALED" } as never
+  } }, { providers: [offline], models: [offlineModel] })
+  h.providers.open()
+  await settle()
+  await h.press([key("l")])
+  expect(h.store.state.providerView?.form?.kind).toBe("chatgpt")
+  expect(h.store.state.providerView?.oauth?.authorizationUrl).toContain("auth.openai.com")
+  const callback = "http://127.0.0.1:1455/auth/callback?code=private-code&state=pending&client_id=issued"
+  h.providers.paste(callback)
+  expect(JSON.stringify(h.store.state.providerView)).not.toContain("private-code")
+  await h.press([key("return")])
+  expect(calls[1]).toEqual({ path: "/v1/auth/chatgpt/oauth/callback", body: { state: "pending", code: callback } })
+  expect(h.store.state.providerView?.form).toBeUndefined()
+  expect(h.store.state.providerView?.notice?.text).toContain("Connected chatgpt")
+  expect(h.store.state.providerView?.screen).toBe("detail")
+  expect(h.picks).toEqual(["chatgpt"])
+  expect(h.store.state.providers.find((p) => p.id === "chatgpt")?.keySource).toBe("oauth")
+})

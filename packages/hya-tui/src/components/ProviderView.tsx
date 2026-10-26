@@ -120,6 +120,9 @@ function FormBox(props: { view: ProviderViewState; form: FormState }) {
       flexDirection="column"
       paddingX={1}
     >
+      <Show when={props.form.kind === "chatgpt" && props.view.oauth}>
+        {(oauth) => <text width="100%" wrapMode="word" fg={colors.fg}>{oauth().authorizationUrl}</text>}
+      </Show>
       <Show
         when={props.form.kind !== "confirm"}
         fallback={<text width="100%" wrapMode="word" fg={colors.fg}>{props.form.confirmText ?? ""}</text>}

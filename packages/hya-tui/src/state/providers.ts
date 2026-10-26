@@ -45,6 +45,7 @@ export const providerProtocols: readonly ChoiceOption[] = [
   { id: "openai-response", label: "openai-response", detail: "OpenAI Responses API" },
   { id: "anthropic", label: "anthropic", detail: "Anthropic Messages API" },
   { id: "google", label: "google", detail: "Google Gemini API" },
+  { id: "openai-chatgpt", label: "openai-chatgpt", detail: "ChatGPT plan · public Responses API; connect with l" },
 ]
 
 const reasoningOptions: readonly ChoiceOption[] = [
@@ -78,7 +79,7 @@ export interface FormField {
   initial?: string
 }
 
-export type FormKind = "addProvider" | "setKey" | "addModel" | "editModel" | "confirm"
+export type FormKind = "chatgpt" | "addProvider" | "setKey" | "addModel" | "editModel" | "confirm"
 
 export interface FormState {
   kind: FormKind
@@ -104,7 +105,7 @@ export type ProviderScreen = "list" | "detail"
 
 /** A provider call in flight (Esc cancels it). */
 export interface ProviderBusy {
-  kind: "add" | "key" | "removeKey" | "refresh" | "test" | "model" | "deleteModel"
+  kind: "oauth" | "add" | "key" | "removeKey" | "refresh" | "test" | "model" | "deleteModel"
   /** `Testing gw/alpha`, `Refreshing gw`, … */
   label: string
   /** `Date.now()` when it started (the elapsed seconds). */
@@ -138,6 +139,7 @@ export interface ProviderViewState {
   filter: string
   /** `/` was pressed: printable keys go to `filter`. */
   filtering: boolean
+  oauth?: { provider: string; authorizationUrl: string; state: string }
   form?: FormState
   busy?: ProviderBusy
   notice?: ProviderNotice
@@ -151,6 +153,7 @@ export interface ProviderData {
 }
 
 export type ProviderCommand =
+  | { kind: "login"; provider: string }
   | { kind: "refresh"; provider: string }
   | { kind: "test"; provider: string; model: string }
 
@@ -184,6 +187,7 @@ export interface ProviderKeyRow {
 export const providerKeyRows: readonly ProviderKeyRow[] = [
   { keys: "Up / Down", description: "Move the highlight over providers or models", hint: "↑↓ move", screens: ["list", "detail"] },
   { keys: "Enter", description: "Open the highlighted provider's models", hint: "Enter open", screens: ["list"] },
+  { keys: "l", description: "Continue with ChatGPT: authorize use of your ChatGPT plan", hint: "l ChatGPT login", screens: ["list", "detail"] },
   { keys: "a", description: "Add a provider: name, protocol, base URL, key; its models are fetched right after", hint: "a add", screens: ["list"] },
   { keys: "t", description: "Test the highlighted model: sends hi with 1 output token and shows the reply, finish, and latency", hint: "t test", screens: ["detail"] },
   { keys: "m", description: "Add a model by hand (written to the provider's models: in config.yaml)", hint: "m add model", screens: ["detail"] },
@@ -602,8 +606,9 @@ export function providerViewKey(view: ProviderViewState, key: KeyLike, data: Pro
     return provider ? { type: "update", view: openProviderDetail(view, provider.id, data) } : { type: "none" }
   }
   const action = key.sequence
-  if (!"akxrtmed".includes(action) || action.length !== 1) return { type: "none" }
+  if (!"lakxrtmed".includes(action) || action.length !== 1) return { type: "none" }
   if (view.busy) return note(view, `Busy: ${view.busy.label} · Esc cancels`)
+  if (action === "l") return { type: "command", command: { kind: "login", provider: provider?.kind === "openai-chatgpt" ? provider.id : "chatgpt" } }
   if (action === "a") return { type: "update", view: { ...view, notice: undefined, form: addProviderForm(data.providers.map((row) => row.id)) } }
   if (!provider) return note(view, "No provider selected · a adds one")
   const offline = provider.id === offlineProviderId
@@ -634,6 +639,7 @@ export function providerViewHint(view: ProviderViewState): string {
   const form = view.form
   if (form) {
     if (view.busy) return `${view.busy.label}… · Esc cancels`
+    if (form.kind === "chatgpt") return "Open the URL, allow ChatGPT plan usage, then Enter · SSH: paste the full callback URL · Esc cancels"
     if (form.kind === "confirm") return "Enter confirms · Esc cancels"
     const field = form.fields[form.step]
     const last = form.step + 1 >= form.fields.length

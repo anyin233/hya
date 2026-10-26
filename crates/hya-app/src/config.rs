@@ -375,6 +375,8 @@ enum ProviderKindConfig {
     OpenaiResponse,
     #[serde(rename = "openai-codex")]
     OpenaiCodex,
+    #[serde(rename = "openai-chatgpt")]
+    OpenaiChatgpt,
     #[serde(rename = "grok-build")]
     GrokBuild,
     Anthropic,
@@ -387,6 +389,7 @@ impl From<ProviderKindConfig> for ProviderKind {
             ProviderKindConfig::Openai => Self::OpenAiCompatible,
             ProviderKindConfig::OpenaiResponse => Self::OpenAiResponse,
             ProviderKindConfig::OpenaiCodex => Self::OpenAiCodex,
+            ProviderKindConfig::OpenaiChatgpt => Self::OpenAiChatgpt,
             ProviderKindConfig::GrokBuild => Self::GrokBuild,
             ProviderKindConfig::Anthropic => Self::Anthropic,
             ProviderKindConfig::Google => Self::Google,
@@ -562,6 +565,21 @@ impl ProviderCredential {
 /// Resolve optional auth for a provider from Hya login token or inline key.
 fn resolve_provider_credential(provider: &ParsedProvider) -> ProviderCredential {
     if let Some(cred) = crate::auth::load_credential(&provider.id) {
+        if cred
+            .oauth()
+            .is_some_and(|o| o.oauth_type == crate::auth::OAuthType::OpenaiChatgpt)
+            && (provider.kind != ProviderKind::OpenAiChatgpt
+                || provider.base_url != crate::oauth::chatgpt::RESOURCE)
+        {
+            // A provider edit must not repurpose a ChatGPT grant for another host.
+            return ProviderCredential {
+                token: None,
+                use_grok_session: false,
+                use_codex_session: false,
+                account_id: None,
+                use_oauth_refresh: false,
+            };
+        }
         let token = cred.access_token().trim();
         let oauth = cred.oauth();
         return ProviderCredential {
@@ -680,6 +698,7 @@ pub const PROVIDER_KIND_LABELS: &[&str] = &[
     "openai-completion",
     "openai-response",
     "openai-codex",
+    "openai-chatgpt",
     "grok-build",
     "anthropic",
     "google",
@@ -1249,6 +1268,11 @@ fn resolve_providers_filtered(
             continue;
         }
         let kind: ProviderKind = provider.kind.into();
+        if kind == ProviderKind::OpenAiChatgpt
+            && provider.base_url != crate::oauth::chatgpt::RESOURCE
+        {
+            anyhow::bail!("ChatGPT plan provider {id} must use https://api.openai.com/v1");
+        }
         let mut seen = BTreeSet::new();
         let mut models = Vec::new();
         for model in &provider.models {
@@ -1788,7 +1812,9 @@ fn discovery_auth(kind: ProviderKind, credential: &ProviderCredential) -> Catalo
             hya_version::BACKEND_VERSION,
             "grok-cli",
         ),
-        ProviderKind::OpenAiCompatible | ProviderKind::OpenAiResponse => credential
+        ProviderKind::OpenAiCompatible
+        | ProviderKind::OpenAiResponse
+        | ProviderKind::OpenAiChatgpt => credential
             .token
             .clone()
             .map_or_else(CatalogAuth::unauthenticated, |token| {

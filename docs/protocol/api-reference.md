@@ -113,12 +113,16 @@ Delete the stored credentials for a provider and rebuild its route live
 
 ### `Auth.StartOauth`
 
-Begin a provider OAuth flow; returns the authorization URL to open.
+Begin official Sign in with ChatGPT plan usage for this provider id.
+Existing provider ids must have kind openai-chatgpt and the public API base.
+Returns an authorization URL and a one-time state expiring after ten minutes.
 
 
 ### `Auth.CompleteOauth`
 
-Complete a provider OAuth flow with the callback code.
+Complete the pending ChatGPT flow, save verified credentials and apply the
+route/catalog live. Empty code waits for the backend loopback callback;
+for SSH clients, code can instead contain the full redirected callback URL.
 
 
 ## Service `BundleApi`
@@ -1129,6 +1133,7 @@ OAuth tokens captured from a completed provider flow.
 
 | Field | Type | Description |
 |---|---|---|
+| `warning` (2) | `string` | Tokens were cleared locally but remote revocation could not be confirmed. Empty on an ordinary successful credential removal. |
 | `provider` (1) | `ProviderInfo` | The provider after the live rebuild; unset when the id is not a configured provider. |
 
 ### `StartOauthRequest`
@@ -1154,7 +1159,7 @@ OAuth tokens captured from a completed provider flow.
 |---|---|---|
 | `directory` (1) | `string` | Directory context for auth resolution. |
 | `provider_id` (2) | `string` | Provider identifier completing the flow. |
-| `code` (3) | `string` | Authorization code returned by the provider callback. |
+| `code` (3) | `string` | Empty to await the loopback callback, or its full URL (code, state, client_id). |
 | `state` (4) | `string` | State value from `StartOauth` when the provider requires it. |
 
 ### `CompleteOauthResponse`

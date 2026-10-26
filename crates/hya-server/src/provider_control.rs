@@ -103,6 +103,8 @@ pub struct ProviderDiscoveryReport {
 /// Result of a mutating provider call, after the live rebuild.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProviderChange {
+    /// A non-fatal warning, for example an unconfirmed remote sign-out.
+    pub warning: Option<String>,
     /// Whether the provider exists in `config.yaml` after the call.
     pub configured: bool,
     /// Remote fetch outcome when the call fetched.
@@ -149,11 +151,34 @@ impl std::error::Error for ProviderControlError {}
 /// Boxed asynchronous result returned by a [`ProviderControl`] operation.
 pub type ProviderControlFuture<'a, T> = BoxFuture<'a, Result<T, ProviderControlError>>;
 
+/// Browser authorization details; never contains access or refresh tokens.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderOauthStart {
+    /// Browser URL for this login attempt.
+    pub authorization_url: String,
+    /// One-time OAuth state bound to the attempt.
+    pub state: String,
+}
+
 /// Server-owned control port for provider keys, declarations, remote model
 /// refresh, and config model overrides. Implementations serialize mutating
 /// calls and publish the rebuilt route/catalog on the engine before
 /// resolving.
 pub trait ProviderControl: Send + Sync {
+    /// Start official ChatGPT plan sign-in with an expiring loopback callback.
+    fn start_oauth(&self, _provider_id: String) -> ProviderControlFuture<'_, ProviderOauthStart> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+    /// Finish the pending callback, then publish credentials and models live.
+    /// Empty callback waits for the loopback; otherwise supply its full URL.
+    fn complete_oauth(
+        &self,
+        _provider_id: String,
+        _state: String,
+        _callback: String,
+    ) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
     /// Whether a real application-owned control is installed.
     fn available(&self) -> bool;
 

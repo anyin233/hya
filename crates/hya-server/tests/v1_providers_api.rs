@@ -47,6 +47,7 @@ struct FakeControl {
 
 fn discovered(count: usize) -> ProviderChange {
     ProviderChange {
+        warning: None,
         configured: true,
         discovery: Some(ProviderDiscoveryReport {
             ok: true,
@@ -110,6 +111,7 @@ impl ProviderControl for FakeControl {
             Ok((
                 true,
                 ProviderChange {
+                    warning: None,
                     configured: true,
                     discovery: None,
                 },
@@ -124,6 +126,7 @@ impl ProviderControl for FakeControl {
         self.record(Call::Upsert(request));
         Box::pin(async {
             Ok(ProviderChange {
+                warning: None,
                 configured: true,
                 discovery: Some(ProviderDiscoveryReport {
                     ok: false,
@@ -159,6 +162,7 @@ impl ProviderControl for FakeControl {
         self.record(Call::SetModel(provider_id, model_id, metadata));
         Box::pin(async {
             Ok(ProviderChange {
+                warning: None,
                 configured: true,
                 discovery: None,
             })
@@ -173,6 +177,7 @@ impl ProviderControl for FakeControl {
         self.record(Call::RemoveModel(provider_id, model_id));
         Box::pin(async {
             Ok(ProviderChange {
+                warning: None,
                 configured: true,
                 discovery: None,
             })

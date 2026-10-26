@@ -554,3 +554,96 @@ async fn failed_fetches_do_not_fail_the_upsert_and_bad_input_is_rejected() {
 
     let _ = std::fs::remove_dir_all(&env.root);
 }
+
+#[tokio::test]
+async fn chatgpt_start_is_live_but_incomplete_or_mismatched_callback_never_saves_credentials() {
+    let _lock = env_lock().await;
+    let temp = std::env::temp_dir().join(format!(
+        "hya-chatgpt-api-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp).unwrap();
+    let _config = EnvGuard::set("XDG_CONFIG_HOME", &temp);
+    let store = SessionStore::connect_memory().await.unwrap();
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        store,
+        Arc::new(hya_provider::ProviderRouter::new()),
+        support::test_runtime(tools, &[]),
+        perm,
+        EventBus::new(16),
+    ));
+    let manager = hya_app::provider_control::ProviderManager::new(engine);
+    use hya_server::ProviderControl as _;
+    let flow = manager.start_oauth("personal".into()).await.unwrap();
+    let url = reqwest::Url::parse(&flow.authorization_url).unwrap();
+    let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(query["client_id"], "dynamic_agent_client");
+    assert_eq!(query["state"], flow.state);
+    assert!(
+        manager
+            .complete_oauth("personal".into(), "wrong".into(), String::new())
+            .await
+            .is_err()
+    );
+    assert!(manager.list_saved_keys().await.unwrap().is_empty());
+    // Valid state with a rejected consent consumes only this attempt.
+    let redirect = &query["redirect_uri"];
+    assert!(
+        manager
+            .complete_oauth(
+                "personal".into(),
+                flow.state.clone(),
+                format!("{redirect}?state={}&error=access_denied", flow.state)
+            )
+            .await
+            .is_err()
+    );
+    assert!(manager.list_saved_keys().await.unwrap().is_empty());
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn changing_provider_protocol_never_sends_a_chatgpt_grant_to_another_host() {
+    let _lock = env_lock().await;
+    let e = env("chatgpt-binding", None);
+    let (base, fake) = fake_provider().await;
+    let credential = hya_app::auth::OAuthCredential {
+        oauth_type: hya_app::auth::OAuthType::OpenaiChatgpt,
+        chatgpt: None,
+        access_token: "must-not-reach-fake-host".into(),
+        refresh_token: "refresh".into(),
+        expires_at: "2099-01-01T00:00:00Z".into(),
+        account_id: None,
+        id_token: None,
+    };
+    hya_app::auth::save_credential_in(
+        &e.auth,
+        "reused",
+        &hya_app::auth::AuthCredential::OAuth(credential),
+    )
+    .unwrap();
+    let (app, _state) = app(hya_provider::ProviderRouter::new()).await;
+    let (status, _) = send(
+        &app,
+        Method::PUT,
+        "/v1/providers/reused",
+        json!({"kind":"openai","baseUrl":base}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !fake
+            .seen
+            .lock()
+            .unwrap()
+            .model_list_auth
+            .iter()
+            .any(Option::is_some)
+    );
+    std::fs::remove_dir_all(&e.root).unwrap();
+}

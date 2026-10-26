@@ -127,6 +127,8 @@ pub enum ProviderKind {
     OpenAiResponse,
     /// ChatGPT Codex subscription backend (`chatgpt.com/backend-api/codex`).
     OpenAiCodex,
+    /// Official Sign in with ChatGPT public Responses API.
+    OpenAiChatgpt,
     /// Grok Build Responses route with encrypted reasoning content.
     GrokBuild,
     /// Anthropic Messages API (`/messages`).
@@ -141,7 +143,9 @@ impl ProviderKind {
         match self {
             ProviderKind::Anthropic => &["low", "medium", "high", "max"],
             ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => {
+            ProviderKind::OpenAiResponse
+            | ProviderKind::OpenAiChatgpt
+            | ProviderKind::OpenAiCodex => {
                 &["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
             ProviderKind::GrokBuild => &["low", "medium", "high"],
@@ -283,6 +287,11 @@ impl HttpProvider {
             ProviderKind::OpenAiCompatible => (
                 Arc::new(OpenAiChatProtocol),
                 format!("{base}/chat/completions"),
+                AuthStyle::Bearer(key),
+            ),
+            ProviderKind::OpenAiChatgpt => (
+                Arc::new(crate::openai::ChatgptPlanProtocol),
+                format!("{base}/responses"),
                 AuthStyle::Bearer(key),
             ),
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => (
@@ -984,6 +993,7 @@ fn provider_kind_identity(kind: ProviderKind) -> &'static [u8] {
     match kind {
         ProviderKind::OpenAiCompatible => b"openai-compatible",
         ProviderKind::OpenAiResponse => b"openai-response",
+        ProviderKind::OpenAiChatgpt => b"openai-chatgpt",
         ProviderKind::OpenAiCodex => b"openai-codex",
         ProviderKind::GrokBuild => b"grok-build",
         ProviderKind::Anthropic => b"anthropic",
@@ -1102,9 +1112,10 @@ impl Provider for HttpProvider {
     }
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
         match self.kind {
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
-                crate::ReasoningReplayPolicy::ProviderData
-            }
+            ProviderKind::OpenAiResponse
+            | ProviderKind::OpenAiChatgpt
+            | ProviderKind::OpenAiCodex
+            | ProviderKind::GrokBuild => crate::ReasoningReplayPolicy::ProviderData,
             ProviderKind::Anthropic => crate::ReasoningReplayPolicy::SignedCurrentTurn,
             ProviderKind::OpenAiCompatible => crate::ReasoningReplayPolicy::ReasoningContent,
             ProviderKind::Google => crate::ReasoningReplayPolicy::None,

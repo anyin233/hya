@@ -358,6 +358,7 @@ fn credential_from_token_response(
         .or_else(|| extract_chatgpt_account_id(&access_token));
     Ok(OAuthCredential {
         oauth_type: OAuthType::OpenaiCodex,
+        chatgpt: None,
         access_token,
         refresh_token,
         expires_at,

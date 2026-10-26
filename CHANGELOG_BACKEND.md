@@ -1,5 +1,6 @@
-# 0.45.10
+# 0.45.11
 
-## First-party TUI panes
+## ChatGPT plan usage
 
-- Use semantic colors in the basic TUI components: selection uses focus, progress uses activity, successful actions use success, blocked todos use warning, and Context values stay neutral.
+- Add official Sign in with ChatGPT with dynamic registration, verified identity, protected per-provider accounts, plan-permission checks, refresh serialization, and logout revocation. `hya oauth login --provider chatgpt --type openai-chatgpt` connects without a Platform API key.
+- Implement the existing v1 OAuth start/callback routes through live provider control. The new `openai-chatgpt` route uses the public Responses API, account model discovery, stateless streaming and namespaced local tools while retaining Hya's agent loop. Credential removal reports a warning when remote revocation cannot be confirmed.

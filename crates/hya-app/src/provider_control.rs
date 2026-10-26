@@ -26,6 +26,9 @@ use crate::config::{self, ConfigEditError, DiscoverMode, PendingCatalogDiscovery
 pub struct ProviderManager {
     engine: Arc<SessionEngine>,
     lock: Arc<tokio::sync::Mutex<()>>,
+    oauth: Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, crate::oauth::chatgpt::ChatgptLogin>>,
+    >,
 }
 
 fn failure(error: impl std::fmt::Display) -> ProviderControlError {
@@ -67,6 +70,7 @@ impl ProviderManager {
         Self {
             engine,
             lock: Arc::new(tokio::sync::Mutex::new(())),
+            oauth: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -109,6 +113,7 @@ impl ProviderManager {
         self.engine
             .publish_provider_catalog(Arc::new(rebuilt.router), rebuilt.catalog);
         Ok(ProviderChange {
+            warning: None,
             configured: rebuilt.configured.contains(provider_id),
             discovery: rebuilt.discovery.get(provider_id).map(report),
         })
@@ -137,6 +142,101 @@ impl ProviderManager {
 }
 
 impl ProviderControl for ProviderManager {
+    fn start_oauth(
+        &self,
+        provider_id: String,
+    ) -> ProviderControlFuture<'_, hya_server::ProviderOauthStart> {
+        Box::pin(async move {
+            if !hya_server::valid_provider_id(&provider_id) {
+                return Err(invalid("invalid provider id"));
+            }
+            let declarations = config::provider_declarations().map_err(failure)?;
+            if declarations.iter().any(|p| {
+                p.id == provider_id
+                    && (p.kind != "openai-chatgpt" || p.base_url != crate::oauth::chatgpt::RESOURCE)
+            }) {
+                return Err(invalid(
+                    "provider name already belongs to another route; use a new ChatGPT provider name",
+                ));
+            }
+            let mut pending = self.oauth.lock().await;
+            pending.retain(|_, p| p.expires > std::time::Instant::now());
+            if pending.len() >= 16 {
+                return Err(invalid("too many pending logins; wait for expiry"));
+            }
+            let dir = crate::auth::auth_dir().ok_or_else(|| failure("no auth directory"))?;
+            let login = crate::oauth::chatgpt::ChatgptLogin::start(
+                &dir,
+                &provider_id,
+                std::time::Duration::from_secs(600),
+            )
+            .await
+            .map_err(failure)?;
+            let result = hya_server::ProviderOauthStart {
+                authorization_url: login.authorization_url.clone(),
+                state: login.state.clone(),
+            };
+            pending.insert(provider_id, login);
+            Ok(result)
+        })
+    }
+    fn complete_oauth(
+        &self,
+        provider_id: String,
+        state: String,
+        callback: String,
+    ) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async move {
+            let login = {
+                let mut pending = self.oauth.lock().await;
+                if !pending
+                    .get(&provider_id)
+                    .is_some_and(|p| p.state == state && p.expires > std::time::Instant::now())
+                {
+                    return Err(invalid(
+                        "missing, expired or mismatched ChatGPT login; start again",
+                    ));
+                }
+                pending
+                    .remove(&provider_id)
+                    .ok_or_else(|| invalid("login already consumed"))?
+            };
+            let credential = login.finish(&callback).await.map_err(failure)?;
+            let _guard = self.lock.lock().await;
+            if config::provider_declarations()
+                .map_err(failure)?
+                .iter()
+                .any(|p| {
+                    p.id == provider_id
+                        && (p.kind != "openai-chatgpt"
+                            || p.base_url != crate::oauth::chatgpt::RESOURCE)
+                })
+            {
+                return Err(invalid(
+                    "provider configuration changed during ChatGPT sign-in; no credentials replaced",
+                ));
+            }
+            let dir = crate::auth::auth_dir().ok_or_else(|| failure("no auth directory"))?;
+            let _credential_guard = crate::oauth::chatgpt::lock_refresh(&dir, &provider_id)
+                .await
+                .map_err(failure)?;
+            crate::auth::save_credential_in(
+                &dir,
+                &provider_id,
+                &crate::auth::AuthCredential::OAuth(credential),
+            )
+            .map_err(failure)?;
+            config::upsert_oauth_provider(
+                &config::expected_config_path(),
+                &provider_id,
+                "openai-chatgpt",
+                crate::oauth::chatgpt::RESOURCE,
+            )
+            .map_err(failure)?;
+            self.rebuild(&provider_id, DiscoverMode::Always).await
+        })
+    }
+
     fn available(&self) -> bool {
         true
     }
@@ -175,8 +275,12 @@ impl ProviderControl for ProviderManager {
     fn remove_key(&self, provider_id: String) -> ProviderControlFuture<'_, (bool, ProviderChange)> {
         Box::pin(async move {
             let _guard = self.lock.lock().await;
-            let removed = crate::auth::remove_token(&provider_id).map_err(failure)?;
-            let change = self.rebuild(&provider_id, DiscoverMode::Never).await?;
+            let dir = crate::auth::auth_dir().ok_or_else(|| failure("no auth directory"))?;
+            let (removed, warning) = crate::oauth::chatgpt::logout_in(&dir, &provider_id)
+                .await
+                .map_err(failure)?;
+            let mut change = self.rebuild(&provider_id, DiscoverMode::Never).await?;
+            change.warning = warning;
             Ok((removed, change))
         })
     }
@@ -197,6 +301,13 @@ impl ProviderControl for ProviderManager {
                 )));
             }
             check_base_url(&request.base_url)?;
+            if request.kind == "openai-chatgpt"
+                && request.base_url != crate::oauth::chatgpt::RESOURCE
+            {
+                return Err(invalid(
+                    "ChatGPT plan providers require https://api.openai.com/v1",
+                ));
+            }
             let _guard = self.lock.lock().await;
             config::upsert_provider_entry(
                 &config::active_config_path(),

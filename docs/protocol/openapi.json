@@ -95,7 +95,7 @@
     "/v1/auth/{provider_id}/oauth/callback": {
       "post": {
         "operationId": "Auth.CompleteOauth",
-        "summary": "Complete a provider OAuth flow with the callback code.",
+        "summary": "Complete the pending ChatGPT flow, save verified credentials and apply the",
         "tags": [
           "Auth"
         ],
@@ -106,7 +106,7 @@
     "/v1/auth/{provider_id}/oauth/start": {
       "post": {
         "operationId": "Auth.StartOauth",
-        "summary": "Begin a provider OAuth flow; returns the authorization URL to open.",
+        "summary": "Begin official Sign in with ChatGPT plan usage for this provider id.",
         "tags": [
           "Auth"
         ],
@@ -1553,6 +1553,9 @@
         "type": "object",
         "description": "",
         "properties": {
+          "warning": {
+            "type": "string"
+          },
           "provider": {
             "$ref": "#/components/schemas/ProviderInfo"
           }

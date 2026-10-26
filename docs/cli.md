@@ -1215,27 +1215,38 @@ configured exits 1.
 
 ```sh
 hya login <provider> <token>
-hya oauth login --provider <name> --type <openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
+hya oauth login --provider <name> --type <openai-chatgpt|openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
 hya oauth status [provider]
+hya oauth logout <provider>
 hya models [provider] [--verbose] [--refresh]
 hya agent list [--all]
 ```
 
 `login` writes a plain provider token under `~/.config/hya/auth`. Prefer
-`oauth login` for ChatGPT Codex and Grok Build subscription auth — it runs the
+`oauth login` for ChatGPT plan usage, ChatGPT Codex and Grok Build subscription auth — it runs the
 OAuth flow in Rust, stores a refreshable credential bundle, and upserts the
 provider route into `config.yaml`.
 
-**`--type` values and aliases.** Interactive OAuth accepts only two provider
+**`--type` values and aliases.** Interactive OAuth accepts three provider
 implementations:
 
 | Canonical | Accepted aliases |
 | --- | --- |
+| `openai-chatgpt` | `chatgpt` |
 | `openai-codex` | `openai_codex`, `codex` |
 | `grok-build` | `grok_build`, `grok`, `xai-oauth` |
 
 Every other provider must use `hya login <provider> <token>` or an
 inline `api_key` in config.
+
+**ChatGPT plan login.** `hya oauth login --provider chatgpt --type openai-chatgpt`
+uses OpenAI's dynamic registration and browser loopback flow for the public
+Responses API. `--no-browser` prints the URL without opening it; `--device` is
+not supported. `hya oauth logout <provider>` attempts revocation and removes
+local tokens while retaining the registration. The TUI offers the same login
+with `l` in `/key` and a concealed full-callback-URL field for SSH clients.
+See [ChatGPT plan connection](chatgpt-plan.md) for the worked example, stored
+credential fields, refresh, and exact OAuth HTTP/RPC requests and responses.
 
 **Device vs loopback.** For `openai-codex`, the default matches Codex CLI:
 **device-code with URL/code printed** (no auto-open browser). Use `--browser` to

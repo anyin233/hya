@@ -121,7 +121,7 @@ Stable codes and their HTTP status / gRPC code:
 | `session_busy` | 409 | `FailedPrecondition` | Another run owns the session. |
 | `failed_precondition` | 409 | `FailedPrecondition` | Refused in the resource's current state (e.g. deleting a Project that still has live sessions). |
 | `conflict` | 409 | `FailedPrecondition` | State conflict (stale revision, patch rejection). |
-| `unavailable` | 503 | `Unavailable` | Required capability not configured (e.g. no summarizer, OAuth not wired). |
+| `unavailable` | 503 | `Unavailable` | Required capability not configured (e.g. no summarizer, provider control not installed). |
 | `internal` | 500 | `Internal` | Unhandled failure. |
 | `bundle_api_not_found` | 404 | `NotFound` | No published bundle endpoint matches (unknown bundle, bundle without endpoints, or no template of the scope matches the path under any method). |
 | `bundle_api_method_not_allowed` | 405 | `Unimplemented` | The path matches bundle endpoints of the scope, but not under this method; HTTP lists the allowed ones in `Allow`. |
@@ -1417,3 +1417,13 @@ unchanged; the response still waits for the complete snapshot.
 `openapi.json`, and the Rust contract crate from `proto/hya/v1`. The task
 fails when any rpc lacks its `// hya.http:` mapping or two rpcs claim the
 same route, so documentation cannot drift from the IDL.
+
+### ChatGPT plan OAuth
+
+The existing `Auth.StartOauth` and `Auth.CompleteOauth` RPCs now delegate to the
+application provider control for official Sign in with ChatGPT plan usage.
+`CompleteOauthRequest.code` can be empty for a loopback callback or contain the
+full redirected URL for SSH use. `RemoveProviderAuthResponse.warning` is an
+optional string reporting unconfirmed remote revocation after local tokens were
+removed. See [ChatGPT plan connection](../chatgpt-plan.md#configuration-and-interfaces)
+for usage, complete schemas, one-time state, registration and permission checks.

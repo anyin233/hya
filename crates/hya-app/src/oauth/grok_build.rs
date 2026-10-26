@@ -199,6 +199,7 @@ fn credential_from_token_response(
     let id_token = json_str(payload, "id_token").map(str::to_string);
     Ok(OAuthCredential {
         oauth_type: OAuthType::GrokBuild,
+        chatgpt: None,
         access_token,
         refresh_token,
         expires_at,

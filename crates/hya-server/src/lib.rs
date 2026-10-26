@@ -61,7 +61,7 @@ pub use provider_control::{
     PROVIDER_CONTROL_FAILURE, PROVIDER_CONTROL_UNAVAILABLE, PROVIDER_INVALID_REQUEST,
     PROVIDER_NOT_FOUND, ProviderChange, ProviderControl, ProviderControlError,
     ProviderControlFuture, ProviderDiscoveryReport, ProviderKeySource, ProviderModelOverride,
-    ProviderSettings, ProviderUpsert, valid_provider_id,
+    ProviderOauthStart, ProviderSettings, ProviderUpsert, valid_provider_id,
 };
 pub use relay_host::{RelayHost, RelayHostConfig, RelaySettings};
 pub use sanitize::display_text;

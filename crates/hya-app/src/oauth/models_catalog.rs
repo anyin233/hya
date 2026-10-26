@@ -17,6 +17,11 @@ pub async fn fetch_oauth_models(
     base_url: &str,
 ) -> Result<Vec<hya_provider::DiscoveredModel>, OAuthError> {
     let (kind, endpoint, auth) = match oauth_type {
+        OAuthType::OpenaiChatgpt => (
+            hya_provider::ProviderKind::OpenAiChatgpt,
+            base_url,
+            hya_provider::CatalogAuth::bearer(access_token, None),
+        ),
         OAuthType::OpenaiCodex => (
             hya_provider::ProviderKind::OpenAiCodex,
             OAuthType::OpenaiCodex.default_base_url(),

@@ -526,6 +526,7 @@ fn kind_label(kind: hya_provider::ProviderKind) -> &'static str {
         K::OpenAiCompatible => "openai",
         K::OpenAiResponse => "openai-response",
         K::OpenAiCodex => "openai-codex",
+        K::OpenAiChatgpt => "openai-chatgpt",
         K::GrokBuild => "grok-build",
         K::Anthropic => "anthropic",
         K::Google => "google",

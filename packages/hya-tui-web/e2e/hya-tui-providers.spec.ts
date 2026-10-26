@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { api, backendConfigDir, expectStatus, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel } from "./hya"
+import { api, backendConfigDir, expectStatus, expect, hangStep, hyaTui, startFakeModel, test, textStep, type Backend, type FakeModel, tuiMain } from "./hya"
 
 // The Provider View (`/key`): a full-screen list of providers and, per
 // provider, its models. Providers are added against a fake OpenAI-compatible
@@ -59,7 +59,7 @@ test.describe("hya TUI Provider View", () => {
     await term.waitForText(/PROVIDER\s+PROTOCOL\s+KEY\s+STATUS\s+MODELS/)
     await term.waitForText(/hya\s+offline\s+no key\s+offline\s+1 model/)
     await term.waitForText("0 configured")
-    await term.waitForText("↑↓ move · Enter open · a add · k key · x remove key · r refresh · / filter · Esc close")
+    await term.waitForText("↑↓ move · Enter open · l ChatGPT login · a add · k key · x remove key · r refresh · / filter · Esc close")
     // The offline provider takes no key.
     await term.type("k")
     await term.waitForText("hya is the built-in offline provider")
@@ -344,3 +344,21 @@ test.describe("hya TUI Provider View", () => {
     })
   })
 })
+
+for (const protocol of ["http", "grpc"] as const) {
+test(`Continue with ChatGPT starts a pending OAuth flow without terminal tokens over ${protocol}`, async ({ tui, backend }) => {
+  const argv = protocol === "http" ? hyaTui(backend) : ["bun", tuiMain, "--grpc", new URL(backend.url).host, "--dir", backend.dir]
+  const term = await tui(argv)
+  await openProviders(term)
+  await term.press("l")
+  await term.waitForText("Continue with ChatGPT")
+  await term.waitForText("https://auth.openai.com/api/accounts/authorize")
+  await term.waitForText("Callback URL")
+  await term.waitForText("allow ChatGPT plan usage")
+  expect((await config(backend))).not.toContain("openai-chatgpt")
+  await term.press("Escape")
+  await term.waitForText("Cancelled")
+  expect((await api<{ providerIds?: string[] }>(backend, "GET", "/v1/auth")).providerIds ?? []).not.toContain("chatgpt")
+})
+
+}

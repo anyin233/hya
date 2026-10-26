@@ -871,7 +871,7 @@ context window. Set `limit.output` to what the endpoint accepts for a single
 request, not a marketing figure, and keep it well below `limit.context` for such
 providers.
 
-### OAuth login (`openai-codex` and `grok-build`)
+### OAuth login (`openai-chatgpt`, `openai-codex` and `grok-build`)
 
 Interactive OAuth is implemented entirely in Rust:
 
@@ -1081,7 +1081,7 @@ token: sk-...
 
 ```yaml
 type: oauth
-oauth_type: openai-codex   # or grok-build
+oauth_type: openai-codex   # or openai-chatgpt (see ChatGPT plan connection), grok-build
 access_token: ...
 refresh_token: ...
 expires_at: "2026-01-01T00:00:00Z"   # RFC3339 UTC
@@ -2125,3 +2125,12 @@ Startup diagnostics also accept `HYA_STARTUP_TRACE_FILE` (an optional file path)
 The backend and TUI append the JSONL phase marks documented in
 [tui.md](tui.md#precompiled-startup); an unwritable diagnostic file never prevents
 startup. `HYA_STARTUP_TRACE=1|true` continues to emit backend marks on stderr.
+
+## ChatGPT plan credentials
+
+`kind: openai-chatgpt` connects the official public Responses API using Sign in
+with ChatGPT and an explicit plan-usage grant. Its base is exactly
+`https://api.openai.com/v1`; models are discovered from that account. Run
+`hya oauth login --provider chatgpt --type openai-chatgpt`, or press `l` in `/key`.
+See [ChatGPT plan connection](chatgpt-plan.md) for an example, account/refresh
+metadata, logout, and the OAuth HTTP/RPC schemas.

@@ -129,3 +129,22 @@ fn catalog_rows_keep_display_name_and_token_limits_when_published() {
     assert_eq!(google[0].context_limit, Some(1_048_576));
     assert_eq!(google[0].output_limit, Some(65_536));
 }
+
+#[test]
+fn chatgpt_plan_catalog_preserves_visible_account_slugs_and_display_order() {
+    let rows = hya_provider::parse_catalog_payload(
+        hya_provider::ProviderKind::OpenAiChatgpt,
+        &serde_json::json!({"models":[
+            {"slug":"model-z","display_name":"Account model Z","visibility":"list"},
+            {"slug":"hidden-model","visibility":"hide"},
+            {"slug":"model-a","display_name":"Account model A","visibility":"list"},
+            {"slug":"model-z","visibility":"list"}
+        ]}),
+    )
+    .unwrap();
+    assert_eq!(
+        rows.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["model-z", "model-a"]
+    );
+    assert_eq!(rows[0].display_name.as_deref(), Some("Account model Z"));
+}

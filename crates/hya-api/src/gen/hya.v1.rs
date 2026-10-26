@@ -3622,6 +3622,10 @@ pub struct RemoveProviderAuthRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RemoveProviderAuthResponse {
+    /// Tokens were cleared locally but remote revocation could not be confirmed.
+    /// Empty on an ordinary successful credential removal.
+    #[prost(string, tag = "2")]
+    pub warning: ::prost::alloc::string::String,
     /// The provider after the live rebuild; unset when the id is not a
     /// configured provider.
     #[prost(message, optional, tag = "1")]
@@ -3653,7 +3657,7 @@ pub struct CompleteOauthRequest {
     /// Provider identifier completing the flow.
     #[prost(string, tag = "2")]
     pub provider_id: ::prost::alloc::string::String,
-    /// Authorization code returned by the provider callback.
+    /// Empty to await the loopback callback, or its full URL (code, state, client_id).
     #[prost(string, tag = "3")]
     pub code: ::prost::alloc::string::String,
     /// State value from `StartOauth` when the provider requires it.
@@ -3844,7 +3848,9 @@ pub mod auth_client {
                 .insert(GrpcMethod::new("hya.v1.Auth", "RemoveProviderAuth"));
             self.inner.unary(req, path, codec).await
         }
-        /// Begin a provider OAuth flow; returns the authorization URL to open.
+        /// Begin official Sign in with ChatGPT plan usage for this provider id.
+        /// Existing provider ids must have kind openai-chatgpt and the public API base.
+        /// Returns an authorization URL and a one-time state expiring after ten minutes.
         ///
         /// hya.http: POST /v1/auth/{provider_id}/oauth/start
         pub async fn start_oauth(
@@ -3868,7 +3874,9 @@ pub mod auth_client {
             req.extensions_mut().insert(GrpcMethod::new("hya.v1.Auth", "StartOauth"));
             self.inner.unary(req, path, codec).await
         }
-        /// Complete a provider OAuth flow with the callback code.
+        /// Complete the pending ChatGPT flow, save verified credentials and apply the
+        /// route/catalog live. Empty code waits for the backend loopback callback;
+        /// for SSH clients, code can instead contain the full redirected callback URL.
         ///
         /// hya.http: POST /v1/auth/{provider_id}/oauth/callback
         pub async fn complete_oauth(
@@ -3942,7 +3950,9 @@ pub mod auth_server {
             tonic::Response<super::RemoveProviderAuthResponse>,
             tonic::Status,
         >;
-        /// Begin a provider OAuth flow; returns the authorization URL to open.
+        /// Begin official Sign in with ChatGPT plan usage for this provider id.
+        /// Existing provider ids must have kind openai-chatgpt and the public API base.
+        /// Returns an authorization URL and a one-time state expiring after ten minutes.
         ///
         /// hya.http: POST /v1/auth/{provider_id}/oauth/start
         async fn start_oauth(
@@ -3952,7 +3962,9 @@ pub mod auth_server {
             tonic::Response<super::StartOauthResponse>,
             tonic::Status,
         >;
-        /// Complete a provider OAuth flow with the callback code.
+        /// Complete the pending ChatGPT flow, save verified credentials and apply the
+        /// route/catalog live. Empty code waits for the backend loopback callback;
+        /// for SSH clients, code can instead contain the full redirected callback URL.
         ///
         /// hya.http: POST /v1/auth/{provider_id}/oauth/callback
         async fn complete_oauth(

@@ -246,7 +246,7 @@ pub fn parse_catalog_payload(
         ProviderKind::OpenAiCompatible | ProviderKind::OpenAiResponse | ProviderKind::Anthropic => {
             parse_data_models(payload, kind, &mut models, false)?
         }
-        ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
+        ProviderKind::OpenAiChatgpt | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
             parse_data_models(payload, kind, &mut models, payload.get("data").is_none())?;
         }
     }
@@ -291,8 +291,15 @@ fn parse_data_models(
             continue;
         }
         let object = row.as_object().ok_or(CatalogFailure::Schema)?;
+        if kind == ProviderKind::OpenAiChatgpt
+            && object.get("visibility").and_then(Value::as_str) != Some("list")
+        {
+            continue;
+        }
         let id = match kind {
-            ProviderKind::OpenAiCodex => object.get("slug").or_else(|| object.get("id")),
+            ProviderKind::OpenAiChatgpt | ProviderKind::OpenAiCodex => {
+                object.get("slug").or_else(|| object.get("id"))
+            }
             ProviderKind::GrokBuild => object
                 .get("id")
                 .or_else(|| object.get("model"))
@@ -305,7 +312,9 @@ fn parse_data_models(
         .and_then(Value::as_str)
         .ok_or(CatalogFailure::Schema)?;
         let (reasoning_default, reasoning_variants) = match kind {
-            ProviderKind::OpenAiCodex => parse_codex_reasoning(object),
+            ProviderKind::OpenAiChatgpt | ProviderKind::OpenAiCodex => {
+                parse_codex_reasoning(object)
+            }
             ProviderKind::GrokBuild => parse_grok_reasoning(object),
             ProviderKind::OpenAiCompatible
             | ProviderKind::OpenAiResponse
@@ -668,6 +677,7 @@ fn next_cursor(kind: ProviderKind, payload: &Value) -> Result<Option<String>, Ca
             .transpose(),
         ProviderKind::OpenAiCompatible
         | ProviderKind::OpenAiResponse
+        | ProviderKind::OpenAiChatgpt
         | ProviderKind::OpenAiCodex
         | ProviderKind::GrokBuild => Ok(None),
     }

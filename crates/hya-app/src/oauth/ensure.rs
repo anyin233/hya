@@ -94,6 +94,9 @@ async fn ensure_access_token_in_async_ref(
     match cred {
         AuthCredential::Api { token } => Ok(token),
         AuthCredential::OAuth(oauth) => {
+            if oauth.oauth_type == OAuthType::OpenaiChatgpt {
+                super::chatgpt::validate_saved(&oauth)?;
+            }
             if !is_expired(&oauth.expires_at, DEFAULT_SKEW)? {
                 return Ok(oauth.access_token);
             }
@@ -109,6 +112,11 @@ async fn refresh_and_store(
 ) -> Result<String, OAuthError> {
     // Single-flight process lock so concurrent streams don't burn a rotated refresh token.
     let _guard = refresh_lock().lock().await;
+    let _file_guard = if oauth.oauth_type == OAuthType::OpenaiChatgpt {
+        Some(super::chatgpt::lock_refresh(dir, provider).await?)
+    } else {
+        None
+    };
 
     // Re-read: another task may have refreshed while we waited.
     if let Some(AuthCredential::OAuth(latest)) = load_credential_in(dir, provider) {
@@ -147,6 +155,11 @@ where
     // Same single-flight process lock as refresh_and_store so concurrent
     // streams recovering from 401 cannot burn a rotated refresh token.
     let _guard = refresh_lock().lock().await;
+    let _file_guard = if oauth.oauth_type == OAuthType::OpenaiChatgpt {
+        Some(super::chatgpt::lock_refresh(dir, provider).await?)
+    } else {
+        None
+    };
 
     // Re-read past the lock. Unlike refresh_and_store the comparison is not a
     // skew check but token identity: when storage already moved past the exact
@@ -170,6 +183,7 @@ async fn refresh_credential(
     oauth: &OAuthCredential,
 ) -> Result<OAuthCredential, OAuthError> {
     let result = match oauth.oauth_type {
+        OAuthType::OpenaiChatgpt => super::chatgpt::refresh_chatgpt(oauth).await,
         OAuthType::OpenaiCodex => refresh_openai_codex(&oauth.refresh_token).await,
         OAuthType::GrokBuild => refresh_grok_build(&oauth.refresh_token).await,
     };
@@ -295,6 +309,7 @@ mod tests {
             "codex",
             &AuthCredential::OAuth(OAuthCredential {
                 oauth_type: OAuthType::OpenaiCodex,
+                chatgpt: None,
                 access_token: "fresh-access".into(),
                 refresh_token: "rt".into(),
                 expires_at: expires,
@@ -320,6 +335,7 @@ mod tests {
             "grok",
             &AuthCredential::OAuth(OAuthCredential {
                 oauth_type: OAuthType::GrokBuild,
+                chatgpt: None,
                 access_token: "a".into(),
                 refresh_token: "r".into(),
                 expires_at: expires.clone(),
@@ -347,6 +363,7 @@ mod tests {
             "codex",
             &AuthCredential::OAuth(OAuthCredential {
                 oauth_type: OAuthType::OpenaiCodex,
+                chatgpt: None,
                 access_token: "stale-t0".into(),
                 refresh_token: "rt-0".into(),
                 expires_at: expires,
@@ -374,6 +391,7 @@ mod tests {
                         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                         Ok::<_, OAuthError>(OAuthCredential {
                             oauth_type: latest.oauth_type,
+                            chatgpt: latest.chatgpt.clone(),
                             access_token: format!("rotated-{}", latest.access_token),
                             refresh_token: format!("rt-next-{}", latest.refresh_token),
                             expires_at: (time::OffsetDateTime::now_utc()

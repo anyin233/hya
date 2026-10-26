@@ -46,6 +46,8 @@ libc = { workspace = true }
 sqlx = { workspace = true }
 futures = { workspace = true }
 
+jsonwebtoken = { version = "9.3", default-features = false }
+
 [dev-dependencies]
 http-body-util = { workspace = true }
 tower = { workspace = true }

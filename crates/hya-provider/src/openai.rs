@@ -14,11 +14,11 @@ mod responses;
 pub use decoder::OpenAiChatDecoder;
 pub(crate) use decoder::REASONING_CONTENT_TYPE;
 pub use response_decoder::OpenAiResponsesDecoder;
-pub(crate) use responses::GrokBuildProtocol;
 pub use responses::{
     COMPACT_CONTEXT_MARKER, OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER,
     encode_input_items, format_responses_compact_system, parse_responses_compact_items,
 };
+pub(crate) use responses::{ChatgptPlanProtocol, GrokBuildProtocol};
 
 /// Marker written by older chat decoders; historical sessions still replay it.
 pub(crate) const LEGACY_CHAT_REASONING_MARKER: &str = "openai_chat_reasoning_content";

@@ -156,7 +156,7 @@ export function createProviderController({ store, client, refresh, pickModel }: 
     if (form.action === "removeKey") {
       const outcome = await run({ kind: "removeKey", label: `Removing the key of ${provider}`, provider }, (signal) => client.removeProviderKey(provider, signal))
       if (!outcome.ok) return formFailed(form, outcome)
-      await succeeded({ tone: "ok", text: `Removed the saved key of ${provider}` })
+      await succeeded({ tone: outcome.value?.warning ? "info" : "ok", text: outcome.value?.warning || `Removed the saved key of ${provider}` })
       return
     }
     const model = form.model ?? ""
@@ -179,6 +179,16 @@ export function createProviderController({ store, client, refresh, pickModel }: 
   }
 
   async function command(next: ProviderCommand): Promise<void> {
+    if (next.kind === "login") {
+      secret.clear()
+      const started = await run<{ authorizationUrl: string; state: string }>({ kind: "oauth", label: "Starting Continue with ChatGPT", provider: next.provider },
+        (signal) => client.request("POST", `/v1/auth/${encodeURIComponent(next.provider)}/oauth/start`, {}, signal))
+      if (!started.ok) { notify({ tone: "error", text: started.cancelled ? "Sign-in cancelled" : errorText(started.error) }); return }
+      patch((current) => ({ ...current, oauth: { provider: next.provider, ...started.value },
+        form: { kind: "chatgpt", title: "Continue with ChatGPT", provider: next.provider, step: 0,
+          fields: [{ id: "callback", label: "Callback URL", kind: "secret", value: "", optional: true, placeholder: "optional for local login" }] } }))
+      return
+    }
     if (next.kind === "refresh") {
       const outcome = await run({ kind: "refresh", label: `Fetching the models of ${next.provider}`, provider: next.provider }, (signal) => client.refreshProvider(next.provider, signal))
       if (!outcome.ok) {
@@ -197,8 +207,26 @@ export function createProviderController({ store, client, refresh, pickModel }: 
     patch((current) => ({ ...current, test: { ...outcome.value, provider: next.provider, model: next.model } }))
   }
 
+  async function finishChatgpt(): Promise<void> {
+    const oauth = view()?.oauth
+    if (!oauth) return
+    const outcome = await run({ kind: "oauth", label: "Waiting for ChatGPT sign-in", provider: oauth.provider },
+      (signal) => client.request("POST", `/v1/auth/${encodeURIComponent(oauth.provider)}/oauth/callback`, { state: oauth.state, code: secret.peek() }, signal))
+    secret.clear()
+    if (!outcome.ok) {
+      patch((current) => ({ ...current, form: undefined, oauth: undefined }))
+      notify({ tone: outcome.cancelled ? "info" : "error", text: `${outcome.cancelled ? "Sign-in cancelled locally; the backend may still finish received consent" : errorText(outcome.error)} · l starts a new login` })
+      await reload()
+      return
+    }
+    await succeeded({ tone: "ok", text: `Connected ${oauth.provider} with ChatGPT · choose a model, then t tests access` },
+      (current) => openProviderDetail({ ...current, form: undefined, oauth: undefined }, oauth.provider, data()))
+    if (store.state.models.some((model) => model.providerId === oauth.provider) && defaultModelRef(store.state).startsWith(`${offlineProviderId}/`)) {
+      pickModel(oauth.provider, (model) => notify({ tone: "ok", text: `Model → ${model}` }))
+    }
+  }
   function submit(form: FormState, values: Record<string, string>): void {
-    const done = form.kind === "addProvider" ? addProvider(form, values)
+    const done = form.kind === "chatgpt" ? finishChatgpt() : form.kind === "addProvider" ? addProvider(form, values)
       : form.kind === "setKey" ? setKey(form)
       : form.kind === "confirm" ? confirm(form)
       : saveModel(form, values)

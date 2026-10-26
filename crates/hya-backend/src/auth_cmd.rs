@@ -7,12 +7,12 @@ use hya_app::oauth::{self, OAuthLoginOptions};
 
 #[derive(Subcommand)]
 pub(crate) enum OauthCommand {
-    /// Run an interactive OAuth login for openai-codex or grok-build.
+    /// Run an interactive OAuth login for openai-chatgpt, openai-codex or grok-build.
     Login {
         /// Provider id to write under `providers.<id>` and `auth/<id>.yaml`.
         #[arg(long)]
         provider: String,
-        /// OAuth provider type: `openai-codex` or `grok-build`.
+        /// OAuth provider type: `openai-chatgpt`, `openai-codex` or `grok-build`.
         #[arg(long = "type", value_name = "TYPE")]
         oauth_type: String,
         /// Use the device-code flow (default for openai-codex and grok-build).
@@ -35,6 +35,8 @@ pub(crate) enum OauthCommand {
         #[arg(long)]
         base_url: Option<String>,
     },
+    /// Sign out and revoke a renewable ChatGPT session when possible.
+    Logout { provider: String },
     /// Show saved auth status (OAuth type and expiry; no secrets).
     Status {
         /// Optional provider id filter.
@@ -62,11 +64,16 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
         } => {
             let oauth_type = OAuthType::parse(&oauth_type).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown OAuth type '{oauth_type}'; supported: openai-codex, grok-build"
+                    "unknown OAuth type '{oauth_type}'; supported: openai-chatgpt, openai-codex, grok-build"
                 )
             })?;
-            if loopback && !matches!(oauth_type, OAuthType::OpenaiCodex) {
-                anyhow::bail!("--loopback is only supported for --type openai-codex");
+            if loopback
+                && !matches!(
+                    oauth_type,
+                    OAuthType::OpenaiCodex | OAuthType::OpenaiChatgpt
+                )
+            {
+                anyhow::bail!("--loopback is only supported for OpenAI OAuth");
             }
             if browser && no_browser {
                 anyhow::bail!("pass only one of --browser or --no-browser");
@@ -123,6 +130,17 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             } else {
                 println!("  models: discovered on next startup; no guessed model was written");
             }
+            Ok(())
+        }
+        OauthCommand::Logout { provider } => {
+            let dir = auth::auth_dir().ok_or_else(|| anyhow::anyhow!("no auth directory"))?;
+            let (_, warning) = oauth::chatgpt::logout_in(&dir, &provider).await?;
+            println!(
+                "{}",
+                warning.unwrap_or_else(|| format!(
+                    "Signed out of {provider}; saved ChatGPT registration retained."
+                ))
+            );
             Ok(())
         }
         OauthCommand::Status { provider } => {

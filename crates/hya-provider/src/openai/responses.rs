@@ -19,6 +19,42 @@ pub struct OpenAiResponsesProtocol;
 
 pub(crate) struct GrokBuildProtocol;
 
+/// Public ChatGPT plan route: preserve Hya's history and client-side tools.
+pub(crate) struct ChatgptPlanProtocol;
+impl Protocol for ChatgptPlanProtocol {
+    fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+        let mut body = OpenAiResponsesProtocol.encode(req)?;
+        if let Some(object) = body.as_object_mut() {
+            object.remove("temperature");
+            object.remove("max_output_tokens");
+        }
+        if let Some(items) = body["input"].as_array_mut() {
+            for item in items {
+                if item["role"] == "system" {
+                    item["role"] = json!("developer");
+                }
+                if item["type"] == "function_call" {
+                    item["namespace"] = json!("hya");
+                }
+            }
+        }
+        // Namespace tools while preserving their function names in call results.
+        if !req.tools.is_empty() {
+            body["tools"] = json!([{"type":"namespace", "name":"hya", "description":"Hya local tools", "tools":body["tools"]}]);
+        }
+        body["include"] = json!(["reasoning.encrypted_content"]);
+        Ok(body)
+    }
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder> {
+        Box::new(OpenAiResponsesDecoder::new(session, message, reasoning))
+    }
+}
+
 impl Protocol for GrokBuildProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         let mut body = OpenAiResponsesProtocol.encode(req)?;
@@ -292,5 +328,46 @@ mod tests {
         let input = encode_input_items(&messages).unwrap();
         assert_eq!(input.len(), 1);
         assert_eq!(input[0]["role"], "system");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod chatgpt_tests {
+    use super::*;
+    #[test]
+    fn plan_requests_use_stateless_developer_history_and_namespaced_tools() {
+        let request = CompletionRequest {
+            model: "account-model".into(),
+            system: Some("You are Hya".into()),
+            messages: vec![Message::System {
+                id: MessageId::new(),
+                content: "Remember this context".into(),
+            }],
+            tools: vec![hya_proto::ToolSchema {
+                name: "read".into(),
+                description: "Read a local file".into(),
+                input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+                output_schema: None,
+            }],
+            temperature: Some(0.2),
+            max_output_tokens: Some(4096),
+            reasoning: None,
+            headers: Default::default(),
+        };
+        let body = ChatgptPlanProtocol.encode(&request).unwrap();
+        assert_eq!(body["store"], false);
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["input"][0]["role"], "developer");
+        assert_eq!(body["tools"][0]["type"], "namespace");
+        assert_eq!(body["tools"][0]["name"], "hya");
+        assert_eq!(body["tools"][0]["tools"][0]["name"], "read");
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("max_output_tokens").is_none());
+        // Ordinary Responses API credentials retain their own request behavior.
+        assert_eq!(
+            OpenAiResponsesProtocol.encode(&request).unwrap()["max_output_tokens"],
+            4096
+        );
     }
 }

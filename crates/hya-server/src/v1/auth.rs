@@ -3,8 +3,7 @@
 //! Keys are written by the app-owned [`crate::ProviderControl`] through
 //! `hya_app::auth` (atomic, mode 0600, `type: api`), which then rebuilds the
 //! provider's route and the catalog live — no restart. Provider OAuth flows
-//! over HTTP are not wired for v1 yet and answer `unavailable` honestly
-//! rather than faking a flow.
+//! use the app-owned control for official Sign in with ChatGPT.
 
 use axum::Router;
 use axum::extract::{Path as AxumPath, State};
@@ -95,6 +94,7 @@ async fn remove_provider_auth(
         .map_err(map_control_error)?;
     super::providers::notify_catalog_updated(&st);
     Ok(Json(pb::RemoveProviderAuthResponse {
+        warning: change.warning.unwrap_or_default(),
         provider: if change.configured {
             super::catalog::provider_info(&st, &provider_id).await
         } else {
@@ -104,21 +104,34 @@ async fn remove_provider_auth(
 }
 
 async fn start_oauth(
+    State(st): State<ServerState>,
     AxumPath(provider_id): AxumPath<String>,
     Json(_request): Json<pb::StartOauthRequest>,
 ) -> Result<Json<pb::StartOauthResponse>, V1Error> {
     check_provider_id(&provider_id)?;
-    Err(V1Error::unavailable(format!(
-        "provider oauth start is not wired for {provider_id}; use the launcher auth command"
-    )))
+    let started = st
+        .provider_control
+        .start_oauth(provider_id)
+        .await
+        .map_err(map_control_error)?;
+    Ok(Json(pb::StartOauthResponse {
+        authorization_url: started.authorization_url,
+        state: started.state,
+    }))
 }
 
 async fn complete_oauth(
+    State(st): State<ServerState>,
     AxumPath(provider_id): AxumPath<String>,
-    Json(_request): Json<pb::CompleteOauthRequest>,
+    Json(request): Json<pb::CompleteOauthRequest>,
 ) -> Result<Json<pb::CompleteOauthResponse>, V1Error> {
     check_provider_id(&provider_id)?;
-    Err(V1Error::unavailable(format!(
-        "provider oauth completion is not wired for {provider_id}; use the launcher auth command"
-    )))
+    st.provider_control
+        .complete_oauth(provider_id, request.state, request.code)
+        .await
+        .map_err(map_control_error)?;
+    super::providers::notify_catalog_updated(&st);
+    Ok(Json(pb::CompleteOauthResponse {
+        status: pb::AuthStatus::Credentialed as i32,
+    }))
 }

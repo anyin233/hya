@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub enum OAuthType {
     /// ChatGPT Codex subscription OAuth (`openai-codex` / `codex`).
     OpenaiCodex,
+    /// Official Sign in with ChatGPT plan usage on the public Responses API.
+    OpenaiChatgpt,
     /// Grok Build / xAI CLI OAuth (`grok-build` / `grok` / `xai-oauth`).
     GrokBuild,
 }
@@ -21,6 +23,7 @@ impl OAuthType {
     /// Parse a CLI/config type string.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
+            "openai-chatgpt" | "chatgpt" => Some(Self::OpenaiChatgpt),
             "openai-codex" | "openai_codex" | "codex" => Some(Self::OpenaiCodex),
             "grok-build" | "grok_build" | "grok" | "xai-oauth" => Some(Self::GrokBuild),
             _ => None,
@@ -31,6 +34,7 @@ impl OAuthType {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::OpenaiChatgpt => "openai-chatgpt",
             Self::OpenaiCodex => "openai-codex",
             Self::GrokBuild => "grok-build",
         }
@@ -40,6 +44,7 @@ impl OAuthType {
     #[must_use]
     pub const fn provider_kind(self) -> &'static str {
         match self {
+            Self::OpenaiChatgpt => "openai-chatgpt",
             Self::OpenaiCodex => "openai-codex",
             Self::GrokBuild => "grok-build",
         }
@@ -49,6 +54,7 @@ impl OAuthType {
     #[must_use]
     pub const fn default_base_url(self) -> &'static str {
         match self {
+            Self::OpenaiChatgpt => "https://api.openai.com/v1",
             Self::OpenaiCodex => "https://chatgpt.com/backend-api/codex",
             Self::GrokBuild => "https://cli-chat-proxy.grok.com/v1",
         }
@@ -58,6 +64,7 @@ impl OAuthType {
     #[must_use]
     pub const fn default_model(self) -> &'static str {
         match self {
+            Self::OpenaiChatgpt => "",
             Self::OpenaiCodex => "gpt-5.3-codex",
             Self::GrokBuild => "grok-4.5",
         }
@@ -70,11 +77,29 @@ impl std::fmt::Display for OAuthType {
     }
 }
 
+/// Verified registration attached to a ChatGPT plan credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatgptRegistration {
+    /// OpenAI-issued client ID for this account registration.
+    pub client_id: String,
+    /// Stable host identity for this installation.
+    pub host_id: String,
+    /// Verified OIDC subject.
+    pub subject: String,
+    /// Verified account display label when supplied.
+    pub email: Option<String>,
+    /// Permissions actually granted by OpenAI.
+    pub scopes: Vec<String>,
+}
+
 /// Full OAuth credential bundle stored on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthCredential {
     /// Which OAuth implementation produced this bundle.
     pub oauth_type: OAuthType,
+    /// Issued registration and verified identity for the public ChatGPT flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<Box<ChatgptRegistration>>,
     /// Short-lived bearer access token for API calls.
     pub access_token: String,
     /// Long-lived refresh token used to mint new access tokens.
@@ -129,6 +154,8 @@ struct AuthFile {
     token: Option<String>,
     #[serde(default)]
     oauth_type: Option<OAuthType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chatgpt: Option<Box<ChatgptRegistration>>,
     #[serde(default)]
     access_token: Option<String>,
     #[serde(default)]
@@ -159,6 +186,7 @@ impl AuthFile {
             let oauth_type = self.oauth_type?;
             return Some(AuthCredential::OAuth(OAuthCredential {
                 oauth_type,
+                chatgpt: self.chatgpt,
                 access_token: access,
                 refresh_token: refresh,
                 expires_at,
@@ -186,6 +214,7 @@ impl AuthFile {
                 kind: Some("api".to_string()),
                 token: Some(token.clone()),
                 oauth_type: None,
+                chatgpt: None,
                 access_token: None,
                 refresh_token: None,
                 expires_at: None,
@@ -196,6 +225,7 @@ impl AuthFile {
                 kind: Some("oauth".to_string()),
                 token: None,
                 oauth_type: Some(oauth.oauth_type),
+                chatgpt: oauth.chatgpt.clone(),
                 access_token: Some(oauth.access_token.clone()),
                 refresh_token: Some(oauth.refresh_token.clone()),
                 expires_at: Some(oauth.expires_at.clone()),
@@ -235,7 +265,12 @@ pub fn save_credential_in(
     let file = AuthFile::from_credential(credential);
     let body = serde_norway::to_string(&file).map_err(std::io::Error::other)?;
     let path = dir.join(format!("{provider}.yaml"));
-    let tmp = dir.join(format!(".{provider}.yaml.tmp"));
+    write_secret(&path, &body)
+}
+
+/// Write private app-owned metadata atomically using the same credential writer.
+pub(crate) fn write_secret(path: &Path, body: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
     // Create the temp file with mode 0600 so the secret is never readable
     // by others, even between the write and the rename.
     let _ = std::fs::remove_file(&tmp);
@@ -441,6 +476,7 @@ mod tests {
         let dir = tempdir();
         let cred = AuthCredential::OAuth(OAuthCredential {
             oauth_type: OAuthType::OpenaiCodex,
+            chatgpt: None,
             access_token: "access-abc".to_string(),
             refresh_token: "refresh-xyz".to_string(),
             expires_at: "2026-07-22T12:00:00Z".to_string(),
