@@ -631,6 +631,74 @@ async fn consumed_results_do_not_repeat_synthesis(via_wait: bool, late_mail: boo
     assert_eq!(max_open_assistant(&events, root), 1);
 }
 
+/// Reading one channel commits the whole inbox cursor, but it acknowledges
+/// only what it showed: a report that arrived on another channel keeps the
+/// lead's synthesis, so the lead still hears of it.
+#[tokio::test]
+async fn reading_another_channel_keeps_the_synthesis_for_unseen_mail() {
+    let (engine, agent, provider) = engine_with_gate().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    provider.gate(root);
+
+    engine
+        .admit_user_prompt(root, "lead the team".to_string())
+        .await
+        .unwrap();
+    let lead = {
+        let engine = engine.clone();
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            engine
+                .run_turn(root, &agent, CancellationToken::new())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), provider.entered.notified())
+        .await
+        .expect("lead turn reaches the provider");
+
+    register_main(&supervisor, &engine, &agent, root).await;
+    let mut scouts = Vec::new();
+    for handle in ["scout", "other"] {
+        let scout = make_session(&engine, Some(root), "hya-task").await;
+        supervisor
+            .register_existing_resident(root, scout, handle.to_string(), agent.clone(), None)
+            .await
+            .unwrap();
+        scouts.push(scout);
+    }
+    for (scout, body) in [(scouts[0], "findings ready"), (scouts[1], "other report")] {
+        engine
+            .mail_send(
+                scout,
+                MailEndpoint::Handle("^parent".to_string()),
+                MailKind::Message,
+                body.to_string(),
+            )
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let read = engine
+        .read_channel_history(root, "scout", None)
+        .await
+        .unwrap();
+    assert_eq!(read.messages[0].1, "findings ready");
+
+    provider.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), lead)
+        .await
+        .expect("lead turn finishes")
+        .unwrap()
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(root) == 2 }).await,
+        "the unseen report on the other DM still wakes the lead"
+    );
+}
+
 /// Two `run_turn` calls on one session serialize: the second waits for the
 /// first to end instead of streaming beside it.
 #[tokio::test]

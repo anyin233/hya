@@ -42,7 +42,10 @@ export function SubagentsPane(props: PaneRenderProps) {
     const confirming = confirmArchive()
     if (confirming) {
       setConfirmArchive(undefined)
-      if (key.name === "return" && !key.ctrl && !key.meta && !key.shift) command(`/subagents archive ${confirming}`)
+      // Only the row the hint still names: one that left the list (archived
+      // elsewhere, or hidden) cancels the confirmation instead.
+      const shown = rows().some((row) => row.id === confirming)
+      if (shown && key.name === "return" && !key.ctrl && !key.meta && !key.shift) command(`/subagents archive ${confirming}`)
       return
     }
     // Paging keys scroll the viewer Enter would pin to; the parent's transcript stays put.

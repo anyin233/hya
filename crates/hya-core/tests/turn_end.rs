@@ -1048,6 +1048,50 @@ async fn interrupting_one_subagent_stops_it_until_the_user_steers_it() {
     assert!(engine.cancel_turn(second, FinishCause::UserCancel));
 }
 
+/// Interrupting a subagent that is idle — no turn running, none owed — stops
+/// nothing: `CancelTurn` reports nothing cancelled, and the lead's mail
+/// still reaches and wakes it.
+#[tokio::test]
+async fn interrupting_an_idle_subagent_stops_nothing() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let member = make_session(&engine, Some(root), "hya-task").await;
+    supervisor
+        .register_existing_resident(
+            root,
+            member,
+            "idle".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(member) == 1 && !engine.turn_active(member) })
+            .await,
+        "its first turn ran and ended"
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert!(!engine.cancel_user_turn(member), "nothing was running");
+    assert!(!engine.stopped_by_user(member), "nothing was stopped");
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle("main/idle".to_string()),
+            MailKind::Message,
+            "next task".to_string(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(member) == 2 }).await,
+        "the lead's mail wakes it"
+    );
+}
+
 /// An aborted restart handoff strands nothing: a turn that cannot reach its
 /// round boundary in time (here: parked mid-provider-stream) is neither
 /// cancelled nor closed, the quiesce lifts so the old harness keeps serving,
