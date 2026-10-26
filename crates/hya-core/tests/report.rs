@@ -747,6 +747,116 @@ async fn archive_names_actionable_errors() {
     );
 }
 
+/// The user's steer wakes an idle subagent with the text, marked `[user]`,
+/// on its parent's DM; a nested subagent is steered from its own parent.
+#[tokio::test]
+async fn user_steer_wakes_an_idle_subagent_from_its_parent() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (lead, lead_handle) = spawn_idle_resident(&supervisor, &engine, root, "lead").await;
+    let (worker, worker_handle) = spawn_idle_resident(&supervisor, &engine, lead, "work").await;
+
+    let receipt = engine
+        .steer_subagent(worker, "  focus on the parser  ")
+        .await
+        .unwrap();
+    assert_eq!(
+        receipt.from, lead_handle,
+        "a nested subagent hears from its own parent"
+    );
+    wait_turns(&engine, worker, 2).await;
+    wait_idle(&engine, root, &worker_handle, worker).await;
+    assert!(transcript_has(&engine, worker, "[user] focus on the parser").await);
+
+    let receipt = engine.steer_subagent(lead, "wrap up").await.unwrap();
+    assert_eq!(receipt.from, "main");
+
+    let empty = engine
+        .steer_subagent(worker, "   ")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(empty.contains("needs text"), "{empty}");
+    let not_child = engine
+        .steer_subagent(root, "hi")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(not_child.contains("not a subagent"), "{not_child}");
+}
+
+/// Steering an archived subagent revives it under the same session.
+#[tokio::test]
+async fn user_steer_revives_an_archived_subagent() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    engine.archive_subagent(child).await.unwrap();
+    assert!(
+        !engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .roster
+            .contains_key(&handle)
+    );
+
+    engine
+        .steer_subagent(child, "one more thing")
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection
+            .team
+            .roster
+            .get(&handle)
+            .map(|entry| entry.session),
+        Some(child)
+    );
+    wait_idle(&engine, root, &handle, child).await;
+    assert!(transcript_has(&engine, child, "[user] one more thing").await);
+}
+
+async fn wait_turns(engine: &SessionEngine, session: SessionId, turns: usize) {
+    for _ in 0..300 {
+        let assistants = engine
+            .read_projection(session)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == hya_proto::Role::Assistant)
+            .count();
+        if assistants >= turns {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("{session} never reached {turns} turns");
+}
+
+async fn transcript_has(engine: &SessionEngine, session: SessionId, needle: &str) -> bool {
+    engine
+        .read_projection(session)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .iter()
+        .any(|message| {
+            message.parts.iter().any(
+                |part| matches!(part, PartProjection::Text { text, .. } if text.contains(needle)),
+            )
+        })
+}
+
 #[tokio::test]
 async fn root_teardown_force_archives_live_descendants() {
     let engine = engine().await;

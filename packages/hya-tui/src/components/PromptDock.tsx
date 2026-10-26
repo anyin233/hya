@@ -60,7 +60,7 @@ export function PromptDock() {
             <For each={view().options}>
               {(option, row) => (
                 <text height={1} wrapMode="none" onMouseDown={() => controller.answer(shown().interaction, option.choice)}>
-                  <span style={{ fg: row() === index() ? colors.accent : colors.fg }}>{`${row() === index() ? "▸" : " "} ${row() + 1}  ${option.label}`}</span>
+                  <span style={{ fg: row() === index() ? colors.focus : colors.fg }}>{`${row() === index() ? "▸" : " "} ${row() + 1}  ${option.label}`}</span>
                   <span style={{ fg: colors.muted }}>{option.detail ? `  ${option.detail}` : ""}</span>
                 </text>
               )}

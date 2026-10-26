@@ -177,6 +177,10 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
     { group: "Subagents", keys: "Enter", description: "Selector: pin the preview to the first following viewer, or reuse the first pinned viewer" },
     { group: "Subagents", keys: "Ctrl+A", description: "Selector: toggle archived helpers (/subagents archived); hidden by default" },
     { group: "Subagents", keys: "n", description: "Selector: add a separate viewer pinned to the preview" },
+    { group: "Subagents", keys: "x", description: "Selector: interrupt the selected subagent's turn (/subagents interrupt); it stays available" },
+    { group: "Subagents", keys: "s", description: "Selector: steer the selected subagent: opens /subagents steer <session> to type the message" },
+    { group: "Subagents", keys: "d", description: "Selector: archive the selected subagent after Enter confirms (/subagents archive); steering wakes it" },
+    { group: "Subagents", keys: "PgUp / PgDn, Home / End", description: "Selector: scroll the viewer Enter pins to" },
   )
   const commandRows: HelpRow[] = commands.map((entry) => ({
     group: "Commands",

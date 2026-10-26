@@ -68,6 +68,27 @@ service Session {
   //
   // hya.http: POST /v1/sessions/{session}/revert
   rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
+
+  // Archive a subagent session on the user's behalf, as its team lead's
+  // `archive` tool does: its in-flight turn is cancelled (cause
+  // `archived`), live descendants archive first, then it leaves the live
+  // roster (`archive_reason` `archived_by_parent`). Its transcript stays
+  // readable and `SteerSubagent` wakes it again under the same session.
+  // `invalid_argument` for a root session or an already archived subagent.
+  // To stop a subagent's turn without archiving it, use `CancelTurn` on its
+  // session.
+  //
+  // hya.http: POST /v1/sessions/{session}/archive
+  rpc ArchiveSubagent(ArchiveSubagentRequest) returns (ArchiveSubagentResponse);
+
+  // Steer a subagent session with a message from the user. It is delivered
+  // on the DM from the subagent's parent, prefixed `[user] `: a running
+  // subagent sees it after its next tool call, an idle one wakes for it,
+  // and an archived one is revived by it. `invalid_argument` for a root
+  // session, empty text, or a subagent whose parent is archived.
+  //
+  // hya.http: POST /v1/sessions/{session}/steer
+  rpc SteerSubagent(SteerSubagentRequest) returns (SteerSubagentResponse);
 }
 
 // Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on
@@ -374,4 +395,30 @@ message RevertSessionResponse {
   SessionInfo session = 1;
   // Files this call wrote (or could not restore).
   repeated RevertedFile files = 2;
+}
+
+message ArchiveSubagentRequest {
+  // Subagent (child) session identifier.
+  string session = 1;
+}
+
+message ArchiveSubagentResponse {
+  // Team handle of the archived subagent.
+  string handle = 1;
+  // Whether an in-flight turn was cancelled.
+  bool cancelled_turn = 2;
+  // Handles of live descendants archived first (deepest first).
+  repeated string descendants = 3;
+}
+
+message SteerSubagentRequest {
+  // Subagent (child) session identifier.
+  string session = 1;
+  // Message text; surrounding whitespace is trimmed.
+  string text = 2;
+}
+
+message SteerSubagentResponse {
+  // Team handle the message was sent from (the subagent's parent).
+  string from = 1;
 }

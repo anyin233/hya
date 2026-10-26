@@ -8,11 +8,11 @@ export function PaneFrame(props: { kind: PaneKind; title: string; focused?: bool
   const selectable = () => paneDefinitions[props.kind].selectable
   return <box width="100%" height="100%" flexGrow={1} flexShrink={1} flexBasis={0}
     // An empty edge list avoids OpenTUI auto-enabling borders when borderColor is set.
-    border={selectable() ? true : []} borderColor={props.focused && selectable() ? colors.accent : colors.border}
-    title={selectable() ? props.title : undefined}
+    border={selectable() ? true : []} borderColor={props.focused && selectable() ? colors.focus : colors.border}
+    titleColor={colors.heading} title={selectable() ? props.title : undefined}
     backgroundColor={props.background ?? (selectable() ? colors.panel : colors.bg)}
     flexDirection="column" paddingX={1}>
-    <Show when={!selectable()}><text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{props.title}</text></Show>
+    <Show when={!selectable()}><text height={1} flexShrink={0} wrapMode="none" fg={colors.heading}>{props.title}</text></Show>
     {props.children}
   </box>
 }

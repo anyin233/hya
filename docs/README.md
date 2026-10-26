@@ -30,6 +30,7 @@ architecture notes.
 If you want to run hya:
 
 1. [Getting Started](getting-started.md)
+   - [Install on Windows with WSL](install-wsl.md) — WSL 2 setup, release or source install, WebUI from Windows
    - [OpenTUI frontend](tui.md) — the interactive TUI, also served as the WebUI
 2. [Configuration](configuration.md)
 3. [Compaction](compaction.md) — the five context-reduction mechanisms and their configurable order

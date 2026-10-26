@@ -492,6 +492,50 @@ impl V1Sdk {
         .await
     }
 
+    /// `POST /v1/sessions/{id}/archive` — archive a subagent session, as its
+    /// team lead's `archive` tool does.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn archive_subagent(
+        &self,
+        session: &str,
+    ) -> Result<pb::ArchiveSubagentResponse, SdkError> {
+        let request = pb::ArchiveSubagentRequest {
+            session: session.to_string(),
+        };
+        self.call(
+            reqwest::Method::POST,
+            &format!("/v1/sessions/{session}/archive"),
+            None,
+            Some(&request),
+        )
+        .await
+    }
+
+    /// `POST /v1/sessions/{id}/steer` — send the user's message to a subagent
+    /// session on its parent's DM.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn steer_subagent(
+        &self,
+        session: &str,
+        text: &str,
+    ) -> Result<pb::SteerSubagentResponse, SdkError> {
+        let request = pb::SteerSubagentRequest {
+            session: session.to_string(),
+            text: text.to_string(),
+        };
+        self.call(
+            reqwest::Method::POST,
+            &format!("/v1/sessions/{session}/steer"),
+            None,
+            Some(&request),
+        )
+        .await
+    }
+
     /// `GET /v1/sessions/{id}/workflow` — the session's workflow state.
     ///
     /// # Errors

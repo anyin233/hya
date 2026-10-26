@@ -11,8 +11,8 @@ import type { Tui } from "./harness"
 import { expect, hyaTui, test, textStep } from "./hya"
 
 // Palettes of packages/hya-tui/src/theme.ts.
-const hya = { bg: "default", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8" }
-const light = { bg: "default", fg: "#1f2933", muted: "#5b6b7b", accent: "#0b6f94", panel: "default", keyword: "#8839c9" }
+const hya = { bg: "default", fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8" }
+const light = { bg: "default", fg: "#1f2933", muted: "#5b6b7b", focus: "#0b6f94", panel: "default", keyword: "#8839c9" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -41,7 +41,7 @@ test.describe("/theme", () => {
     const env = { HYA_TUI_CONFIG: prefs }
     let term = await tui(hyaTui(backend), { env })
     await term.waitForText("Message, !shell, or @file · / commands")
-    expect(await screenColors(term)).toEqual({ bg: hya.bg, focus: hya.accent })
+    expect(await screenColors(term)).toEqual({ bg: hya.bg, focus: hya.focus })
 
     await prompt(term, "/theme")
     await term.waitForText("Theme")
@@ -49,15 +49,21 @@ test.describe("/theme", () => {
     await term.waitForText(/ {3}Light\s+\[light\]/)
     await term.waitForText(/High contrast\s+\[dark\]/)
     await term.waitForText(/Ember\s+\[dark\]/)
+    const title = (await term.find("Theme"))!
+    expect((await term.cell(title.row, title.col))?.fg).toBe(hya.fg)
+    const choice = (await term.find("▸ ● hya"))!
+    expect((await term.cell(choice.row, choice.col))?.fg).toBe(hya.focus)
 
     // Down highlights Light: the whole screen previews it at once.
     await term.press("ArrowDown")
-    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.accent)
+    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.focus)
+    const lightTitle = (await term.find("Theme"))!
+    expect((await term.cell(lightTitle.row, lightTitle.col))?.fg).toBe(light.fg)
     await term.attach(testInfo, "light-preview")
     // Esc restores the default theme and saves nothing.
     await term.press("Escape")
     await expect.poll(() => term.find("─Theme")).toBeNull()
-    await expect.poll(() => screenColors(term)).toEqual({ bg: hya.bg, focus: hya.accent })
+    await expect.poll(() => screenColors(term)).toEqual({ bg: hya.bg, focus: hya.focus })
     await expect(readFile(prefs, "utf8")).rejects.toThrow()
 
     // Enter keeps the highlighted theme and writes the preferences file.
@@ -67,18 +73,18 @@ test.describe("/theme", () => {
     await term.waitForText(/▸ +Light\s+\[light\]/)
     await term.press("Enter")
     await expect.poll(() => term.find("─Theme")).toBeNull()
-    await expect.poll(() => screenColors(term)).toEqual({ bg: light.bg, focus: light.accent })
+    await expect.poll(() => screenColors(term)).toEqual({ bg: light.bg, focus: light.focus })
     expect(JSON.parse(await readFile(prefs, "utf8"))).toMatchObject({ theme: "light" })
 
     // A new TUI reads the file and starts in the light theme; the picker marks it.
     term = await tui(hyaTui(backend), { env })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.accent)
+    await expect.poll(async () => (await screenColors(term)).focus).toBe(light.focus)
     await prompt(term, "/theme")
     await term.waitForText(/▸ ● Light\s+\[light\]/)
     await term.press("Escape")
     await expect.poll(() => term.find("● Light")).toBeNull()
-    expect((await screenColors(term)).focus).toBe(light.accent)
+    expect((await screenColors(term)).focus).toBe(light.focus)
   })
 
   test("at about 80 columns the light theme covers the screen and the picker fits", async ({ tui, backend }) => {
@@ -99,7 +105,7 @@ test.describe("/theme", () => {
     const row = lines.findIndex((line, index) => index > 1 && line.trim() === "")
     expect((await term.cell(row, cols - 1))?.bg).toBe(light.bg)
     expect((await term.cell(row, 0))?.bg).toBe(light.bg)
-    expect((await screenColors(term)).focus).toBe(light.accent)
+    expect((await screenColors(term)).focus).toBe(light.focus)
 
   })
 })

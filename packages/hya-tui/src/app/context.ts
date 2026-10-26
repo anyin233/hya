@@ -18,6 +18,8 @@ export interface UiHandles {
   transcript?: TranscriptScroller
   /** Scroll actions of read-only workspace panes, keyed by stable pane id. */
   panes?: Map<string, DiffScroller>
+  /** Scroll actions of mounted subagent viewers, keyed by their pane id; the selector drives them. */
+  viewers?: Map<string, TranscriptScroller>
   diff?: DiffScroller
   command?: CommandPaneHandle
   composerHistory?: InputHistory
@@ -36,7 +38,8 @@ export interface PaneInputHandle {
 /** One command input, independent of the message composer. */
 export interface CommandPaneHandle {
   active(): boolean
-  open(): void
+  /** Open the pane; `text` replaces its input (a prefilled command to finish typing). */
+  open(text?: string): void
   /** Returns true when the key was handled and must not reach the editor. */
   key(event: KeyEvent): boolean
   paste(text: string): void

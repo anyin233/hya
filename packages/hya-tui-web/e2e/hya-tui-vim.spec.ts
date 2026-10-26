@@ -1,5 +1,5 @@
 // Vim mode (docs/tui.md "Vim mode"): `/vim` toggles it and saves `vim` in
-// the preferences file; the cursor is a bar in insert mode and a block in normal;
+// the preferences file; the cursor is a bar (as without Vim) in insert mode and a block in normal;
 // Esc in insert mode switches to normal mode, Esc in normal mode keeps its
 // usual meaning (cancel the running turn, clear the input).
 
@@ -45,6 +45,11 @@ async function normal(term: Tui): Promise<void> {
   await expect.poll(() => cursorStyle(term)).toBe(2)
 }
 
+/** The saved `vim` preference, or undefined before the file is written. */
+async function savedVim(prefs: string): Promise<boolean | undefined> {
+  return readFile(prefs, "utf8").then((text) => JSON.parse(text).vim, () => undefined)
+}
+
 async function keys(term: Tui, sequence: string): Promise<void> {
   for (const key of sequence) await term.press(key)
 }
@@ -58,8 +63,10 @@ test("/vim: insert and normal mode, motions, dd, undo, the cursor shape, and per
 
   await term.type("/vim")
   await term.press("Enter")
-  await expect.poll(() => cursorStyle(term)).toBe(5)
+  await expect.poll(() => savedVim(prefs)).toBe(true)
   expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ vim: true })
+  // Insert mode keeps the bar the composer already had, so no shape change is sent.
+  expect([null, 5]).toContain(await cursorStyle(term))
 
   await term.type("alpha beta gamma")
   await term.press("Escape")
@@ -107,11 +114,31 @@ test("/vim: insert and normal mode, motions, dd, undo, the cursor shape, and per
   await term.waitForText("Message, !shell, or @file · / commands")
   await term.type("/vim off")
   await term.press("Enter")
-  await expect.poll(async () => JSON.parse(await readFile(prefs, "utf8")).vim).toBe(false)
+  await expect.poll(() => savedVim(prefs)).toBe(false)
   expect(JSON.parse(await readFile(prefs, "utf8"))).toEqual({ vim: false })
   // Off: letters type again.
   await term.type("hjkl")
   await expect.poll(() => composerText(term)).toBe("hjkl")
+})
+
+test("without Vim the composer and the command pane use a blinking bar cursor", async ({ tui, backend }) => {
+  const prefs = join(dir, "tui.json")
+  await writeFile(prefs, JSON.stringify({ vim: true }))
+  const term = await tui(hyaTui(backend), { env: { HYA_TUI_CONFIG: prefs } })
+  await term.waitForText("Message, !shell, or @file · / commands")
+  await cursorStyle(term)
+  await normal(term)
+  // The command pane's input is a bar even over a normal-mode composer.
+  await term.press("Control+x")
+  await term.type("/")
+  await expect.poll(() => cursorStyle(term)).toBe(5)
+  await term.press("Escape")
+  await expect.poll(() => cursorStyle(term)).toBe(2)
+  await term.press("Control+x")
+  await term.type("/vim")
+  await term.press("Enter")
+  await expect.poll(() => savedVim(prefs)).toBe(false)
+  await expect.poll(() => cursorStyle(term)).toBe(5)
 })
 
 test("at about 80 columns Vim keys work with no status heading", async ({ tui, backend }) => {

@@ -1,6 +1,6 @@
 /**
  * The left Projects pane: one row per Project with the highlight `▸`, a busy
- * marker `●` while a session of it runs a turn, the active one in the accent
+ * marker `●` while a session of it runs a turn, the highlighted one in the focus
  * color, and its session count; a rule between rows. A click switches; a right
  * click opens the Project's actions. While it holds the keyboard (Ctrl+P, or a
  * click on the pane), Up/Down move the highlight, Enter switches and returns
@@ -27,9 +27,9 @@ export function registerProjects(api: TuiExtensionApi): void {
       rows.push({
         kind: "row",
         children: [
-          text(project.id === current(projects) ? "▸ " : "  ", "accent", action),
+          text(project.id === current(projects) ? "▸ " : "  ", "focus", action),
           text(project.busy ? "● " : "  ", project.busy ? "warning" : "fg", action),
-          text(truncate(project.name, Math.max(1, width - 8)), project.id === projects.active ? "accent" : "fg", action),
+          text(truncate(project.name, Math.max(1, width - 8)), project.id === current(projects) ? "focus" : "fg", action),
           text(` (${project.sessionCount ?? 0})`, "muted", action),
         ],
       });

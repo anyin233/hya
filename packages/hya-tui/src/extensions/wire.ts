@@ -100,7 +100,7 @@ export const renderLimits = { maxDepth: 32, maxNodes: 2_000, maxStringBytes: 32 
 // CSI/OSC/other escape sequences, then remaining C0/C1 controls except tab and newline.
 const escapes = /[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-T-Zcf-nq-uy=><~]))|[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g
 const idPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/
-const colorPattern = /^(#[0-9a-fA-F]{6}|fg|accent|muted|error|warning|success|border)$/
+const colorPattern = /^(#[0-9a-fA-F]{6}|fg|focus|heading|link|activity|accent|muted|error|warning|success|border)$/
 const encoder = new TextEncoder()
 
 /** Terminal-safe extension text, or `undefined` when it is not a string or too large. */

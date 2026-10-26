@@ -75,17 +75,17 @@ function visibleStreamingText(text: string): string {
   return fence ? text : text.slice(0, lineStart)
 }
 
-/** Show heading text with its final accent while tree-sitter catches up. */
+/** Show heading text with its final heading style while tree-sitter catches up. */
 function previewStreamingHeadings(view: MarkdownRenderable, previewed: WeakMap<CodeRenderable, string>): void {
   for (const block of view._blockStates) {
     if (block.token.type !== "heading" || !(block.renderable instanceof CodeRenderable)) continue
     const heading = block.token.text
     if (!heading) continue
-    const accent = colors.accent
-    const signature = `${accent}\0${heading}`
+    const headingColor = colors.heading
+    const signature = `${headingColor}\0${heading}`
     if (previewed.get(block.renderable) === signature) continue
     previewed.set(block.renderable, signature)
-    const styled = new StyledText([bold(fg(accent)(heading))])
+    const styled = new StyledText([bold(fg(headingColor)(heading))])
     block.renderable.updateStreamingPreview(block.renderable.content, styled)
   }
 }

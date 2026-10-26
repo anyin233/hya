@@ -17,7 +17,7 @@ import type { Tone } from "../state/tools"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: DiffNotice): string {
-  return notice.tone === "error" ? colors.error : notice.tone === "ok" ? colors.accent : colors.fg
+  return notice.tone === "error" ? colors.error : notice.tone === "ok" ? colors.success : colors.fg
 }
 
 function toneColor(tone: Tone): string {
@@ -38,7 +38,7 @@ function BusyLine(props: { busy: DiffBusy }) {
   const seconds = () => Math.max(0, Math.floor((now() - props.busy.startedAt) / 1000))
   return (
     <text height={1} flexShrink={0} wrapMode="none">
-      <span style={{ fg: colors.accent }}>{frame()}</span>
+      <span style={{ fg: colors.activity }}>{frame()}</span>
       <span style={{ fg: colors.fg }}>{` ${props.busy.label}… ${seconds()}s`}</span>
       <span style={{ fg: colors.muted }}>{" · Esc cancels"}</span>
     </text>
@@ -89,8 +89,8 @@ export function DiffView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "diff" ? colors.accent : colors.border}
-            title={file() ? `Diff › ${file()!.path}` : "Diff"}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "diff" ? colors.focus : colors.border}
+            titleColor={colors.heading} title={file() ? `Diff › ${file()!.path}` : "Diff"}
             backgroundColor={colors.bg}
             flexDirection="row"
           >
@@ -102,7 +102,7 @@ export function DiffView() {
                 </Show>
                 <For each={shownFiles()}>
                   {(row) => (
-                    <text height={1} wrapMode="none" fg={row.path === open().current ? colors.accent : colors.fg}>
+                    <text height={1} wrapMode="none" fg={row.path === open().current ? colors.focus : colors.fg}>
                       {fileLine(row, row.path === open().current, fileListWidth() - 4)}
                     </text>
                   )}

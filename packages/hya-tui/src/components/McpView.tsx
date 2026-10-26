@@ -2,6 +2,7 @@
  * The full-screen MCP view (`/mcp`; docs/tui.md "MCP servers"). The state
  * and keys are state/mcp.ts, the calls app/mcp.ts.
  */
+import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
@@ -13,7 +14,7 @@ import { keyboardOwner } from "../state/focus"
 import { useSpinner } from "./Spinner"
 
 function noticeColor(notice: McpNotice): string {
-  return notice.tone === "error" ? colors.error : notice.tone === "ok" ? colors.accent : colors.fg
+  return notice.tone === "error" ? colors.error : notice.tone === "ok" ? colors.success : colors.fg
 }
 
 function BusyLine(props: { busy: McpBusy }) {
@@ -24,7 +25,7 @@ function BusyLine(props: { busy: McpBusy }) {
   const seconds = () => Math.max(0, Math.floor((now() - props.busy.startedAt) / 1000))
   return (
     <text height={1} flexShrink={0} wrapMode="none">
-      <span style={{ fg: colors.accent }}>{frame()}</span>
+      <span style={{ fg: colors.activity }}>{frame()}</span>
       <span style={{ fg: colors.fg }}>{` ${props.busy.label}… ${seconds()}s`}</span>
       <span style={{ fg: colors.muted }}>{" · Esc cancels"}</span>
     </text>
@@ -90,8 +91,8 @@ export function McpView() {
             height="100%"
             zIndex={50}
             border
-            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "mcp" ? colors.accent : colors.border}
-            title={title()}
+            borderColor={keyboardOwner(store.state, ui.command?.active() ?? false) === "mcp" ? colors.focus : colors.border}
+            titleColor={colors.heading} title={title()}
             backgroundColor={colors.bg}
             flexDirection="column"
             paddingX={1}
@@ -115,8 +116,8 @@ export function McpView() {
                         const on = () => item.at === mcpToolIndex(open())
                         return (
                           <text height={1} wrapMode="none">
-                            <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
-                            <span style={{ fg: on() ? colors.accent : colors.fg }}>{mcpToolLabel(open().server ?? "", item.tool)}</span>
+                            <span style={{ fg: colors.focus }}>{on() ? "▸ " : "  "}</span>
+                            <span style={{ fg: on() ? colors.focus : colors.fg }}>{mcpToolLabel(open().server ?? "", item.tool)}</span>
                           </text>
                         )
                       }}
@@ -132,8 +133,8 @@ export function McpView() {
                     const on = () => row.name === open().server
                     return (
                       <text height={1} wrapMode="none">
-                        <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
-                        <span style={{ fg: on() ? colors.accent : colors.fg }}>{serverLine(row, lineWidth())}</span>
+                        <span style={{ fg: colors.focus }}>{on() ? "▸ " : "  "}</span>
+                        <span style={{ fg: on() ? colors.focus : colors.fg }}>{serverLine(row, lineWidth())}</span>
                       </text>
                     )
                   }}
@@ -146,11 +147,11 @@ export function McpView() {
             <Show when={open().auth}>
               {(auth) => (
                 <box flexDirection="column" flexShrink={0}>
-                  <text width="100%" wrapMode="word" fg={colors.accent}>{`Open ${auth().url} (copied to the clipboard)`}</text>
+                  <text width="100%" wrapMode="word" fg={colors.link} attributes={TextAttributes.UNDERLINE}>{`Open ${auth().url} (copied to the clipboard)`}</text>
                   <text height={1} wrapMode="none">
                     <span style={{ fg: colors.muted }}>Code </span>
                     <span style={{ fg: colors.fg }}>{auth().code}</span>
-                    <span style={{ fg: colors.accent }}>▏</span>
+                    <span style={{ fg: colors.focus }}>▏</span>
                   </text>
                 </box>
               )}
@@ -165,7 +166,7 @@ export function McpView() {
               <text height={1} flexShrink={0} wrapMode="none">
                 <span style={{ fg: colors.muted }}>Filter </span>
                 <span style={{ fg: colors.fg }}>{open().filter}</span>
-                <span style={{ fg: colors.accent }}>{open().filtering ? "▏" : ""}</span>
+                <span style={{ fg: colors.focus }}>{open().filtering ? "▏" : ""}</span>
               </text>
             </Show>
             <text width="100%" flexShrink={0} wrapMode="word" fg={colors.muted}>{mcpViewHint(open())}</text>

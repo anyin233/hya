@@ -20,9 +20,9 @@ use hya_core::{
     SubagentLimits,
 };
 use hya_proto::{
-    AgentName, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MessageId, ModelRef,
-    PartId, PartProjection, Role, RosterStatus, SessionId, ToolCallId, ToolName, ToolPartState,
-    ToolSchema,
+    AgentName, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MailEndpoint, MailKind,
+    MessageId, ModelRef, PartId, PartProjection, Role, RosterStatus, SessionId, ToolCallId,
+    ToolName, ToolPartState, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -809,6 +809,286 @@ async fn archive_cancels_a_busy_member_turn_with_cause_archived() {
             .unwrap()
             .contains(&worker),
         "the member's actor claim is released"
+    );
+}
+
+/// A user archive from a client (`archive_subagent`, by child session) takes
+/// the `archive` tool path: the busy member's turn closes with cause
+/// archived and it leaves the live roster.
+#[tokio::test]
+async fn user_archive_of_a_busy_subagent_cancels_its_turn_and_archives_it() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
+    provider.script(worker, Script::Hang);
+    supervisor
+        .register_existing_resident(
+            root,
+            worker,
+            "worker".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { engine.turn_active(worker) }).await,
+        "the member is mid-turn"
+    );
+
+    let receipt = engine.archive_subagent(worker).await.unwrap();
+    assert_eq!(receipt.handle, "main/worker");
+    assert!(receipt.cancelled_turn, "{receipt:?}");
+    assert!(!engine.turn_active(worker));
+    let finishes = assistant_finishes(&engine.replay(worker).await.unwrap(), worker);
+    assert_eq!(
+        finishes[0].1,
+        vec![(FinishReason::Cancelled, Some(FinishCause::Archived))]
+    );
+    let team = engine.read_projection(root).await.unwrap().team;
+    assert!(!team.roster.contains_key("main/worker"));
+    assert_eq!(
+        team.archived.get("main/worker").map(|entry| entry.reason),
+        Some(ArchiveReason::ArchivedByParent)
+    );
+    // A root session is not a subagent.
+    let refused = engine.archive_subagent(root).await.unwrap_err().to_string();
+    assert!(refused.contains("not a subagent"), "{refused}");
+}
+
+/// Interrupting a subagent (`CancelTurn` on its session) stops only its
+/// turn: it stays on the roster, idle, and is not immediately re-run.
+#[tokio::test]
+async fn interrupting_a_subagent_cancels_only_its_turn() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let worker = make_session(&engine, Some(root), "hya-task").await;
+    provider.script(worker, Script::Hang);
+    supervisor
+        .register_existing_resident(
+            root,
+            worker,
+            "worker".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async {
+            engine.turn_active(worker) && open_tool_parts(&engine, worker).await == 1
+        })
+        .await,
+        "the member is mid-turn with an open tool part"
+    );
+
+    assert!(engine.cancel_turn(worker, FinishCause::UserCancel));
+    assert!(
+        eventually(|| async { !engine.turn_active(worker) }).await,
+        "the member's turn ends"
+    );
+    let finishes = assistant_finishes(&engine.replay(worker).await.unwrap(), worker);
+    assert_eq!(
+        finishes[0].1,
+        vec![(FinishReason::Cancelled, Some(FinishCause::UserCancel))]
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        provider.streams_for(worker),
+        1,
+        "no follow-up turn after an interrupt"
+    );
+    assert!(!engine.turn_active(worker));
+    let team = engine.read_projection(root).await.unwrap().team;
+    assert!(
+        team.roster.contains_key("main/worker"),
+        "an interrupt does not archive"
+    );
+}
+
+/// Register a resident `handle` under `root` that parks mid-turn, and wait
+/// until it has an open tool part.
+async fn hanging_member(
+    engine: &Arc<SessionEngine>,
+    supervisor: &Arc<ResidentSupervisor>,
+    provider: &ScriptProvider,
+    agent: &AgentSpec,
+    root: SessionId,
+    handle: &str,
+) -> SessionId {
+    let member = make_session(engine, Some(root), "hya-task").await;
+    provider.script(member, Script::Hang);
+    supervisor
+        .register_existing_resident(
+            root,
+            member,
+            handle.to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async {
+            engine.turn_active(member) && open_tool_parts(engine, member).await == 1
+        })
+        .await,
+        "`{handle}` is mid-turn with an open tool part"
+    );
+    member
+}
+
+/// Cancelling the lead (`cancel_user_turn` on the root) stops every
+/// subagent: their turns are cancelled, nothing restarts them — no mail
+/// wake, no `TEAM QUIESCED` synthesis — and the lead's mail to them is
+/// refused, until the user acts on the team again.
+#[tokio::test]
+async fn cancelling_the_lead_stops_every_subagent_until_the_user_acts() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let first = hanging_member(&engine, &supervisor, &provider, &agent, root, "first").await;
+    let second = hanging_member(&engine, &supervisor, &provider, &agent, root, "second").await;
+
+    assert!(engine.cancel_user_turn(root), "the subagents' turns cancel");
+    assert!(
+        eventually(|| async { !engine.turn_active(first) && !engine.turn_active(second) }).await,
+        "both subagent turns end"
+    );
+    for member in [first, second] {
+        let finishes = assistant_finishes(&engine.replay(member).await.unwrap(), member);
+        assert_eq!(
+            finishes[0].1,
+            vec![(FinishReason::Cancelled, Some(FinishCause::UserCancel))]
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(provider.streams_for(first), 1, "no follow-up turn");
+    assert_eq!(provider.streams_for(second), 1, "no follow-up turn");
+    assert_eq!(
+        quiesced_notices(&engine, root).await,
+        0,
+        "the idle team does not wake the lead"
+    );
+    assert_eq!(provider.streams_for(root), 0, "the lead stays stopped");
+    let team = engine.read_projection(root).await.unwrap().team;
+    assert!(team.roster.contains_key("main/first") && team.roster.contains_key("main/second"));
+
+    let refused = engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle("main/first".to_string()),
+            MailKind::Message,
+            "resume your work".to_string(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("the user stopped `main/first`"),
+        "{refused}"
+    );
+
+    // The user prompts the lead: the stop lifts, and its mail wakes again.
+    engine.resume_after_user_stop(root);
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle("main/first".to_string()),
+            MailKind::Message,
+            "resume your work".to_string(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(first) == 2 }).await,
+        "the lead's mail wakes the subagent again"
+    );
+    assert_eq!(provider.streams_for(second), 1, "unmailed, it stays idle");
+}
+
+/// Interrupting one subagent stops it alone: its sibling keeps running, the
+/// lead's mail to it is refused, and the user's steer wakes it.
+#[tokio::test]
+async fn interrupting_one_subagent_stops_it_until_the_user_steers_it() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let first = hanging_member(&engine, &supervisor, &provider, &agent, root, "first").await;
+    let second = hanging_member(&engine, &supervisor, &provider, &agent, root, "second").await;
+
+    assert!(engine.cancel_user_turn(first));
+    assert!(eventually(|| async { !engine.turn_active(first) }).await);
+    assert!(engine.turn_active(second), "the sibling keeps running");
+    assert!(
+        engine
+            .mail_send(
+                root,
+                MailEndpoint::Handle("main/first".to_string()),
+                MailKind::Message,
+                "keep going".to_string(),
+            )
+            .await
+            .is_err(),
+        "the lead cannot restart it"
+    );
+
+    engine.steer_subagent(first, "carry on").await.unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(first) == 2 }).await,
+        "the user's steer wakes it"
+    );
+    assert!(engine.cancel_turn(second, FinishCause::UserCancel));
+}
+
+/// Interrupting a subagent that is idle — no turn running, none owed — stops
+/// nothing: `CancelTurn` reports nothing cancelled, and the lead's mail
+/// still reaches and wakes it.
+#[tokio::test]
+async fn interrupting_an_idle_subagent_stops_nothing() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "hya-main").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let member = make_session(&engine, Some(root), "hya-task").await;
+    supervisor
+        .register_existing_resident(
+            root,
+            member,
+            "idle".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(member) == 1 && !engine.turn_active(member) })
+            .await,
+        "its first turn ran and ended"
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert!(!engine.cancel_user_turn(member), "nothing was running");
+    assert!(!engine.stopped_by_user(member), "nothing was stopped");
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle("main/idle".to_string()),
+            MailKind::Message,
+            "next task".to_string(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async { provider.streams_for(member) == 2 }).await,
+        "the lead's mail wakes it"
     );
 }
 

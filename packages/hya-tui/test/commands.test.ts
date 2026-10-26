@@ -951,6 +951,40 @@ test("/layout bubble swaps siblings, persists them, completes arguments, and val
 })
 
 
+test("/subagents interrupt, archive and steer act on one subagent through the API", async () => {
+  const calls: string[] = []
+  const h = harness({
+    cancelTurn: async (session, turn) => { calls.push(`cancel ${session} ${turn}`); return { state: "TURN_STATE_CANCELLED" } },
+    archiveSubagent: async (session) => { calls.push(`archive ${session}`); return { handle: "main/helper", cancelledTurn: true, descendants: ["main/helper/leaf"] } },
+    steerSubagent: async (session, text) => { calls.push(`steer ${session} ${text}`); return { from: "main" } },
+  })
+  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
+  h.store.setSessions([{ id: "a", parent: "parent", agent: "task", workdir: "/work" }])
+
+  await h.run("/subagents interrupt a")
+  expect(h.store.state.status).toContain("Interrupted")
+  await h.run("/subagents steer a   look at  the parser first  ")
+  expect(h.store.state.status).toContain("Steered")
+  await h.run("/subagents archive a")
+  expect(h.store.state.status).toContain("Archived main/helper")
+  expect(h.store.state.status).toContain("1 nested")
+  expect(calls).toEqual(["cancel a current", "steer a look at  the parser first", "archive a"])
+
+  await expect(h.run("/subagents steer a")).rejects.toThrow("Usage:")
+  await expect(h.run("/subagents archive")).rejects.toThrow("Usage:")
+  await expect(h.run("/subagents interrupt unrelated")).rejects.toThrow("Choose a subagent")
+  expect(h.registry.complete("/subagents ", h.store.completionContext())).toEqual(expect.arrayContaining(["/subagents interrupt", "/subagents archive", "/subagents steer"]))
+  expect(h.registry.complete("/subagents steer ", h.store.completionContext())).toContain("/subagents steer a")
+})
+
+test("/subagents interrupt says when the subagent was not running", async () => {
+  const h = harness({ cancelTurn: async () => ({ state: "TURN_STATE_FINISHED" }) })
+  h.store.openSession({ id: "parent", agent: "main", workdir: "/work" })
+  h.store.setSessions([{ id: "a", parent: "parent", agent: "task", workdir: "/work" }])
+  await h.run("/subagents interrupt a")
+  expect(h.store.state.status).toContain("not running")
+})
+
 test("/subagents archived toggles or explicitly sets visibility and validates arguments", async () => {
   const h = harness()
   await expect(h.run("/subagents archived")).rejects.toThrow("Open a conversation")

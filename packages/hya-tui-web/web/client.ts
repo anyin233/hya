@@ -4,6 +4,7 @@
 import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import { decodeServerFrame, encodeClientFrame } from "../src/frames"
+import { pageTitle } from "../src/title"
 import { createNotificationDeduper, notificationTag, osc777Notification, osc9Notification, shouldShowNotification, type NotificationRequest } from "../src/notify"
 
 export type HyaTermHook = {
@@ -110,6 +111,11 @@ function requestNotificationPermissionOnce(): void {
 }
 terminalElement.addEventListener("pointerdown", requestNotificationPermissionOnce, { once: true })
 terminalElement.addEventListener("keydown", requestNotificationPermissionOnce, { once: true })
+
+// The tab title follows the terminal title (OSC 0/2), as in a terminal
+// emulator's tab bar (ADR-0030); a cleared title shows the page's own again.
+const initialTitle = document.title
+term.onTitleChange((title) => { document.title = pageTitle(title, initialTitle) })
 
 term.parser.registerOscHandler(9, (payload) => {
   showNotification(osc9Notification(payload))
