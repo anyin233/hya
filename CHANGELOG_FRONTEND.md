@@ -30,3 +30,4 @@
 
 - The Subagents selector no longer shows a working subagent as idle when its turn started just after the TUI last polled it. It now uses the session list's live busy flag.
 - A scrolled-up transcript no longer jumps to the bottom while a turn streams. Each session-list refresh (about every 1.5 s while a subagent or another session is busy) was treated as opening the session again.
+- In the Subagents selector, an archive confirmation whose row left the list (archived elsewhere, or hidden) no longer archives it on Enter.

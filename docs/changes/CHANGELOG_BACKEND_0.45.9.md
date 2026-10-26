@@ -9,9 +9,12 @@
 ## User cancel stops the subtree
 
 - `CancelTurn` on a session now also cancels the turns of every live subagent below it, and keeps them all stopped: no mail wake and no `TEAM QUIESCED` synthesis restarts them. Previously a cancel reached only that session, and the parent's `wait` reported the interrupted child as stalled, so the parent re-sent the work within seconds.
-- A parent's mail to a stopped subagent is refused with a message telling it to ask the user. `wait` lists the subagent as `stopped_by_user` and does not wake for it.
-- The user lifts the stop with a new prompt on the session (`CreateTurn`), or with `SteerSubagent` on the subagent. Nothing is archived, and the subagents keep their transcripts.
+- A parent's mail to a stopped subagent is refused with a message telling it to ask the user. `wait` lists the subagent as `stopped_by_user` rather than stalled, and stops waiting on it: a wait left with only stopped subagents returns `nothing_to_wait_for`.
+- The user lifts the stop with a new prompt on the session (`CreateTurn`), or with `SteerSubagent` on the subagent; mail queued before or during the stop then wakes them. A steer that is not delivered leaves the stop in place. Nothing is archived, and the subagents keep their transcripts.
+- `CancelTurn` stops nothing when neither the session nor any subagent below it is running or owes a turn, and reports `TURN_STATE_CANCELLED` when a stop held back an owed turn.
+- A backgrounded MCP job that finishes on a stopped session does not start a reclaim turn; the user's next turn sees its result.
+- `ArchiveSubagent` records the subagent as archived by the user, not by its parent.
 
 ## Runtime
 
-- Fixed a redundant `TEAM QUIESCED` synthesis after the parent had already consumed subagent results through `wait` or `read channel://…`. Both delivery paths now acknowledge the resident supervisor after committing the inbox cursor, as automatic in-turn steering already does. Genuinely late unread mail still wakes the parent.
+- Fixed a redundant `TEAM QUIESCED` synthesis after the parent had already consumed subagent results through `wait` or `read channel://…`. Both delivery paths now acknowledge the resident supervisor after committing the inbox cursor, as automatic in-turn steering already does. Genuinely late unread mail still wakes the parent, and so does unread mail a `read channel://…` did not show (another channel, or beyond `last`).

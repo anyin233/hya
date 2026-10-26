@@ -86,7 +86,10 @@ The team supervisor also acknowledges mail delivered by `wait` or an explicit
 `read channel://<id>` while the parent is working. Once the parent has consumed
 the results and finishes its response, that same work must not cause an empty
 `TEAM QUIESCED` synthesis turn. Mail arriving after the final read or steering
-drain remains eligible to wake the parent for a follow-up.
+drain remains eligible to wake the parent for a follow-up. A channel read
+acknowledges only when it showed every unread message: it still marks the whole
+inbox read, but a report that arrived on another channel (or beyond `last`)
+keeps the parent's synthesis, so the parent still hears of it.
 
 For example, spawn reviewers, call `wait` to collect their reports, and use
 `read channel://DM-…?last=10` for longer report text before writing the final
@@ -96,7 +99,9 @@ The delivery contract remains the durable event
 `MailConsumed { session: SessionId, handle: string, through: u64 }`, where
 `session` identifies the team root and `through` is the exclusive inbox cursor.
 After successfully appending that event, both explicit channel reads and waits
-notify the same turn-boundary observer as automatic `[NEW MAIL]` delivery.
+notify the same turn-boundary observer as automatic `[NEW MAIL]` delivery. The
+notice carries the team's work counter from before the inbox was read, so mail
+counted after that snapshot keeps its wake.
 This changes scheduling only; the tool parameters and results are unchanged.
 
 A subagent with no subagents of its own can call `wait` to block until its

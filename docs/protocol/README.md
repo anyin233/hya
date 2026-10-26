@@ -875,11 +875,16 @@ session and of every live member below it are cancelled (`cause:
 user_cancel`), and the harness starts none of their turns — no mail wake, no
 `TEAM QUIESCED` synthesis — until the user acts again. A parent's mail to a
 stopped member is refused (`invalid_argument`, naming the member), and its
-`wait` lists the member as `stopped_by_user` without waking for it. Nothing is
-archived. `CreateTurn` on a session lifts the stop from it and its subtree,
-and `SteerSubagent` from that member and its subtree; queued mail then wakes
-them, and the others stay idle until mailed. `CancelTurn` reports
-`TURN_STATE_CANCELLED` when any of those turns was running.
+`wait` lists the member as `stopped_by_user` instead of `stalled`, and does not
+keep waiting on it: a wait whose remaining targets are all stopped returns
+`nothing_to_wait_for`, and an `all` wait completes once the others finished.
+Nothing is archived, and a backgrounded MCP completion starts no reclaim turn on a
+stopped session. `CreateTurn` on a session lifts the stop from it and its
+subtree, and a delivered `SteerSubagent` from that member and its subtree;
+mail queued before or during the stop then wakes them, and the others stay
+idle until mailed. When neither the session nor any member below it is running
+or owes a turn, `CancelTurn` stops nothing. It reports `TURN_STATE_CANCELLED`
+when any of those turns was running or a stop held back an owed turn.
 
 A client controls one member through its child session id (0.45.9):
 
@@ -894,8 +899,8 @@ A client controls one member through its child session id (0.45.9):
 - **Archive:** `ArchiveSubagent` (`POST /v1/sessions/{child}/archive`) runs
   the parent's `archive` tool path: the turn is cancelled with `cause:
   archived`, live descendants archive first (deepest first), and the member
-  leaves the roster with `archiveReason` `archived_by_parent`. The response
-  lists the archived `handle`, `cancelledTurn`, and `descendants`.
+  leaves the roster with `archiveReason` `archived_by_parent`; its member row
+  and handoff note read `archived by the user`. The response lists the archived `handle`, `cancelledTurn`, and `descendants`.
 
 Both new calls answer `invalid_argument` for a root session, an archived
 member (archive), empty text (steer), or a member whose parent is archived

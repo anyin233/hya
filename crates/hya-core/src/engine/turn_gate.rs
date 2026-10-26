@@ -45,8 +45,16 @@ tokio::task_local! {
 /// released, on a fresh task when a Tokio runtime is available, so it never
 /// runs while the releasing caller still holds its own locks.
 pub trait TurnBoundaryObserver: Send + Sync {
-    /// Mail consumed by the active turn is no longer owed as a wake.
-    fn mail_consumed(&self, _session: SessionId) {}
+    /// The team's work counter for `session`'s team, taken BEFORE a reader
+    /// snapshots the inbox it will consume (see
+    /// [`mail_consumed`](Self::mail_consumed)). `None` outside a team.
+    fn mail_mark(&self, _session: SessionId) -> Option<u64> {
+        None
+    }
+    /// Mail consumed by the active turn is no longer owed as a wake. `mark`
+    /// is the [`mail_mark`](Self::mail_mark) taken before the consumed
+    /// snapshot: work counted after it was not consumed and stays owed.
+    fn mail_consumed(&self, _session: SessionId, _mark: u64) {}
     /// `session` has no active turn any more.
     fn turn_released(&self, session: SessionId);
 

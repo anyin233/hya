@@ -30,7 +30,7 @@ impl SessionEngine {
             CoreError::Invalid("subagents are not supervised by this process".to_string())
         })?;
         reviver
-            .archive_member(root, &child.to_string(), "requested by the user")
+            .archive_member_for_user(root, &child.to_string())
             .await
     }
 
@@ -52,9 +52,6 @@ impl SessionEngine {
             return Err(CoreError::Invalid("a steer message needs text".to_string()));
         }
         let root = self.subagent_root(child).await?;
-        // The user acts on this subagent again: a cancel's stop lifts first,
-        // so the steer below is neither refused nor held back.
-        self.resume_after_user_stop(child);
         let projection = self.read_projection(root).await?;
         let target =
             resolve_member_target(&projection, root, scope::ROOT_HANDLE, &child.to_string())?;
@@ -74,15 +71,21 @@ impl SessionEngine {
                     ))
                 })?
         };
-        self.mail_send_for_actor_with_policy(
-            parent_session,
-            MailEndpoint::Handle(target.handle),
-            MailKind::Message,
-            format!("{USER_STEER_PREFIX}{body}"),
-            None,
-            None,
-        )
-        .await
+        let receipt = self
+            .mail_send_checked(
+                parent_session,
+                MailEndpoint::Handle(target.handle),
+                MailKind::Message,
+                format!("{USER_STEER_PREFIX}{body}"),
+                None,
+                None,
+                true,
+            )
+            .await?;
+        // The user acts on this subagent again: only a delivered steer lifts
+        // a cancel's stop, which then lets the steer (and queued mail) wake it.
+        self.resume_after_user_stop(child);
+        Ok(receipt)
     }
 
     /// The team root of `child`, refusing a root session (it is no subagent).
