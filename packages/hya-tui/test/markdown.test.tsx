@@ -57,6 +57,7 @@ test("renders headings, emphasis, inline code, and links with the palette", asyn
   // imply the paragraph or quote has rendered yet (especially on cold CI).
   await until(() =>
     hex(span("Release notes")?.fg) === colors.heading &&
+    ((span("Release notes")?.attributes ?? 0) & 1) === 1 &&
     ((span("bold")?.attributes ?? 0) & 1) === 1 &&
     ((span("soft")?.attributes ?? 0) & 4) === 4 &&
     hex(span("npm test")?.fg) === syntaxColors.inlineCode &&
@@ -65,6 +66,7 @@ test("renders headings, emphasis, inline code, and links with the palette", asyn
   "heading, styled paragraph, link, and quote")
   const lines = frame()
   expect(lines).toContain("Release notes")
+  expect(span("Release notes")!.attributes & 1).toBe(1)
   // Blocks keep their blank line between them.
   expect(lines[1]).toBe("")
   expect(lines.some((line) => line.includes("#"))).toBe(false)
@@ -175,10 +177,12 @@ test("a reply whose stream ends with the last delta re-parses: an unclosed fence
 test("switching the theme re-renders rendered Markdown: headings, highlighted code, and the code panel", async () => {
   await render(() => "# Title\n\n```ts\nconst answer = 1\n```\n\nAfter")
   await until(() => hex(span("const")?.fg) === themes.hya.syntaxColors.keyword, "hya keyword")
-  await until(() => hex(span("Title")?.fg) === themes.hya.colors.heading, "hya heading")
+  await until(() => hex(span("Title")?.fg) === themes.hya.colors.heading &&
+    ((span("Title")?.attributes ?? 0) & 1) === 1, "bold hya heading")
   setTheme("light")
   await until(() => hex(span("const")?.fg) === themes.light.syntaxColors.keyword, "light keyword")
-  await until(() => hex(span("Title")?.fg) === themes.light.colors.heading, "light heading")
+  await until(() => hex(span("Title")?.fg) === themes.light.colors.heading &&
+    ((span("Title")?.attributes ?? 0) & 1) === 1, "bold light heading")
   await until(() => hex(span("After")?.fg) === themes.light.colors.fg, "light paragraph")
   expect(span("const")?.bg?.intent).toBe("default")
 })

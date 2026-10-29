@@ -3,7 +3,7 @@
 // transcript scrolling with the "new messages below" hint. See docs/tui.md
 // "Messages".
 
-import type { Tui } from "./harness"
+import type { Cell, Tui } from "./harness"
 import { expect, hangStep, httpErrorStep, hyaTui, reasoningStep, test, textStep, toolStep } from "./hya"
 
 const colors = {
@@ -20,6 +20,14 @@ async function at(term: Tui, needle: string) {
   const found = await term.find(needle)
   expect(found, `screen shows ${needle}`).not.toBeNull()
   return found!
+}
+
+/** Highlighting finishes per block after the turn ends; locate its current cell on every poll. */
+async function expectStyle(term: Tui, needle: string, style: Partial<Cell>): Promise<void> {
+  await expect.poll(async () => {
+    const found = await term.find(needle)
+    return found ? term.cell(found.row, found.col) : null
+  }, { message: `style of ${JSON.stringify(needle)}` }).toMatchObject(style)
 }
 
 test.describe("roles", () => {
@@ -79,26 +87,21 @@ test.describe("markdown", () => {
     await term.waitForText("Done.", 20_000)
     await term.waitForIdle()
 
-    const heading = await at(term, "Release plan")
-    await expect.poll(async () => (await term.cell(heading.row, heading.col))?.fg).toBe(colors.heading)
-    expect((await term.cell(heading.row, heading.col))?.bold).toBe(true)
+    // Heading and ordinary text share a color. Color alone cannot establish
+    // that the asynchronous Markdown highlighter has applied its bold style.
+    await expectStyle(term, "Release plan", { fg: colors.heading, bold: true })
     expect(await term.find("# Release plan")).toBeNull()
 
-    const bold = await at(term, "bold change")
-    expect((await term.cell(bold.row, bold.col))?.bold).toBe(true)
+    await expectStyle(term, "bold change", { bold: true })
     expect(await term.find("**bold**")).toBeNull()
-    const code = await at(term, "bun test")
-    expect((await term.cell(code.row, code.col))?.fg).toBe(colors.inlineCode)
+    await expectStyle(term, "bun test", { fg: colors.inlineCode })
 
     const nested = await at(term, "- nested item")
     const first = await at(term, "- first item")
     expect(nested.col).toBe(first.col + 2)
 
-    const keyword = await at(term, "const answer")
-    await expect.poll(async () => (await term.cell(keyword.row, keyword.col))?.fg).toBe(colors.keyword)
-    expect((await term.cell(keyword.row, keyword.col))?.bg).toBe(colors.panel)
-    const string = await at(term, "\"forty-two\"")
-    expect((await term.cell(string.row, string.col))?.fg).toBe(colors.string)
+    await expectStyle(term, "const answer", { fg: colors.keyword, bg: colors.panel })
+    await expectStyle(term, "\"forty-two\"", { fg: colors.string })
     expect(await term.find("```")).toBeNull()
   })
 })

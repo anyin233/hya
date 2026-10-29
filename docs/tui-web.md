@@ -298,6 +298,16 @@ the restored reply and removal of the revert marker before opening `/fork`.
 These conditions keep the shared browser and PTY scenarios tied to completed
 state transitions instead of text left over from an earlier frame.
 
+Markdown highlighting has its own asynchronous completion after model streaming
+ends, and each block can finish independently. For style assertions, poll the
+complete expected cell style and find its text again on each attempt. For
+example, locate `Release plan` and assert `toMatchObject({ fg: headingColor,
+bold: true })` inside `expect.poll`. The neutral heading color equals ordinary
+text in the default theme, so waiting for that color alone cannot establish
+that a heading is styled. Emphasis, inline code, and fenced-code tokens each
+need their own style wait. Turn idle and a visible final paragraph do not
+establish that the highlighter finished.
+
 Session-changing commands also complete asynchronously. Use
 `createSession(term, options?)` from `e2e/hya.ts` for `/new`: it reads the old
 selection before submission, then polls `/status` until a different session
