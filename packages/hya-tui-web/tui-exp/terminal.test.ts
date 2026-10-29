@@ -34,6 +34,30 @@ test("keyboard, bracketed paste, mouse click/drag/wheel reach the raw child", as
   } finally { await terminal.close() }
 })
 
+test("no-button hover reaches any-motion terminals and is suppressed in drag-only mode", async () => {
+  const script = `process.stdin.setRawMode(true);
+    process.stdout.write("\\x1b[?1003h\\x1b[?1006hready\\r\\n");
+    let input = "";
+    process.stdin.on("data", b => {
+      input += b.toString("hex");
+      if (b.toString() === "d") process.stdout.write("\\x1b[?1003l\\x1b[?1002hdrag-only\\r\\n");
+      process.stdout.write("\\rinput:" + input + "\\r\\n");
+    });`
+  const terminal = PtyTerminal.launch(["bun", "-e", script], { cols: 120, rows: 24 })
+  try {
+    await terminal.waitForText("ready")
+    await terminal.mouse("move", { col: 4, row: 2 }, {}, 3)
+    const hover = Buffer.from("\x1b[<35;5;3M").toString("hex")
+    await terminal.waitForText(`input:${hover}`)
+    await terminal.type("d")
+    await terminal.waitForText("drag-only")
+    await terminal.mouse("move", { col: 5, row: 2 }, {}, 3)
+    await terminal.type("p")
+    await terminal.waitForText(`input:${hover}6470`)
+    expect(terminal.text()).not.toContain(Buffer.from("\x1b[<35;6;3M").toString("hex"))
+  } finally { await terminal.close() }
+})
+
 test("OpenTUI renders at cell dimensions and handles real key input and resize", async () => {
   const terminal = PtyTerminal.launch(["bun", fileURLToPath(new URL("../e2e/fixtures/opentui-probe.ts", import.meta.url))], { cols: 100, rows: 30 })
   try {

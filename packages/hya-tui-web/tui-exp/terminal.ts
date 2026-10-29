@@ -190,7 +190,7 @@ export class PtyTerminal {
     if (mode === "none") throw new Error("Application has not enabled mouse reporting")
     if (this.pixelMouse) throw new Error("Pixel mouse mode is not supported by this cell-based harness")
     if (point.col >= this.screen.cols || point.row >= this.screen.rows) throw new Error("Mouse point is outside the screen")
-    if (action === "move" && mode !== "drag" && mode !== "any") return
+    if (action === "move" && mode !== "any" && (mode !== "drag" || button === 3)) return
     if (action === "up" && mode === "x10") return
     this.write(encodeMouse(action, point, this.sgrMouse, modifiers, button))
     await this.flush()

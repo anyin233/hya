@@ -12,6 +12,8 @@ import { paneRegistry } from "./paneRegistry"
 import { workingLineText } from "../state/activity"
 import { currentPrompt } from "../state/prompts"
 import { pendingLines } from "../state/format"
+import { resizeBoundaryAt, resizeGuide, type ResizeBoundary } from "../state/paneResize"
+import { colors } from "../theme"
 export { jobsText } from "./paneRegistry"
 
 /** One stable mounted instance per id; tree edits change its bounds, never its parent. */
@@ -52,7 +54,6 @@ function PaneLeafView(props: { node: PaneLeaf; rect?: Rect }) {
   </box>
 }
 
-interface Boundary { id: string; index: number; secondIndex: number; direction: LayoutDirection; first: Rect; second: Rect; container: Rect }
 export function PaneWorkspace() {
   const { store, controller, ui } = useApp()
   useKeyboard((event) => ui.workspaceInput?.onKey(event))
@@ -107,7 +108,7 @@ export function PaneWorkspace() {
   })
   const nodes = createMemo(() => new Map(paneLeaves(savedRoot()).map((pane) => [pane.id, pane])))
   const ids = createMemo(() => [...nodes().keys()])
-  const boundaries = (): Boundary[] => paneNodes(visibleRoot()).flatMap((node) => {
+  const boundaries = createMemo((): ResizeBoundary[] => paneNodes(visibleRoot()).flatMap((node) => {
     if (node.type === "pane") return []
     const saved = paneNodes(displayedRoot()).find((item) => item.id === node.id)
     if (!saved || saved.type === "pane") return []
@@ -121,40 +122,88 @@ export function PaneWorkspace() {
       const secondIndex = saved.children.findIndex((item) => paneNodes(item.node).some((descendant) => descendant.id === next.node.id))
       return container && index >= 0 && secondIndex > index ? [{ id: node.id, index, secondIndex, direction: node.direction, first: child.rect, second: next.rect, container }] : []
     })
+  }))
+  const boundaryKey = (edge: ResizeBoundary) => `${edge.id}:${edge.index}:${edge.secondIndex}`
+  const [hovered, setHovered] = createSignal<string>()
+  const [dragged, setDragged] = createSignal<string>()
+  let dragging: ResizeBoundary | undefined
+  let pointer: { x: number; y: number } | undefined
+  const interactive = () => {
+    const owner = keyboardOwner(store.state, ui.command?.active() ?? false)
+    return store.state.focused && owner !== undefined && nodes().has(owner)
+  }
+  const guide = createMemo(() => {
+    if (!interactive()) return undefined
+    const key = dragged() ?? hovered()
+    const edge = key && boundaries().find((edge) => boundaryKey(edge) === key)
+    return edge ? resizeGuide(edge) : undefined
   })
-  let dragging: Boundary | undefined
-  const down = (event: MouseEvent) => {
+  let pointerShape: "ew-resize" | "ns-resize" | undefined
+  createEffect(() => {
+    const next = guide()?.cursor
+    if (next === pointerShape) return
+    renderer.setMousePointer(next ?? "default")
+    pointerShape = next
+  })
+  const capture = (target: BoxRenderable | undefined) =>
+    (renderer as unknown as { setCapturedRenderable(target: BoxRenderable | undefined): void }).setCapturedRenderable(target)
+  const cancel = () => {
+    pointer = undefined
+    if (dragging) capture(undefined)
     dragging = undefined
-    if (event.button !== 0) return
-    for (const edge of boundaries()) {
-      const row = edge.direction === "row", boundary = row ? edge.second.left : edge.second.top
-      const coordinate = row ? event.x : event.y, cross = row ? event.y : event.x
-      const low = row ? edge.container.top : edge.container.left, high = row ? edge.container.bottom : edge.container.right
-      if ((coordinate !== boundary && coordinate !== boundary - 1) || cross < low || cross >= high) continue
-      const area = (edge.container.right - edge.container.left) * (edge.container.bottom - edge.container.top)
-      const previous = dragging && (dragging.container.right - dragging.container.left) * (dragging.container.bottom - dragging.container.top)
-      if (!dragging || area < previous!) dragging = edge
+    setDragged(undefined); setHovered(undefined); setLive(undefined)
+  }
+  createEffect(() => {
+    const edges = boundaries()
+    if (!interactive()) { cancel(); return }
+    if (!dragging && pointer) {
+      const edge = resizeBoundaryAt(edges, pointer.x, pointer.y)
+      setHovered(edge ? boundaryKey(edge) : undefined)
     }
+  })
+  renderer.on("blur", cancel)
+  onCleanup(() => {
+    renderer.off("blur", cancel)
+    if (pointerShape && !renderer.isDestroyed) renderer.setMousePointer("default")
+  })
+  const hover = (event: MouseEvent) => {
+    pointer = { x: event.x, y: event.y }
+    if (dragging) return
+    const edge = interactive() ? resizeBoundaryAt(boundaries(), event.x, event.y) : undefined
+    setHovered(edge ? boundaryKey(edge) : undefined)
+  }
+  const down = (event: MouseEvent) => {
+    if (event.button !== 0 || !interactive()) return
+    pointer = { x: event.x, y: event.y }
+    dragging = resizeBoundaryAt(boundaries(), event.x, event.y)
+    setDragged(dragging ? boundaryKey(dragging) : undefined)
     if (dragging && workspace) {
       renderer.clearSelection()
-      ;(renderer as unknown as { setCapturedRenderable(target: BoxRenderable): void }).setCapturedRenderable(workspace)
+      capture(workspace)
     }
   }
   const move = (event: MouseEvent) => {
     if (!dragging) return
+    pointer = { x: event.x, y: event.y }
     const row = dragging.direction === "row", start = row ? dragging.first.left : dragging.first.top, end = row ? dragging.second.right : dragging.second.bottom
     if (end <= start) return
     setLive({ id: dragging.id, index: dragging.index, secondIndex: dragging.secondIndex, ratio: (row ? event.x - start : event.y - start) / (end - start) })
   }
   const release = () => {
-    const edit = live(); dragging = undefined; setLive(undefined)
+    const edit = live(); dragging = undefined; setDragged(undefined); setLive(undefined)
     if (!edit) return
     const next = setContainerBoundary(store.state.paneLayout, edit.id, edit.index, edit.ratio, edit.secondIndex)
     store.setPaneLayout(next)
     try { controller.savePreferences({ paneLayout: next }) }
     catch (error) { store.setStatus(`Layout changed, not saved: ${error instanceof Error ? error.message : String(error)}`) }
   }
-  return <box ref={(element: BoxRenderable) => workspace = element} width="100%" height="100%" overflow="hidden" onMouseDown={down} onMouseDrag={move} onMouseDragEnd={release}>
+  return <box ref={(element: BoxRenderable) => workspace = element} width="100%" height="100%" overflow="hidden"
+    onMouseMove={hover} onMouseOver={hover} onMouseOut={hover} onMouseDown={down} onMouseDrag={move} onMouseDragEnd={release}>
     <For each={ids()}>{(id) => <PaneLeafView node={nodes().get(id)!} rect={rects().get(id)} />}</For>
+    <Show when={guide()}>
+      {(line) => <text position="absolute" left={line().rect.left} top={line().rect.top}
+        width={line().rect.right - line().rect.left} height={line().rect.bottom - line().rect.top}
+        zIndex={10} selectable={false} wrapMode="none" fg={colors.border}>{line().text}</text>}
+    </Show>
   </box>
 }

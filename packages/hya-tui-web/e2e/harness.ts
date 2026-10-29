@@ -43,7 +43,7 @@ export type Pointer = {
   wheel(dx: number, dy: number): Promise<void>
 }
 
-export type InspectionState = { osc52?: string[]; observedCursor?: { style: number | null }; osc9?: string[] }
+export type InspectionState = { osc52?: string[]; observedCursor?: { style: number | null }; osc9?: string[]; osc22?: string[] }
 
 export class Tui {
   constructor(

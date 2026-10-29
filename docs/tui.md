@@ -1584,19 +1584,42 @@ loader and passive-pane targeting UI are not introduced in this version.
 `minColumns` is metadata for future sizing policy. No RPC or backend wire
 contract changes.
 
-**Resizing with the mouse.** Drag the border between two side-by-side panes
-with the left mouse button to move it: the right sidebar's left border, the
-Projects sidebar's right border, or the border of any vertical `/layout
-split`. Press on the border column (or the column just left of it) and drag;
-the panes follow the pointer while you drag. On release the new share is
-written into the saved layout (the split's `weight`), so the next TUI start
-keeps it. A drag stays within the `0.1`–`0.9` weight range, and it cannot
-make the right sidebar narrower than 29 columns. `/layout resize <+10|-10>`
-changes the focused pane's share from the keyboard, and `/layout reset`
-returns to the default widths. For example, on a 174-column terminal the
-right sidebar starts at its 29-column minimum; dragging its left border 25
-columns to the left makes it 54 columns wide, and a new TUI opens with the
-same width.
+**Resizing with the mouse.** Hover over the divider between adjacent panes
+to see the line that will move. A horizontal line such as `────↕────` means
+drag up/down to redistribute height; a vertical `│` line with a centered `↔`
+means drag left/right to redistribute width. The guide spans only that split's
+container, including nested groups, and follows the divider during the drag.
+Moving away hides it. Hovering keeps keyboard focus and layout weights intact.
+
+Hold the left mouse button on the divider cell (or the cell immediately before
+it) and drag. On release the new shares are written to the saved layout
+(the split's `weight`), so the next TUI start keeps them. This works between
+side-by-side panes and above/below panes. Hidden siblings and zero-height
+activity slots are skipped. At an intersection the innermost split wins.
+A drag stays within the `0.1`–`0.9` weight range, and it cannot make the right
+sidebar narrower than 29 columns. `/layout resize <+10|-10>` changes the focused
+pane's share from the keyboard, and `/layout reset` restores the default layout.
+For example, hover the left border of Sessions to reveal `↔`, then drag it left
+to give the sidebar more width. Hover above the input to reveal `↕`, then drag
+up to give that section more height.
+
+The guide is an unboxed, one-cell overlay in the neutral `border` color; it adds no pane
+or layout space. `PaneWorkspace` uses the same `resizeBoundaryAt(boundaries, x, y)`
+hit test for hover and dragging. Its `ResizeBoundary` carries `{id, index,
+secondIndex, direction: "row" | "column", first: Rect, second: Rect, container:
+Rect}` in terminal-cell coordinates; the indices retain the actual saved
+siblings. `resizeGuide(boundary)` returns `{rect: Rect, text: string, cursor:
+"ew-resize" | "ns-resize"}`. A row split has a vertical guide and `ew-resize`;
+a column split has a horizontal guide and `ns-resize`. Only releasing a moved
+divider saves the existing `paneLayout` preferences contract. Hover is transient;
+opening an overlay or losing terminal focus clears it and cancels an unfinished
+drag without saving. No RPC or layout-file schema changes are involved.
+
+Hya also requests the corresponding mouse pointer shape through OpenTUI's
+OSC 22 support and restores `default` on exit from the divider. This works only in
+terminals that implement [mouse pointer shapes](https://sw.kovidgoyal.net/kitty/pointer-shapes/);
+the Unicode line and arrows remain the visible hint when a terminal ignores
+that request. Mouse motion reporting must reach the TUI for hover detection.
 
 The colors come from the theme in effect (see [Themes](#themes)). The
 default `hya` theme:

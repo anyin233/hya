@@ -800,3 +800,13 @@ default 3000). The spawned command gets
 `TERM=xterm-256color` and `COLORTERM=truecolor`. `src/frames.ts` exports the
 frame codec (`encodeClientFrame`, `decodeClientFrame`, `encodeServerFrame`,
 `decodeServerFrame`).
+
+### Terminal hover coverage
+
+The shared `Tui.mouse.move(x, y)` driver models pointer motion even when no
+button is held. The PTY driver emits no-button SGR motion (`button=3`, motion
+code 35) only for any-motion tracking; button-held moves remain available in
+button-motion tracking. This matches browser mouse input and lets
+`e2e/hya-tui-pane-resize.spec.ts` check divider hover cues, OSC 22 pointer
+requests, preserved keyboard focus, and unchanged layout files. These are
+terminal input bytes; the PTY WebSocket frame contract is unchanged.

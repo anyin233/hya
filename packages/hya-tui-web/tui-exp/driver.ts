@@ -59,7 +59,7 @@ export class PtyTui extends Tui {
       const steps = options?.steps ?? 1
       for (let n = 1; n <= steps; n++) {
         this.point = { col: Math.round(from.col + (next.col - from.col) * n / steps), row: Math.round(from.row + (next.row - from.row) * n / steps) }
-        if (this.button !== undefined) await this.terminal.mouse("move", this.point, {}, this.button)
+        await this.terminal.mouse("move", this.point, {}, this.button ?? 3)
       }
     }
     const down = async (options?: { button?: string }) => {

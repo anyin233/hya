@@ -1,5 +1,6 @@
-# 0.44.23-dev.10
+# 0.44.23-dev.11
 
-## Neutral inactive borders
+## Pane resize guides
 
-- Desaturate unfocused frame borders to gray (`R = G = B`) in every built-in theme while preserving the focused frame color. Native panes and extensions share the same border token.
+- Show a Unicode divider guide on hover and while dragging: horizontal `─↕─` for height changes, vertical `│` with `↔` for width changes. Guides follow the affected split, including nested groups, without taking keyboard focus or saving layout changes on hover.
+- Request resize pointer shapes where the terminal supports OSC 22, restore the pointer when leaving, and clear guides when overlays open or terminal focus is lost.

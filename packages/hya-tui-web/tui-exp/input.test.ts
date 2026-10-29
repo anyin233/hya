@@ -22,6 +22,7 @@ test("mouse coordinates are one-based on the wire and preserve release, drag, wh
   expect(encodeMouse("down", { col: 4, row: 2 }, true)).toBe("\x1b[<0;5;3M")
   expect(encodeMouse("up", { col: 4, row: 2 }, true)).toBe("\x1b[<0;5;3m")
   expect(encodeMouse("move", { col: 4, row: 2 }, true, { alt: true })).toBe("\x1b[<40;5;3M")
+  expect(encodeMouse("move", { col: 4, row: 2 }, true, {}, 3)).toBe("\x1b[<35;5;3M")
   expect(encodeMouse("wheel-down", { col: 4, row: 2 }, true)).toBe("\x1b[<65;5;3M")
   expect(encodeMouse("up", { col: 0, row: 0 }, false)).toBe("\x1b[M#!!")
   expect(() => encodeMouse("down", { col: -1, row: 2 }, true)).toThrow("nonnegative")
