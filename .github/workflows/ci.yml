@@ -147,10 +147,34 @@ jobs:
           HYA_TUI_EXP_WORKERS: 4
           HYA_TUI_EXP_OUTPUT_DIR: ${{ runner.temp }}/tui-exp-results
         run: bun run test:tui-exp
+      - name: tui-race
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-web
+        env:
+          HYA_BIN: ${{ github.workspace }}/target/debug/hya
+          TMPDIR: ${{ runner.temp }}
+          HYA_TUI_RACE_REPEAT: 5
+          HYA_TUI_RACE_WORKERS: 4
+          HYA_TUI_RACE_OUTPUT_DIR: ${{ runner.temp }}/tui-race-results
+        # Four workers on at most two permitted CPUs exercise scheduling pressure.
+        # Select from the actual affinity mask instead of assuming CPU 0 exists.
+        run: |
+          python3 - <<'PY'
+          import os
+          os.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])
+          os.execvp("bun", ["bun", "run", "test:tui-race"])
+          PY
       - name: upload terminal screens, output and timings
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tui-exp-results
           path: ${{ runner.temp }}/tui-exp-results/
+          if-no-files-found: ignore
+      - name: upload tui-race screens, output and timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tui-race-results
+          path: ${{ runner.temp }}/tui-race-results/
           if-no-files-found: ignore

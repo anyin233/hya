@@ -68,7 +68,7 @@ test.describe("hya TUI Provider View", () => {
     expect(await term.text()).not.toContain("PROVIDER")
   })
 
-  test("a provider added over the API while the TUI is running reaches the /model picker live, no restart or manual refresh (catalogUpdated)", async ({ tui, backend }) => {
+  test("a provider added over the API while the TUI is running reaches the /model picker live, no restart or manual refresh (catalogUpdated)", { tag: "@tui-race" }, async ({ tui, backend }) => {
     await withFake([], ["alpha"], async (fake) => {
       const term = await tui(hyaTui(backend))
       await term.waitForText("Message, !shell, or @file · / commands")

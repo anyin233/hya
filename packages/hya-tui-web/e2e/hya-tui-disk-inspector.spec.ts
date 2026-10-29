@@ -8,7 +8,7 @@ import { expect, hyaTui, test } from "./hya"
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url))
 
-test("disk inspector package exposes discovery and an opt-in pane", async ({ tui, backend }, testInfo) => {
+test("disk inspector package exposes discovery and an opt-in pane", { tag: "@tui-race" }, async ({ tui, backend }, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), "disk-inspector-package-"))
   try {
     const path = join(directory, "disk-inspector.hyabundle")

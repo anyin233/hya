@@ -219,7 +219,7 @@ test.describe("WebUI tabs (bare hya)", { tag: "@browser-only" }, () => {
 test.describe("resume across the terminal and WebUI tabs (bare hya)", () => {
   test.use({ model: { steps: [textStep("Terminal reply."), textStep("Web reply."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("/resume in a tab opens the terminal's session, and the other way round", async ({ tui, workspace }, testInfo) => {
+  test("/resume in a tab opens the terminal's session, and the other way round", { tag: "@tui-race" }, async ({ tui, workspace }, testInfo) => {
     const port = await freePort()
     const term = await tui(...bareHya(workspace, port))
     await term.waitForText("Message, !shell, or @file · / commands", 60_000)

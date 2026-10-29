@@ -22,12 +22,41 @@ async function at(term: Tui, needle: string) {
   return found!
 }
 
-/** Highlighting finishes per block after the turn ends; locate its current cell on every poll. */
-async function expectStyle(term: Tui, needle: string, style: Partial<Cell>): Promise<void> {
-  await expect.poll(async () => {
-    const found = await term.find(needle)
-    return found ? term.cell(found.row, found.col) : null
-  }, { message: `style of ${JSON.stringify(needle)}` }).toMatchObject(style)
+type MarkdownStyle = Partial<Pick<Cell, "fg" | "bg" | "bold">>
+
+/** Locate text and copy every style synchronously from one terminal-buffer observation. */
+async function expectStyles(term: Tui, expected: { text: string; style: MarkdownStyle }[]): Promise<void> {
+  await expect.poll(() => term.inspect((terminal, _state, needles) => {
+    const buffer = terminal.buffer.active
+    const color = (rgb: boolean, palette: boolean, value: number) =>
+      rgb ? `#${value.toString(16).padStart(6, "0")}` : palette ? `palette:${value}` : "default"
+    return needles.map((needle) => {
+      for (let row = 0; row < terminal.rows; row++) {
+        const line = buffer.getLine(buffer.viewportY + row)
+        if (!line) continue
+        let text = ""
+        const columns: number[] = []
+        for (let col = 0; col < terminal.cols; col++) {
+          const cell = line.getCell(col)
+          if (!cell || cell.getWidth() === 0) continue
+          const chars = cell.getChars() || " "
+          text += chars
+          for (let index = 0; index < chars.length; index++) columns.push(col)
+        }
+        const index = text.indexOf(needle)
+        if (index < 0) continue
+        const cell = line.getCell(columns[index]!)!
+        return {
+          fg: color(cell.isFgRGB(), cell.isFgPalette(), cell.getFgColor()),
+          bg: color(cell.isBgRGB(), cell.isBgPalette(), cell.getBgColor()),
+          bold: cell.isBold() !== 0,
+        }
+      }
+      return null
+    })
+  }, expected.map((entry) => entry.text)), {
+    message: `Markdown styles of ${expected.map((entry) => JSON.stringify(entry.text)).join(", ")}`,
+  }).toMatchObject(expected.map((entry) => entry.style))
 }
 
 test.describe("roles", () => {
@@ -80,7 +109,7 @@ test.describe("markdown", () => {
   ].join("\n")
   test.use({ model: { steps: [textStep(reply, { chunkSize: 16, delayMs: 20 })] } })
 
-  test("renders headings, emphasis, inline code, lists, and a highlighted code block", async ({ tui, backend }) => {
+  test("renders headings, emphasis, inline code, lists, and a highlighted code block", { tag: "@tui-race" }, async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     await prompt(term, "show markdown")
@@ -89,19 +118,20 @@ test.describe("markdown", () => {
 
     // Heading and ordinary text share a color. Color alone cannot establish
     // that the asynchronous Markdown highlighter has applied its bold style.
-    await expectStyle(term, "Release plan", { fg: colors.heading, bold: true })
+    await expectStyles(term, [
+      { text: "Release plan", style: { fg: colors.heading, bold: true } },
+      { text: "bold change", style: { bold: true } },
+      { text: "bun test", style: { fg: colors.inlineCode } },
+      { text: "const answer", style: { fg: colors.keyword, bg: colors.panel } },
+      { text: "\"forty-two\"", style: { fg: colors.string } },
+    ])
     expect(await term.find("# Release plan")).toBeNull()
-
-    await expectStyle(term, "bold change", { bold: true })
     expect(await term.find("**bold**")).toBeNull()
-    await expectStyle(term, "bun test", { fg: colors.inlineCode })
 
     const nested = await at(term, "- nested item")
     const first = await at(term, "- first item")
     expect(nested.col).toBe(first.col + 2)
 
-    await expectStyle(term, "const answer", { fg: colors.keyword, bg: colors.panel })
-    await expectStyle(term, "\"forty-two\"", { fg: colors.string })
     expect(await term.find("```")).toBeNull()
   })
 })

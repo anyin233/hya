@@ -175,6 +175,7 @@ bun run typecheck
 bun test ./test                       # codec + host unit tests (bun run test)
 bun run test:tui-exp:parity -- e2e/<spec>.ts  # terminal scenarios for changed screens
 bun run test:tui-exp                         # full required terminal suite
+bun run test:tui-race                        # repeated shared regression scenarios
 bun run test:e2e                             # optional Chromium/WebUI checks
 ```
 
@@ -253,14 +254,51 @@ Kitty keyboard, pixel mouse coordinates and browser-specific event translation
 are not emulated. Unsupported combinations and pixel mouse mode fail explicitly.
 
 Each parity run writes `parity.json` under its output directory. Its contract is
-`{ driver, status, durationMs, workers, selected, terminalScenarios,
+`{ driver, status, durationMs, workers, repeatEach, selected, terminalScenarios,
 browserOnlyExcludedTag, browserOnlyFiles, tests }`. Each test records
-`{ file, line, title, browserOnly, outcome, runs }`; each run contains
+`{ file, line, title, repeatEachIndex, browserOnly, outcome, runs }`; each run contains
 `{ status, durationMs, retry, errors }`. This makes coverage and failures
 inspectable without a browser report. Per-client artifacts contain
 `final-screen.txt`, `frames.json` and `output.base64.txt`; the runner prints
 per-test durations. The default parity output directory is
 `~/data/hya-rust/tmp/tui-exp-parity`, overridden by `HYA_TUI_EXP_OUTPUT_DIR`.
+
+##### tui-race stress gate
+
+The CI `tui` job includes a separate step named `tui-race`, reusing the built
+backend, frontend, and dependencies. It repeats the shared scenarios tagged
+`@tui-race` to exercise scheduling-sensitive rendering, command completion,
+session changes, compaction/revert, plugin activation, notifications, and child
+mouse targets. The current selection has 11 scenarios, each repeated five
+times (55 executions), with four workers on at most two CPUs from the runner's
+permitted affinity mask. Retries remain zero: any failed repetition fails the
+step, even if another repetition passes. It also runs after a normal terminal
+suite failure unless the job was cancelled.
+
+Run it locally from `packages/hya-tui-web` after building the frontend, backend,
+and `xtask` as for the normal terminal suite:
+
+```sh
+bun run test:tui-race --list
+bun run test:tui-race
+HYA_TUI_RACE_REPEAT=20 HYA_TUI_RACE_WORKERS=4 bun run test:tui-race
+```
+
+Local runs use the caller's CPU affinity; CI selects up to two available CPUs
+before launching the same command. Configure the gate with:
+
+| Setting | Type / default | Contract |
+| --- | --- | --- |
+| `HYA_TUI_RACE_REPEAT` | positive safe integer, `5` | Independent executions per selected scenario. Invalid values fail before running tests. |
+| `HYA_TUI_RACE_WORKERS` | positive safe integer, `4` | Concurrent test workers; each run retains its isolated backend and preferences. |
+| `HYA_TUI_RACE_OUTPUT_DIR` | path, `~/data/hya-rust/tmp/tui-race-results` | Separate terminal screens, raw output, captured frames, and `parity.json`; never overwrites normal parity output. |
+| `@tui-race` | Playwright test tag | Opt an existing shared scenario into repeated checks without copying it; the normal suite still runs it once. |
+
+CI always uploads the `tui-race-results` artifact when output exists. Its
+`parity.json` follows the shared report schema above: `repeatEach` records the
+configured repetition count, and `repeatEachIndex` identifies the zero-based
+repetition of each scenario. This is a scheduling stress test: passing samples
+does not prove race freedom or check every transient frame.
 
 ##### Shared scenario driver interface
 
@@ -299,14 +337,17 @@ These conditions keep the shared browser and PTY scenarios tied to completed
 state transitions instead of text left over from an earlier frame.
 
 Markdown highlighting has its own asynchronous completion after model streaming
-ends, and each block can finish independently. For style assertions, poll the
-complete expected cell style and find its text again on each attempt. For
-example, locate `Release plan` and assert `toMatchObject({ fg: headingColor,
-bold: true })` inside `expect.poll`. The neutral heading color equals ordinary
-text in the default theme, so waiting for that color alone cannot establish
-that a heading is styled. Emphasis, inline code, and fenced-code tokens each
-need their own style wait. Turn idle and a visible final paragraph do not
-establish that the highlighter finished.
+ends, and each block can finish independently. The Markdown scenario polls all
+five expected text/style pairs together through `Tui.inspect`: text lookup and
+copying foreground, background, and bold attributes run synchronously against
+one emulator-buffer observation. Separate awaited `find()` and `cell()` calls
+can observe different states across a redraw. In that single inspection, match
+`Release plan` against `{ fg: headingColor, bold: true }`, as well as emphasis,
+inline code, and fenced-code token styles. The neutral heading color equals
+ordinary text in the default theme, so color alone cannot establish that a
+heading is styled. Turn idle and a visible final paragraph do not establish
+that the highlighter finished. The predicate checks eventual rendered style;
+the separate streaming-heading scenario checks for transient marker exposure.
 
 Session-changing commands also complete asynchronously. Use
 `createSession(term, options?)` from `e2e/hya.ts` for `/new`: it reads the old

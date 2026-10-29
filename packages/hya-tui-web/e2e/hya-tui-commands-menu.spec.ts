@@ -332,7 +332,7 @@ test.describe("skill commands", () => {
 test.describe("/compact", () => {
   test.use({ model: { steps: [textStep("hi there")] } })
 
-  test("shows a compacting status, then the outcome", async ({ tui, backend }, testInfo) => {
+  test("shows a compacting status, then the outcome", { tag: "@tui-race" }, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await connected(term, backend)
     await term.type("hi")

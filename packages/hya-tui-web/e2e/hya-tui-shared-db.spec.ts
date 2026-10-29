@@ -57,7 +57,7 @@ function bareHyaEnv(workspace: Workspace): Record<string, string> {
 test.describe("two frontends, one database", () => {
   test.use({ model: { steps: [textStep("Reply seen by both TUIs."), textStep("Spare."), textStep("Spare.")] } })
 
-  test("a second TUI uses the first one's daemon; both follow the same session live", async ({ tui, workspace }, testInfo) => {
+  test("a second TUI uses the first one's daemon; both follow the same session live", { tag: "@tui-race" }, async ({ tui, workspace }, testInfo) => {
     const first = await tui(...selfLaunch(workspace))
     await first.waitForText("Message, !shell, or @file · / commands", 30_000)
     const one = await status(first)

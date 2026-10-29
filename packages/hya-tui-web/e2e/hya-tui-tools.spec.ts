@@ -252,7 +252,7 @@ test.describe("batch subagents", () => {
   test.use({ model: { steps: [] } })
 
   for (const width of [1100, 700]) {
-    test(`batch task shows every handle/session and opens each child at width ${width}`, async ({ tui, backend, fakeModel }, testInfo) => {
+    test(`batch task shows every handle/session and opens each child at width ${width}`, { tag: "@tui-race" }, async ({ tui, backend, fakeModel }, testInfo) => {
       fakeModel!.route("NEVER call `report`", [
         toolStep("task", { context: "Read only", tasks: [
           { description: "map routes", prompt: "inspect routes", subagent_type: "hya-task" },

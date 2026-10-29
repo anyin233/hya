@@ -143,7 +143,7 @@ test.describe("fork", () => {
     expect(await term.find("beta question")).toBeNull()
   })
 
-  test("at about 80 columns the fork picker and the pending-revert line fit", async ({ tui, backend }, testInfo) => {
+  test("at about 80 columns the fork picker and the pending-revert line fit", { tag: "@tui-race" }, async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 690, height: 640 } })
     await term.waitForText("Message, !shell, or @file · / commands")
     expect((await term.size()).cols).toBeLessThanOrEqual(82)

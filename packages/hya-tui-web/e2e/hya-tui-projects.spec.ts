@@ -176,7 +176,7 @@ test.describe("Project view", () => {
     await term.attach(testInfo, "project-view-delete-refused")
   })
 
-  test("`t` starts a temporary session from the Project view; /new --temp does the same", async ({ tui, backend }) => {
+  test("`t` starts a temporary session from the Project view; /new --temp does the same", { tag: "@tui-race" }, async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
     const initial = await statusSessionId(term)

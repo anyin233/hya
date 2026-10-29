@@ -55,7 +55,7 @@ async function promptThenBlur(term: Tui, text: string): Promise<void> {
 test.describe("desktop notifications: turn end", () => {
   test.use({ model: { steps: [textStep("Focused turn reply.", { chunkSize: 4, delayMs: 30 }), textStep("Unfocused turn reply.", { chunkSize: 4, delayMs: 30 }), textStep("Notifications off reply.", { chunkSize: 4, delayMs: 30 })] } })
 
-  test("notifies over OSC 9 only while unfocused, and not when /notifications is off", async ({ tui, backend }) => {
+  test("notifies over OSC 9 only while unfocused, and not when /notifications is off", { tag: "@tui-race" }, async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Message, !shell, or @file · / commands")
 
