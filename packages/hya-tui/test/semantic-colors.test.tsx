@@ -1,25 +1,31 @@
 import { afterEach, expect, test } from "bun:test"
 import { TextAttributes, type RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
+import { createSignal } from "solid-js"
 import { PaneFrame } from "../src/components/PaneFrame"
 import { RenderTree } from "../src/extensions/renderTree"
 import { validateRenderNode } from "../src/extensions/wire"
-import { colors, defaultThemeName, setTheme } from "../src/theme"
+import { colors, defaultThemeName, setTheme, themes } from "../src/theme"
 
 let setup: Awaited<ReturnType<typeof testRender>> | undefined
 afterEach(() => { setup?.renderer.destroy(); setup = undefined; setTheme(defaultThemeName) })
 const hex = (color: RGBA | undefined) => color ? `#${[color.r, color.g, color.b].map((n) => Math.round(n * 255).toString(16).padStart(2, "0")).join("")}` : undefined
 const span = (text: string) => setup?.captureSpans().lines.flatMap((line) => line.spans).find((item) => item.text.includes(text))
 
-test("a focused frame has a blue border and an independently neutral title", async () => {
-  setup = await testRender(() => <PaneFrame kind="subagents" title="Window title" focused><text>body</text></PaneFrame>, { width: 40, height: 6 })
-  await setup.renderOnce()
-  expect(hex(span("┌")?.fg)).toBe(colors.focus)
-  expect(hex(span("Window title")?.fg)).toBe(colors.heading)
-  setTheme("light")
-  await setup.renderOnce()
-  expect(hex(span("┌")?.fg)).toBe(colors.focus)
-  expect(hex(span("Window title")?.fg)).toBe(colors.heading)
+test("frame borders follow focus across themes while titles remain neutral", async () => {
+  const [focused, setFocused] = createSignal(true)
+  setup = await testRender(() => <PaneFrame kind="subagents" title="Window title" focused={focused()}><text>body</text></PaneFrame>, { width: 40, height: 6 })
+  for (const theme of Object.keys(themes)) {
+    setTheme(theme)
+    setFocused(true)
+    await setup.renderOnce()
+    expect(hex(span("┌")?.fg)).toBe(colors.focus)
+    expect(hex(span("Window title")?.fg)).toBe(colors.heading)
+    setFocused(false)
+    await setup.renderOnce()
+    expect(hex(span("┌")?.fg)).toBe(colors.border)
+    expect(hex(span("Window title")?.fg)).toBe(colors.heading)
+  }
 })
 
 test("extension roles validate and render with the same meanings; legacy accent means focus", async () => {

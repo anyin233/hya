@@ -35,6 +35,39 @@ test.beforeEach(async () => { prefsDir = await mkdtemp(join(tmpdir(), "hya-tui-t
 test.afterEach(async () => { await rm(prefsDir, { recursive: true, force: true }) })
 
 test.describe("/theme", () => {
+  test("unfocused pane borders stay gray across themes and focus transitions", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), {
+      env: { HYA_TUI_CONFIG: join(prefsDir, "tui.json") }, viewport: { width: 1500, height: 640 },
+    })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    const border = async () => {
+      const sessions = await term.find("Sessions")
+      return sessions ? (await term.cell(sessions.row, sessions.col - 1))?.fg : undefined
+    }
+    const palettes = [
+      { label: "hya", border: "#535353", focus: "#73c8e8" },
+      { label: "Light", border: "#b6b6b6", focus: "#0b6f94" },
+      { label: "High contrast", border: "#8a8a8a", focus: "#00e5ff" },
+      { label: "Ember", border: "#4d4d4d", focus: "#8fc9d9" },
+    ]
+    for (const [index, palette] of palettes.entries()) {
+      if (index > 0) {
+        await prompt(term, "/theme")
+        await term.waitForText(new RegExp(`▸ ● ${palettes[index - 1]!.label}`))
+        await term.press("ArrowDown")
+        await term.waitForText(new RegExp(`▸ +${palette.label}`))
+        await term.press("Enter")
+        await expect.poll(() => term.find("─Theme")).toBeNull()
+      }
+      await expect.poll(border).toBe(palette.border)
+      await prompt(term, "/layout focus pane-3")
+      await expect.poll(() => term.find("Commands")).toBeNull()
+      await expect.poll(border).toBe(palette.focus)
+      await term.press("Alt+ArrowRight")
+      await expect.poll(border).toBe(palette.border)
+    }
+  })
+
   test("previews the highlighted theme, Esc restores, Enter saves; a restarted TUI starts in the saved theme", async ({ tui, backend }, testInfo) => {
     const prefs = join(prefsDir, "prefs", "tui.json")
     await mkdir(join(prefsDir, "prefs"), { recursive: true })

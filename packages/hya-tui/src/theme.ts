@@ -33,6 +33,7 @@ export interface ThemeColors {
   activity: string
   /** A completed operation or successful result. */
   success: string
+  /** Inactive frames and structural gutters; achromatic (R = G = B). */
   border: string
   /** Failed turns and tool errors. */
   error: string
@@ -98,7 +99,7 @@ export const themes = {
     label: "hya",
     kind: "dark",
     description: "Terminal background with light text and blue focus highlights",
-    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", heading: "#e8edf3", link: "#e8edf3", activity: "#9caab9", success: "#a5d6a7", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b" },
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", heading: "#e8edf3", link: "#e8edf3", activity: "#9caab9", success: "#a5d6a7", border: "#535353", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b" },
     toolColors: { done: "#a5d6a7" },
     diffColors: { add: "#a5d6a7", remove: "#f07878", hunk: "#e8edf3", context: "#9caab9" },
     syntaxColors: { keyword: "#c792ea", string: "#d6bb8d", number: "#d6bb8d", comment: "#7a8a9c", function: "#e8edf3", type: "#e8edf3", operator: "#e8edf3", inlineCode: "#d6bb8d" },
@@ -108,7 +109,7 @@ export const themes = {
     label: "Light",
     kind: "light",
     description: "Terminal background with dark text, for bright terminals",
-    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#1f2933", muted: "#5b6b7b", focus: "#0b6f94", heading: "#1f2933", link: "#1f2933", activity: "#5b6b7b", success: "#2e7d32", border: "#a9b6c3", error: "#c23b3b", warning: "#946200", selection: "#b7d5ea" },
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#1f2933", muted: "#5b6b7b", focus: "#0b6f94", heading: "#1f2933", link: "#1f2933", activity: "#5b6b7b", success: "#2e7d32", border: "#b6b6b6", error: "#c23b3b", warning: "#946200", selection: "#b7d5ea" },
     toolColors: { done: "#2e7d32" },
     diffColors: { add: "#2e7d32", remove: "#c23b3b", hunk: "#1f2933", context: "#5b6b7b" },
     syntaxColors: { keyword: "#8839c9", string: "#805f20", number: "#805f20", comment: "#6a7a8a", function: "#1f2933", type: "#1f2933", operator: "#1f2933", inlineCode: "#805f20" },
@@ -128,7 +129,7 @@ export const themes = {
     label: "Ember",
     kind: "dark",
     description: "Terminal background with warm text and blue focus highlights",
-    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#f1e6d8", muted: "#b3a393", focus: "#8fc9d9", heading: "#f1e6d8", link: "#f1e6d8", activity: "#b3a393", success: "#a9c77a", border: "#5c4a3d", error: "#e8665a", warning: "#e6b450", selection: "#2c4c55" },
+    colors: { bg: terminalBackground, panel: terminalBackground, fg: "#f1e6d8", muted: "#b3a393", focus: "#8fc9d9", heading: "#f1e6d8", link: "#f1e6d8", activity: "#b3a393", success: "#a9c77a", border: "#4d4d4d", error: "#e8665a", warning: "#e6b450", selection: "#2c4c55" },
     toolColors: { done: "#a9c77a" },
     diffColors: { add: "#a9c77a", remove: "#e8665a", hunk: "#f1e6d8", context: "#b3a393" },
     syntaxColors: { keyword: "#c8a6dd", string: "#d7c28a", number: "#d7c28a", comment: "#85766a", function: "#f1e6d8", type: "#f1e6d8", operator: "#f1e6d8", inlineCode: "#d7c28a" },

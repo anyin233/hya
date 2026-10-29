@@ -11,7 +11,7 @@ test.describe("hya TUI commands and look", () => {
 
     const sessions = (await term.find("Sessions"))!
     const corner = await term.cell(sessions.row, sessions.col - 1)
-    expect(corner?.fg).toBe("#405366")
+    expect(corner?.fg).toBe("#535353")
     expect((await term.cell(sessions.row + 1, sessions.col))?.bg).toBe("default")
 
     // The transcript (no box since the single-column layout) sits on the base background.

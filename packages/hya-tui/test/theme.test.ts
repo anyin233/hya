@@ -22,7 +22,7 @@ test("the default theme inherits the terminal background and preserves text colo
   expect(defaultThemeName).toBe("hya")
   expect(themeName()).toBe("hya")
   expect({ ...colors }).toEqual({
-    bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", heading: "#e8edf3", link: "#e8edf3", activity: "#9caab9", success: "#a5d6a7", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
+    bg: terminalBackground, panel: terminalBackground, fg: "#e8edf3", muted: "#9caab9", focus: "#73c8e8", heading: "#e8edf3", link: "#e8edf3", activity: "#9caab9", success: "#a5d6a7", border: "#535353", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
   })
   expect({ ...toolColors }).toEqual({ done: "#a5d6a7" })
   expect({ ...diffColors }).toEqual({ add: "#a5d6a7", remove: "#f07878", hunk: "#e8edf3", context: "#9caab9" })
@@ -93,6 +93,10 @@ test("syntax styles are derived from a theme's palette", () => {
 test("every theme reserves focus for navigation and keeps status and structure distinct", () => {
   for (const theme of Object.values(themes)) {
     const ui = theme.colors
+    const [red, green, blue] = [ui.border.slice(1, 3), ui.border.slice(3, 5), ui.border.slice(5, 7)]
+    expect(red).toBe(green)
+    expect(green).toBe(blue)
+    expect(ui.border).not.toBe(ui.focus)
     for (const role of ["heading", "link", "activity", "success", "warning", "error"] as const) expect(ui[role]).not.toBe(ui.focus)
     expect(ui.heading).toBe(ui.fg)
     expect(ui.activity).toBe(ui.muted)

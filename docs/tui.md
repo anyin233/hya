@@ -1617,16 +1617,24 @@ shape, labels, bold text, and underlining carry meaning alongside color.
 | `warning` | `#e5c07b` | Attention or waiting: permission/question prompts, blocked todos, cancellation and length limits. |
 | `error` | `#f07878` | Failure or danger: failed turns/tools, errors, and the yolo warning. |
 | `link` | `#e8edf3` | An action or link, distinguished with an underline instead of selection blue. |
-| `border` | `#405366` | Inactive frames and transcript gutters; not a focus indicator. |
+| `border` | `#535353` | Neutral gray inactive frames and transcript gutters (`R = G = B`); not a focus indicator. |
 | `selection` | `#2f4d6b` | Background of a mouse-selected text range. |
 | `bg`, `panel` | Terminal default | Screen, transcript, editor, code blocks and overlays inherit the terminal background. |
+
+Unfocused box borders are achromatic in every built-in theme, making the focused
+frame distinct. The shared `ThemeColors.border` string token is a `#rrggbb` gray: `hya` uses `#535353`, `light` uses `#b6b6b6`,
+`contrast` uses `#8a8a8a`, and `ember` uses `#4d4d4d`. Native panes and extension
+content using the `border` semantic role share this token. Focused frames use
+`ThemeColors.focus`.
 
 The same meanings apply in Light, High contrast and Ember; their exact shades
 adapt to contrast and text warmth. Ember also uses a blue focus color so it
 cannot be mistaken for an amber warning. No new setting is needed: start the TUI
 normally. For example, `/theme` draws its title in neutral text and its highlighted
 row in the focus color; moving Down changes the selected row, and Enter saves the
-theme. A response's headings remain neutral after the picker closes.
+theme. Move focus between Sessions and the input with Alt+Arrow:
+the pane losing focus returns to a gray border and the selected pane uses the
+focus color. A response's headings remain neutral after the picker closes.
 
 Tool cards keep the compatibility group `toolColors.done`, equal to `success`.
 `diffColors` describes content changes rather than navigation: `add` (green,

@@ -1,6 +1,5 @@
-# 0.44.23-dev.9
+# 0.44.23-dev.10
 
-## Login links and clipboard
+## Neutral inactive borders
 
-- Attach an explicit terminal hyperlink to the ChatGPT authorization URL so wrapped text retains its complete target where OpenTUI detects hyperlink support. Document its current Windows Terminal over SSH detection limitation.
-- Add F2 in the login form to copy the full authorization URL through OSC 52, including over SSH, with visible success or local failure feedback. Callback entry stays concealed and untouched.
+- Desaturate unfocused frame borders to gray (`R = G = B`) in every built-in theme while preserving the focused frame color. Native panes and extensions share the same border token.

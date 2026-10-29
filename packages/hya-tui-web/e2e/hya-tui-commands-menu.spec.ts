@@ -276,7 +276,7 @@ test.describe("command menu", () => {
     await term.waitForText("▸ /new")
     await term.press("Enter")
     await expect.poll(() => term.find("Commands")).toBeNull()
-    await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe("#405366")
+    await expect.poll(async () => (await term.cell(projects.row, projects.col - 1))?.fg).toBe("#535353")
     // Before the fix the refocused sidebar swallowed these keys and they showed nowhere.
     await term.type("hello after new")
     await term.waitForText("│ hello after new")
