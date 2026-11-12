@@ -4583,12 +4583,7 @@ mod tests {
 
     impl TestCatalog {
         fn from_prepared(bundles: &[Bundle]) -> Result<AgentCatalog, BundleError> {
-            let bundles = bundles
-                .iter()
-                .cloned()
-                .map(|bundle| bundle)
-                .collect::<Vec<_>>();
-            AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles)?))
+            AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(bundles)?))
         }
 
         fn from_verified_catalogs(
@@ -4674,9 +4669,9 @@ mod tests {
                 ],
             )).unwrap()
         };
-        let plugin = prepare("Plugin", "shared", "shared-skill", "");
+        let plugin = prepare("Bundle", "shared", "shared-skill", "");
         let agent = prepare(
-            "AgentBundle",
+            "Bundle",
             "private",
             "private-skill",
             "agents: [{ id: private-agent, role: main }]\n",
