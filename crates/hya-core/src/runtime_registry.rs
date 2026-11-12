@@ -2091,6 +2091,21 @@ impl TurnBinding {
             .map(|skill| skill.content.as_str())
     }
 
+    /// Restrict a private process's complete exports to this agent's hook view.
+    pub fn sidecar_hook_view(
+        &self,
+        stable_agent_id: &str,
+        dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
+    ) -> Result<Option<Arc<dyn crate::hooks::HookDispatcher>>, BundleError> {
+        let policy = self.agent_resource_policy(stable_agent_id)?;
+        Ok((!policy.canonical_hook_ids.is_empty()).then(|| {
+            Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
+                dispatcher,
+                &policy.canonical_hook_ids,
+            )) as Arc<dyn crate::hooks::HookDispatcher>
+        }))
+    }
+
     /// Hooks bound to one agent, in dispatch order.
     ///
     /// Every agent gets user-global config plugins, installed Plugin-kind

@@ -74,10 +74,18 @@ and restrict calls by each Agent's selected references.
 
 A selected Tool/Hook path must exact-path match a JavaScript Extension from its owning bundle.
 For activation-scoped entrypoints, only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list;
-staged does not mean activated. Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject.
-A tool-only reports zero hooks and a hook-only reports zero tools. Selected Skill ids,
-bytes, and digests also match prepared resources. Generic authoring rule:
-generic superset modules are rejected and must be split, as in `bun-disjoint`.
+staged does not mean activated.
+Tool and Hook initialize declarations independently equal the complete prepared
+declarations of the loaded modules, regardless of order. Missing, undeclared, or
+duplicate exports reject initialization. Selection is a view: a module may export
+two tools while two agents each select a different one. Tools outside
+`resource_view` and hooks outside `hook_refs` are neither advertised nor dispatched
+for that agent, even when its loaded module exports them. A tool-only consumer
+may therefore initialize a module that also declares hooks, and vice versa.
+Skill declarations, when present in an activation, are likewise checked against
+the complete packaged Skill set, independently of the agent's Skill selection.
+The `bun-disjoint` example still illustrates independent entrypoints; splitting
+a module is unnecessary when its consumers select different exports.
 
 The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports.
 Use external single-file bundling; activation never executes the authoring tree.

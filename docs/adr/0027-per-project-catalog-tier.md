@@ -65,6 +65,10 @@ from every one of its roots.
   the base tier are unaffected. A plugin process is owned by the scope
   overlay (`kill_on_drop`) and stops once its overlay is dropped and no
   binding still holds it.
+  Config plugins, Project plugins and bundle processes now use the same
+  `PluginSpec` launch descriptor and `PluginConn` connection owner. The
+  descriptor retains cwd and environment policy across restart; scoped
+  publication and retained bindings still determine ownership lifetime.
 - **Cache.** Scope overlays are cached with an LRU (default 32 scopes) and an
   idle TTL (default 30 minutes), both configurable under `config.yaml`'s
   `catalog_scopes:`. Eviction runs on every bind and a periodic sweep; the

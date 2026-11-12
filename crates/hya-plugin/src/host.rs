@@ -56,6 +56,29 @@ pub struct PreparedPlugin {
 }
 
 impl PreparedPlugin {
+    /// Transport-loss signal for a session-private activation. Shared sources respawn instead.
+    #[must_use]
+    pub fn loss_token(&self) -> Option<tokio_util::sync::CancellationToken> {
+        self.conn.activation_loss.clone()
+    }
+
+    /// Bind an exported tool under a consumer's canonical name.
+    /// Selection changes the adapter only; the connection retains all exports.
+    #[must_use]
+    pub fn tool(&self, local: &str, canonical: &str) -> Option<Arc<dyn Tool>> {
+        let info = self
+            .conn
+            .contributions
+            .tools
+            .iter()
+            .find(|tool| tool.name == local)?;
+        Some(PluginTool::named(
+            self.conn.clone(),
+            info.clone(),
+            canonical,
+        ))
+    }
+
     /// Configured plugin id.
     #[must_use]
     pub fn id(&self) -> &str {
@@ -74,21 +97,21 @@ impl PreparedPlugin {
         &self.conn.contributions
     }
 
-    /// Tool adapters for this plugin only (`inputSchema.type` must be `"object"`).
+    /// Tool adapters for this plugin's validated complete declaration.
     #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.conn
             .contributions
             .tools
             .iter()
-            .filter_map(|tool| PluginTool::try_new(self.conn.clone(), tool.clone()))
+            .map(|tool| PluginTool::bind(self.conn.clone(), tool.clone()))
             .collect()
     }
 }
 
 struct LiveClient {
     client: PluginClient,
-    _guard: ChildGuard,
+    guard: ChildGuard,
 }
 
 pub(crate) struct PluginConn {
@@ -97,16 +120,13 @@ pub(crate) struct PluginConn {
     pub(crate) contributions: PluginContributionSet,
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
-    command: Vec<String>,
-    bundle_root: Option<std::path::PathBuf>,
-    /// Working directory of a plugin spawned with an explicit cwd; restarts
-    /// spawn there again.
-    cwd: Option<std::path::PathBuf>,
-    env: BTreeMap<String, String>,
+    spec: PluginSpec,
     host_info: HostInfo,
     live: Mutex<Option<LiveClient>>,
     restarts: Mutex<Vec<Instant>>,
     disabled: AtomicBool,
+    stopped: AtomicBool,
+    activation_loss: Option<tokio_util::sync::CancellationToken>,
     declaration_drift: AtomicBool,
     event_tx: mpsc::Sender<Envelope>,
     event_drops: AtomicU64,
@@ -116,6 +136,16 @@ pub(crate) struct PluginConn {
 }
 
 impl PluginConn {
+    pub(crate) fn is_activation(&self) -> bool {
+        self.spec.is_activation()
+    }
+
+    pub(crate) fn activation_is_lost(&self) -> bool {
+        self.activation_loss
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    }
+
     pub(crate) fn has_hook(&self, hook: HookName) -> bool {
         self.hooks.contains(&hook)
     }
@@ -129,7 +159,9 @@ impl PluginConn {
         match client.call(&hook.method(), params, self.timeout).await {
             Ok(value) => Ok(value),
             Err(error) => {
-                if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
+                if !self.spec.is_activation()
+                    && matches!(error, PluginError::Closed | PluginError::OversizedLine(_))
+                {
                     *self.live.lock().await = None;
                 }
                 Err(error)
@@ -148,7 +180,7 @@ impl PluginConn {
         let client = self.ensure_client().await?;
         // Every installed-bundle process (any kind) receives a call-scoped,
         // read-only / permission-checked capability; configured plugins never do.
-        let reply = if self.bundle_root.is_some() {
+        let reply = if self.spec.has_capabilities() {
             client
                 .call_tool_with_capability_timeout(
                     tool,
@@ -167,7 +199,9 @@ impl PluginConn {
         match reply {
             Ok(reply) => Ok(reply),
             Err(error) => {
-                if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
+                if !self.spec.is_activation()
+                    && matches!(error, PluginError::Closed | PluginError::OversizedLine(_))
+                {
                     *self.live.lock().await = None;
                 }
                 Err(error)
@@ -180,7 +214,7 @@ impl PluginConn {
         &self,
         request: hya_core::BundleApiRequest,
     ) -> Result<crate::messages::ApiRequestResult, PluginError> {
-        if self.bundle_root.is_none() {
+        if !self.spec.has_capabilities() {
             return Err(PluginError::Json(
                 "only bundle processes serve API endpoints".to_string(),
             ));
@@ -237,32 +271,30 @@ impl PluginConn {
             });
         }
         let mut live = self.live.lock().await;
+        if self.stopped.load(Ordering::Relaxed) {
+            return Err(PluginError::Closed);
+        }
         if let Some(current) = live.as_ref() {
             return Ok(current.client.clone());
+        }
+        // Session-private state must be recovered by the session supervisor.
+        if self.spec.is_activation() {
+            return Err(PluginError::Closed);
         }
         if !self.charge_restart().await {
             self.disabled.store(true, Ordering::Relaxed);
             tracing::warn!(plugin = %self.id, "plugin disabled after exceeding restart budget");
             return Err(PluginError::Disabled);
         }
-        let env = (!self.env.is_empty()).then_some(&self.env);
-        let (client, guard) = match (self.bundle_root.as_deref(), self.cwd.as_deref()) {
-            (Some(root), _) => PluginClient::spawn_bundle(&self.command, root, env)?,
-            (None, Some(dir)) => PluginClient::spawn_in(&self.command, dir, env)?,
-            (None, None) => PluginClient::spawn(&self.command, env)?,
-        };
-        let init = client.initialize(self.host_info.clone()).await?;
-        validate_initialize(&self.id, &init)?;
+        let (started, init) = connection::start_client(&self.spec, &self.host_info).await?;
         if canonical_initialize(&init)?.as_slice() != self.canonical_declaration.as_ref() {
             self.declaration_drift.store(true, Ordering::Relaxed);
             return Err(PluginError::DeclarationDrift {
                 plugin: self.id.clone(),
             });
         }
-        *live = Some(LiveClient {
-            client: client.clone(),
-            _guard: guard,
-        });
+        let client = started.client.clone();
+        *live = Some(started);
         tracing::info!(plugin = %self.id, "plugin respawned");
         Ok(client)
     }
@@ -306,7 +338,7 @@ impl PluginConn {
 }
 
 fn validate_initialize(
-    configured_id: &str,
+    spec: &PluginSpec,
     init: &crate::messages::InitializeResult,
 ) -> Result<(), PluginError> {
     if init.protocol_version != crate::messages::PROTOCOL_VERSION {
@@ -315,13 +347,18 @@ fn validate_initialize(
             got: init.protocol_version,
         });
     }
-    if init.plugin.id != configured_id {
+    if !spec.is_activation() && init.plugin.id != spec.id {
         return Err(PluginError::IdentityMismatch {
-            expected: configured_id.to_string(),
+            expected: spec.id.clone(),
             got: init.plugin.id.clone(),
         });
     }
-    init.contributions.validate(configured_id)
+    if spec.is_activation() && init.plugin.kind != crate::messages::PluginKindWire::Bun {
+        return Err(PluginError::Json(
+            "bundle sidecar initialize declaration is incompatible".into(),
+        ));
+    }
+    init.contributions.validate(&spec.id)
 }
 
 fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<u8>, PluginError> {
@@ -385,25 +422,48 @@ fn canonical_json(value: &Value) -> Value {
 }
 
 impl PluginHost {
-    /// Connect one bundle process in its private materialized directory.
-    /// The directory and explicitly supplied environment are retained on restart.
-    pub async fn connect_bundle(
-        spec: PluginSpec,
-        host: HostInfo,
-        root: std::path::PathBuf,
-    ) -> Result<Self, PluginError> {
-        Self::connect_bundle_with_reads(spec, host, root, None).await
+    /// Gracefully stop and reap this owner's processes. Retained views cannot respawn them.
+    pub async fn shutdown(&self) -> Result<(), PluginError> {
+        self.stop(false).await
     }
 
-    /// Like [`PluginHost::connect_bundle`], with the read-only host services
-    /// (`session.usage`) behind this process's tool-call and API capabilities.
-    pub async fn connect_bundle_with_reads(
+    /// Terminate and reap this owner's processes without a shutdown handshake.
+    pub async fn terminate(&self) -> Result<(), PluginError> {
+        self.stop(true).await
+    }
+
+    async fn stop(&self, force: bool) -> Result<(), PluginError> {
+        for conn in &self.plugins {
+            conn.stopped.store(true, Ordering::Relaxed);
+            if let Some(mut live) = conn.live.lock().await.take() {
+                if force {
+                    live.guard.terminate().await?;
+                } else {
+                    live.guard.shutdown().await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.plugins.iter().all(|conn| {
+            !conn.stopped.load(Ordering::Relaxed)
+                && conn
+                    .activation_loss
+                    .as_ref()
+                    .is_none_or(|token| !token.is_cancelled())
+        })
+    }
+
+    /// Connect one descriptor, retaining its launch policy and process handle.
+    /// `reads` backs the read-only capabilities of generation-owned bundle processes.
+    pub async fn connect(
         spec: PluginSpec,
         host: HostInfo,
-        root: std::path::PathBuf,
         reads: Option<Arc<dyn hya_core::HostSessionReads>>,
     ) -> Result<Self, PluginError> {
-        let conn = connection::connect_one_at(spec, host, Some(root), reads).await?;
+        let conn = connection::connect_one(spec, host, reads).await?;
         Ok(Self {
             plugins: vec![conn],
         })
@@ -436,41 +496,7 @@ impl PluginHost {
         for (index, spec) in specs.into_iter().enumerate() {
             let host = host.clone();
             let id = spec.id.clone();
-            set.spawn(async move { (index, id, connection::connect_one(spec, host).await) });
-        }
-        let mut collected: Vec<(usize, Arc<PluginConn>)> = Vec::new();
-        let mut failures = BTreeMap::new();
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((index, _, Ok(conn))) => collected.push((index, conn)),
-                Ok((index, id, Err(error))) => {
-                    tracing::warn!(%error, index, "plugin unavailable");
-                    failures.insert(id, error);
-                }
-                Err(error) => tracing::warn!(%error, "plugin connect task failed"),
-            }
-        }
-        collected.sort_by_key(|(index, _)| *index);
-        let plugins = collected.into_iter().map(|(_, conn)| conn).collect();
-        (Self { plugins }, failures)
-    }
-
-    /// Like [`PluginHost::connect_all_observed`], but spawns each plugin in
-    /// `cwd` (standard inherited environment) rather than the host process's
-    /// own working directory.
-    pub async fn connect_all_observed_in(
-        specs: Vec<PluginSpec>,
-        cwd: std::path::PathBuf,
-        host: HostInfo,
-    ) -> (Self, BTreeMap<String, PluginError>) {
-        let mut set = tokio::task::JoinSet::new();
-        for (index, spec) in specs.into_iter().enumerate() {
-            let host = host.clone();
-            let id = spec.id.clone();
-            let cwd = cwd.clone();
-            set.spawn(
-                async move { (index, id, connection::connect_one_in(spec, host, cwd).await) },
-            );
+            set.spawn(async move { (index, id, connection::connect_one(spec, host, None).await) });
         }
         let mut collected: Vec<(usize, Arc<PluginConn>)> = Vec::new();
         let mut failures = BTreeMap::new();
@@ -519,7 +545,7 @@ impl PluginHost {
                 conn.contributions
                     .tools
                     .iter()
-                    .filter_map(|tool| PluginTool::try_new(conn.clone(), tool.clone()))
+                    .map(|tool| PluginTool::bind(conn.clone(), tool.clone()))
             })
             .collect()
     }
@@ -567,7 +593,7 @@ impl hya_core::BundleApiProvider for PluginHost {
             .plugins
             .iter()
             .find(|conn| {
-                conn.bundle_root.is_some()
+                conn.spec.has_capabilities()
                     && conn
                         .contributions
                         .apis

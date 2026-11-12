@@ -128,10 +128,16 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ("staging", "staged does not mean activated"),
         (
             "declaration validation",
-            "Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject",
+            "declarations of the loaded modules, regardless of order",
         ),
-        ("tool-only", "tool-only reports zero hooks"),
-        ("hook-only", "hook-only reports zero tools"),
+        (
+            "view filtering",
+            "`resource_view` and hooks outside `hook_refs` are neither advertised nor dispatched",
+        ),
+        (
+            "package Skills",
+            "the complete packaged Skill set, independently of the agent's Skill selection",
+        ),
         ("Bundle agents", "`agents`"),
         (
             "host-controlled tool plane",
@@ -140,8 +146,8 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ("clamp is not a sandbox", "The clamp is not a sandbox."),
         ("bun-disjoint link/name", "bun-disjoint"),
         (
-            "generic superset modules",
-            "generic superset modules are rejected and must be split",
+            "consumer subsets",
+            "two tools while two agents each select a different one",
         ),
         (
             "self-contained public JS profile",

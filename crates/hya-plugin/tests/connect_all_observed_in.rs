@@ -1,5 +1,4 @@
-//! Integration test for `hya-plugin`: `PluginHost::connect_all_observed_in`
-//! spawns every plugin in a given directory rather than the host's own cwd.
+//! Project launch descriptors retain their directory and inherited environment.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -80,7 +79,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
 }
 
 #[tokio::test]
-async fn connect_all_observed_in_spawns_relative_command_in_given_cwd_with_inherited_env() {
+async fn project_descriptor_spawns_relative_command_with_inherited_env() {
     let plugin_dir = std::env::temp_dir().join(format!(
         "hya-plugin-connect-in-{}-{}",
         std::process::id(),
@@ -102,11 +101,11 @@ async fn connect_all_observed_in_spawns_relative_command_in_given_cwd_with_inher
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
         plugin_dir: None,
+        launch: Default::default(),
     };
 
-    let (host, failures) = PluginHost::connect_all_observed_in(
-        vec![spec],
-        script_dir.clone(),
+    let (host, failures) = PluginHost::connect_all_observed(
+        vec![spec.in_project(script_dir.clone())],
         HostInfo {
             name: "hya".to_string(),
             version: "0.0.0".to_string(),
@@ -164,10 +163,10 @@ async fn a_respawned_plugin_keeps_its_given_cwd() {
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
         plugin_dir: None,
+        launch: Default::default(),
     };
-    let (host, failures) = PluginHost::connect_all_observed_in(
-        vec![spec],
-        script_dir.clone(),
+    let (host, failures) = PluginHost::connect_all_observed(
+        vec![spec.in_project(script_dir.clone())],
         HostInfo {
             name: "hya".to_string(),
             version: "0.0.0".to_string(),

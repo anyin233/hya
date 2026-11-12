@@ -396,16 +396,12 @@ pub(crate) async fn prepare_source(
                 timeout_ms: None,
                 env,
                 plugin_dir: None,
+                launch: Default::default(),
             };
             let host = Arc::new(
-                PluginHost::connect_bundle_with_reads(
-                    spec,
-                    crate::host_info(),
-                    root.0.clone(),
-                    reads,
-                )
-                .await
-                .map_err(|error| invalid("start bundle process", error))?,
+                PluginHost::connect(spec.in_bundle(root.0.clone()), crate::host_info(), reads)
+                    .await
+                    .map_err(|error| invalid("start bundle process", error))?,
             );
             let tools = host.tools();
             let declared = bundle

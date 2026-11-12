@@ -164,9 +164,8 @@ impl ProjectPlugins {
                         Ok(None) => Ok(None),
                         Ok(Some(spec)) => {
                             let id = spec.id.clone();
-                            let (host, failures) = PluginHost::connect_all_observed_in(
-                                vec![spec],
-                                root.clone(),
+                            let (host, failures) = PluginHost::connect_all_observed(
+                                vec![spec.in_project(root.clone())],
                                 settings.host.clone(),
                             )
                             .await;

@@ -35,6 +35,10 @@ const GUARD_FAILED_SAFE: &str = "guard failed safe";
 
 #[async_trait]
 impl HookDispatcher for PluginHost {
+    fn is_healthy(&self) -> bool {
+        PluginHost::is_healthy(self)
+    }
+
     fn dispatch_event(&self, envelope: &Envelope) {
         self.fan_out_event(envelope);
     }
@@ -167,7 +171,11 @@ impl HookDispatcher for PluginHost {
                 }
                 Err(failed) => {
                     return ToolExecuteBeforeOutcome::Veto {
-                        reason: format!("{GUARD_FAILED_SAFE}: {} ({failed})", conn.id),
+                        reason: if conn.is_activation() {
+                            format!("{GUARD_FAILED_SAFE}: {failed}")
+                        } else {
+                            format!("{GUARD_FAILED_SAFE}: {} ({failed})", conn.id)
+                        },
                     };
                 }
             }

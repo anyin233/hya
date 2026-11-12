@@ -26,23 +26,21 @@ use hya_core::{
 use futures::future::join_all;
 pub use hya_core::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
-use hya_plugin::client::{ChildGuard, PluginClient};
-use hya_plugin::config::PluginSpec;
+use hya_plugin::config::{PluginSpec, ProcessLaunch};
 use hya_plugin::messages::{
-    ActivationLifecycle, ActivationMetadata, HookName, HookRegistration, PluginKindWire, ToolInfo,
+    ActivationLifecycle, ActivationMetadata, HookName, HookRegistration, PluginKindWire,
 };
-use hya_plugin::{HostInfo, PluginContributionSet};
+use hya_plugin::{HostInfo, PluginContributionSet, PluginHost, PreparedPlugin};
 use hya_proto::{
-    AgentName, FinishCause, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
-    WorkflowDelivery,
+    AgentName, FinishCause, ModelRef, OwnerRunId, SessionId, SubagentMode, WorkflowDelivery,
 };
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::{AdmissionTerminal, SessionStore, StoreError};
 use hya_tool::{
     Action, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, MailboxPlane,
     MemberOutcome, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest,
-    ResolvedTool, Resource, Rule, SpawnError, SpawnMember, SpawnRequest, Tool, ToolCtx, ToolError,
-    ToolPermission, ToolRegistry, WebSearchConfig, WebSearchPlane,
+    ResolvedTool, Rule, SpawnError, SpawnMember, SpawnRequest, ToolPermission, ToolRegistry,
+    WebSearchConfig, WebSearchPlane,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -475,79 +473,65 @@ impl BoundSidecarFactory for BundleSidecarFactory {
                 config_file.to_string_lossy().into_owned(),
             ),
         ]);
-        let (client, mut guard) =
-            match PluginClient::spawn_bundle(&command, activation_dir.path(), Some(&environment)) {
-                Ok(result) => result,
-                Err(error) => {
-                    return Err(CoreError::Invalid(format!("spawn bundle sidecar: {error}")));
-                }
-            };
         let lifecycle = match start.lifecycle {
             SidecarLifecycle::Transient => ActivationLifecycle::Transient,
             SidecarLifecycle::Resident => ActivationLifecycle::Resident,
         };
-        let initialized = match client
-            .initialize_activation(
-                host_info(),
-                ActivationMetadata {
+        let spec = PluginSpec {
+            id: self.stable_agent_id.clone(),
+            kind: PluginKindWire::Bun,
+            command,
+            timeout_ms: None,
+            env: environment,
+            plugin_dir: None,
+            launch: ProcessLaunch::Bundle {
+                root: activation_dir.path().to_path_buf(),
+                activation: Some(ActivationMetadata {
                     activation_id: start.activation_id.clone(),
                     lifecycle,
-                },
-            )
-            .await
-        {
-            Ok(initialized) => initialized,
-            Err(error) => {
-                let _ = guard.terminate().await;
-                return Err(CoreError::Invalid(format!(
-                    "initialize bundle sidecar: {error}"
-                )));
-            }
+                }),
+            },
         };
-        if initialized.protocol_version != hya_plugin::messages::PROTOCOL_VERSION
-            || initialized.plugin.kind != PluginKindWire::Bun
-        {
-            let _ = guard.terminate().await;
-            return Err(CoreError::Invalid(
-                "bundle sidecar initialize declaration is incompatible".to_string(),
-            ));
-        }
+        let host = Arc::new(
+            PluginHost::connect(spec, host_info(), None)
+                .await
+                .map_err(|error| {
+                    CoreError::Invalid(format!("initialize bundle sidecar: {error}"))
+                })?,
+        );
+        let plugin = host.prepared_plugins().remove(0);
+        let contributions = plugin.contributions();
         let tools_and_hooks = (|| {
             validate_bundle_sidecar_hooks(
                 &self.binding,
                 &self.stable_agent_id,
-                &initialized.contributions.hooks,
+                &contributions.hooks,
             )?;
-            validate_bundle_sidecar_skills(
-                &self.binding,
-                &self.stable_agent_id,
-                &initialized.contributions,
-            )?;
-            let tools = bind_bundle_sidecar_tools(
-                &self.binding,
-                &self.stable_agent_id,
-                &client,
-                &initialized.contributions.tools,
-            )?;
-            let hooks = (!initialized.contributions.hooks.is_empty()).then(|| {
-                Arc::new(hya_plugin::ActivationHookDispatcher::new(
-                    client.clone(),
-                    &initialized.contributions.hooks,
-                )) as Arc<dyn hya_core::hooks::HookDispatcher>
-            });
+            validate_bundle_sidecar_skills(&self.binding, &self.stable_agent_id, contributions)?;
+            let tools = bind_bundle_sidecar_tools(&self.binding, &self.stable_agent_id, &plugin)?;
+            if !contributions.apis.is_empty() || !contributions.workspace_adapters.is_empty() {
+                return Err(CoreError::Invalid(
+                    "bundle sidecar has undeclared API or workspace-adapter exports".into(),
+                ));
+            }
+            let hooks = self
+                .binding
+                .sidecar_hook_view(&self.stable_agent_id, host.clone())?;
             Ok::<_, CoreError>((tools, hooks))
         })();
         let (tools, hooks) = match tools_and_hooks {
             Ok(bound) => bound,
             Err(error) => {
-                let _ = guard.terminate().await;
+                let _ = host.terminate().await;
                 return Err(error);
             }
         };
 
         Ok(Box::new(BundleSidecarHandle {
-            client,
-            guard: Some(guard),
+            loss: plugin
+                .loss_token()
+                .ok_or_else(|| CoreError::Invalid("private process has no loss token".into()))?,
+            host: Some(host),
             activation_dir: Some(activation_dir.disarm()),
             tools,
             hooks,
@@ -558,8 +542,8 @@ impl BoundSidecarFactory for BundleSidecarFactory {
 }
 
 struct BundleSidecarHandle {
-    client: PluginClient,
-    guard: Option<ChildGuard>,
+    host: Option<Arc<PluginHost>>,
+    loss: tokio_util::sync::CancellationToken,
     activation_dir: Option<PathBuf>,
     tools: Arc<[ResolvedTool]>,
     hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>>,
@@ -582,7 +566,7 @@ impl BundleSidecarHandle {
 
 impl Drop for BundleSidecarHandle {
     fn drop(&mut self) {
-        drop(self.guard.take());
+        drop(self.host.take());
         let _ = self.cleanup_activation_dir();
     }
 }
@@ -595,8 +579,8 @@ impl SidecarHandle for BundleSidecarHandle {
 
     async fn shutdown(&mut self) -> Result<(), CoreError> {
         let mut shutdown_error = None;
-        if let Some(mut guard) = self.guard.take()
-            && let Err(error) = guard.shutdown().await
+        if let Some(host) = self.host.take()
+            && let Err(error) = host.shutdown().await
         {
             shutdown_error = Some(CoreError::Invalid(format!(
                 "shutdown bundle sidecar: {error}"
@@ -609,17 +593,17 @@ impl SidecarHandle for BundleSidecarHandle {
     }
 
     fn is_healthy(&self) -> bool {
-        self.guard.is_some() && !self.client.is_closed()
+        self.host.is_some() && !self.loss.is_cancelled()
     }
 
     fn loss_token(&self) -> Option<tokio_util::sync::CancellationToken> {
-        Some(self.client.closed_token())
+        Some(self.loss.clone())
     }
 
     async fn terminate(&mut self) -> Result<(), CoreError> {
         let mut terminate_error = None;
-        if let Some(mut guard) = self.guard.take()
-            && let Err(error) = guard.terminate().await
+        if let Some(host) = self.host.take()
+            && let Err(error) = host.terminate().await
         {
             terminate_error = Some(CoreError::Invalid(format!(
                 "terminate bundle sidecar: {error}"
@@ -644,70 +628,10 @@ impl SidecarHandle for BundleSidecarHandle {
     }
 }
 
-struct BundleSidecarTool {
-    client: PluginClient,
-    rpc_name: String,
-    canonical_name: String,
-    schema: ToolSchema,
-}
-
-#[async_trait::async_trait]
-impl Tool for BundleSidecarTool {
-    fn name(&self) -> &str {
-        &self.canonical_name
-    }
-
-    fn schema(&self) -> ToolSchema {
-        self.schema.clone()
-    }
-
-    async fn execute(
-        &self,
-        ctx: &ToolCtx,
-        input: serde_json::Value,
-    ) -> Result<serde_json::Value, ToolError> {
-        if ctx.cancel.is_cancelled() {
-            return Err(ToolError::Cancelled);
-        }
-        let session = ctx.session.ok_or_else(|| {
-            ToolError::Other("bundle sidecar tool requires a session".to_string())
-        })?;
-        ctx.permission
-            .assert(Action::Tool, Resource::Tool(self.canonical_name.clone()))
-            .await?;
-        let result = tokio::select! {
-            _ = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
-            result = self.client.call_tool(
-                &self.rpc_name,
-                session,
-                ctx.operation.source_tool_call_id(),
-                input,
-            ) => result,
-        };
-        let reply = match result {
-            Ok(reply) => reply,
-            Err(error) => {
-                if self.client.is_closed() {
-                    ctx.cancel.cancel();
-                    return Err(ToolError::Cancelled);
-                }
-                return Err(ToolError::Other(format!(
-                    "bundle sidecar tool call: {error}"
-                )));
-            }
-        };
-        if !reply.ok {
-            return Err(ToolError::Other(reply.output.to_string()));
-        }
-        Ok(reply.output)
-    }
-}
-
 fn bind_bundle_sidecar_tools(
     binding: &TurnBinding,
     stable_agent_id: &str,
-    client: &PluginClient,
-    declarations: &[ToolInfo],
+    plugin: &PreparedPlugin,
 ) -> Result<Arc<[ResolvedTool]>, CoreError> {
     let (bundle_id, _) = binding
         .bundle_catalog()
@@ -716,7 +640,7 @@ fn bind_bundle_sidecar_tools(
             agent_id: stable_agent_id.to_string(),
         })?;
     let policy = binding.agent_resource_policy(stable_agent_id)?;
-    let expected = policy
+    let selected = policy
         .selected_bundle_tool_ids()
         .iter()
         .map(|stable_id| {
@@ -726,26 +650,9 @@ fn bind_bundle_sidecar_tools(
                 .map(|(_, resource)| resource)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut declaration_names = std::collections::BTreeSet::new();
-    for declaration in declarations {
-        if !declaration_names.insert(declaration.name.clone()) {
-            return Err(CoreError::Invalid(format!(
-                "duplicate bundle sidecar tool declaration `{}`",
-                declaration.name
-            )));
-        }
-        if declaration
-            .input_schema
-            .get("type")
-            .and_then(|value| value.as_str())
-            != Some("object")
-        {
-            return Err(CoreError::Invalid(format!(
-                "bundle sidecar tool `{}` input schema must be an object",
-                declaration.name
-            )));
-        }
-    }
+    let expected =
+        bundle_sidecar_module_resources(binding, stable_agent_id, hya_bundle::ExportKind::Tool)?;
+    let declarations = &plugin.contributions().tools;
     if expected.len() != declarations.len() {
         return Err(CoreError::Invalid(format!(
             "bundle sidecar tool declaration count mismatch: expected {}, got {}",
@@ -755,8 +662,8 @@ fn bind_bundle_sidecar_tools(
     }
 
     let mut bound = Vec::with_capacity(expected.len());
-    for resource in expected {
-        let declaration = declarations
+    for resource in &expected {
+        declarations
             .iter()
             .find(|declaration| declaration.name == resource.local_id)
             .ok_or_else(|| {
@@ -765,23 +672,58 @@ fn bind_bundle_sidecar_tools(
                     resource.local_id
                 ))
             })?;
-        let schema = ToolSchema {
-            name: ToolName::new(resource.stable_id.clone()),
-            description: declaration.description.clone(),
-            input_schema: declaration.input_schema.clone(),
-            output_schema: None,
-        };
+    }
+    for resource in selected {
         bound.push(ResolvedTool {
-            tool: Arc::new(BundleSidecarTool {
-                client: client.clone(),
-                rpc_name: declaration.name.clone(),
-                canonical_name: resource.stable_id.clone(),
-                schema,
-            }),
+            tool: plugin
+                .tool(&resource.local_id, &resource.stable_id)
+                .ok_or_else(|| {
+                    CoreError::Invalid(format!(
+                        "missing bundle sidecar tool `{}`",
+                        resource.local_id
+                    ))
+                })?,
             permission: ToolPermission::Tool,
         });
     }
     Ok(Arc::from(bound))
+}
+
+/// The complete declaration of the loaded modules, independent of an agent's view.
+fn bundle_sidecar_module_resources<'a>(
+    binding: &'a TurnBinding,
+    stable_agent_id: &str,
+    kind: hya_bundle::ExportKind,
+) -> Result<Vec<&'a hya_bundle::PreparedResource>, CoreError> {
+    let policy = binding.agent_resource_policy(stable_agent_id)?;
+    let (bundle_id, _) = binding
+        .bundle_catalog()
+        .resolve_agent_entry(stable_agent_id)
+        .ok_or_else(|| CoreError::AgentDefinitionMissing {
+            agent_id: stable_agent_id.to_string(),
+        })?;
+    let mut paths = BTreeSet::new();
+    for (kind, ids) in [
+        (
+            hya_bundle::ExportKind::Tool,
+            policy.selected_bundle_tool_ids(),
+        ),
+        (hya_bundle::ExportKind::Hook, policy.canonical_hook_ids()),
+    ] {
+        for id in ids {
+            let (_, resource) = binding
+                .bundle_catalog()
+                .resolve_resource_entry(bundle_id, kind, id)?;
+            paths.insert(resource.source_path.as_str());
+        }
+    }
+    Ok(binding
+        .bundle_catalog()
+        .bundle_resources(bundle_id, kind)
+        .into_iter()
+        .flatten()
+        .filter(|resource| paths.contains(resource.source_path.as_str()))
+        .collect())
 }
 
 fn declared_bundle_sidecar_hooks(
@@ -814,20 +756,10 @@ fn validate_bundle_sidecar_hooks(
     registrations: &[HookRegistration],
 ) -> Result<(), CoreError> {
     let actual = declared_bundle_sidecar_hooks(registrations)?;
-    let (bundle_id, _) = binding
-        .bundle_catalog()
-        .resolve_agent_entry(stable_agent_id)
-        .ok_or_else(|| CoreError::AgentDefinitionMissing {
-            agent_id: stable_agent_id.to_string(),
-        })?;
-    let policy = binding.agent_resource_policy(stable_agent_id)?;
     let mut expected = BTreeSet::new();
-    for stable_id in policy.canonical_hook_ids() {
-        let (_, resource) = binding.bundle_catalog().resolve_resource_entry(
-            bundle_id,
-            hya_bundle::ExportKind::Hook,
-            stable_id,
-        )?;
+    for resource in
+        bundle_sidecar_module_resources(binding, stable_agent_id, hya_bundle::ExportKind::Hook)?
+    {
         let hook = match resource.local_id.as_str() {
             "event" => HookName::Event,
             "tool.execute.before" => HookName::ToolExecuteBefore,
@@ -861,11 +793,6 @@ fn validate_bundle_sidecar_skills(
             "bundle sidecar agent `{stable_agent_id}` has no owning bundle"
         ))
     })?;
-    let selected = policy
-        .selected_bundle_skill_ids()
-        .iter()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
     let resources = binding
         .bundle_catalog()
         .bundle_resources(bundle_id, hya_bundle::ExportKind::Skill)
@@ -873,12 +800,8 @@ fn validate_bundle_sidecar_skills(
             CoreError::Invalid(format!(
                 "bundle `{bundle_id}` has no prepared Skill namespace"
             ))
-        })?
-        .iter()
-        .filter(|resource| selected.contains(resource.stable_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    adapt_prepared_bundle_skills(bundle_id, &resources, contributions)
+        })?;
+    adapt_prepared_bundle_skills(bundle_id, resources, contributions)
         .map(|_| ())
         .map_err(|error| CoreError::Invalid(format!("bundle sidecar Skill declaration: {error}")))
 }
@@ -2780,12 +2703,17 @@ mod tests {
         AgentRole, Bundle, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
         PreparedResource, ResourceView, SourceFile, prepare_package,
     };
+    use hya_core::hooks::{
+        ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+        ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    };
     use hya_core::{CategoryEntry, run_team};
     use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
     use hya_plugin::protocol::Frame;
     use hya_proto::{
-        Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, OwnerRunId, RosterStatus,
-        SubagentMode, ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision, WorkflowStagePlan,
+        Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, MessageId, OwnerRunId,
+        RosterStatus, SubagentMode, ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision,
+        WorkflowStagePlan,
     };
     use hya_provider::{
         Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider,
@@ -4220,6 +4148,7 @@ You are the installed resident agent.
                 timeout_ms: Some(1_000),
                 env: BTreeMap::new(),
                 plugin_dir: None,
+                launch: Default::default(),
             }],
             (
                 WebSearchConfig::default(),
@@ -4270,6 +4199,7 @@ You are the installed resident agent.
                 timeout_ms: Some(1_000),
                 env: BTreeMap::new(),
                 plugin_dir: None,
+                launch: Default::default(),
             }],
             (
                 WebSearchConfig::default(),
@@ -4317,6 +4247,7 @@ You are the installed resident agent.
             timeout_ms: Some(1_000),
             env: BTreeMap::new(),
             plugin_dir: None,
+            launch: Default::default(),
         }];
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
@@ -5412,9 +5343,9 @@ for line in sys.stdin:
         );
     }
 
-    /// Sidecars must declare exactly the prepared Skills selected by their bound agent.
+    /// Initialization validates packaged Skills independently of an agent's view.
     #[test]
-    fn bundle_sidecar_skill_declarations_match_captured_selected_set() {
+    fn bundle_sidecar_skill_declarations_match_complete_package() {
         let make_skill = |local_id: &str| {
             let content = format!(
                 "---\nname: {local_id}\ndescription: {local_id} fixture\n---\n{local_id} body\n"
@@ -5477,15 +5408,17 @@ for line in sys.stdin:
             }],
             ..PluginContributionSet::default()
         };
-        assert!(validate_bundle_sidecar_skills(&binding, "alpha", &selected_contributions).is_ok());
         assert!(
-            validate_bundle_sidecar_skills(&binding, "alpha", &full_contributions).is_err(),
-            "an unselected prepared Skill declaration must fail closed"
+            validate_bundle_sidecar_skills(&binding, "alpha", &selected_contributions).is_err()
+        );
+        assert!(
+            validate_bundle_sidecar_skills(&binding, "alpha", &full_contributions).is_ok(),
+            "complete declarations are valid even when the agent selects only one Skill"
         );
         assert!(
             validate_bundle_sidecar_skills(&binding, "alpha", &PluginContributionSet::default(),)
                 .is_err(),
-            "a missing selected Skill declaration must fail closed"
+            "missing package Skill declarations must fail closed"
         );
     }
 
@@ -6123,7 +6056,144 @@ export default {
     }
 
     #[tokio::test]
-    async fn bun_sidecar_rejects_generic_superset_module_before_activation() {
+    async fn one_bun_module_serves_two_agents_with_disjoint_tool_views() {
+        let root = tempdir();
+        std::fs::write(
+            root.join("bundle.yaml"),
+            r#"kind: Bundle
+identity: { id: test/shared-module, version: 1.0.0, publisher: test }
+agents:
+  - id: alpha
+    role: subagent
+    resource_view: { allow: [alpha] }
+    hook_refs: [tool.execute.before]
+  - id: beta
+    role: subagent
+    resource_view: { allow: [beta] }
+    hook_refs: [tool.execute.after]
+resources:
+  tools:
+    - { id: alpha, path: main.js }
+    - { id: beta, path: main.js }
+  hooks:
+    - { id: tool.execute.before, path: main.js }
+    - { id: tool.execute.after, path: main.js }
+extensions:
+  js: [{ id: main, path: main.js }]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("main.js"),
+            r#"export default {
+  server: async () => ({
+    tool: {
+      alpha: {description: "alpha", execute: async () => "alpha result"},
+      beta: {description: "beta", execute: async () => "beta result"},
+    },
+    "tool.execute.before": async (params) => ({input: {...params.input, guarded: true}}),
+    "tool.execute.after": async () => ({status: "ok", output: "after", time_ms: 0}),
+  }),
+};"#,
+        )
+        .unwrap();
+        let prepared = prepare_package(BundleSource::read_directory(&root).unwrap()).unwrap();
+        let catalog = Arc::new(to_agent_catalog(
+            BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
+        ));
+        let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let binding = runtime.bind_turn(&root).unwrap();
+        let staging = tempdir();
+        let environment = BundleSidecarEnvironment::from_command(
+            plugins::bundle_sidecar_command().expect("Bun must be available"),
+            staging.clone(),
+        );
+        let session = SessionId::new();
+        let (permission, _permission_rx) =
+            PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+                Action::Tool,
+                "*",
+                Mode::Allow,
+            )]));
+        let (interaction, _interaction_rx) = InteractionPlane::new();
+        let (spawner, _spawner_rx) = SpawnerPlane::new();
+        let ctx = ToolCtx {
+            workflows: hya_tool::WorkflowPlane::disconnected(),
+            permission: permission.for_session(session),
+            interaction: interaction.for_session(session),
+            spawner,
+            operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: MailboxPlane::disconnected(),
+            lifecycle: LifecyclePlane::disconnected(),
+            session: Some(session),
+            parent_session: None,
+            todo: TodoPlane::default(),
+            skills: SkillPlane::default(),
+            artifacts: ArtifactPlane::default(),
+            websearch: WebSearchPlane::default(),
+            formatter: FormatterPlane::default(),
+            agents: Default::default(),
+            lsp: LspPlane::default(),
+            workdir: root.clone(),
+            roots: vec![root.clone()],
+            cancel: Default::default(),
+            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
+        };
+        for agent in ["alpha", "beta"] {
+            let factory = environment.factory_for(&binding, agent).unwrap().unwrap();
+            let mut handle = factory
+                .start(SidecarStart {
+                    activation_id: format!("shared-{agent}"),
+                    lifecycle: SidecarLifecycle::Transient,
+                })
+                .await
+                .unwrap();
+            let tools = handle.tool_bindings();
+            assert_eq!(tools.len(), 1);
+            assert_eq!(
+                tools[0].tool.name(),
+                format!("bundle:test/shared-module/tool/{agent}")
+            );
+            let hooks = handle.hook_dispatcher().unwrap();
+            let before = hooks
+                .tool_execute_before(ToolExecuteBeforeInput {
+                    session,
+                    message: MessageId::new(),
+                    call: hya_proto::ToolCallId::new(),
+                    tool: agent.into(),
+                    input: json!({}),
+                })
+                .await;
+            assert!(
+                matches!(before, ToolExecuteBeforeOutcome::Continue { input }
+                if input == if agent == "alpha" { json!({"guarded": true}) } else { json!({}) })
+            );
+            let ToolExecuteAfterOutcome::Continue { result: after } = hooks
+                .tool_execute_after(ToolExecuteAfterInput {
+                    session,
+                    message: MessageId::new(),
+                    call: hya_proto::ToolCallId::new(),
+                    tool: agent.into(),
+                    input: json!({}),
+                    result: ToolOutcomeNative::Ok {
+                        output: json!("original"),
+                        time_ms: 0,
+                    },
+                })
+                .await;
+            assert!(matches!(after, ToolOutcomeNative::Ok { output, .. }
+                if output == if agent == "beta" { json!("after") } else { json!("original") }));
+            let result = tools[0].tool.execute(&ctx, json!({})).await;
+            handle.shutdown().await.unwrap();
+            assert_eq!(result.unwrap()["output"], format!("{agent} result"));
+        }
+        assert!(std::fs::read_dir(&staging).unwrap().next().is_none());
+        std::fs::remove_dir_all(staging).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bun_sidecar_rejects_exports_declared_only_in_an_unloaded_module() {
         let mut bundle = disjoint_materialized_bundle("bun-generic-superset");
         set_materialized_extension_content_for_path(
             &mut bundle,
@@ -6187,7 +6257,7 @@ export default {
         };
         assert!(
             rejected,
-            "generic superset declarations must fail before activation"
+            "an export declared only in an unloaded module must fail initialization"
         );
         assert!(
             !staging_root.join(activation_id).exists(),
@@ -8179,6 +8249,53 @@ export default {
         assert_eq!(beta_content, "ordered extensions/beta.js\n");
     }
 
+    async fn prepared_sidecar_plugin(
+        tools: &[ToolInfo],
+        hooks: &[HookRegistration],
+    ) -> (PluginHost, PreparedPlugin) {
+        let declaration = json!({
+            "protocol_version": 1,
+            "plugin": {"id": "test", "version": "1", "kind": "bun"},
+            "tools": tools, "hooks": hooks,
+        });
+        let script = format!(
+            r#"
+import json, sys
+declaration = json.loads({declaration:?})
+for line in sys.stdin:
+    req = json.loads(line)
+    if 'id' not in req: continue
+    result = declaration if req['method'] == 'initialize' else {{}}
+    print(json.dumps({{'jsonrpc':'2.0', 'id':req['id'], 'result':result}}), flush=True)
+    if req['method'] == 'shutdown': break
+"#,
+            declaration = declaration.to_string()
+        );
+        let host = PluginHost::connect(
+            PluginSpec {
+                id: "test".into(),
+                kind: PluginKindWire::Bun,
+                command: vec!["python3".into(), "-c".into(), script],
+                timeout_ms: None,
+                env: BTreeMap::new(),
+                plugin_dir: None,
+                launch: ProcessLaunch::Bundle {
+                    root: std::env::temp_dir(),
+                    activation: Some(ActivationMetadata {
+                        activation_id: "test".into(),
+                        lifecycle: ActivationLifecycle::Transient,
+                    }),
+                },
+            },
+            host_info(),
+            None,
+        )
+        .await
+        .unwrap();
+        let plugin = host.prepared_plugins().remove(0);
+        (host, plugin)
+    }
+
     #[tokio::test]
     async fn bundle_sidecar_tool_declaration_binds_canonical_captured_resource() {
         let old_catalog = Arc::new(to_agent_catalog(
@@ -8200,15 +8317,14 @@ export default {
             .publish_catalog(new_catalog)
             .expect("publish replacement catalog");
 
-        let client = PluginClient::new(tokio::io::empty(), tokio::io::sink());
         let declaration = ToolInfo {
             name: "echo".to_string(),
             description: "sidecar echo".to_string(),
             input_schema: json!({"type": "object"}),
         };
-        let bindings =
-            super::bind_bundle_sidecar_tools(&old_binding, "worker", &client, &[declaration])
-                .expect("bind sidecar tool declaration");
+        let (host, plugin) = prepared_sidecar_plugin(&[declaration], &[]).await;
+        let bindings = super::bind_bundle_sidecar_tools(&old_binding, "worker", &plugin)
+            .expect("bind sidecar tool declaration");
 
         assert_eq!(bindings.len(), 1);
         let resolved = &bindings[0];
@@ -8218,10 +8334,11 @@ export default {
         assert_eq!(schema.description, "sidecar echo");
         assert_eq!(schema.input_schema, json!({"type": "object"}));
         assert_eq!(resolved.permission, ToolPermission::Tool);
+        host.shutdown().await.unwrap();
     }
 
     #[tokio::test]
-    async fn bundle_sidecar_tool_declarations_match_captured_selected_set() {
+    async fn bundle_sidecar_tool_declarations_match_loaded_module_set() {
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([disjoint_materialized_bundle(
                 "selected-tools",
@@ -8233,20 +8350,23 @@ export default {
         let binding = runtime
             .bind_turn(&turn_dir)
             .expect("capture selected-tools turn binding");
-        let client = PluginClient::new(tokio::io::empty(), tokio::io::sink());
         let echo = ToolInfo {
             name: "echo".to_string(),
             description: "selected echo".to_string(),
             input_schema: json!({"type": "object"}),
         };
+        let (empty_host, empty) = prepared_sidecar_plugin(&[], &[]).await;
         assert!(matches!(
-            super::bind_bundle_sidecar_tools(&binding, "alpha", &client, &[]),
+            super::bind_bundle_sidecar_tools(&binding, "alpha", &empty),
             Err(CoreError::Invalid(_))
         ));
-        let bindings = super::bind_bundle_sidecar_tools(&binding, "alpha", &client, &[echo])
+        empty_host.shutdown().await.unwrap();
+        let (host, plugin) = prepared_sidecar_plugin(&[echo], &[]).await;
+        let bindings = super::bind_bundle_sidecar_tools(&binding, "alpha", &plugin)
             .expect("selected tool declaration must bind");
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].tool.name(), "bundle:hya/materialized/tool/echo");
+        host.shutdown().await.unwrap();
 
         let declarations = [
             ToolInfo {
@@ -8260,10 +8380,12 @@ export default {
                 input_schema: json!({"type": "object"}),
             },
         ];
+        let (host, plugin) = prepared_sidecar_plugin(&declarations, &[]).await;
         assert!(matches!(
-            super::bind_bundle_sidecar_tools(&binding, "alpha", &client, &declarations),
+            super::bind_bundle_sidecar_tools(&binding, "alpha", &plugin),
             Err(CoreError::Invalid(_))
         ));
+        host.shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -8315,8 +8437,8 @@ export default {
 
         assert!(validate_bundle_sidecar_hooks(&binding, "alpha", &registrations).is_ok());
 
-        let client = PluginClient::new(tokio::io::empty(), tokio::io::sink());
-        let bindings = bind_bundle_sidecar_tools(&binding, "alpha", &client, &declarations)
+        let (host, plugin) = prepared_sidecar_plugin(&declarations, &registrations).await;
+        let bindings = bind_bundle_sidecar_tools(&binding, "alpha", &plugin)
             .expect("reverse-order tool declarations must bind");
         let canonical_names = bindings
             .iter()
@@ -8329,6 +8451,7 @@ export default {
                 "bundle:hya/materialized/tool/echo".to_string(),
             ]
         );
+        host.shutdown().await.unwrap();
 
         std::fs::remove_dir_all(turn_dir).expect("cleanup order-independent turn directory");
     }
@@ -8352,10 +8475,11 @@ export default {
         }];
         assert!(super::validate_bundle_sidecar_hooks(&binding, "worker", &registrations).is_ok());
 
-        let client = PluginClient::new(tokio::io::empty(), tokio::io::sink());
-        let bindings = super::bind_bundle_sidecar_tools(&binding, "worker", &client, &[])
+        let (host, plugin) = prepared_sidecar_plugin(&[], &registrations).await;
+        let bindings = super::bind_bundle_sidecar_tools(&binding, "worker", &plugin)
             .expect("hook-only activation accepts zero tool declarations");
         assert!(bindings.is_empty());
+        host.shutdown().await.unwrap();
 
         std::fs::remove_dir_all(turn_dir).expect("cleanup hook-only turn directory");
     }
@@ -8367,11 +8491,47 @@ export default {
         let canonical_name = "bundle:hya/materialized/tool/echo".to_string();
         let input = json!({"text": "cancel"});
         let expected_input = input.clone();
-        let (client_io, server_io) = tokio::io::duplex(4096);
-        let (client_read, client_write) = tokio::io::split(client_io);
-        let client = hya_plugin::PluginClient::new(client_read, client_write);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let script = format!(
+            r#"
+import json, sys, socket
+for line in sys.stdin:
+    req = json.loads(line)
+    if req['method'] == 'initialize':
+        result = {{'protocol_version':1,'plugin':{{'id':'test','version':'1','kind':'bun'}},
+                  'tools':[{{'name':'echo','description':'echo','inputSchema':{{'type':'object'}}}}]}}
+        print(json.dumps({{'jsonrpc':'2.0','id':req['id'],'result':result}}), flush=True)
+    elif req['method'] == 'tool/call':
+        with socket.create_connection(('127.0.0.1', {port})) as conn:
+            conn.sendall((json.dumps(req)+'\n').encode())
+        sys.stdin.read()
+"#
+        );
+        let host = PluginHost::connect(
+            PluginSpec {
+                id: "test".into(),
+                kind: PluginKindWire::Bun,
+                command: vec!["python3".into(), "-c".into(), script],
+                timeout_ms: None,
+                env: BTreeMap::new(),
+                plugin_dir: None,
+                launch: ProcessLaunch::Bundle {
+                    root: std::env::temp_dir(),
+                    activation: Some(ActivationMetadata {
+                        activation_id: "cancel".into(),
+                        lifecycle: ActivationLifecycle::Transient,
+                    }),
+                },
+            },
+            host_info(),
+            None,
+        )
+        .await
+        .unwrap();
         let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
+            let (server_io, _) = listener.accept().await.unwrap();
             let mut lines = tokio::io::BufReader::new(server_io).lines();
             let line = lines
                 .next_line()
@@ -8390,7 +8550,6 @@ export default {
             assert_eq!(params.call, call);
             assert_eq!(params.input, expected_input);
             let _ = observed_tx.send(());
-            std::future::pending::<()>().await;
         });
 
         let (permission, _permission_rx) =
@@ -8424,17 +8583,9 @@ export default {
             project_activity: hya_tool::ProjectActivityPlane::disconnected(),
         };
         let cancel = ctx.cancel.clone();
-        let tool = BundleSidecarTool {
-            client,
-            rpc_name: "echo".to_string(),
-            canonical_name: canonical_name.clone(),
-            schema: ToolSchema {
-                name: ToolName::new(canonical_name),
-                description: "sidecar echo".to_string(),
-                input_schema: json!({"type": "object"}),
-                output_schema: None,
-            },
-        };
+        let tool = host.prepared_plugins()[0]
+            .tool("echo", &canonical_name)
+            .unwrap();
         let mut execute = Box::pin(tool.execute(&ctx, input));
         let outcome = tokio::time::timeout(std::time::Duration::from_millis(250), async {
             tokio::select! {
@@ -8456,6 +8607,7 @@ export default {
 
         let outcome = outcome.expect("Bundle sidecar tool must stop after cancellation");
         assert!(matches!(outcome, (true, Err(ToolError::Cancelled))));
+        host.terminate().await.unwrap();
     }
 
     #[test]
