@@ -426,3 +426,73 @@ async fn message_budget_kill_cancels_the_team() {
         "killed members are marked Failed with a reason"
     );
 }
+
+#[tokio::test]
+async fn registered_initial_task_survives_supervisor_loss() {
+    let (engine, agent) = engine_with(SubagentLimits::default()).await;
+    let root = make_root(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, handle) = supervisor
+        .spawn_resident(
+            root,
+            agent.clone(),
+            (binding, Arc::from([]), resources, None),
+            "durable initial task".into(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    // Registration spawns the driver only at its end. Cancel before yielding to it.
+    supervisor.team_cancel(root).unwrap().cancel();
+    drop(supervisor);
+    assert_eq!(assistant_turns(&engine, child).await, 0);
+    let recovered = engine
+        .store()
+        .recover_claim(child, hya_proto::OwnerRunId::new())
+        .await
+        .unwrap();
+    let disposition = engine
+        .recover_resident_actor(&recovered, root, &handle)
+        .await
+        .unwrap();
+    assert!(matches!(
+        disposition.work,
+        hya_core::ResidentRecovery::Queued { .. }
+    ));
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    supervisor
+        .register_recovered_resident(
+            root,
+            handle,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            recovered,
+            disposition.work,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(child).await.unwrap();
+            if projection.session.messages.iter().any(|message| {
+                message.role == Role::Assistant
+                    && message.parts.iter().any(|part| {
+                        matches!(part,
+                        hya_proto::PartProjection::Text { text, .. }
+                            if text.contains("durable initial task"))
+                    })
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    supervisor.team_cancel(root).unwrap().cancel();
+}

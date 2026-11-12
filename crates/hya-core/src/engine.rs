@@ -66,7 +66,6 @@ mod mailbox;
 pub(crate) use mailbox::dm_channel_between;
 mod member_control;
 mod members;
-pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
 mod restart;
 mod revert;
@@ -1790,6 +1789,17 @@ impl SessionEngine {
                 (projection.session.project, projection.session.kind)
             })
             .await?)
+    }
+
+    pub(crate) async fn notify_session_start(&self, session: SessionId) {
+        for hooks in self
+            .hooks
+            .iter()
+            .cloned()
+            .chain(self.runtime.global_plugin_hooks())
+        {
+            hooks.session_start(SessionLifecycleInput { session }).await;
+        }
     }
 
     /// Create a new session id and append `SessionCreated`.

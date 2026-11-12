@@ -378,3 +378,25 @@ Behavior contract:
 Workflow member inside the provider, cancels lifecycle stop, and requires both
 the supervisor and tool reply to become terminal. Replacing the in-flight
 `select!` with a plain `.await` must make this regression time out.
+
+## Scenario: Atomic Resident Registration and Arming
+
+A successful `task` spawn commits the child `SessionCreated`, parent's
+`MemberSpawned`, root roster/channel events, actor claim and initial user message
+in one SQLite transaction. The initial prompt passes through message hooks before
+commit. There is no volatile initial-directive queue. For example, spawning a
+worker with prompt `inspect the parser` persists that user message before the
+spawn returns; takeover before its first turn sees queued work and executes it.
+Parked registrations omit the initial message and await durable mail as before.
+
+Store contract: `commit_resident_registration(actor_id: SessionId,
+owner_run_id: OwnerRunId, parent_claim: Option<&ActorClaim>, events: Vec<Event>)`
+returns `(ActorClaim, Vec<Envelope>)` after commit. A supplied parent claim is
+fenced inside that same transaction. Events may target child, parent or root;
+they use `append_event_in_transaction`. The caller publishes the returned
+envelopes once, after commit. `try_claim_new_in_transaction(&mut Transaction,
+SessionId, OwnerRunId)` allows claim rows in that caller-owned transaction.
+
+`registered_initial_task_survives_supervisor_loss` covers recovery after
+registration and before the first worker turn. This does not promise replay of
+work that already crossed `ResidentWorkStarted`.
