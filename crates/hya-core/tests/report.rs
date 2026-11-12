@@ -752,7 +752,7 @@ async fn stopped_handoffs_are_searchable_by_the_members_directive() {
 }
 
 #[tokio::test]
-async fn a_forced_stop_preserves_the_previous_real_handoff() {
+async fn a_forced_stop_carries_prior_facts_into_the_current_episode_handoff() {
     let summary = Arc::new(ParkedHandoff::default());
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
     let engine = Arc::new(
@@ -806,7 +806,34 @@ async fn a_forced_stop_preserves_the_previous_real_handoff() {
         .session
         .handoff
         .unwrap();
-    assert_eq!(stopped.doc, original.doc);
+    assert!(stopped.degraded);
+    assert_ne!(stopped.doc, original.doc);
+    assert!(
+        stopped.doc.contains("1. Goal - [mail from main] next task"),
+        "{}",
+        stopped.doc
+    );
+    assert!(
+        stopped
+            .doc
+            .contains("3. Files and code - (from generation 1) none"),
+        "{}",
+        stopped.doc
+    );
+    assert!(
+        stopped
+            .doc
+            .contains("4. Decisions - (from generation 1) none"),
+        "{}",
+        stopped.doc
+    );
+    assert!(
+        stopped
+            .doc
+            .contains("5. Pending tasks - [mail from main] next task"),
+        "{}",
+        stopped.doc
+    );
     assert_eq!(stopped.generation, original.generation + 1);
 }
 

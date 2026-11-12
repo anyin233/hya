@@ -388,7 +388,8 @@ async fn message_budget_kill_cancels_the_team() {
 
     // Drive a vertical mail loop past the budget of 3 (ADR-0016: sibling DMs
     // no longer exist, so the loop runs between the root and worker-1).
-    for i in 0..10 {
+    // Stop at the first violation: later downward mail can revive a killed member.
+    for i in 0..4 {
         let (from, to) = if i % 2 == 0 {
             (root, "worker-1")
         } else {

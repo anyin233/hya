@@ -293,6 +293,14 @@ answer in later model requests, which omit empty assistant messages. See the
 [store signatures and cancellation causes](../spec/backend/database-guidelines.md)
 and [registration usage](../spec/backend/task-tool.md#scenario-atomic-resident-registration-and-arming).
 
+`revive_episode` rechecks mail authorization, reactivates the released claim,
+registers the member, records `AgentRestarted`, writes the child's handoff/context
+boundary and appends the first mail on the existing DM in one `BEGIN IMMEDIATE`.
+It reads the latest handoff inside this transaction and returns the new claim,
+inbox cursor and committed envelopes. Concurrent senders that find the member
+live append ordinary mail without claiming again. Any failure rolls back all
+revival effects. See [the exact inputs, outputs and usage](subagent-orchestration.md#4-revival).
+
 ## Event Log
 
 Schema (`0001`):

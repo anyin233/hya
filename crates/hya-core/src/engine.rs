@@ -432,7 +432,7 @@ pub struct SessionEngine {
     /// implementor (resident supervisor) itself holds the engine —
     /// [`ResidentSupervisor::start`](crate::resident::ResidentSupervisor::start)
     /// wires it.
-    reviver: RwLock<Option<Arc<dyn ArchiveReviver>>>,
+    reviver: RwLock<Option<Arc<crate::resident::ResidentSupervisor>>>,
     /// Runtime-owner claim used for durable stop/start records.
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
@@ -503,29 +503,10 @@ impl Clone for SessionEngine {
     }
 }
 
-/// Revival seam for archived direct children (ADR-0015).
-///
-/// The mailbox write gate calls this when a direct-handle send resolves to an
-/// archived agent that is the **sender's own direct child**; everything else
-/// stays an indistinguishable rejection. The implementation (resident
-/// supervisor) re-registers the agent under a bumped claim epoch, seeds the
-/// new episode from the latest handoff, and arms it with `body` as the wake
-/// prompt.
+/// Episode lifecycle control for the engine's resident supervisor.
+/// Mail revival calls the supervisor's transactional install path directly.
 #[async_trait::async_trait]
 pub trait ArchiveReviver: Send + Sync {
-    /// Revive `child_handle` on team `root` for parent handle `parent`.
-    ///
-    /// # Errors
-    /// Returns [`CoreError::Invalid`] when the handle is not an archived
-    /// direct child of `parent`, or registration cannot be re-resolved.
-    async fn revive(
-        &self,
-        root: SessionId,
-        parent: &str,
-        child_handle: &str,
-        body: String,
-    ) -> Result<(), CoreError>;
-
     /// End every episode under `root`, await its result, then reconcile orphan
     /// claims. The episode owners publish their own terminal events.
     async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
@@ -981,7 +962,7 @@ impl SessionEngine {
 
     /// Wire the archive-revival seam on a shared engine. Idempotent; the
     /// resident supervisor calls this from its own start.
-    pub fn set_reviver(&self, reviver: Arc<dyn ArchiveReviver>) {
+    pub fn set_reviver(&self, reviver: Arc<crate::resident::ResidentSupervisor>) {
         match self.reviver.write() {
             Ok(mut slot) => *slot = Some(reviver),
             Err(poisoned) => *poisoned.into_inner() = Some(reviver),
@@ -1043,10 +1024,15 @@ impl SessionEngine {
     /// The installed archive reviver, if any.
     #[must_use]
     pub fn archive_reviver(&self) -> Option<Arc<dyn ArchiveReviver>> {
-        match self.reviver.read() {
-            Ok(slot) => slot.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+        self.resident_supervisor()
+            .map(|supervisor| supervisor as Arc<dyn ArchiveReviver>)
+    }
+
+    pub(crate) fn resident_supervisor(&self) -> Option<Arc<crate::resident::ResidentSupervisor>> {
+        self.reviver
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Install the `SubagentGovernor` that bounds nested/parallel subagent
@@ -1475,6 +1461,26 @@ impl SessionEngine {
         stable_id: &str,
     ) -> Result<AgentSpec, CoreError> {
         agent_from_definition(base, stable_id, binding)
+    }
+
+    /// Resolve the exact recorded resident identity and all its capabilities
+    /// from one binding. Recovery and revival never perform spawn admission.
+    pub fn resolve_resident_runtime(
+        &self,
+        binding: TurnBinding,
+        base: &AgentSpec,
+        recorded: &AgentName,
+    ) -> Result<(AgentSpec, crate::resident::ResolvedResidentRuntime), CoreError> {
+        let stable = recorded.as_str();
+        let agent = self.agent_spec_for_binding(&binding, base, stable)?;
+        let agents = self.agent_roster_for_binding(&binding, stable)?;
+        let resources = self.agent_resource_policy_for_binding(&binding, stable)?;
+        let factory = self
+            .sidecar_environment()
+            .map(|environment| environment.factory_for(&binding, stable))
+            .transpose()?
+            .flatten();
+        Ok((agent, (binding, agents, resources, factory)))
     }
 
     /// Build the caller's authorized spawn roster for tools.

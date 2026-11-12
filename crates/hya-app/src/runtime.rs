@@ -2409,49 +2409,15 @@ async fn build_session_engine_with_mcp_defer(
             .bind_session_runtime(actor_id, &workdir)
             .await
             .context("bind recovered resident Session model configuration")?;
-        let (recovered_binding, recovered_agent) =
-            resolve_recovered_resident_agent(&engine, recovered_binding, &base, recorded)
-                .with_context(|| {
-                    format!(
-                        "resolve recovered resident agent `{}` from current catalog",
-                        recorded.as_str()
-                    )
-                })?;
-        let recovered_agents = engine
-            .agent_roster_for_binding(&recovered_binding, recorded.as_str())
-            .with_context(|| {
-                format!(
-                    "resolve recovered resident roster `{}` from current catalog",
-                    recorded.as_str()
-                )
-            })?;
-        let recovered_resources = engine
-            .agent_resource_policy_for_binding(&recovered_binding, recorded.as_str())
-            .with_context(|| {
-                format!(
-                    "resolve recovered resident resources `{}` from current catalog",
-                    recorded.as_str()
-                )
-            })?;
-        let recovered_sidecar_factory = sidecar_environment
-            .factory_for(&recovered_binding, recorded.as_str())
-            .with_context(|| {
-                format!(
-                    "resolve recovered resident sidecar `{}` from current catalog",
-                    recorded.as_str()
-                )
-            })?;
+        let (recovered_agent, recovered_runtime) = engine
+            .resolve_resident_runtime(recovered_binding, &base, recorded)
+            .context("resolve recovered resident capabilities from current catalog")?;
         resident_supervisor
             .register_recovered_resident(
                 root,
                 entry.handle,
                 recovered_agent,
-                (
-                    recovered_binding,
-                    recovered_agents,
-                    recovered_resources,
-                    recovered_sidecar_factory,
-                ),
+                recovered_runtime,
                 recovered,
                 report.work,
             )
@@ -2516,21 +2482,6 @@ async fn build_session_engine_with_mcp_defer(
         lifecycle,
         agent_model_control,
     })
-}
-
-/// Exact-resolve a process-loss recovered resident from the current RuntimeSnapshot.
-///
-/// Binds once from the recorded session workdir and uses the same production
-/// TurnBinding catalog projection as live turns. Resume is definition resolution,
-/// not a new spawn: no `can_spawn`, no AgentSpec synthesis, no general/base fallback.
-fn resolve_recovered_resident_agent(
-    engine: &SessionEngine,
-    binding: TurnBinding,
-    base: &AgentSpec,
-    recorded_agent: &AgentName,
-) -> Result<(TurnBinding, AgentSpec), CoreError> {
-    let agent = engine.agent_spec_for_binding(&binding, base, recorded_agent.as_str())?;
-    Ok((binding, agent))
 }
 
 /// How often idle catalog scopes are swept.
@@ -5021,8 +4972,7 @@ You are the installed resident agent.
         };
         let recorded = AgentName::new("legacy-resident-only");
 
-        let err = match resolve_recovered_resident_agent(
-            &engine,
+        let err = match engine.resolve_resident_runtime(
             engine.bind_runtime(&workdir).unwrap(),
             &base,
             &recorded,
@@ -5063,13 +5013,9 @@ You are the installed resident agent.
         };
         let recorded = AgentName::new("resident-helper");
 
-        let (_binding, resolved) = resolve_recovered_resident_agent(
-            &engine,
-            engine.bind_runtime(&workdir).unwrap(),
-            &base,
-            &recorded,
-        )
-        .expect("exact catalog hit must resolve without can_spawn");
+        let (resolved, _runtime) = engine
+            .resolve_resident_runtime(engine.bind_runtime(&workdir).unwrap(), &base, &recorded)
+            .expect("exact catalog hit must resolve without can_spawn");
         assert_eq!(
             resolved.name.as_str(),
             "resident-helper",
@@ -5113,13 +5059,9 @@ You are the installed resident agent.
         };
         let recorded = AgentName::new("resident-helper");
 
-        let (_binding, resolved) = resolve_recovered_resident_agent(
-            &engine,
-            engine.bind_runtime(&session_dir).unwrap(),
-            &base,
-            &recorded,
-        )
-        .unwrap();
+        let (resolved, _runtime) = engine
+            .resolve_resident_runtime(engine.bind_runtime(&session_dir).unwrap(), &base, &recorded)
+            .unwrap();
         assert_eq!(resolved.workdir, session_dir);
         assert_ne!(resolved.workdir, base_dir);
     }
@@ -8447,7 +8389,7 @@ for line in sys.stdin:
                 .iter()
                 .map(|(_, inbox_through)| *inbox_through)
                 .collect::<Vec<_>>(),
-            vec![1, 2]
+            vec![1, 3]
         );
         let recorded_generations = child_events
             .iter()
