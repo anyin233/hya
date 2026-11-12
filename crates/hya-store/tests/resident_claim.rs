@@ -64,7 +64,7 @@ impl TempDb {
 
 impl Drop for TempDb {
     fn drop(&mut self) {
-        for suffix in ["", "-wal", "-shm"] {
+        for suffix in ["", "-wal", "-shm", ".lock"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", self.path));
         }
     }
@@ -72,6 +72,7 @@ impl Drop for TempDb {
 
 async fn stop_fixture(path: &str) -> StopFixture {
     let store = SessionStore::connect(path).await.unwrap();
+    store.claim_runtime_owner(OwnerRunId::new()).unwrap();
     let root = SessionId::new();
     let actor = SessionId::new();
     let handle = "resident-1".to_string();
@@ -171,6 +172,335 @@ async fn stop_fixture(path: &str) -> StopFixture {
         claim,
         operation,
     }
+}
+
+fn orphan_archive(actor: SessionId) -> hya_store::ResidentArchive {
+    hya_store::ResidentArchive {
+        actor,
+        generation: 1,
+        doc: "orphan handoff".into(),
+        degraded: true,
+        reason: hya_proto::ArchiveReason::ArchivedByParent,
+        note: "archive orphan".into(),
+        member_status: MemberRunStatus::Cancelled,
+        report: None,
+        check_gate: false,
+        expected_work: None,
+    }
+}
+
+#[tokio::test]
+async fn terminal_takeover_is_idempotent_after_claim_or_takeover_archive() {
+    for first_takeover in [false, true] {
+        let temp_db = TempDb::new("takeover-repeat");
+        let fixture = stop_fixture(temp_db.path()).await;
+        let owner = if first_takeover {
+            hya_store::ResidentArchiveOwner::Takeover
+        } else {
+            hya_store::ResidentArchiveOwner::Claim(&fixture.claim)
+        };
+        fixture
+            .store
+            .finalize_resident_archive(
+                owner,
+                fixture.root,
+                &fixture.handle,
+                orphan_archive(fixture.actor),
+                hya_proto::FinishCause::Archived,
+            )
+            .await
+            .unwrap();
+        let before_root = fixture.store.replay(fixture.root).await.unwrap();
+        let before_actor = fixture.store.replay(fixture.actor).await.unwrap();
+        let (outcome, events, admissions) = fixture
+            .store
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Takeover,
+                fixture.root,
+                &fixture.handle,
+                orphan_archive(fixture.actor),
+                hya_proto::FinishCause::Archived,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
+        assert!(events.is_empty());
+        assert!(admissions.is_empty());
+        assert_eq!(
+            fixture.store.replay(fixture.root).await.unwrap(),
+            before_root
+        );
+        assert_eq!(
+            fixture.store.replay(fixture.actor).await.unwrap(),
+            before_actor
+        );
+    }
+}
+
+#[tokio::test]
+async fn terminal_takeover_requires_a_released_claim_and_matching_archive_for_replay() {
+    for mismatch in [
+        "missing claim",
+        "not archived",
+        "wrong root",
+        "wrong handle",
+        "wrong actor",
+    ] {
+        let temp_db = TempDb::new("takeover-mismatch");
+        let fixture = stop_fixture(temp_db.path()).await;
+        let mut connection = SqliteConnection::connect(&format!("sqlite://{}", temp_db.path()))
+            .await
+            .unwrap();
+        match mismatch {
+            "missing claim" => {
+                sqlx::query("DELETE FROM resident_actor_claim WHERE actor_id = ?")
+                    .bind(fixture.actor.storage_key())
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+            }
+            "not archived" => {
+                fixture.store.release_claim(&fixture.claim).await.unwrap();
+            }
+            _ => {
+                fixture
+                    .store
+                    .finalize_resident_archive(
+                        hya_store::ResidentArchiveOwner::Claim(&fixture.claim),
+                        fixture.root,
+                        &fixture.handle,
+                        orphan_archive(fixture.actor),
+                        hya_proto::FinishCause::Archived,
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        let actor = if mismatch == "wrong actor" {
+            let other = SessionId::new();
+            let claim = fixture
+                .store
+                .try_claim_new(other, OwnerRunId::new())
+                .await
+                .unwrap();
+            fixture.store.release_claim(&claim).await.unwrap();
+            other
+        } else {
+            fixture.actor
+        };
+        let before_claim: Option<(i64, Vec<u8>, String)> = sqlx::query_as(
+            "SELECT epoch, owner_run_id, state FROM resident_actor_claim WHERE actor_id = ?",
+        )
+        .bind(actor.storage_key())
+        .fetch_optional(&mut connection)
+        .await
+        .unwrap();
+        let before_root = fixture.store.replay(fixture.root).await.unwrap();
+        let before_actor = fixture.store.replay(actor).await.unwrap();
+        let result = fixture
+            .store
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Takeover,
+                if mismatch == "wrong root" {
+                    SessionId::new()
+                } else {
+                    fixture.root
+                },
+                if mismatch == "wrong handle" {
+                    "main/other"
+                } else {
+                    &fixture.handle
+                },
+                orphan_archive(actor),
+                hya_proto::FinishCause::Archived,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(StoreError::ActorClaimUnavailable { actor_id }) if actor_id == actor),
+            "{mismatch}"
+        );
+        let after_claim: Option<(i64, Vec<u8>, String)> = sqlx::query_as(
+            "SELECT epoch, owner_run_id, state FROM resident_actor_claim WHERE actor_id = ?",
+        )
+        .bind(actor.storage_key())
+        .fetch_optional(&mut connection)
+        .await
+        .unwrap();
+        assert_eq!(after_claim, before_claim, "{mismatch}");
+        assert_eq!(
+            fixture.store.replay(fixture.root).await.unwrap(),
+            before_root
+        );
+        assert_eq!(fixture.store.replay(actor).await.unwrap(), before_actor);
+    }
+}
+
+#[tokio::test]
+async fn terminal_archive_aborts_admissions_from_all_prior_epochs() {
+    for takeover in [false, true] {
+        let temp_db = TempDb::new("old-admissions");
+        let fixture = stop_fixture(temp_db.path()).await;
+        let accepted_call = ToolCallId::new();
+        let accepted = OperationId::from_tool_call(accepted_call);
+        fixture
+            .store
+            .claim_admission(&AdmissionClaim {
+                operation_id: accepted,
+                source_tool_call_id: accepted_call,
+                root_session: fixture.root,
+                request_fingerprint: [8; 32],
+                admission_units: 1,
+                actor_claim: Some(fixture.claim),
+            })
+            .await
+            .unwrap();
+        fixture
+            .store
+            .recover_claim(fixture.actor, OwnerRunId::new())
+            .await
+            .unwrap();
+        let recovered = fixture
+            .store
+            .recover_claim(fixture.actor, OwnerRunId::new())
+            .await
+            .unwrap();
+        let current_call = ToolCallId::new();
+        let current = OperationId::from_tool_call(current_call);
+        fixture
+            .store
+            .claim_admission(&AdmissionClaim {
+                operation_id: current,
+                source_tool_call_id: current_call,
+                root_session: fixture.root,
+                request_fingerprint: [9; 32],
+                admission_units: 1,
+                actor_claim: Some(recovered.claim),
+            })
+            .await
+            .unwrap();
+        fixture
+            .store
+            .start_admission(current, Some(&recovered.claim))
+            .await
+            .unwrap();
+        let owner = if takeover {
+            hya_store::ResidentArchiveOwner::Takeover
+        } else {
+            hya_store::ResidentArchiveOwner::Claim(&recovered.claim)
+        };
+        let (outcome, _, admissions) = fixture
+            .store
+            .finalize_resident_archive(
+                owner,
+                fixture.root,
+                &fixture.handle,
+                orphan_archive(fixture.actor),
+                hya_proto::FinishCause::Archived,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, hya_store::ResidentArchiveOutcome::Committed);
+        assert_eq!(admissions.len(), 3, "takeover={takeover}");
+        for operation in [fixture.operation, accepted, current] {
+            let row = fixture.store.admission(operation).await.unwrap().unwrap();
+            assert_eq!(row.state, AdmissionState::Aborted);
+            assert_eq!(row.logical_released, operation != accepted);
+            assert!(
+                admissions
+                    .iter()
+                    .any(|returned| returned.operation_id == operation)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn terminal_takeover_requires_the_owning_store_handle() {
+    let temp_db = TempDb::new("takeover-owner");
+    let fixture = stop_fixture(temp_db.path()).await;
+    let observer = SessionStore::connect(temp_db.path()).await.unwrap();
+    assert!(matches!(
+        observer.claim_runtime_owner(OwnerRunId::new()),
+        Err(StoreError::RuntimeOwnerBusy)
+    ));
+    let result = observer
+        .finalize_resident_archive(
+            hya_store::ResidentArchiveOwner::Takeover,
+            fixture.root,
+            &fixture.handle,
+            orphan_archive(fixture.actor),
+            hya_proto::FinishCause::Archived,
+        )
+        .await;
+    assert!(matches!(result, Err(StoreError::RuntimeOwnerClaimRequired)));
+    fixture
+        .store
+        .validate_actor_claim(&fixture.claim)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.store.replay(fixture.root).await.unwrap(),
+        fixture.before_root
+    );
+    assert_eq!(
+        fixture.store.replay(fixture.actor).await.unwrap(),
+        fixture.before_actor
+    );
+    assert_eq!(
+        fixture
+            .store
+            .admission(fixture.operation)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        AdmissionState::Started
+    );
+}
+
+#[tokio::test]
+async fn terminal_takeover_rejects_a_voluntary_report_gate_without_changing_the_claim() {
+    let temp_db = TempDb::new("takeover-gate");
+    let fixture = stop_fixture(temp_db.path()).await;
+    let mut archive = orphan_archive(fixture.actor);
+    archive.check_gate = true;
+    archive.report = Some((hya_proto::ReportOutcome::Done, "report".into()));
+    let result = fixture
+        .store
+        .finalize_resident_archive(
+            hya_store::ResidentArchiveOwner::Takeover,
+            fixture.root,
+            &fixture.handle,
+            archive,
+            hya_proto::FinishCause::Archived,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(StoreError::ActorClaimData(reason)) if reason == "voluntary report requires an episode claim")
+    );
+    fixture
+        .store
+        .validate_actor_claim(&fixture.claim)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.store.replay(fixture.root).await.unwrap(),
+        fixture.before_root
+    );
+    assert_eq!(
+        fixture.store.replay(fixture.actor).await.unwrap(),
+        fixture.before_actor
+    );
+    assert_eq!(
+        fixture
+            .store
+            .admission(fixture.operation)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        AdmissionState::Started
+    );
 }
 
 #[tokio::test]
