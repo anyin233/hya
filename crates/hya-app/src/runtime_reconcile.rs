@@ -508,7 +508,7 @@ pub(crate) fn prepared_bundle_skill_exports(
             )));
         }
     }
-    if prepared_by_id.len() != contributions.skills.len() {
+    if !contributions.skills.is_empty() && prepared_by_id.len() != contributions.skills.len() {
         return Err(ReconcileError::InvalidPrepared(format!(
             "prepared Skill count {} does not match contribution count {}",
             prepared_by_id.len(),
@@ -531,18 +531,25 @@ pub(crate) fn prepared_bundle_skill_exports(
 
     let mut exports = Vec::with_capacity(resources.len());
     for (local_id, resource) in prepared_by_id {
-        let Some(contribution) = contribution_by_id.get(local_id) else {
-            return Err(ReconcileError::InvalidPrepared(format!(
-                "prepared Skill `{local_id}` is missing from contributions"
-            )));
-        };
-        if contribution.content != resource.content || contribution.digest != resource.digest {
-            return Err(ReconcileError::InvalidPrepared(format!(
-                "Skill contribution `{local_id}` differs from prepared id/content/digest"
-            )));
+        if !contributions.skills.is_empty() {
+            let Some(contribution) = contribution_by_id.get(local_id) else {
+                return Err(ReconcileError::InvalidPrepared(format!(
+                    "prepared Skill `{local_id}` is missing from contributions"
+                )));
+            };
+            if contribution.content != resource.content || contribution.digest != resource.digest {
+                return Err(ReconcileError::InvalidPrepared(format!(
+                    "Skill contribution `{local_id}` differs from prepared id/content/digest"
+                )));
+            }
         }
+        let contribution = SkillContribution {
+            id: local_id.to_string(),
+            content: resource.content.clone(),
+            digest: resource.digest.clone(),
+        };
         let path = PathBuf::from(format!("bundle:{bundle_id}/{}", resource.source_path));
-        let entry = parse_skill_contribution(contribution, path)?;
+        let entry = parse_skill_contribution(&contribution, path)?;
         exports.push(RuntimeSourceSkill::new(
             resource.stable_id.clone(),
             resource.local_id.clone(),
@@ -2740,8 +2747,8 @@ for line in sys.stdin:
                 std::slice::from_ref(&prepared),
                 &missing,
             )
-            .is_err(),
-            "a missing prepared Skill declaration must fail closed"
+            .is_ok(),
+            "static Skills remain available without process declarations"
         );
 
         let mut extra = valid.clone();

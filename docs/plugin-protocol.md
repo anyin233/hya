@@ -270,7 +270,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `plugin.kind` | **Required** on the initialize reply (no `#[serde(default)]` on `PluginInfo.kind`). Wire snake_case: `rust`, `bun`, `claude`, `other`. Omitting `kind` fails deserialization and aborts the handshake. (`#[default] Rust` on `PluginKindWire` applies to YAML config / `plugin.toml` entries that do have `#[serde(default)]`, not to this wire field.) |
 | `hooks` | Only hooks listed here are ever dispatched to this plugin. Each registration is exactly `{ "name": "<hook>" }`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
-| `workspaceAdapters` | Shape `{ type, name, description }`, parsed but unsupported: no route serves them. A bundle process that declares one fails to start (`process workspace adapters have no bundle resource contract`), and a Project plugin's adapters are ignored with a warning. |
+| `workspaceAdapters` | Shape `{ type, name, description }`, parsed but unsupported: no route serves them. A bundle process that declares one fails to start (`process workspace adapters have no bundle resource contract`), and Project plugins and private agent sidecars ignore them with a warning. |
 | `apis` | Optional. API endpoints answered over `api/request`: `{ name, description? }`, names unique and non-empty. A bundle process must list exactly its manifest `apis:` ids (otherwise the bundle fails to start); configured plugins' endpoints are ignored. |
 
 ---
@@ -661,7 +661,12 @@ returns the ordered host and a per-id failure map. `PreparedPlugin::tool(local,
 canonical)` returns `Option<Arc<dyn Tool>>` for an exported tool under a view's
 canonical name. `PluginHost::shutdown()` and `terminate()` return
 `Result<(), PluginError>` after reaping; retained views cannot restart a stopped
-owner. Dropping the last owner retains the existing child-guard cleanup.
+owner. `PluginHost::stop_now() -> ()` marks connections stopped and takes their
+child guards synchronously, closes clients and kills children immediately,
+then reaps on the current runtime. A private sidecar handle calls it on drop
+before removing its activation directory, including when tool or hook views
+outlive the handle. Calls through retained stopped views return `Closed`.
+Use `shutdown().await` to send the shutdown RPC and await reaping.
 `TurnBinding::sidecar_hook_view(agent: &str, dispatcher: Arc<dyn HookDispatcher>)`
 returns `Result<Option<Arc<dyn HookDispatcher>>, BundleError>`: no selected hooks
 produce `None`; otherwise the retained dispatcher is filtered by `hook_refs`.
@@ -727,13 +732,18 @@ Observable state via `PluginHost::plugin_status(id)`:
 
 | `PluginStatus` | Meaning |
 | --- | --- |
-| `Alive` | Live client present |
-| `Dead` | Client cleared; next call may lazily respawn |
+| `Alive` | Open live client present |
+| `Dead` | Client absent or closed; next shared-source call may lazily respawn |
 | `DeclarationDrift` | Respawned child changed its initialize declaration; latched, never reused |
 | `Disabled` | Restart budget exhausted |
 
 A crash (EOF mid-call) clears the live client (`Dead`); the next call charges
 the restart budget and respawns if still under the window.
+
+Concurrent failed calls invalidate only the client they used. One crashed child
+costs one restart even with multiple in-flight calls; a closed or timeout-tainted
+client is replaced before the next shared-source dispatch. Private activations
+remain non-respawning and report process loss to their session supervisor.
 
 ---
 

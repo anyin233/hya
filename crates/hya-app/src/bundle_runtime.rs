@@ -458,10 +458,8 @@ pub(crate) async fn prepare_source(
                         "bundle `{id}` process workspace adapters have no bundle resource contract"
                     )));
                 }
-                if !set.skills.is_empty() {
-                    prepared_bundle_skill_exports(id, bundle.skills(), set)
-                        .map_err(|error| invalid("bundle process Skill declarations", error))?;
-                }
+                prepared_bundle_skill_exports(id, bundle.skills(), set)
+                    .map_err(|error| invalid("bundle process Skill declarations", error))?;
             }
             for tool in tools {
                 let local = tool.name().to_string();

@@ -139,8 +139,8 @@ struct ClientInner {
 
 /// Owns a spawned plugin process and its paired [`PluginClient`].
 ///
-/// Dropping without [`ChildGuard::shutdown`] / [`ChildGuard::terminate`] leaves
-/// cleanup to the OS; prefer explicit shutdown for a clean `shutdown` RPC.
+/// Drop schedules shutdown and reaping on the current runtime; without one it kills.
+/// Prefer explicit shutdown to await reaping.
 pub struct ChildGuard {
     child: StdMutex<Option<Child>>,
     client: PluginClient,
@@ -195,7 +195,7 @@ impl ChildGuard {
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         let Some(mut child) = child else {
-            self.client.mark_closed(PluginError::Closed).await;
+            self.client.mark_closed(PluginError::Closed);
             let _ = await_stderr_task(stderr_task).await;
             return Err(PluginError::Closed);
         };
@@ -204,7 +204,7 @@ impl ChildGuard {
             .call(METHOD_SHUTDOWN, json!({}), SHUTDOWN_TIMEOUT)
             .await;
         let status_result = terminate_child(&mut child).await;
-        self.client.mark_closed(PluginError::Closed).await;
+        self.client.mark_closed(PluginError::Closed);
         let stderr_result = await_stderr_task(stderr_task).await;
 
         let status = status_result?;
@@ -220,7 +220,7 @@ impl ChildGuard {
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         let Some(mut child) = child else {
-            self.client.mark_closed(PluginError::Closed).await;
+            self.client.mark_closed(PluginError::Closed);
             let _ = await_stderr_task(stderr_task).await;
             return Err(PluginError::Closed);
         };
@@ -232,7 +232,7 @@ impl ChildGuard {
             .wait()
             .await
             .map_err(|error| PluginError::Io(error.to_string()));
-        self.client.mark_closed(PluginError::Closed).await;
+        self.client.mark_closed(PluginError::Closed);
         let stderr_result = await_stderr_task(stderr_task).await;
 
         kill_result?;
@@ -248,7 +248,7 @@ impl ChildGuard {
         let child = self.take_child();
         let stderr_task = self.take_stderr_task();
         let Some(mut child) = child else {
-            self.client.mark_closed(PluginError::Closed).await;
+            self.client.mark_closed(PluginError::Closed);
             let _ = await_stderr_task(stderr_task).await;
             return Err(PluginError::Closed);
         };
@@ -257,7 +257,7 @@ impl ChildGuard {
             .wait()
             .await
             .map_err(|error| PluginError::Io(error.to_string()));
-        self.client.mark_closed(PluginError::Closed).await;
+        self.client.mark_closed(PluginError::Closed);
         let stderr_result = await_stderr_task(stderr_task).await;
 
         let status = status_result?;
@@ -265,6 +265,30 @@ impl ChildGuard {
         Ok(status)
     }
 
+    /// Close and kill synchronously; reap on the current runtime.
+    pub(crate) fn stop_now(&mut self) {
+        self.client.mark_closed(PluginError::Closed);
+        let child = self.take_child();
+        let stderr_task = self.take_stderr_task();
+        if let Some(mut child) = child {
+            let _ = child.start_kill();
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(async move {
+                        let _ = child.wait().await;
+                        let _ = await_stderr_task(stderr_task).await;
+                    });
+                }
+                Err(_) => {
+                    if let Some(task) = stderr_task {
+                        task.abort();
+                    }
+                }
+            }
+        } else if let Some(task) = stderr_task {
+            task.abort();
+        }
+    }
     fn take_child(&self) -> Option<Child> {
         match self.child.lock() {
             Ok(mut guard) => guard.take(),
@@ -294,7 +318,7 @@ impl Drop for ChildGuard {
                                 .call(METHOD_SHUTDOWN, json!({}), SHUTDOWN_TIMEOUT)
                                 .await;
                             let _ = terminate_child(&mut child).await;
-                            client.mark_closed(PluginError::Closed).await;
+                            client.mark_closed(PluginError::Closed);
                             let _ = await_stderr_task(stderr_task).await;
                         });
                     }
@@ -312,7 +336,7 @@ impl Drop for ChildGuard {
                     match tokio::runtime::Handle::try_current() {
                         Ok(handle) => {
                             handle.spawn(async move {
-                                client.mark_closed(PluginError::Closed).await;
+                                client.mark_closed(PluginError::Closed);
                                 let _ = await_stderr_task(Some(task)).await;
                             });
                         }
@@ -544,7 +568,7 @@ impl PluginClient {
         let _pending_registration = PendingRegistration::insert(self.inner.pending.clone(), id, tx);
         let operation = async {
             if let Err(error) = self.write_frame(&request).await {
-                self.mark_closed(error.clone()).await;
+                self.mark_closed(error.clone());
                 return Err(error);
             }
             match rx.await {
@@ -556,7 +580,7 @@ impl PluginClient {
             Ok(result) => result,
             Err(_) => {
                 if self.inner.timeout_taints_closed {
-                    self.mark_closed(PluginError::Closed).await;
+                    self.mark_closed(PluginError::Closed);
                 }
                 Err(PluginError::Timeout {
                     method: method.to_string(),
@@ -731,7 +755,7 @@ impl PluginClient {
         match self.write_frame(&notification).await {
             Ok(()) => Ok(()),
             Err(error) => {
-                self.mark_closed(error.clone()).await;
+                self.mark_closed(error.clone());
                 Err(error)
             }
         }
@@ -753,13 +777,17 @@ impl PluginClient {
         self.inner.closed.load(Ordering::SeqCst)
     }
 
+    pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Cancellation token fired when the client is marked closed.
     #[must_use]
     pub fn closed_token(&self) -> CancellationToken {
         self.inner.closed_token.clone()
     }
 
-    async fn mark_closed(&self, error: PluginError) {
+    fn mark_closed(&self, error: PluginError) {
         if self.inner.closed.swap(true, Ordering::SeqCst) {
             return;
         }

@@ -838,10 +838,17 @@ for that agent, even when its loaded module exports them. A tool-only consumer
 may therefore initialize a module that also declares hooks, and vice versa.
 Skill declarations, when present in an activation, are likewise checked against
 the complete packaged Skill set, independently of the agent's Skill selection.
+An empty process Skill list is valid: static packaged Skills remain available
+without any process declaration, for both private activations and shared bundle
+processes.
 
 The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
 
 ---
+
+Private sidecars ignore unsupported `workspaceAdapters` exports with a warning;
+these exports do not affect tool activation. Undeclared API exports still fail
+initialization.
 
 ## Sidecar ABI and activation
 
@@ -883,7 +890,9 @@ limit. A malformed response or timeout taints and terminates the sidecar.
 - A root (user-started) agent's turn starts one child for the whole Harness activation and shuts it down and reaps it when the activation ends.
 - A spawned agent is a resident actor and reuses one healthy child across mailbox messages. Its in-process state is volatile; process loss never replays completed messages or effects.
 - Idle resident loss lazily creates a fresh child and ACKs it under the same captured binding. Running loss aborts and fences the running item without replay, then preserves queued-after work for a fresh ACK under that binding.
-- Explicit stop is final and idempotent.
+- Explicit stop is final and idempotent. Dropping a sidecar handle stops its
+  connection before removing activation files, even when tool or hook views
+  remain. Retained stopped views cannot dispatch or respawn the child.
 - There is no TTL, heartbeat, idle reclaim, process adoption, watcher, or persisted PID/stdio/process state.
 
 ---

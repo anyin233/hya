@@ -398,10 +398,13 @@ Project bundles (`.hya/bundles/<dir>/`, written by `hya bundle install
   providers restart at the next root binding, like a changed package.
 - The provider's initialized tools and hook names must exactly match declared
   resources. Nonempty dynamic Skill declarations must match packaged Skills.
+  An empty process Skill list is valid; static packaged Skills remain available
+  with or without process declarations, including in private agent activations.
   A missing executable, failed initialization, or declaration mismatch rejects
   the candidate without changing the published runtime generation.
-  Workspace-adapter contributions reject initialization because the bundle
-  schema has no resource contract for them; they are never silently ignored.
+  Shared bundle processes reject workspace-adapter contributions because the
+  bundle schema has no resource contract for them. Private agent sidecars
+  ignore these unsupported exports with a warning.
 - Unchanged package/process/schema/configuration identities reuse the existing source. New
   bindings after uninstall omit that source; retained bindings keep it alive.
   Materialized files remain until the last retained process owner is dropped.
