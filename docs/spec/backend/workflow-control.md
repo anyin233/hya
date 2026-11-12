@@ -141,3 +141,26 @@ match store.admit_workflow_run(actor_claim, session, start).await? {
 ```
 
 The lock proves exclusive runtime ownership for recovery. The writer transaction owns run idempotency and exclusion. The event log still owns projected Workflow state.
+
+### Bounded tool admission and runtime shutdown
+
+The `workflow` tool queue and concurrent request admission share the existing
+`subagents.per_run_budget: u64` capacity (after channel capacity clamping).
+There is no additional setting. For example, `subagents: { per_run_budget: 1 }`
+allows one catalog/admission handler at a time. A saturated queue or handler
+pool returns `ToolError::Overloaded("workflow host queue is full; retry shortly")`.
+The host reply represents handler saturation as
+`WorkflowHostError { code: "WORKFLOW_OVERLOADED", message: string }`; the tool
+plane maps it to the same overload result as a full channel.
+
+A Run releases its request slot after durable admission, before waiting for its
+Finished result. Admitted runs remain tracked and governed by the existing
+per-session claim and resident budgets; List and State can proceed while a run
+executes. Catalog filesystem walks and compilation use tracked blocking tasks,
+so they do not block Tokio runtime workers. Direct control calls retain their
+existing admission rules; the tool queue capacity applies to tool requests.
+
+All public `WorkflowControl` entry points (`execute`, `list`, `decorate`) take
+a runtime tracker token before checking cancellation. Once shutdown returns,
+they reject new work with `WORKFLOW_RUNTIME_UNAVAILABLE`. Work admitted before
+shutdown remains tracked through any Started run handoff and terminal write.

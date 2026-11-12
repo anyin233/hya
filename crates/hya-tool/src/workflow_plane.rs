@@ -174,9 +174,15 @@ impl WorkflowPlane {
             })?;
         rx.await
             .map_err(|_| ToolError::Other("workflow host dropped the request".to_string()))?
-            .map_err(|error| ToolError::WorkflowControl {
-                code: error.code,
-                message: error.message,
+            .map_err(|error| {
+                if error.code == "WORKFLOW_OVERLOADED" {
+                    ToolError::Overloaded(error.message)
+                } else {
+                    ToolError::WorkflowControl {
+                        code: error.code,
+                        message: error.message,
+                    }
+                }
             })
     }
 }

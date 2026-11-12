@@ -658,6 +658,31 @@ impl WorkflowControl {
         }
     }
 
+    fn request_token(
+        &self,
+    ) -> Result<tokio_util::task::task_tracker::TaskTrackerToken, WorkflowControlError> {
+        let request = self.tasks.token();
+        if self.stop.is_cancelled() {
+            return Err(WorkflowControlError::RuntimeUnavailable);
+        }
+        Ok(request)
+    }
+
+    async fn catalog(
+        &self,
+        workdir: &Path,
+        binding: &TurnBinding,
+    ) -> Result<WorkflowCatalog, WorkflowControlError> {
+        let roots = WorkflowCatalogRoots::for_scope(binding.scope(), workdir);
+        let binding = binding.clone();
+        self.tasks
+            .spawn_blocking(move || WorkflowCatalog::build(roots, &binding))
+            .await
+            .map_err(|error| {
+                WorkflowControlError::Execution(format!("Workflow catalog task failed: {error}"))
+            })?
+    }
+
     /// Execute one Workflow command for a Session.
     ///
     /// All caller surfaces use this method. It performs catalog resolution,
@@ -674,19 +699,25 @@ impl WorkflowControl {
         command: WorkflowCommand,
         cancel: CancellationToken,
     ) -> Result<WorkflowCommandResult, WorkflowControlError> {
-        let _request = self.tasks.token();
-        if self.stop.is_cancelled() {
-            return Err(WorkflowControlError::RuntimeUnavailable);
-        }
+        self.execute_with_admission(session, invocation, command, cancel, None)
+            .await
+    }
+
+    pub(crate) async fn execute_with_admission(
+        &self,
+        session: SessionId,
+        invocation: WorkflowInvocation,
+        command: WorkflowCommand,
+        cancel: CancellationToken,
+        mut slot: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<WorkflowCommandResult, WorkflowControlError> {
+        let _request = self.request_token()?;
         let execution = async {
             match command {
                 WorkflowCommand::List => {
                     let (workdir, binding) =
                         self.session_binding(session, invocation.binding).await?;
-                    let catalog = WorkflowCatalog::build(
-                        WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-                        &binding,
-                    )?;
+                    let catalog = self.catalog(&workdir, &binding).await?;
                     Ok(WorkflowCommandResult::List {
                         workflows: catalog.list(),
                     })
@@ -694,10 +725,7 @@ impl WorkflowControl {
                 WorkflowCommand::Info { name } => {
                     let (workdir, binding) =
                         self.session_binding(session, invocation.binding).await?;
-                    let catalog = WorkflowCatalog::build(
-                        WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-                        &binding,
-                    )?;
+                    let catalog = self.catalog(&workdir, &binding).await?;
                     Ok(WorkflowCommandResult::Info {
                         workflow: catalog.info(&name)?,
                     })
@@ -736,6 +764,7 @@ impl WorkflowControl {
                                 requested_run: run,
                                 cancel: cancel.clone(),
                             },
+                            &mut slot,
                         )
                         .await?,
                 }),
@@ -767,12 +796,12 @@ impl WorkflowControl {
         &self,
         scope: Option<&Path>,
     ) -> Result<Vec<WorkflowSummary>, WorkflowControlError> {
+        let _request = self.request_token()?;
         let (workdir, binding) = match scope {
             Some(dir) => (dir.to_path_buf(), self.engine.bind_root_runtime(dir).await?),
             None => (PathBuf::new(), self.engine.bind_global_runtime().await?),
         };
-        let roots = WorkflowCatalogRoots::for_scope(binding.scope(), &workdir);
-        let catalog = WorkflowCatalog::build(roots, &binding)?;
+        let catalog = self.catalog(&workdir, &binding).await?;
         Ok(catalog.list())
     }
 
@@ -789,11 +818,9 @@ impl WorkflowControl {
         session: SessionId,
         mut state: WorkflowProjection,
     ) -> Result<WorkflowProjection, WorkflowControlError> {
+        let _request = self.request_token()?;
         let (workdir, binding) = self.session_binding(session, None).await?;
-        let catalog = WorkflowCatalog::build(
-            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-            &binding,
-        )?;
+        let catalog = self.catalog(&workdir, &binding).await?;
         decorate_projection(&catalog, &mut state);
         Ok(state)
     }
@@ -808,10 +835,7 @@ impl WorkflowControl {
         captured_binding: Option<TurnBinding>,
     ) -> Result<WorkflowProjection, WorkflowControlError> {
         let (workdir, binding) = self.session_binding(session, captured_binding).await?;
-        let catalog = WorkflowCatalog::build(
-            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-            &binding,
-        )?;
+        let catalog = self.catalog(&workdir, &binding).await?;
         let entry = catalog.resolve(name)?;
         if let Some(run) = self.active_run(session)? {
             return Err(WorkflowControlError::Busy { session, run });
@@ -857,10 +881,7 @@ impl WorkflowControl {
             return Err(WorkflowControlError::SessionNotFound { session });
         }
         let (workdir, binding) = self.session_binding(session, captured_binding).await?;
-        let catalog = WorkflowCatalog::build(
-            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-            &binding,
-        )?;
+        let catalog = self.catalog(&workdir, &binding).await?;
         let mut state = projection.session.workflow.unwrap_or_default();
         decorate_projection(&catalog, &mut state);
         Ok(state)
@@ -886,6 +907,7 @@ impl WorkflowControl {
         session: SessionId,
         invocation: WorkflowInvocation,
         request: RunRequest,
+        slot: &mut Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> Result<WorkflowRunResult, WorkflowControlError> {
         let RunRequest {
             workflow,
@@ -914,10 +936,7 @@ impl WorkflowControl {
         let (workdir, binding) = self
             .session_binding(session, invocation.binding.clone())
             .await?;
-        let catalog = WorkflowCatalog::build(
-            WorkflowCatalogRoots::for_scope(binding.scope(), &workdir),
-            &binding,
-        )?;
+        let catalog = self.catalog(&workdir, &binding).await?;
         let entry = catalog.resolve(workflow_name)?;
         let selected_same_name = selected
             .as_ref()
@@ -1093,6 +1112,9 @@ impl WorkflowControl {
             });
         }
 
+        // Finished delivery waits for execution, but admission no longer occupies
+        // a request slot once the durable run owns its execution resources.
+        drop(slot.take());
         self.finish_prepared_run(session, run, operation, prepared, finish_binding, cancel)
             .await
     }

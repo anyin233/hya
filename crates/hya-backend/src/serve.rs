@@ -312,7 +312,7 @@ pub(crate) async fn serve_until(
     } = prepared;
     let stop_request = lock.as_ref().map(db_lock::DbLock::stop_request_path);
     let engine = built.engine();
-    let supervisor = built.resident_supervisor();
+    let drain_runtime = built.drain(hya_proto::FinishCause::Shutdown);
     let stopping = tokio_util::sync::CancellationToken::new();
     let extra_served = extra.map(|listener| {
         let server = server.clone();
@@ -335,9 +335,7 @@ pub(crate) async fn serve_until(
             stopping.cancel();
             let result = state.stop_for_restart(hya_core::DRAIN_DEADLINE).await;
             let _ = drained.send(result);
-            supervisor
-                .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
-                .await;
+            drain_runtime.await;
         })
         .await;
     if let Some(task) = extra_served {

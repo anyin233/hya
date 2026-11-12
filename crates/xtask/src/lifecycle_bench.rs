@@ -213,15 +213,15 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
         .root
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(root);
+    hya_store::bench::warm(engine.store()).await?;
     let resident = ResidentSupervisor::start(engine.clone());
-    let mut tasks = hya_app::spawn_team_supervisor(
+    let tasks = hya_app::spawn_team_supervisor(
         receiver,
         engine.clone(),
         agent.clone(),
         Arc::new(CategoryRegistry::default()),
         resident.clone(),
     );
-    hya_store::bench::warm(engine.store()).await?;
     let cancel = CancellationToken::new();
     let worker_engine = engine.clone();
     let worker_cancel = cancel.clone();
@@ -317,10 +317,10 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
     let result = tokio::time::timeout(Duration::from_secs(120), measured).await;
     cancel.cancel();
     let _ = lead.await;
+    tasks.shutdown().await;
     resident
         .drain(FinishCause::Shutdown, Duration::from_secs(10))
         .await;
-    tasks.shutdown().await;
     result??;
     Ok(rows)
 }

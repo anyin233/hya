@@ -960,6 +960,15 @@ of those runs, `serve` shutdown (SIGTERM/SIGINT/SIGHUP), `BuiltSessionEngine::sh
 subagents, and a quiescence-synthesis turn that started on the lead during
 shutdown):
 
+`BuiltSessionEngine::drain(cause)` owns the stop order for server stops,
+restarts, and headless commands. It closes the turn gate, cancels composition
+intake, and joins admitted registration and Workflow handlers before calling
+`ResidentSupervisor::drain`. Cancelled registrations and Workflow runs still
+finish their terminal store writes. Embedders retain the built value and await
+`built.shutdown().await?`; dropping it only signals cancellation. Lower-level
+`spawn_team_supervisor` callers retain its `RuntimeTaskOwner`, await
+`tasks.shutdown()`, then drain their resident supervisor.
+
 1. `begin_drain(cause)`: the turn gate refuses every new claim from now on
    (`try_begin_turn` → `CoreError::Cancelled`; queued `run_turn*` →
    `Ok(Cancelled)` with no turn; resident wakes stay parked) and cancels each
@@ -1036,8 +1045,9 @@ impl ResidentSupervisor {
     pub async fn drain(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport;
 }
 impl BuiltSessionEngine { // hya-app
-    pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport; // DRAIN_DEADLINE
-    pub async fn shutdown(&mut self) -> Result<(), CoreError>;         // drain(Shutdown) first
+    // Owned future for a server callback; joins composition, then drains residents.
+    pub fn drain(&self, cause: FinishCause) -> impl Future<Output = TurnDrainReport> + Send + 'static + use<>;
+    pub async fn shutdown(&mut self) -> Result<(), CoreError>;      // drain(Shutdown)
 }
 ```
 
