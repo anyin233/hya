@@ -54,6 +54,42 @@ struct PublishedBundle {
 }
 
 impl ProjectScopeRefresh {
+    /// Prepare a fresh scope's inert bundle catalog without starting runtime
+    /// sources. Roots are ordered; failed sources are isolated and returned as
+    /// warnings. Pass no roots for a Directory or Global scope.
+    ///
+    /// # Errors
+    /// Returns catalog validation errors after selecting readable sources.
+    pub fn catalog_for_roots(
+        roots: &[PathBuf],
+        installed: &[PreparedCatalog],
+        first_party: &[PreparedCatalog],
+        disabled: &BTreeSet<String>,
+    ) -> Result<(BundleCatalog, Vec<String>), CoreError> {
+        let mut errors = Vec::new();
+        let dirs = project_bundle_dirs(roots, &BTreeMap::new(), &mut errors);
+        let mut ids = BTreeSet::new();
+        let mut namespaces = BTreeSet::new();
+        let mut project = Vec::new();
+        for dir in dirs {
+            if let Ok((id, namespace)) = hya_bundle::read_bundle_identity(&dir)
+                && !claim_bundle(&id, &namespace, disabled, &mut ids, &mut namespaces)
+            {
+                continue;
+            }
+            match prepare_bundle_catalog(&dir, disabled) {
+                Ok(bundle) => project.push(bundle.catalog),
+                Err(error) => errors.push(format!("project bundle {}: {error}", dir.display())),
+            }
+        }
+        let (catalog, _) = compose_scope_catalog(
+            project.iter(),
+            installed.iter().chain(first_party),
+            disabled,
+        )?;
+        Ok((catalog, errors))
+    }
+
     /// Compose Project sources on top of the installed base catalog.
     #[must_use]
     pub fn new(installed: Arc<InstalledBundleRefresh>) -> Self {
@@ -167,18 +203,14 @@ impl ProjectScopeRefresh {
                 let bundle = &published.catalog.bundles()[0];
                 (bundle.identity().id.as_str(), bundle.namespace())
             });
-            if let Some((id, namespace)) = declared.or(retained) {
-                if ids.contains(id) || namespaces.contains(namespace) {
-                    changed |= record.published.take().is_some();
-                    record.attempted = None;
-                    record.enabled = None;
-                    record.error = None;
-                    continue;
-                }
-                if !base.disabled.contains(id) {
-                    ids.insert(id.to_string());
-                    namespaces.insert(namespace.to_string());
-                }
+            if let Some((id, namespace)) = declared.or(retained)
+                && !claim_bundle(id, namespace, &base.disabled, &mut ids, &mut namespaces)
+            {
+                changed |= record.published.take().is_some();
+                record.attempted = None;
+                record.enabled = None;
+                record.error = None;
+                continue;
             }
             let enabled = record.published.as_ref().map(|published| {
                 !base
@@ -239,9 +271,25 @@ impl ProjectScopeRefresh {
         }
         // Select catalogs using the same first-root/id/namespace precedence as
         // project loading, then installed bundles, then first-party bundles.
-        let mut ids = BTreeSet::new();
-        let mut namespaces = BTreeSet::new();
-        let mut catalogs = Vec::new();
+        let (bundles, project_catalogs) = compose_scope_catalog(
+            dirs.iter().filter_map(|dir| {
+                state.bundles[dir]
+                    .published
+                    .as_ref()
+                    .filter(|bundle| bundle.enabled)
+                    .map(|bundle| &bundle.catalog)
+            }),
+            base.installed
+                .iter()
+                .chain(&base.first_party)
+                .map(Arc::as_ref),
+            &base.disabled,
+        )?;
+        let ids = bundles
+            .bundles()
+            .iter()
+            .map(|bundle| bundle.identity().id.clone())
+            .collect::<BTreeSet<_>>();
         let mut bundle_models = BTreeMap::new();
         let mut bundle_efforts = BTreeMap::new();
         let mut project_bundle_dirs = BTreeMap::new();
@@ -252,35 +300,20 @@ impl ProjectScopeRefresh {
             };
             let bundle = &published.catalog.bundles()[0];
             let id = &bundle.identity().id;
-            if !published.enabled
-                || base.disabled.contains(id)
-                || ids.contains(id)
-                || namespaces.contains(bundle.namespace())
+            // Failed edits can retain colliding old identities. Match the
+            // selected source itself when carrying its runtime metadata.
+            if !project_catalogs
+                .iter()
+                .any(|catalog| std::ptr::eq(*catalog, &published.catalog))
             {
                 continue;
             }
-            ids.insert(id.clone());
-            namespaces.insert(bundle.namespace().to_string());
-            catalogs.push(&published.catalog);
             project_bundle_dirs.insert(id.clone(), dir.clone());
             if !published.models.is_empty() {
                 bundle_models.insert(id.clone(), published.models.clone());
             }
             bundle_efforts.insert(id.clone(), published.efforts.clone());
             sources.extend(published.sources.clone());
-        }
-        for catalog in base.installed.iter().chain(&base.first_party) {
-            let bundle = &catalog.bundles()[0];
-            let id = &bundle.identity().id;
-            if base.disabled.contains(id)
-                || ids.contains(id)
-                || namespaces.contains(bundle.namespace())
-            {
-                continue;
-            }
-            ids.insert(id.clone());
-            namespaces.insert(bundle.namespace().to_string());
-            catalogs.push(catalog.as_ref());
         }
         let mut bundle_sources = sources.values().cloned().collect::<Vec<_>>();
         bundle_sources.extend(
@@ -292,9 +325,7 @@ impl ProjectScopeRefresh {
                         && !project_bundle_dirs.contains_key(source.id().configured_id())
                 }),
         );
-        let catalog = Arc::new(AgentCatalog::new(Arc::new(
-            BundleCatalog::from_verified_catalogs(&catalogs)?,
-        ))?);
+        let catalog = Arc::new(AgentCatalog::new(Arc::new(bundles))?);
         runtime.publish_scope(
             key.clone(),
             ScopeOverlay {
@@ -324,48 +355,17 @@ impl ProjectScopeRefresh {
         dir: &std::path::Path,
         disabled: &BTreeSet<String>,
     ) -> Result<PublishedBundle, CoreError> {
-        let source = directory_source(dir)
-            .map_err(|error| CoreError::Invalid(error.to_string()))?
-            .ok_or_else(|| {
-                CoreError::Invalid(format!(
-                    "project bundle {} has no bundle.yaml or bundle.hya.md",
-                    dir.display()
-                ))
-            })?;
-        let catalog = hya_bundle::prepare_package(source)
-            .map_err(|error| CoreError::Invalid(error.to_string()))?;
-        if catalog.bundles().len() != 1 {
-            return Err(CoreError::Invalid(
-                "project bundle must prepare exactly one bundle".into(),
-            ));
+        let mut published = prepare_bundle_catalog(dir, disabled)?;
+        if !published.enabled {
+            return Ok(published);
         }
-        let id = catalog.bundles()[0].identity().id.clone();
-        if disabled.contains(&id) {
-            return Ok(PublishedBundle {
-                enabled: false,
-                catalog,
-                sources: BTreeMap::new(),
-                models: BTreeMap::new(),
-                efforts: BTreeMap::new(),
-            });
-        }
-        let agents = crate::agent_model_config::read_agent_settings(&dir.join("config.yml"))
-            .map_err(|error| {
-                CoreError::Invalid(format!("project bundle {id} configuration: {error:#}"))
-            })?;
-        let efforts = crate::agent_model_config::typed_efforts(&agents).map_err(|error| {
-            CoreError::Invalid(format!("project bundle {id} configuration: {error:#}"))
-        })?;
-        let models = agents
-            .into_iter()
-            .filter_map(|(id, entry)| entry.model.map(|model| (id, ModelRef::new(model))))
-            .collect();
+        let id = published.catalog.bundles()[0].identity().id.clone();
         let resolver = BundleConfigResolver::new(
             self.installed.config_file().to_path_buf(),
             BTreeMap::from([(id, dir.to_path_buf())]),
         );
         let composition = compose(
-            &[&catalog],
+            &[&published.catalog],
             &[],
             &[],
             &BTreeSet::new(),
@@ -374,14 +374,92 @@ impl ProjectScopeRefresh {
             self.installed.host_reads(),
         )
         .await?;
-        Ok(PublishedBundle {
-            enabled: true,
-            catalog,
-            sources: composition.sources,
-            models,
-            efforts,
-        })
+        published.sources = composition.sources;
+        Ok(published)
     }
+}
+
+fn prepare_bundle_catalog(
+    dir: &std::path::Path,
+    disabled: &BTreeSet<String>,
+) -> Result<PublishedBundle, CoreError> {
+    let source = directory_source(dir)
+        .map_err(|error| CoreError::Invalid(error.to_string()))?
+        .ok_or_else(|| {
+            CoreError::Invalid(format!(
+                "project bundle {} has no bundle.yaml or bundle.hya.md",
+                dir.display()
+            ))
+        })?;
+    let catalog = hya_bundle::prepare_package(source)
+        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+    if catalog.bundles().len() != 1 {
+        return Err(CoreError::Invalid(
+            "project bundle must prepare exactly one bundle".into(),
+        ));
+    }
+    let id = &catalog.bundles()[0].identity().id;
+    let enabled = !disabled.contains(id);
+    let agents = if enabled {
+        crate::agent_model_config::read_agent_settings(&dir.join("config.yml")).map_err(
+            |error| CoreError::Invalid(format!("project bundle {id} configuration: {error:#}")),
+        )?
+    } else {
+        BTreeMap::new()
+    };
+    let efforts = crate::agent_model_config::typed_efforts(&agents).map_err(|error| {
+        CoreError::Invalid(format!("project bundle {id} configuration: {error:#}"))
+    })?;
+    let models = agents
+        .into_iter()
+        .filter_map(|(id, entry)| entry.model.map(|model| (id, ModelRef::new(model))))
+        .collect();
+    Ok(PublishedBundle {
+        enabled,
+        catalog,
+        sources: BTreeMap::new(),
+        models,
+        efforts,
+    })
+}
+
+fn claim_bundle(
+    id: &str,
+    namespace: &str,
+    disabled: &BTreeSet<String>,
+    ids: &mut BTreeSet<String>,
+    namespaces: &mut BTreeSet<String>,
+) -> bool {
+    if ids.contains(id) || namespaces.contains(namespace) {
+        return false;
+    }
+    if !disabled.contains(id) {
+        ids.insert(id.to_string());
+        namespaces.insert(namespace.to_string());
+    }
+    true
+}
+
+fn compose_scope_catalog<'a>(
+    project: impl Iterator<Item = &'a PreparedCatalog>,
+    base: impl Iterator<Item = &'a PreparedCatalog>,
+    disabled: &BTreeSet<String>,
+) -> Result<(BundleCatalog, Vec<&'a PreparedCatalog>), CoreError> {
+    let mut ids = BTreeSet::new();
+    let mut namespaces = BTreeSet::new();
+    let mut select = |catalog: &&PreparedCatalog| {
+        let bundle = &catalog.bundles()[0];
+        let id = &bundle.identity().id;
+        !disabled.contains(id)
+            && claim_bundle(id, bundle.namespace(), disabled, &mut ids, &mut namespaces)
+    };
+    let mut catalogs = project.filter(&mut select).collect::<Vec<_>>();
+    let project_catalogs = catalogs.clone();
+    catalogs.extend(base.filter(select));
+    Ok((
+        BundleCatalog::from_verified_catalogs(&catalogs)?,
+        project_catalogs,
+    ))
 }
 
 fn project_bundle_dirs(

@@ -347,7 +347,7 @@ pub(crate) enum Command {
         /// `unarchive`).
         #[arg(long, global = true)]
         db: Option<String>,
-        /// List archived root sessions too.
+        /// Include child sessions and archived sessions.
         #[arg(long, conflicts_with = "archived")]
         all: bool,
         /// List only archived root sessions.
