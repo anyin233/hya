@@ -911,6 +911,24 @@ shutdown):
    archive cannot commit falls back to roster `failed` with a `stopped: …`
    reason and a released claim, as before 0.41.0.)
 
+Daemon stops additionally call `SessionEngine::stop_for_restart(deadline)`.
+It drains every active session with cause `shutdown`, cancels its unresolved
+permission/question metadata, and queues one restore prompt naming unfinished
+tools and call IDs. `SessionEngine::resume_interrupted_turns(base)` on the next
+start reserves each session's turn, atomically consumes its queue row and
+appends the user-role restore prompt, then starts a new turn. This applies to
+root and child sessions; the model decides what to redo. An unanswered
+permission or question never becomes a synthetic successful tool result.
+A new process binds fresh listeners and publishes new discovery metadata
+(ADR-0031); listener inheritance and rollback generations no longer exist.
+
+```rust
+impl SessionEngine {
+    pub async fn stop_for_restart(&self, deadline: Duration) -> Result<TurnDrainReport, CoreError>;
+    pub async fn resume_interrupted_turns(self: &Arc<Self>, base: &AgentSpec) -> Result<Vec<SessionId>, CoreError>;
+}
+```
+
 Causes: SIGINT → `user_cancel`; SIGTERM, normal end, `serve` shutdown →
 `shutdown`; end of a one-shot run whose lead turn failed → `leader_failed`.
 The drain is idempotent (the first cause wins). A second SIGINT during a

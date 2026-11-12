@@ -96,9 +96,19 @@ history and SQLite's sequence table):
 | `projection_snapshot` | Derived reducer cache; see below. |
 | `file_blob` | Per-session content-addressed bytes; see below. |
 | `project`, `project_root` | Mutable Project configuration; see below. |
-| `pending_resume` | Handoff continuation: `id TEXT PK`, `session_id BLOB`, `owner_run BLOB` (16 bytes), `generation INTEGER >= 0`, `prompt TEXT`, `created_at INTEGER` are required; nullable `taken_by BLOB` (16 bytes) and `taken_at INTEGER` are both present or absent. One live row per session; live rows indexed by `(generation, created_at, id)`. |
+| `pending_resume` | Restore queue: `session_id BLOB PRIMARY KEY`, `prompt TEXT NOT NULL`, `created_at INTEGER NOT NULL`. One row per session interrupted by daemon stop. Startup deletes the row and appends its user prompt atomically; a failed append rolls back both. |
 | `pending_interaction` | `id TEXT PK`, nullable `session_id BLOB`, required `kind`/`payload TEXT`, `created_at INTEGER`, nullable `resolved_at INTEGER`; unresolved rows indexed by creation time/id. |
-| `pending_interaction_reply` | `id TEXT PK`, required `kind`/`payload TEXT`, `created_at INTEGER`, nullable `consumed_at INTEGER`; unconsumed rows indexed by creation time/id. |
+
+The runtime owner queues a restore after cancelling a session's active turn.
+`queue_restart_resume(session: SessionId, owner: OwnerRunId, prompt: &str)`
+also resolves that session's unanswered interaction metadata in its writer
+transaction. `list_pending_resumes() -> Vec<PendingResume>` returns
+`PendingResume { session: SessionId, prompt: String }` in creation order.
+`take_restart_resume(session: SessionId, owner: OwnerRunId) -> Vec<Envelope>`
+consumes a row and appends `MessageStarted(User)`, `TextStart`, `TextDelta`,
+`TextEnd`, and `MessageFinished(User, Stop)` in one transaction. These async
+store methods return `Result<_, StoreError>`; queue and take require the
+runtime-owner claim. No pending row means take returns an empty vector.
 
 ### Agent model preferences
 

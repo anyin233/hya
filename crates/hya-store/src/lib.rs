@@ -54,9 +54,9 @@ pub use bundle_registry::{
     NamespaceInstallPolicy, is_downgrade,
 };
 pub use error::StoreError;
-pub use handoff::{HANDOFF_REASON, HandoffCheckpoint, HandoffResumeStart, PendingResume};
+pub use handoff::PendingResume;
 pub use hya_proto::{ActorClaim, OwnerRunId};
-pub use interaction::{PendingInteraction, PendingInteractionReply};
+pub use interaction::PendingInteraction;
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
@@ -261,31 +261,6 @@ impl SessionStore {
             projections: Arc::new(ProjectionCache::new()),
             _memory_keeper: None,
         })
-    }
-
-    /// Write a transactionally consistent copy of the database at `source`
-    /// to `dest` (`VACUUM INTO`), opening `source` read-only: no migration,
-    /// no runtime-owner claim, and no write to the live database. `dest`
-    /// must not exist.
-    ///
-    /// # Errors
-    ///
-    /// The source cannot be opened or the copy fails.
-    pub async fn snapshot_database(source: &Path, dest: &Path) -> Result<(), StoreError> {
-        let opts = SqliteConnectOptions::new()
-            .filename(source)
-            .read_only(true)
-            .busy_timeout(Duration::from_secs(5));
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await?;
-        sqlx::query("VACUUM INTO ?")
-            .bind(dest.to_string_lossy().into_owned())
-            .execute(&pool)
-            .await?;
-        pool.close().await;
-        Ok(())
     }
 
     /// Open an in-memory store (single connection) and run migrations.

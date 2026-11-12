@@ -23,13 +23,6 @@ use crate::error::CoreError;
 /// before closing whatever is still open itself.
 pub const DRAIN_DEADLINE: Duration = Duration::from_secs(5);
 
-/// Text recorded on the tool parts a handoff checkpoint closed while they
-/// were still open (an in-flight `task` call, a straddling member row). The
-/// model of the successor's resumed turn reads this: the call was not denied,
-/// the runtime restarted under it, and it decides whether to redo it.
-pub(crate) const HANDOFF_REASON: &str =
-    "handed off: the runtime restarted before this tool call finished";
-
 /// Result of [`SessionEngine::drain_turns`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TurnDrainReport {
@@ -313,19 +306,15 @@ impl SessionEngine {
         if entry.finish.is_some() {
             return Ok(());
         }
-        let (reason, code) = if cause == Some(FinishCause::Handoff) {
-            (HANDOFF_REASON, "HANDOFF")
-        } else {
-            match finish {
-                FinishReason::Error => (
-                    "the turn failed before this tool call finished",
-                    "TURN_FAILED",
-                ),
-                _ => (
-                    "cancelled: the turn stopped before this tool call finished",
-                    "CANCELLED",
-                ),
-            }
+        let (reason, code) = match finish {
+            FinishReason::Error => (
+                "the turn failed before this tool call finished",
+                "TURN_FAILED",
+            ),
+            _ => (
+                "cancelled: the turn stopped before this tool call finished",
+                "CANCELLED",
+            ),
         };
         let open_parts: Vec<_> = entry
             .parts
