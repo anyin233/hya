@@ -29,7 +29,19 @@ pub struct TerminalHandoff {
 impl SessionEngine {
     /// Generate the terminal handoff for `session`. See the module docs for
     /// the degradation contract.
-    pub async fn terminal_handoff(&self, session: SessionId) -> TerminalHandoff {
+    pub async fn terminal_handoff(
+        &self,
+        session: SessionId,
+    ) -> Result<TerminalHandoff, crate::CoreError> {
+        let _lease = self
+            .begin_turn(session, &tokio_util::sync::CancellationToken::new())
+            .await?
+            .ok_or(crate::CoreError::Cancelled)?;
+        Ok(self.terminal_handoff_claimed(session).await)
+    }
+
+    /// The caller holds the turn lease through handoff publication.
+    pub(crate) async fn terminal_handoff_claimed(&self, session: SessionId) -> TerminalHandoff {
         let Ok(projection) = self.read_projection(session).await else {
             return TerminalHandoff {
                 generation: 1,

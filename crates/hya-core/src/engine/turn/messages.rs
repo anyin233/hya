@@ -218,7 +218,7 @@ fn is_context_reference(file: &Value, media_type: &str) -> bool {
         || file.pointer("/source/type").and_then(Value::as_str) == Some("resource")
 }
 
-fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
+pub(crate) fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
     parts
         .iter()
         .map(|p| match p {

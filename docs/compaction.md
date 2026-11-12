@@ -205,3 +205,16 @@ Marker publication is atomic: each persisted reduction writes its completed
 system marker and `ContextCompacted` range event in one transaction, then
 publishes the committed events. Persistence and actor-fence errors fail the
 turn; they do not cause the ladder to try another method.
+
+Manual `/compact` (`SessionEngine::summarize_session(SessionId) ->
+Result<MessageId, CoreError>`) acquires the session turn lease before reading
+history and holds it through the atomic marker commit. For example, requesting
+`/compact` during a running turn queues until that turn releases its lease.
+Both manual summaries and terminal handoffs preserve tool names, arguments,
+results and errors through the same part conversion used by automatic requests.
+
+`SessionEngine::terminal_handoff(SessionId) -> Result<TerminalHandoff, CoreError>`
+also queues for the turn lease; admission errors propagate, while summarizer
+failures retain the degraded-document contract. Resident archival holds its
+lease through generation and handoff publication and uses the internal
+already-claimed entry point. Gate draining cancels queued admission.

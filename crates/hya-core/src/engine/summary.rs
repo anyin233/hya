@@ -1,6 +1,6 @@
 use hya_proto::{
-    AgentName, CompactionStrategy, Event, Message, MessageId, ModelRef, Part, PartProjection,
-    Projection, Role, SessionId, UsagePurpose,
+    AgentName, CompactionStrategy, Event, Message, MessageId, ModelRef, PartProjection, Projection,
+    Role, SessionId, UsagePurpose,
 };
 
 use super::SessionEngine;
@@ -14,6 +14,10 @@ use hya_provider::COMPACT_CONTEXT_MARKER;
 impl SessionEngine {
     /// Produce a summary message for the session via the summarizer.
     pub async fn summarize_session(&self, session: SessionId) -> Result<MessageId, CoreError> {
+        let _lease = self
+            .begin_turn(session, &tokio_util::sync::CancellationToken::new())
+            .await?
+            .ok_or(CoreError::Cancelled)?;
         let projection = self.store.read_projection(session).await?;
         // Empty projection has no session id; fail before workdir/catalog lookup.
         if projection.session.id.is_none() {
@@ -50,29 +54,24 @@ impl SessionEngine {
         // Behind the marker, not merely appended. Without it `compacted_messages`
         // never finds a cut point, so the summarized history stays in the
         // transcript and `/compact` *grows* the context it was asked to shrink.
+        let folded = messages.first().zip(messages.last()).map(|(first, last)| {
+            (
+                first.id(),
+                last.id(),
+                u32::try_from(messages.len()).unwrap_or(u32::MAX),
+            )
+        });
         let marker = self
-            .inject_system_message(session, format!("{COMPACT_CONTEXT_MARKER}\n{summary}"))
-            .await?;
-        // The same record the automatic strategies append: a summarizer fold
-        // with no retained tail, so the range is the whole window it saw.
-        // `threshold: 0` marks it manual (no threshold tripped).
-        if let (Some(first), Some(last)) = (messages.first(), messages.last()) {
-            self.emit(
+            .commit_compaction(
+                None,
                 session,
-                Event::ContextCompacted {
-                    session,
-                    message: marker,
-                    strategy: CompactionStrategy::LocalSummarizer,
-                    from_message: first.id(),
-                    to_message: last.id(),
-                    folded_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
-                    input_tokens_est: u64::try_from(self.token_accounting.estimate(&messages))
-                        .unwrap_or(u64::MAX),
-                    threshold: 0,
-                },
+                format!("{COMPACT_CONTEXT_MARKER}\n{summary}"),
+                CompactionStrategy::LocalSummarizer,
+                folded,
+                u64::try_from(self.token_accounting.estimate(&messages)).unwrap_or(u64::MAX),
+                0,
             )
             .await?;
-        }
         Ok(marker)
     }
 }
@@ -98,13 +97,13 @@ pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, 
         .map(|message| match message.role {
             Role::User => Message::User {
                 id: message.id,
-                parts: text_parts(&message.parts),
+                parts: super::turn::messages::map_parts(&message.parts),
             },
             Role::Assistant => Message::Assistant {
                 id: message.id,
                 agent: agent.clone(),
                 model: model.clone(),
-                parts: text_parts(&message.parts),
+                parts: super::turn::messages::map_parts(&message.parts),
                 finish: message.finish,
                 tokens: None,
                 last_round: None,
@@ -115,19 +114,6 @@ pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, 
             },
         })
         .collect())
-}
-
-fn text_parts(parts: &[PartProjection]) -> Vec<Part> {
-    parts
-        .iter()
-        .filter_map(|part| match part {
-            PartProjection::Text { id, text } => Some(Part::Text {
-                id: *id,
-                text: text.clone(),
-            }),
-            PartProjection::Reasoning { .. } | PartProjection::Tool { .. } => None,
-        })
-        .collect()
 }
 
 fn collect_text(parts: &[PartProjection]) -> String {
