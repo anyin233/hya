@@ -1090,7 +1090,7 @@ async fn interrupting_an_idle_subagent_stops_nothing() {
 }
 
 #[tokio::test]
-async fn stop_cancels_root_and_child_turns_and_restores_each_once() {
+async fn stop_cancels_root_and_child_turns_but_only_queues_the_root() {
     let (engine, agent, provider) = engine_with_script().await;
     let root = make_session(&engine, None, "hya-main").await;
     let child = make_session(&engine, Some(root), "hya-task").await;
@@ -1125,43 +1125,12 @@ async fn stop_cancels_root_and_child_turns_and_restores_each_once() {
         assert_eq!(task.await.unwrap().unwrap(), FinishReason::Cancelled);
     }
     let pending = engine.store().list_pending_resumes().await.unwrap();
-    assert_eq!(pending.len(), 2);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].session, root);
     assert!(pending.iter().all(|row| row.prompt.contains("bash (call ")));
 
-    let (permission, _) = PermissionPlane::new(PermissionRules::default());
-    let next = Arc::new(
-        SessionEngine::new(
-            engine.store().clone(),
-            Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime(Arc::new(ToolRegistry::builtins())),
-            permission,
-            EventBus::default(),
-        )
-        .with_runtime_owner(engine.runtime_owner()),
-    );
-    assert_eq!(
-        next.resume_interrupted_turns(&agent).await.unwrap().len(),
-        2
-    );
-    assert!(eventually(|| async { !next.turn_active(root) && !next.turn_active(child) }).await);
-    assert!(
-        next.resume_interrupted_turns(&agent)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    for session in [root, child] {
-        let events = next.replay(session).await.unwrap();
-        assert_eq!(events.iter().filter(|e| matches!(&e.event,
-            Event::TextDelta { delta, .. } if delta.contains("Your previous turn was interrupted by a restart.")
-        )).count(), 1);
-        assert_eq!(provider.streams_for(session), 2);
-        assert!(
-            !events
-                .iter()
-                .any(|e| matches!(e.event, Event::ToolResult { .. }))
-        );
-    }
+    assert_eq!(provider.streams_for(root), 1);
+    assert_eq!(provider.streams_for(child), 1);
 }
 
 #[tokio::test]
@@ -1197,5 +1166,115 @@ async fn stop_interrupts_a_running_tool_without_recording_success() {
             .unwrap()
             .iter()
             .any(|e| matches!(e.event, Event::ToolResult { .. }))
+    );
+}
+
+#[tokio::test]
+async fn stop_does_not_restore_a_finished_turn_still_holding_its_lease() {
+    let (engine, _agent, _provider) = engine_with_script().await;
+    let session = make_session(&engine, None, "hya-main").await;
+    let lease = engine.try_begin_turn(session).unwrap();
+    let message = MessageId::new();
+    for event in [
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+            agent: None,
+            model: None,
+        },
+        Event::MessageFinished {
+            session,
+            message,
+            role: Role::Assistant,
+            finish: FinishReason::Stop,
+            tokens: None,
+            cause: None,
+        },
+    ] {
+        engine.store().append_event(session, &event).await.unwrap();
+    }
+    engine.stop_for_restart(Duration::ZERO).await.unwrap();
+    drop(lease);
+    assert!(
+        engine
+            .store()
+            .list_pending_resumes()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+struct ShutdownErrorShell {
+    entered: Notify,
+}
+
+#[async_trait]
+impl Tool for ShutdownErrorShell {
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: ToolName::new("bash"),
+            description: "shutdown shell".into(),
+            input_schema: json!({"type":"object"}),
+            output_schema: None,
+        }
+    }
+    async fn execute(
+        &self,
+        ctx: &ToolCtx,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        self.entered.notify_one();
+        ctx.cancel.cancelled().await;
+        Err(ToolError::Io(std::io::Error::other(
+            "child killed by shutdown",
+        )))
+    }
+}
+
+#[tokio::test]
+async fn stop_snapshots_a_shell_call_before_its_shutdown_io_error() {
+    let shell = Arc::new(ShutdownErrorShell {
+        entered: Notify::new(),
+    });
+    let tools = Arc::new(ToolRegistry::from_tool_families(&["hya/extended-tools"]));
+    tools.register(shell.clone()).unwrap();
+    let (engine, agent) = scripted_engine(Arc::new(ScriptProvider::default()), tools).await;
+    let session = make_session(&engine, None, "hya-main").await;
+    let mut task = {
+        let engine = engine.clone();
+        tokio::spawn(async move {
+            engine
+                .run_shell(session, &agent, "waiting".into(), CancellationToken::new())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            () = shell.entered.notified() => {},
+            result = &mut task => panic!("shell ended before executing: {result:?}"),
+        }
+    })
+    .await
+    .unwrap();
+    engine
+        .stop_for_restart(Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(task.await.unwrap().unwrap().1, FinishReason::Cancelled);
+    let rows = engine.store().list_pending_resumes().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].prompt.contains("bash (call "));
+    assert!(
+        !engine
+            .replay(session)
+            .await
+            .unwrap()
+            .iter()
+            .any(|entry| matches!(entry.event, Event::ToolResult { .. }))
     );
 }

@@ -96,19 +96,25 @@ history and SQLite's sequence table):
 | `projection_snapshot` | Derived reducer cache; see below. |
 | `file_blob` | Per-session content-addressed bytes; see below. |
 | `project`, `project_root` | Mutable Project configuration; see below. |
-| `pending_resume` | Restore queue: `session_id BLOB PRIMARY KEY`, `prompt TEXT NOT NULL`, `created_at INTEGER NOT NULL`. One row per session interrupted by daemon stop. Startup deletes the row and appends its user prompt atomically; a failed append rolls back both. |
-| `pending_interaction` | `id TEXT PK`, nullable `session_id BLOB`, required `kind`/`payload TEXT`, `created_at INTEGER`, nullable `resolved_at INTEGER`; unresolved rows indexed by creation time/id. |
+| `pending_resume` | Restore queue: `session_id BLOB PRIMARY KEY`, `prompt TEXT NOT NULL`, nullable `prompt_message_id BLOB`, `created_at INTEGER NOT NULL`. Cancellation and the row commit together for interrupted, non-archived root sessions. Prompt injection records its message id atomically; assistant start deletes the row. |
 
-The runtime owner queues a restore after cancelling a session's active turn.
-`queue_restart_resume(session: SessionId, owner: OwnerRunId, prompt: &str)`
-also resolves that session's unanswered interaction metadata in its writer
-transaction. `list_pending_resumes() -> Vec<PendingResume>` returns
+The runtime owner's
+`cancel_turn_for_restart(session: SessionId, message: MessageId, owner: OwnerRunId, prompt: &str)`
+closes an open assistant message and its unfinished tool calls, then queues a
+restore for an eligible root in the same writer transaction. A finished
+message is left alone. `list_pending_resumes() -> Vec<PendingResume>` returns
 `PendingResume { session: SessionId, prompt: String }` in creation order.
-`take_restart_resume(session: SessionId, owner: OwnerRunId) -> Vec<Envelope>`
-consumes a row and appends `MessageStarted(User)`, `TextStart`, `TextDelta`,
-`TextEnd`, and `MessageFinished(User, Stop)` in one transaction. These async
-store methods return `Result<_, StoreError>`; queue and take require the
-runtime-owner claim. No pending row means take returns an empty vector.
+`take_restart_resume(session: SessionId, owner: OwnerRunId) -> Option<Vec<Envelope>>`
+appends `MessageStarted(User)`, `TextStart`, `TextDelta`, `TextEnd`, and
+`MessageFinished(User, Stop)` and records `prompt_message_id` in one
+transaction. An already injected prompt returns `Some([])` so startup can
+still start its turn after a crash. Missing rows return `None`; missing,
+archived, or child sessions have their rows deleted and also return `None`.
+The first assistant `MessageStarted` deletes an injected row in the same
+transaction. Session deletion also removes the row. Permission/question
+requests live only in memory and are cancelled with their turn.
+These async methods return `Result<_, StoreError>`; cancellation and prompt
+injection require the runtime-owner claim.
 
 ### Agent model preferences
 
