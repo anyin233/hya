@@ -632,3 +632,439 @@ async fn subagent_control_refusals_match_over_http_and_grpc() {
     assert_eq!(grpc.code(), tonic::Code::InvalidArgument);
     assert!(grpc.message().contains("needs text"), "{}", grpc.message());
 }
+
+#[tokio::test]
+async fn every_list_rpc_has_http_grpc_page_parity() {
+    let state = state()
+        .await
+        .with_agent_model_control(Arc::new(EmptyListControl))
+        .with_provider_control(Arc::new(EmptyListControl))
+        .with_bundle_control(Arc::new(EmptyListControl));
+    let app = router(state.clone());
+    let address = grpc_endpoint(state).await;
+    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let (status, body) = http_json(&app, Method::POST, "/v1/sessions", json!({"agent":"build", "model":"fake", "workdir": std::env::current_dir().unwrap().to_str().unwrap()})).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        ids.push(body["session"]["id"].as_str().unwrap().to_owned());
+    }
+    let session = &ids[0];
+    let (_, projects) = http_json(&app, Method::GET, "/v1/projects", Value::Null).await;
+    let project = projects["projects"][0]["id"].as_str().unwrap();
+    let directory = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut covered = std::collections::BTreeSet::new();
+    macro_rules! check {
+        ($service:ident, $client:ident, $method:ident, $req:ident, $id:literal, $path:expr, $body:expr) => {{
+            let mut body = $body;
+            let mut previous = Value::Null;
+            for round in 0..2 {
+                if round == 1 {
+                    if body.get("page").is_some() {
+                        body["page"]["cursor"] =
+                            json!(previous["page"]["nextCursor"].as_str().unwrap_or_default());
+                    }
+                    if body.get("sinceSeq").is_some() {
+                        body["sinceSeq"] = json!(previous["nextSeq"].as_str().unwrap_or("0"));
+                    }
+                }
+                let request: pb::$req = serde_json::from_value(body.clone()).unwrap();
+                let mut query = Vec::new();
+                for (key, value) in body.as_object().unwrap() {
+                    if key == "page" {
+                        query.push(format!(
+                            "page.limit=1&page.cursor={}",
+                            value["cursor"].as_str().unwrap()
+                        ));
+                    } else {
+                        query.push(format!(
+                            "{key}={}",
+                            value
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| value.to_string())
+                        ));
+                    }
+                }
+                let uri = format!("{}?{}", $path, query.join("&"));
+                let response = pb::$service::$client::new(channel.clone())
+                    .$method(tonic::Request::new(request))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let actual = serde_json::to_value(response).unwrap();
+                let (status, expected) = http_json(&app, Method::GET, &uri, Value::Null).await;
+                assert_eq!(status, StatusCode::OK, "{}: {expected}", $id);
+                assert_eq!(actual, expected, "{} round {round}", $id);
+                if $id == "Session.ListSessions" {
+                    assert_eq!(actual["sessions"].as_array().unwrap().len(), 1);
+                    if round == 0 {
+                        assert!(actual["page"]["hasMore"].as_bool().unwrap());
+                    } else {
+                        assert_ne!(actual["sessions"], previous["sessions"]);
+                    }
+                }
+                previous = actual;
+            }
+            covered.insert($id);
+        }};
+    }
+    check!(
+        session_client,
+        SessionClient,
+        list_sessions,
+        ListSessionsRequest,
+        "Session.ListSessions",
+        String::from("/v1/sessions"),
+        json!({"page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        agent_models_client,
+        AgentModelsClient,
+        list_agent_models,
+        ListAgentModelsRequest,
+        "AgentModels.ListAgentModels",
+        String::from("/v1/agent-models"),
+        json!({"session": session, "directory": directory})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_agents,
+        ListAgentsRequest,
+        "Catalog.ListAgents",
+        String::from("/v1/agents"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        auth_client,
+        AuthClient,
+        list_provider_auth,
+        ListProviderAuthRequest,
+        "Auth.ListProviderAuth",
+        String::from("/v1/auth"),
+        json!({})
+    );
+    check!(
+        bundle_api_client,
+        BundleApiClient,
+        list_bundle_apis,
+        ListBundleApisRequest,
+        "BundleApi.ListBundleApis",
+        String::from("/v1/bundle-apis"),
+        json!({"session": session, "directory": directory})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_bundles,
+        ListBundlesRequest,
+        "Catalog.ListBundles",
+        String::from("/v1/bundles"),
+        json!({"directory": directory})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_commands,
+        ListCommandsRequest,
+        "Catalog.ListCommands",
+        String::from("/v1/commands"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        files_client,
+        FilesClient,
+        list_directory,
+        ListDirectoryRequest,
+        "Files.ListDirectory",
+        String::from("/v1/fs/list"),
+        json!({"directory": directory})
+    );
+    check!(
+        interactions_client,
+        InteractionsClient,
+        list_interactions,
+        ListInteractionsRequest,
+        "Interactions.ListInteractions",
+        String::from("/v1/interactions"),
+        json!({"session": session, "directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        agent_models_client,
+        AgentModelsClient,
+        list_model_effort_preferences,
+        ListModelEffortPreferencesRequest,
+        "AgentModels.ListModelEffortPreferences",
+        String::from("/v1/model-effort-preferences"),
+        json!({})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_models,
+        ListModelsRequest,
+        "Catalog.ListModels",
+        String::from("/v1/models"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_permission_modes,
+        ListPermissionModesRequest,
+        "Catalog.ListPermissionModes",
+        String::from("/v1/permission-modes"),
+        json!({"session": session, "directory": directory})
+    );
+    check!(
+        interactions_client,
+        InteractionsClient,
+        list_saved_rules,
+        ListSavedRulesRequest,
+        "Interactions.ListSavedRules",
+        String::from("/v1/permissions/rules"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        project_client,
+        ProjectClient,
+        list_projects,
+        ListProjectsRequest,
+        "Project.ListProjects",
+        String::from("/v1/projects"),
+        json!({"page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        project_client,
+        ProjectClient,
+        list_project_directories,
+        ListProjectDirectoriesRequest,
+        "Project.ListProjectDirectories",
+        format!("/v1/projects/{project}/directories"),
+        json!({"project": project})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_providers,
+        ListProvidersRequest,
+        "Catalog.ListProviders",
+        String::from("/v1/providers"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        pty_client,
+        PtyClient,
+        list_shells,
+        ListShellsRequest,
+        "Pty.ListShells",
+        String::from("/v1/pty/shells"),
+        json!({})
+    );
+    check!(
+        events_client,
+        EventsClient,
+        list_events,
+        ListEventsRequest,
+        "Events.ListEvents",
+        format!("/v1/sessions/{session}/events"),
+        json!({"session": session, "limit": 1, "sinceSeq": "0"})
+    );
+    check!(
+        messages_client,
+        MessagesClient,
+        list_messages,
+        ListMessagesRequest,
+        "Messages.ListMessages",
+        format!("/v1/sessions/{session}/messages"),
+        json!({"session": session, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_skills,
+        ListSkillsRequest,
+        "Catalog.ListSkills",
+        String::from("/v1/skills"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_tools,
+        ListToolsRequest,
+        "Catalog.ListTools",
+        String::from("/v1/tools"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        catalog_client,
+        CatalogClient,
+        list_tui_extensions,
+        ListTuiExtensionsRequest,
+        "Catalog.ListTuiExtensions",
+        String::from("/v1/tui-extensions"),
+        json!({"directory": directory})
+    );
+    check!(
+        workflow_client,
+        WorkflowClient,
+        list_workflows,
+        ListWorkflowsRequest,
+        "Workflow.ListWorkflows",
+        String::from("/v1/workflows"),
+        json!({"directory": directory, "page": {"limit": 1, "cursor": ""}})
+    );
+    check!(
+        worktrees_client,
+        WorktreesClient,
+        list_worktrees,
+        ListWorktreesRequest,
+        "Worktrees.ListWorktrees",
+        String::from("/v1/worktrees"),
+        json!({"directory": directory})
+    );
+    let catalog: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../packages/hya-tui/src/operations.json"
+    ))
+    .unwrap();
+    let expected: std::collections::BTreeSet<_> = catalog
+        .iter()
+        .filter_map(|op| op["operationId"].as_str())
+        .filter(|id| id.split('.').nth(1).unwrap().starts_with("List"))
+        .collect();
+    assert_eq!(covered, expected);
+}
+
+use hya_core::TurnBinding;
+use hya_server::{
+    AgentModelControl, AgentModelControlError, AgentModelControlFuture, AgentModelIdentity,
+    AgentModelState,
+};
+struct EmptyListControl;
+impl AgentModelControl for EmptyListControl {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn configuration_available(&self) -> bool {
+        false
+    }
+
+    fn list(
+        &self,
+        _binding: TurnBinding,
+        _base_model: ModelRef,
+    ) -> AgentModelControlFuture<'_, Vec<AgentModelState>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn set(
+        &self,
+        _binding: TurnBinding,
+        _agent_id: String,
+        _preference: Option<AgentModelIdentity>,
+        _base_model: ModelRef,
+    ) -> AgentModelControlFuture<'_, AgentModelState> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+
+    fn save_configuration(
+        &self,
+        _binding: TurnBinding,
+        _agent_id: String,
+        _model: Option<AgentModelIdentity>,
+        _base_model: ModelRef,
+    ) -> AgentModelControlFuture<'_, AgentModelState> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+    fn list_model_effort_preferences(
+        &self,
+    ) -> AgentModelControlFuture<'_, Vec<hya_store::ModelEffortPreference>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn set_model_effort_preference(
+        &self,
+        _provider_id: String,
+        _model_id: String,
+        _effort: String,
+    ) -> AgentModelControlFuture<'_, ()> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+}
+
+use hya_server::{
+    ProviderChange, ProviderControl, ProviderControlError, ProviderControlFuture,
+    ProviderModelOverride, ProviderSettings, ProviderUpsert,
+};
+impl ProviderControl for EmptyListControl {
+    fn available(&self) -> bool {
+        false
+    }
+
+    fn list_saved_keys(&self) -> ProviderControlFuture<'_, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn list_settings(&self) -> ProviderControlFuture<'_, Vec<ProviderSettings>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn set_key(&self, _: String, _: String) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+
+    fn remove_key(&self, _: String) -> ProviderControlFuture<'_, (bool, ProviderChange)> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+
+    fn upsert_provider(&self, _: ProviderUpsert) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+
+    fn refresh_provider(&self, _: String) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+
+    fn set_model(
+        &self,
+        _: String,
+        _: String,
+        _: ProviderModelOverride,
+    ) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+
+    fn remove_model(&self, _: String, _: String) -> ProviderControlFuture<'_, ProviderChange> {
+        Box::pin(async { Err(ProviderControlError::unavailable()) })
+    }
+}
+
+use hya_server::{BundleControl, BundleControlFuture, BundleListing};
+use std::path::PathBuf;
+impl BundleControl for EmptyListControl {
+    fn list(&self, _: Option<PathBuf>) -> BundleControlFuture<'_, Vec<BundleListing>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn install(&self, _: PathBuf, _: Option<PathBuf>, _: bool) -> BundleControlFuture<'_, String> {
+        panic!("list fixture does not mutate bundles")
+    }
+
+    fn uninstall(&self, _: String, _: Option<PathBuf>) -> BundleControlFuture<'_, ()> {
+        panic!("list fixture does not mutate bundles")
+    }
+
+    fn set_enabled(&self, _: String, _: bool) -> BundleControlFuture<'_, ()> {
+        panic!("list fixture does not mutate bundles")
+    }
+}
