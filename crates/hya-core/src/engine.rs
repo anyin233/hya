@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::{
@@ -386,8 +384,7 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 /// interaction, spawn, mailbox, hooks, compaction, and governors. Turns append
 /// events to the store and publish on the bus; observers never write the log.
 ///
-/// Clone is cheap: every field is a handle or shared state, so detached tasks
-/// (backgrounded MCP watchers) can carry their own engine handle.
+/// Clone shares execution handles and snapshots the current resource bindings.
 pub struct SessionEngine {
     store: SessionStore,
     providers: RwLock<Arc<ProviderRouter>>,
@@ -436,11 +433,6 @@ pub struct SessionEngine {
     /// [`ResidentSupervisor::start`](crate::resident::ResidentSupervisor::start)
     /// wires it.
     reviver: RwLock<Option<Arc<dyn ArchiveReviver>>>,
-    /// Foreground budget for `mcp__` tool calls; `None` (default) keeps every
-    /// call synchronous.
-    mcp_background_after: Option<Duration>,
-    /// Monotonic `mcpbg-N` job ids for backgrounded MCP calls.
-    background_job_seq: Arc<AtomicU64>,
     /// Runtime-owner claim used for durable stop/start records.
     runtime_owner: hya_proto::OwnerRunId,
     /// Single-active-turn registry shared by every clone of this engine.
@@ -502,8 +494,6 @@ impl Clone for SessionEngine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone(),
             ),
-            mcp_background_after: self.mcp_background_after,
-            background_job_seq: self.background_job_seq.clone(),
             runtime_owner: self.runtime_owner,
             turn_gate: Arc::clone(&self.turn_gate),
             sticky_evictions: Arc::clone(&self.sticky_evictions),
@@ -672,8 +662,6 @@ impl SessionEngine {
             governor: None,
             sidecar_environment: None,
             reviver: RwLock::new(None),
-            mcp_background_after: None,
-            background_job_seq: Arc::new(AtomicU64::new(1)),
             runtime_owner: hya_proto::OwnerRunId::new(),
             turn_gate: Arc::new(turn_gate::TurnGate::default()),
             sticky_evictions: Arc::new(Mutex::new(HashMap::new())),
@@ -691,16 +679,6 @@ impl SessionEngine {
             ));
         }
         engine
-    }
-
-    /// Move `mcp__`-namespaced tool calls still running after `budget` to the
-    /// background: the turn receives an early "backgrounded" tool result and
-    /// the real result is later delivered as a steered user prompt. Disabled
-    /// (the default) when unset.
-    #[must_use]
-    pub fn with_mcp_background_after(mut self, budget: Duration) -> Self {
-        self.mcp_background_after = Some(budget);
-        self
     }
 
     /// Record the id claimed with `SessionStore::claim_runtime_owner`.

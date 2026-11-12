@@ -106,13 +106,12 @@ pub fn router(state: AppState) -> Router {
 }
 
 /// Start the process-wide background drivers of a server state: the
-/// backgrounded-MCP reclaim driver, the Project busy watcher, the
+/// Project busy watcher, the
 /// session-list busy tracker, the ephemeral-session reaper, and the
 /// catalog-scope notice relay. Called exactly once per server state
 /// ([`AppState::server_state`]), so HTTP and gRPC share one of each.
 pub(crate) fn spawn_background_drivers(state: &ServerState) {
     spawn_catalog_scope_notices(state);
-    spawn_background_reclaim_driver(state.clone());
     spawn_project_busy_watcher(state.clone());
     session_list::spawn_busy_tracker(state.clone());
     ephemeral::spawn_reaper(state.clone());
@@ -135,64 +134,6 @@ fn spawn_catalog_scope_notices(state: &ServerState) {
                 Err(RecvError::Closed) => break,
             };
             let _ = notices.send(crate::state::catalog_notice(project));
-        }
-    });
-}
-
-/// Drive the reclaim turn for backgrounded MCP calls.
-///
-/// The engine's background watcher admits the steered reclaim prompt first and
-/// then publishes the completion marker (`ToolResult` metadata
-/// `background_result`, or `ToolError` value `background_failed`). When the
-/// session is idle at that moment, this driver starts one turn so the agent
-/// reclaims the result immediately; a busy session is left alone — its turn
-/// already sees the prompt on the next round.
-fn spawn_background_reclaim_driver(state: ServerState) {
-    let mut rx = state.engine.bus().subscribe();
-    tokio::spawn(async move {
-        loop {
-            let session = match rx.recv().await {
-                Ok(envelope) => background_completion_session(&envelope.event),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(_) => break,
-            };
-            let Some(session) = session else { continue };
-            // A session the user stopped waits for the user: the admitted
-            // reclaim prompt is seen by the next turn the user starts on it.
-            if state.is_busy(session) || state.engine.stopped_by_user(session) {
-                continue;
-            }
-            let Some(run) = state.start_run(session) else {
-                continue;
-            };
-            let turn = match crate::support::reference::session_agent_with_guidance(&state, session)
-                .await
-            {
-                Ok(turn) => turn,
-                Err(error) => {
-                    tracing::warn!(%session, "background reclaim skipped: {error}");
-                    continue;
-                }
-            };
-            let external_dirs =
-                crate::support::reference::external_directories_at(&state, &turn.agent.workdir)
-                    .await;
-            let engine = state.engine.clone();
-            let agent = turn.agent.clone();
-            let guidance = turn.guidance.clone();
-            tokio::spawn(async move {
-                let _ = engine
-                    .run_turn_with_external_dirs_and_guidance(
-                        session,
-                        &agent,
-                        run.token(),
-                        &external_dirs,
-                        guidance,
-                        None,
-                    )
-                    .await;
-                drop(run);
-            });
         }
     });
 }
@@ -273,23 +214,6 @@ fn turn_boundary_session(event: &hya_proto::Event) -> Option<hya_proto::SessionI
         | hya_proto::Event::MessageFinished { session, .. }
         | hya_proto::Event::WorkflowRunStarted { session, .. }
         | hya_proto::Event::WorkflowRunFinished { session, .. } => Some(*session),
-        _ => None,
-    }
-}
-
-/// The session of a backgrounded-MCP completion marker, if the event is one.
-fn background_completion_session(event: &hya_proto::Event) -> Option<hya_proto::SessionId> {
-    match event {
-        hya_proto::Event::ToolResult {
-            session, output, ..
-        } => output
-            .get("metadata")
-            .and_then(|metadata| metadata.get("background_result"))
-            .map(|_| *session),
-        hya_proto::Event::ToolError { session, value, .. } => value
-            .as_ref()
-            .and_then(|value| value.get("background_failed"))
-            .map(|_| *session),
         _ => None,
     }
 }
