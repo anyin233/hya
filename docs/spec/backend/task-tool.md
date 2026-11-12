@@ -404,10 +404,11 @@ updating slot state, or entering another turn. If a parent archives and revives
 the child while an old `session.start` or `agent.spawn` is blocked, releasing
 that hook silently retires the old task; only the revived episode drives the
 session. Map replacement and its ownership check share the team lock.
-`remove_slot(session: SessionId, claim: Option<&ActorClaim>)` removes only a
-matching slot; stale or already-removed cleanup is a no-op. `None` belongs only
-to the main actor. Sidecar recovery updates the driver's claim only after the
-matching slot accepts the recovered claim.
+`take_episode(session: SessionId, claim: Option<&ActorClaim>)` removes only a
+matching episode and returns its completion sender; the ending publishes its
+envelopes before resolving that sender. `None` belongs only to the main actor.
+A claim stays fixed for the whole in-memory episode. Resident recovery runs only
+after a process restart; an orphan may still be ended using `Takeover`.
 
 Concurrent sibling registrations resolve their unit's group channel under the
 same SQLite writer reservation. A single `announce` therefore reaches every
@@ -583,3 +584,28 @@ prompts and internal bound Workflow entry points remain allowed. See
 [the client mutation contract](../../architecture/subagent-orchestration.md)
 for the admission predicate and API routes. Empty or duplicate mail notifications
 never cause a provider request without a directive, unread mail or synthesis.
+
+### Sidecar loss and bounded turn ownership
+
+A resident turn uses a child of its episode's cancellation token. Losing a
+sidecar during a turn requests `Failed("activation sidecar lost")`, cancels the
+turn, and keeps polling it so its text and tool cancellation results flush before
+the terminal transaction. The episode reports failure to its parent through
+`SubagentReported { outcome: failed }` and DM mail, archives with reason
+`reported`, and releases its unchanged claim. It never recovers that claim in
+process. For example, after such a failure the parent sends new mail to the
+member's handle to start a new episode under the next claim epoch.
+
+Idle sidecar loss only discards that handle; it sends no report and keeps the
+claim. The next mail wake starts a fresh sidecar. Every sidecar termination is
+bounded by the internal `SIDECAR_STOP_DEADLINE` (five seconds), including idle
+loss and unhealthy-handle replacement.
+
+After cancellation, the episode awaits its own turn for `DRAIN_DEADLINE` (five
+seconds). A cooperative turn completes normally through cancellation. A
+straggler's message is closed under that episode's claim before its future is
+dropped; late tool results cannot append after the close. Ending writes begin
+after the turn is gone, so they cannot wait for a pooled connection retained by
+the suspended turn. Sidecar stop errors or timeouts append `sidecar did not
+stop: ...` to the ending note. The episode is removed before archive envelopes
+are published and before completion is resolved. No tool or wire schema changes.
