@@ -344,7 +344,7 @@ async fn reports_consumed_in_lead_turn_do_not_wake_synthesis() {
 }
 
 /// A mail loop that exceeds the per-team message budget kills the whole team: the
-/// team cancel token fires and every member is marked Failed with a reason.
+/// team cancel token fires and every member is archived.
 #[tokio::test]
 async fn message_budget_kill_cancels_the_team() {
     let (engine, agent) = engine_with(SubagentLimits {
@@ -404,7 +404,7 @@ async fn message_budget_kill_cancels_the_team() {
             .await;
     }
 
-    // The team is killed: its cancel fires and members are marked Failed.
+    // The team is killed: its cancel fires and members enter the archive.
     let killed = {
         let mut ok = false;
         for _ in 0..300 {
@@ -420,10 +420,12 @@ async fn message_budget_kill_cancels_the_team() {
 
     assert!(
         wait_until(&engine, root, |p| {
-            p.team.roster.get("main/worker-1").map(|e| e.status) == Some(RosterStatus::Failed)
+            ["main/worker-1", "main/worker-2"].iter().all(|handle| {
+                !p.team.roster.contains_key(*handle) && p.team.archived.contains_key(*handle)
+            })
         })
         .await,
-        "killed members are marked Failed with a reason"
+        "killed members leave the live roster and can be revived"
     );
 }
 

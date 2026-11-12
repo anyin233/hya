@@ -547,8 +547,9 @@ decisions are unchanged.
 3. A live agent's parent is live (upward DM never hits an archive).
 4. Revival is only via downward DM from the direct parent; it bumps the claim
    epoch, re-debits budget, and never replays transcripts into model context.
-5. Every terminal path produces a report (model-issued or engine-synthesized)
-   and a handoff (model-written or degraded). The lead has no terminal path:
+5. Every terminal path produces a handoff (model-written or degraded). Reports
+   additionally commit a parent report and mail; explicit stops and failures
+   close the parent member row without sending report mail. The lead has no terminal path:
    it is never reported, handed off, or archived (§3.3).
 6. Journal claim precedes governor debit; refund is exactly-once via
    `logical_released`; archive is the only refund trigger for a completed
@@ -598,3 +599,22 @@ workspace suite.
 - Client-side team/channel presentation tests return with the future
   `hya-sdk-v1` frontend (the legacy `hya-sdk` mirror conformance suite and the
   removed TUI's presentation tests retired with those components).
+
+### Terminal transaction implementation
+
+The store finalizer fences the actor claim and replays the root and child inside
+`BEGIN IMMEDIATE`. A prepared handoff carries its generation and observed
+cursor/work boundary; a mismatch refuses termination. Voluntary reports also
+recheck inbox drainage and live children here, after handoff preparation.
+Cancellation cleanup, parent member effects, handoff, optional report/mail,
+terminal activity, archive and claim release commit together. The engine calls
+`publish_resident_finalization` once with the returned envelopes and admissions.
+Budget kills and sidecar startup failures enter this same transition, so their
+members enter the archive and can be revived. Empty killed teams are replaced
+on activation to avoid reusing a cancelled token.
+
+Workflow Stage waits also recognize archived actors. They use the linked parent
+member row for the terminal status and summary, so failure and cancellation can
+settle a Stage after the live roster entry has been removed. Live-only listings
+and delivery cursors still read the live roster; `wait` already reads both the
+roster and archive.
