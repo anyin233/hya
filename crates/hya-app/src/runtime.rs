@@ -7568,13 +7568,15 @@ for line in sys.stdin:
             })
             .collect::<Vec<_>>();
         assert_eq!(tool_errors.len(), 1);
+        // Sidecar loss cancels the running turn; the tool reports its own
+        // cancelled result before the stale claim is fenced.
         assert_eq!(
             tool_errors[0]
                 .0
                 .as_ref()
-                .and_then(|value| value.get("code"))
+                .and_then(|value| value.pointer("/error/type"))
                 .and_then(Value::as_str),
-            Some("STALE_ACTOR_CLAIM")
+            Some("cancelled")
         );
         assert!(!tool_errors[0].1.to_ascii_lowercase().contains("closed"));
 
