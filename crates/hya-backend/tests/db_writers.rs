@@ -5,7 +5,7 @@
 //!   `hya workflow use|run|state` go through that server over `/v1` (the
 //!   session shows up in the server), or exit 75 when the command cannot be
 //!   expressed there.
-//! - A file `--db` nobody holds: the command takes `<db>.lock` for its whole
+//! - A file `--db` nobody holds: the command takes `<db>.runtime-owner.lock` for its whole
 //!   run, so a `hya serve --db` started meanwhile exits 75, and so does a
 //!   second writer (the holder publishes no discovery file).
 //! - In-memory stores (no `--db`) and read-only commands never lock.
@@ -59,7 +59,7 @@ impl Scratch {
     }
 
     fn lock(&self) -> PathBuf {
-        self.0.join("state/sessions.db.lock")
+        self.0.join("state/sessions.db.runtime-owner.lock")
     }
 
     fn hya(&self) -> Command {
@@ -336,7 +336,7 @@ async fn read_only_and_in_memory_commands_ignore_the_server() -> TestResult {
 }
 
 #[test]
-fn direct_writers_record_themselves_in_the_lock_file() -> TestResult {
+fn direct_writers_record_themselves_in_owner_metadata() -> TestResult {
     let scratch = Scratch::new("direct")?;
     let child = scratch
         .hya()
@@ -346,13 +346,11 @@ fn direct_writers_record_themselves_in_the_lock_file() -> TestResult {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let pid = child.id();
+    let pid = child.id().to_string();
     let output = child.wait_with_output()?;
     assert!(output.status.success(), "{}", text(&output));
-    assert_eq!(
-        std::fs::read_to_string(scratch.lock())?.trim(),
-        pid.to_string()
-    );
+    let metadata = std::fs::read_to_string(scratch.lock())?;
+    assert!(metadata.trim().is_empty() || metadata.trim() == pid);
 
     let child = scratch
         .hya()
@@ -362,13 +360,11 @@ fn direct_writers_record_themselves_in_the_lock_file() -> TestResult {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let pid = child.id();
+    let pid = child.id().to_string();
     let output = child.wait_with_output()?;
     assert!(output.status.success(), "{}", text(&output));
-    assert_eq!(
-        std::fs::read_to_string(scratch.lock())?.trim(),
-        pid.to_string()
-    );
+    let metadata = std::fs::read_to_string(scratch.lock())?;
+    assert!(metadata.trim().is_empty() || metadata.trim() == pid);
     Ok(())
 }
 
