@@ -31,6 +31,7 @@ mod routed;
 mod serve;
 mod serve_relay;
 mod sessions_cmd;
+mod update_cmd;
 mod workflow_cmd;
 
 pub use hya_app::{auth, config, formatter_config, permission, plugins};
@@ -1012,16 +1013,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             };
             sessions_cmd::run(resolve_interactive_db(&path), action, listing).await
         }
-        // The update TCB runs without composing any runtime: no config,
-        // bundles, providers, plugins, MCP, or session store.
+        // Install without composing a runtime, then notify the database daemon.
         Some(Command::Update { command, install }) => match command {
             Some(command) => {
                 let mut stdout = std::io::stdout().lock();
                 hya_updater::cli::run(command, &mut stdout)
                     .map_err(|error| anyhow::anyhow!("hya update: {error}"))
             }
-            None => hya_updater::release_install::run_release_install(&install)
-                .map_err(|error| anyhow::anyhow!("hya update: {error}")),
+            None => update_cmd::run(&install, &resolve_interactive_db(&db)).await,
         },
         // The proxy composes no runtime either: no config, providers, MCP,
         // or session store — it only opens network connections.

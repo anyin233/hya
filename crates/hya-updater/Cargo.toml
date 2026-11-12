@@ -15,3 +15,4 @@ workspace = true
 [dependencies]
 clap = { workspace = true }
 hya-version = { workspace = true }
+sha2 = { workspace = true }

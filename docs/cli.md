@@ -1299,7 +1299,16 @@ headless commands without the frontend, while bare `hya` tells the user to run
 `hya update version` prints the updater's package version (the backend release
 version). `hya` dispatches every `update` command before composing any runtime:
 no config bootstrap, bundles, providers, plugins, MCP, or session store are
-loaded. Global flags such as `--model` or `--db` are accepted but ignored.
+loaded in the installer process. `--db` selects the daemon to refresh or restart;
+`--model` does not change the running daemon during installation.
+
+After a successful `hya update`, the running daemon for `--db` (the default
+session database when omitted) reloads its bundles if only bundle contents
+changed. A changed backend executable runs the installed `hya --db <db> serve
+restart`: stop drains interrupted turns, start restores them with a restore
+prompt, and connected TUIs automatically discover the new URL and reconnect.
+No running daemon is started solely by an update. Unchanged installs and
+frontend-only updates leave the daemon running.
 
 ## `hya proxy`
 

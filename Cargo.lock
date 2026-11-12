@@ -1477,6 +1477,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "hya-version",
+ "sha2",
 ]
 
 [[package]]
