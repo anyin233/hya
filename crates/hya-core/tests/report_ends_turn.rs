@@ -330,12 +330,12 @@ async fn an_accepted_report_ends_the_turn_without_another_model_round() {
     );
     assert_eq!(log.results.len(), 1, "{:?}", log.results);
     assert!(
-        log.results[0].contains("Report accepted; your turn ends now."),
-        "the acceptance text must not invite continuation: {}",
+        log.results[0].contains("Report submitted; it takes effect when this turn ends."),
+        "the result must distinguish submission from archive: {}",
         log.results[0]
     );
     assert!(
-        !log.results[0].contains("when this turn completes"),
+        log.results[0].contains("you will receive a harness notice and must report again"),
         "{}",
         log.results[0]
     );
@@ -373,7 +373,7 @@ async fn other_tool_calls_in_the_report_round_complete_then_the_turn_ends() {
     assert!(
         log.results
             .iter()
-            .any(|text| text.contains("Report accepted")),
+            .any(|text| text.contains("Report submitted")),
         "{:?}",
         log.results
     );

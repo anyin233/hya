@@ -58,7 +58,10 @@ pub use bundle_registry::{
 pub use error::StoreError;
 pub use handoff::PendingResume;
 pub use hya_proto::{ActorClaim, OwnerRunId};
-pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork, ResidentArchive};
+pub use mailbox::{
+    RecoveredResidentOutcome, RecoveredResidentWork, ResidentArchive, ResidentArchiveOutcome,
+    ResidentArchiveOwner,
+};
 pub use model_effort_preference::ModelEffortPreference;
 pub use paths::user_cache_dir;
 pub use permission::SavedPermission;
