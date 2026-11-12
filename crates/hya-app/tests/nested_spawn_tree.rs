@@ -22,6 +22,7 @@ use serde_json::Value;
 
 struct NestedSpawn {
     engine: Arc<SessionEngine>,
+    _tasks: hya_app::RuntimeTaskOwner,
     root: SessionId,
     child: SessionId,
     grandchild: SessionId,
@@ -59,7 +60,7 @@ async fn nested_spawn() -> NestedSpawn {
         reasoning: None,
     };
     let resident = ResidentSupervisor::start(engine.clone());
-    let _tasks = spawn_team_supervisor(
+    let tasks = spawn_team_supervisor(
         spawn_rx,
         engine.clone(),
         agent.clone(),
@@ -133,6 +134,7 @@ async fn nested_spawn() -> NestedSpawn {
 
     NestedSpawn {
         engine,
+        _tasks: tasks,
         root,
         child,
         grandchild,
