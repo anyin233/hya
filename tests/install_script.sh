@@ -281,7 +281,7 @@ if real_bun=$(command -v bun); then
   cp -R "$repo/crates/hya-plugin-bun/adapter/src/." "$bun_adapter/src/"
   result=$(
     cd "$probe"
-    env -u HYA_BUN_ADAPTER_DIR HYA_DIRECTORY="$probe" HYA_WORKTREE="$probe" \
+    env -u HYA_BUN_ADAPTER_DIR \
       "$real_bun" run "$bun_adapter/src/main.ts" <<'ADAPTER_REQUESTS'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"host":{"name":"hya","version":"test"}}}
 {"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}

@@ -1,4 +1,4 @@
-import type { ExtensionHooks } from "./loader/init"
+import { extensionSpec, type ExtensionHooks } from "./loader/init"
 
 import { isWireCompletionRequest, type WireCompletionRequest, type ChatParamsParams as ChatParams, type ChatParamsOutcomeWire as ChatParamsOutcome } from "./wire.gen"
 export type { ChatParamsParams as ChatParams, ChatParamsOutcomeWire as ChatParamsOutcome } from "./wire.gen"
@@ -23,6 +23,8 @@ export async function runChatParamsHooks(
       const returned = await candidate({ ...params, request: current })
       if (isWireCompletionRequest(returned)) {
         current = returned
+      } else if (returned !== undefined) {
+        console.error(`chat.params: invalid return from extension ${extensionSpec(hook)}`)
       }
     } catch {
       continue
