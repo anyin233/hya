@@ -24,23 +24,6 @@ CREATE TABLE event_log (
 );
 CREATE INDEX event_log_session ON event_log(session_id);
 
-CREATE TABLE token_ledger (
-    id                BLOB PRIMARY KEY,
-    session_id        BLOB NOT NULL,
-    turn              INTEGER,
-    provider          TEXT,
-    model             TEXT,
-    team_id           BLOB,
-    completion_run_id BLOB,
-    iteration         INTEGER,
-    role              TEXT,
-    category          TEXT,
-    prompt_tokens     INTEGER,
-    completion_tokens INTEGER,
-    confidence        TEXT NOT NULL,
-    ts                INTEGER NOT NULL
-);
-
 CREATE TABLE saved_permission (
     id         TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,

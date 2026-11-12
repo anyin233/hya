@@ -85,8 +85,6 @@ anyhow = "1"
 uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 time = { version = "0.3", features = ["serde", "macros", "parsing", "formatting"] }
 tracing = "0.1"
-tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
-hf-hub = "0.4"
 clap = { version = "4", features = ["derive", "env"] }
 toml = "0.8"
 secrecy = "0.8"

@@ -294,7 +294,7 @@ Use this guide when deciding where a change belongs:
 | New provider route, protocol encoder/decoder, capability preflight | `hya-provider` |
 | New builtin tool implementation | Owning source under `bundles/presets/<family>-tools/native` |
 | Tool trait, loader, runtime plane, or permission action | `hya-tool` |
-| Persistence, replay, migrations, usage ledger | `hya-store` |
+| Persistence, replay, migrations, usage projection | `hya-store` |
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |

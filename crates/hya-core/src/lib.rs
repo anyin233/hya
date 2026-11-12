@@ -58,8 +58,6 @@ pub mod lifecycle;
 pub mod loop_mode;
 pub mod mailbox;
 mod member_wait;
-/// Real per-family tokenizers backing the usage-ledger fallback estimate.
-pub mod model_tokenizers;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
 pub(crate) mod project_activity;

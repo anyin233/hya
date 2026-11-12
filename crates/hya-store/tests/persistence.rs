@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_proto::{Event, Projection, Role, SessionId};
-use hya_store::{LedgerEntry, SavedPermission, SessionStore};
+use hya_proto::{Event, ModelRef, Projection, Role, SessionId, TokenUsage, UsagePurpose};
+use hya_store::{SavedPermission, SessionStore};
 
 fn temp_db() -> String {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -127,71 +127,86 @@ async fn session_resumes_after_reconnect() {
 }
 
 #[tokio::test]
-async fn token_ledger_records_and_reads_by_role() {
+async fn usage_events_fold_by_model_and_purpose() {
     let store = SessionStore::connect_memory().await.unwrap();
     let session = SessionId::new();
-    for (role, iteration) in [("worker", 1), ("verifier", 1), ("planner", 1)] {
+    for (model, purpose) in [
+        ("12th/glm-5.3", UsagePurpose::Turn),
+        ("12th/glm-5.3", UsagePurpose::Turn),
+        ("title-model", UsagePurpose::Title),
+    ] {
         store
-            .record_usage(&LedgerEntry {
+            .append_event(
                 session,
-                role: role.to_string(),
-                iteration: Some(iteration),
-                completion_run_id: None,
-                prompt_tokens: 100,
-                completion_tokens: 50,
-                confidence: "actual".to_string(),
-                provider: Some("12th".to_string()),
-                model: Some("12th/glm-5.3".to_string()),
-            })
+                &Event::UsageRecorded {
+                    session,
+                    message: None,
+                    step: None,
+                    model: ModelRef::new(model),
+                    purpose,
+                    tokens: TokenUsage {
+                        input: 100,
+                        output: 50,
+                        ..Default::default()
+                    },
+                },
+            )
             .await
             .unwrap();
     }
-    let entries = store.read_usage(session).await.unwrap();
-    assert_eq!(entries.len(), 3);
-    assert!(entries.iter().any(|e| e.role == "worker"));
-    assert!(
-        entries
-            .iter()
-            .all(|e| e.provider.as_deref() == Some("12th")
-                && e.model.as_deref() == Some("12th/glm-5.3")),
-        "provider and model columns round-trip"
-    );
-    assert!(
-        entries
-            .iter()
-            .any(|e| e.role == "planner" && e.iteration == Some(1))
+    let projection = store.read_projection(session).await.unwrap();
+    let usage = &projection.session.usage;
+    assert_eq!(usage.by_model.len(), 2);
+    let turns = usage.by_model[&ModelRef::new("12th/glm-5.3")];
+    assert_eq!((turns.input, turns.output, turns.rounds), (200, 100, 2));
+    assert_eq!(usage.by_purpose[&UsagePurpose::Turn], turns);
+    let title = usage.by_model[&ModelRef::new("title-model")];
+    assert_eq!((title.input, title.output, title.rounds), (100, 50, 1));
+    assert_eq!(usage.by_purpose[&UsagePurpose::Title], title);
+    assert_eq!(usage.total().input, 300);
+    assert_eq!(
+        projection,
+        Projection::from_events(&store.replay(session).await.unwrap())
     );
 }
 
 #[tokio::test]
-async fn hysec_token_ledger_resumes_after_reconnect() {
+async fn hysec_usage_projection_resumes_after_reconnect() {
     let path = temp_db();
     let session: SessionId = "hysec_ABCDEFGHIJKLMNOPQRST".parse().unwrap();
     {
         let store = SessionStore::connect(&path).await.unwrap();
         store
-            .record_usage(&LedgerEntry {
+            .append_event(
                 session,
-                role: "worker".to_string(),
-                iteration: Some(1),
-                completion_run_id: Some("run-1".to_string()),
-                prompt_tokens: 100,
-                completion_tokens: 50,
-                confidence: "actual".to_string(),
-                provider: Some("12th".to_string()),
-                model: Some("12th/glm-5.3".to_string()),
-            })
+                &Event::UsageRecorded {
+                    session,
+                    message: None,
+                    step: None,
+                    model: ModelRef::new("12th/glm-5.3"),
+                    purpose: UsagePurpose::Turn,
+                    tokens: TokenUsage {
+                        input: 100,
+                        output: 50,
+                        ..Default::default()
+                    },
+                },
+            )
             .await
             .unwrap();
     }
 
     let reopened = SessionStore::connect(&path).await.unwrap();
-    let entries = reopened.read_usage(session).await.unwrap();
-
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].session, session);
-    assert_eq!(entries[0].role, "worker");
-    assert_eq!(entries[0].completion_run_id.as_deref(), Some("run-1"));
+    let projection = reopened.read_projection(session).await.unwrap();
+    let usage = &projection.session.usage;
+    assert_eq!(usage.by_model.len(), 1);
+    let totals = usage.by_model[&ModelRef::new("12th/glm-5.3")];
+    assert_eq!((totals.input, totals.output, totals.rounds), (100, 50, 1));
+    assert_eq!(usage.by_purpose[&UsagePurpose::Turn], totals);
+    assert_eq!(
+        projection,
+        Projection::from_events(&reopened.replay(session).await.unwrap())
+    );
 }
 
 #[tokio::test]

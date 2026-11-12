@@ -123,7 +123,7 @@ If you want to understand the codebase:
 | [Agent tool surface](architecture/agent-tool-surface.md) | Canonical tool registry surface, aliases, resource views, and agent-facing tool contracts. |
 | [Subagent Orchestration](architecture/subagent-orchestration.md) | Unified resident lifecycle (episodes, report/handoff/archive, revive), channel communication plane, depth policy, and workflow on the unified substrate ([ADR-0015](adr/0015-unified-resident-subagent-lifecycle.md), [ADR-0016](adr/0016-channel-communication-plane.md), [ADR-0017](adr/0017-workflow-on-unified-substrate.md)). |
 | [Compat parity](compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work; that surface is deleted. |
-| [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
+| [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and usage projection behavior. |
 | [Server and Client](architecture/server-client.md) | The consolidated hya.v1 contract over HTTP/SSE/WebSocket and gRPC, state, semantics, and clients. |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |

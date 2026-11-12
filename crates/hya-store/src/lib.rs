@@ -196,7 +196,7 @@ fn canonical_runtime_owner_lock_path(sqlite_path: &str) -> Result<PathBuf, Store
     Ok(runtime_owner_lock_path(&canonical))
 }
 
-/// SQLite-backed session event log, token ledger, admission journal, and related tables.
+/// SQLite-backed session event log, admission journal, and related tables.
 ///
 /// Construct with [`SessionStore::connect`] (file) or [`SessionStore::connect_memory`].
 /// Projection is folded on read via `hya_proto::Projection` — there is no separate
@@ -237,29 +237,6 @@ pub struct ProjectActivityFile {
     pub changed_millis: i64,
     /// Whether the path was absent before the change.
     pub created: bool,
-}
-
-/// One token-usage row written by the engine after a completion.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LedgerEntry {
-    /// Session the usage belongs to.
-    pub session: SessionId,
-    /// Role label (e.g. assistant / system accounting bucket).
-    pub role: String,
-    /// Optional multi-step iteration index.
-    pub iteration: Option<i64>,
-    /// Optional id correlating multiple ledger rows for one completion run.
-    pub completion_run_id: Option<String>,
-    /// Prompt-side token count.
-    pub prompt_tokens: i64,
-    /// Completion-side token count.
-    pub completion_tokens: i64,
-    /// Confidence or estimation quality label stored with the row.
-    pub confidence: String,
-    /// Provider id the completion ran on (e.g. `12th` in `12th/glm-5.3`).
-    pub provider: Option<String>,
-    /// Full model ref the completion ran on.
-    pub model: Option<String>,
 }
 
 impl SessionStore {
@@ -526,7 +503,6 @@ impl SessionStore {
         for tree_key in &tree_keys {
             for table in [
                 "event_log",
-                "token_ledger",
                 "open_assistant_message",
                 "pending_resume",
                 "projection_snapshot",
@@ -777,58 +753,6 @@ impl SessionStore {
             updated_millis: row.try_get("updated")?,
             events: n.max(0) as u64,
         }))
-    }
-
-    /// Insert one token-ledger row (new UUID primary key, current timestamp).
-    pub async fn record_usage(&self, entry: &LedgerEntry) -> Result<(), StoreError> {
-        let id = uuid::Uuid::now_v7().as_bytes().to_vec();
-        let session = entry.session.storage_key();
-        sqlx::query(
-            "INSERT INTO token_ledger \
-             (id, session_id, iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence, provider, model, ts) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(id)
-        .bind(session)
-        .bind(entry.iteration)
-        .bind(entry.completion_run_id.clone())
-        .bind(entry.role.clone())
-        .bind(entry.prompt_tokens)
-        .bind(entry.completion_tokens)
-        .bind(entry.confidence.clone())
-        .bind(entry.provider.clone())
-        .bind(entry.model.clone())
-        .bind(now_millis())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// All token-ledger rows for a session in timestamp order.
-    pub async fn read_usage(&self, session: SessionId) -> Result<Vec<LedgerEntry>, StoreError> {
-        let key = session.storage_key();
-        let rows = sqlx::query(
-            "SELECT iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence, provider, model \
-             FROM token_ledger WHERE session_id = ? ORDER BY ts",
-        )
-        .bind(key)
-        .fetch_all(&self.pool)
-        .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            out.push(LedgerEntry {
-                session,
-                iteration: r.try_get("iteration")?,
-                completion_run_id: r.try_get("completion_run_id")?,
-                role: r.try_get("role")?,
-                prompt_tokens: r.try_get("prompt_tokens")?,
-                completion_tokens: r.try_get("completion_tokens")?,
-                confidence: r.try_get("confidence")?,
-                provider: r.try_get("provider")?,
-                model: r.try_get("model")?,
-            });
-        }
-        Ok(out)
     }
 }
 

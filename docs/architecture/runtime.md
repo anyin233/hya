@@ -1011,10 +1011,9 @@ over to `anthropic/claude-sonnet` yields two `turn` records and two
 `by_model` entries; the Anthropic entry's output lands in
 `reasoning_unknown_output` because Anthropic does not report thinking.
 
-The token ledger (`record_session_usage`, best-effort, one row per finished
-assistant message) prefers the message's attributed rounds: the sum of its
-records with the latest round's serving model, `prompt_tokens =
-input + cache_read + cache_write`.
+Finishing an assistant message performs no separate usage accounting. Calls
+without reported usage add no estimates; transcript text is not concatenated
+or tokenized for billing.
 
 ## Compaction and Summaries
 
@@ -1137,8 +1136,8 @@ Callers cannot pass an arbitrary agent id into these seams.
 `cleanup_empty_unnamed_session` deletes a session if and only if
 `title::is_empty_unnamed_session` holds: the session exists, has **no** title,
 and has **no** messages (no user content and no assigned title). It calls
-through to `SessionStore::delete_session`, which removes `token_ledger` rows
-then `event_log` rows in one transaction.
+through to `SessionStore::delete_session`, which removes event-log rows and
+associated auxiliary state in one transaction.
 
 ## Shell turns
 
