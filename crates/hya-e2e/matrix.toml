@@ -470,6 +470,22 @@ path = "crates/hya-e2e/tests/p38_relay.rs"
 tags = ["pr", "relay", "security", "tls"]
 timeout_secs = 90
 
+[[scenario]]
+id = "T2.38"
+title = "headless exec: a lead turn that ends while its worker is still running gets a HEADLESS RUN notice turn instead of ending the run; the lead waits, the worker reports (it is not stopped), and the lead's final answer is the run's last turn"
+track = "P"
+path = "crates/hya-e2e/tests/p39_exec_live_subagents.rs"
+tags = ["pr", "subagent", "exec"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.39"
+title = "headless exec: two notice turns in a row that neither wait nor archive end the run with the worker still running"
+track = "P"
+path = "crates/hya-e2e/tests/p39_exec_live_subagents.rs"
+tags = ["pr", "subagent", "exec"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
