@@ -97,6 +97,27 @@ that already ran. A partial answer is therefore retained in replay. Use the
 normal turn cancellation operation (or `hya serve stop` for shutdown); no
 additional configuration is needed.
 
+Resident and transient subagent activations follow the same rule: sidecar loss
+cancels the turn token and awaits its cancelled result, including flushing and
+message closure, before recovery or sidecar termination. The caller never drops
+the running turn future to stop it.
+
+Replay preserves the content a live subscriber saw, except for content an actor
+produced after losing its claim. Every stale-claim write, including a flush of
+text, reasoning, or file changes, is fenced; recovery closes the open message.
+The claim fence takes precedence over replay/live equivalence. On cancellation,
+live subscribers can see the durable `TextStart`/`TextEnd` again after their
+live copies; the projection applies these boundaries idempotently. A straggler
+resuming after the drain deadline may append a `ToolResult` after the drain's
+`MessageFinished`, but cannot append a second finish.
+
+A tool result already produced is recorded as that result even if cancellation
+arrives immediately afterwards; the turn then finishes as cancelled. Cancelled
+results bypass tool after-hooks, including direct shell calls, so a hook cannot
+turn shutdown into success. File-change snapshots start after authorization:
+an edit the user makes while permission is pending belongs to the user, and a
+cancelled permission prompt records no file change for its unexecuted tool.
+
 A prompt is owned by the turn that admitted it, and that turn closes it with
 an assistant `MessageStarted` and `MessageFinished` pair however it ends:
 cancellation or failure during preparation, refusal by a draining engine, or a
@@ -111,6 +132,11 @@ leaves an empty cancelled assistant message in the transcript, with cause
 `UserCancel`, and clears any pending restore. For example, cancelling a
 restored turn while its sidecar is starting prevents the next
 `hya serve start` from restoring it again.
+
+A resident mail wake of the root lead also carries the id of the user-role
+prompt it admits. Stopping it during binding therefore creates the same
+shutdown pair and restore row. A synthesis-only wake admits only a system
+message and claims no user prompt; child sessions still receive no restore row.
 
 The server prepares a turn first (agent, guidance, external directories,
 attachment checks) and commits nothing until preparation succeeded; a failed

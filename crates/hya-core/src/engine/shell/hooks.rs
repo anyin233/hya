@@ -19,6 +19,9 @@ pub(super) async fn apply_tool_after_hooks(
     result: Result<Value, ToolError>,
     call: AfterHookCall<'_>,
 ) -> Result<Value, ToolError> {
+    if matches!(&result, Err(ToolError::Cancelled)) {
+        return result;
+    }
     let Some(hooks) = engine.active_hook_dispatcher(call.session) else {
         return result;
     };

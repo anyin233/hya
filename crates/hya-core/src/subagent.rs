@@ -368,6 +368,7 @@ async fn run_member(
     let loss_token = sidecar_handle
         .as_ref()
         .and_then(|handle| handle.loss_token());
+    let turn_cancel = cancel.clone();
     let run = async {
         engine
             .emit_for_actor(
@@ -482,23 +483,23 @@ async fn run_member(
         let projection = engine.read_projection(child).await?;
         Ok::<String, CoreError>(summarize_member(&projection))
     };
-    let run_result = match (sidecar_hooks, loss_token) {
-        (Some(hooks), Some(loss_token)) => {
-            tokio::select! {
-                biased;
-                _ = loss_token.cancelled() => Err(CoreError::Cancelled),
-                result = scope_activation_hooks(child, hooks, run) => result,
-            }
+    let mut run = Box::pin(async {
+        match sidecar_hooks {
+            Some(hooks) => scope_activation_hooks(child, hooks, run).await,
+            None => run.await,
         }
-        (Some(hooks), None) => scope_activation_hooks(child, hooks, run).await,
-        (None, Some(loss_token)) => {
-            tokio::select! {
-                biased;
-                _ = loss_token.cancelled() => Err(CoreError::Cancelled),
-                result = run => result,
+    });
+    let run_result = if let Some(loss_token) = loss_token {
+        tokio::select! {
+            biased;
+            _ = loss_token.cancelled() => {
+                turn_cancel.cancel();
+                run.await.and(Err(CoreError::Cancelled))
             }
+            result = &mut run => result,
         }
-        (None, None) => run.await,
+    } else {
+        run.await
     };
     match run_result {
         Ok(summary) => Ok(MemberRunOutcome {
