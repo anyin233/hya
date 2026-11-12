@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 mod support;
 
@@ -500,15 +501,16 @@ async fn report_archives_the_agent_end_to_end() {
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore the tree").await;
 
-    supervisor
-        .report_and_archive(
-            root,
-            &handle,
-            ReportOutcome::Done,
-            "found three call sites".to_string(),
-        )
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "found three call sites".to_string(),
+    )
+    .await
+    .unwrap();
 
     // Roster row gone, archive history present.
     let projection = engine.read_projection(root).await.unwrap();
@@ -572,15 +574,16 @@ async fn revive_by_parent_mail_rearms_an_episode_from_the_handoff() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore the tree").await;
-    supervisor
-        .report_and_archive(
-            root,
-            &handle,
-            ReportOutcome::Done,
-            "partial answer".to_string(),
-        )
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "partial answer".to_string(),
+    )
+    .await
+    .unwrap();
 
     // A downward mail to the archived handle revives it.
     engine
@@ -632,34 +635,49 @@ async fn revive_is_rejected_for_agents_the_caller_did_not_spawn() {
     let (lead, lead_handle) = spawn_idle_resident(&supervisor, &engine, root, "lead").await;
     let (_worker, worker_handle) = spawn_idle_resident(&supervisor, &engine, lead, "work").await;
     // Both archive; the root then tries to revive the GRANDCHILD directly.
-    supervisor
-        .report_and_archive(root, &worker_handle, ReportOutcome::Done, String::new())
-        .await
-        .unwrap();
-    // The worker's report mail wakes the lead to consume it; let that turn
-    // settle before the lead reports its own terminal state. Retry briefly
-    // with diagnostics: roster-Busy means a real re-arm; roster-Idle means a
-    // slot-ordering bug.
-    wait_idle(&engine, root, &lead_handle, lead).await;
-    let mut lead_reported = false;
-    for _ in 0..200 {
-        match supervisor
-            .report_and_archive(root, &lead_handle, ReportOutcome::Done, String::new())
-            .await
-        {
-            Ok(()) => {
-                lead_reported = true;
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &worker_handle,
+        ReportOutcome::Done,
+        String::new(),
+    )
+    .await
+    .unwrap();
+    // Wait for this report mail to be consumed, rather than an earlier idle
+    // observation that can precede its bus delivery.
+    let mut events = engine.bus().subscribe();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(root).await.unwrap();
+            let entry = &projection.team.roster[&lead_handle];
+            let through = projection
+                .team
+                .inboxes
+                .get(&lead_handle)
+                .map_or(0, Vec::len) as u64;
+            if entry.resident_cursor >= through
+                && entry.resident_work.is_none()
+                && entry.status == RosterStatus::Idle
+            {
                 break;
             }
-            Err(CoreError::Invalid(message)) if message.contains("still working") => {
-                // A mail wake may reserve the slot before its Busy event is
-                // published; a separate projection read cannot prove ordering.
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-            Err(other) => panic!("unexpected lead report error: {other:?}"),
+            events.recv().await.unwrap();
         }
-    }
-    assert!(lead_reported, "lead never settled to report");
+    })
+    .await
+    .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &lead_handle,
+        ReportOutcome::Done,
+        String::new(),
+    )
+    .await
+    .unwrap();
 
     let result = engine
         .mail_send(
@@ -679,20 +697,18 @@ async fn revive_is_rejected_for_agents_the_caller_did_not_spawn() {
 
 #[tokio::test]
 async fn stop_still_terminates_a_resident_without_report() {
-    // Sanity anchor: the pre-existing stop path keeps working alongside the
-    // new archive machinery (engine-synthesized terminality lands on it).
     let engine = engine().await;
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
     let projection = engine.read_projection(root).await.unwrap();
     assert!(!projection.team.roster.contains_key(&handle));
     assert!(projection.team.archived.contains_key(&handle));
     assert_eq!(
         projection.team.archived[&handle].reason,
-        ArchiveReason::Killed
+        ArchiveReason::ArchivedByParent
     );
     let handoff = engine
         .read_projection(child)
@@ -713,7 +729,7 @@ async fn stopped_handoffs_are_searchable_by_the_members_directive() {
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) =
         spawn_idle_resident(&supervisor, &engine, root, "quartz investigation").await;
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
     let (mailbox, rx) = hya_tool::MailboxPlane::new();
     tokio::spawn(hya_core::run_mailbox_service(
         engine.clone(),
@@ -755,10 +771,16 @@ async fn a_forced_stop_preserves_the_previous_real_handoff() {
     let _lead = engine.try_begin_turn(root).unwrap();
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
     summary.release.notify_one();
-    supervisor
-        .report_and_archive(root, &handle, ReportOutcome::Done, "FIRST REPORT".into())
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "FIRST REPORT".into(),
+    )
+    .await
+    .unwrap();
     let original = engine
         .read_projection(child)
         .await
@@ -776,7 +798,7 @@ async fn a_forced_stop_preserves_the_previous_real_handoff() {
         )
         .await
         .unwrap();
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
     let stopped = engine
         .read_projection(child)
         .await
@@ -796,10 +818,16 @@ async fn a_refused_revival_leaves_the_child_transcript_unchanged() {
     ensure_main(&supervisor, &engine, root).await;
     let _lead = engine.try_begin_turn(root).unwrap();
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
-    supervisor
-        .report_and_archive(root, &handle, ReportOutcome::Done, "done".into())
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "done".into(),
+    )
+    .await
+    .unwrap();
     let other = engine
         .store()
         .try_claim_new(child, hya_proto::OwnerRunId::new())
@@ -1715,15 +1743,19 @@ async fn resident_turn_boundaries_leave_a_heartbeat_on_the_roster() {
         "the work-start heartbeat must land on the roster row"
     );
 
-    // And it is durable: the root log carries the harness event.
-    assert!(
+    // The start and finish each emit once; registration events observed while
+    // the first turn starts must not race in a third heartbeat.
+    assert_eq!(
         engine
             .replay(root)
             .await
             .unwrap()
             .iter()
-            .any(|envelope| matches!(&envelope.event, Event::AgentHeartbeat { .. })),
-        "AgentHeartbeat must be on the root log"
+            .filter(|envelope| matches!(&envelope.event,
+                Event::AgentHeartbeat { handle: member, .. } if member == &handle))
+            .count(),
+        2,
+        "one durable heartbeat per turn boundary"
     );
 }
 
@@ -2043,10 +2075,16 @@ async fn public_mail_send_uses_the_session_captured_channel_policy() {
     assert!(
         matches!(result, Err(CoreError::Store(hya_store::StoreError::MailAuthorizationRejected { sender, channel, .. })) if sender == "main" && !channel.is_empty())
     );
-    supervisor
-        .report_and_archive(root, &handle, ReportOutcome::Done, "done".into())
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "done".into(),
+    )
+    .await
+    .unwrap();
     let result = engine
         .mail_send(
             root,
@@ -2311,10 +2349,16 @@ async fn resident_member_row_runs_once_per_episode_and_reports_done() {
     assert_eq!(running_transitions(&engine, root, child).await, 1);
 
     // The report closes the episode.
-    supervisor
-        .report_and_archive(root, &handle, ReportOutcome::Done, "found it".to_string())
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        ReportOutcome::Done,
+        "found it".to_string(),
+    )
+    .await
+    .unwrap();
     let row = member_row(&engine, root, child).await;
     assert_eq!(row.status, MemberRunStatus::Done);
     assert_eq!(row.summary, "found it");
@@ -2340,8 +2384,8 @@ async fn stopped_resident_member_row_is_cancelled_once() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
-    supervisor.stop_resident(root, &handle).await.unwrap();
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
 
     let row = member_row(&engine, root, child).await;
     assert_eq!(row.status, MemberRunStatus::Cancelled, "{row:?}");
@@ -2412,7 +2456,7 @@ async fn failed_shutdown_archive_has_no_second_terminal_write_path() {
         .execute(&faults)
         .await
         .unwrap();
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
     faults.close().await;
 }
 
@@ -2504,4 +2548,32 @@ async fn failing_resident_turn_marks_the_member_row_failed() {
             ..
         } if *reported == child
     )));
+}
+
+async fn submit_and_wait(
+    engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
+    root: SessionId,
+    handle: &str,
+    outcome: hya_proto::ReportOutcome,
+    report: String,
+) -> Result<(), hya_core::CoreError> {
+    let mut events = engine.bus().subscribe();
+    supervisor
+        .submit_report(root, handle, outcome, report)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(root).await?;
+            if projection.team.archived.contains_key(handle) {
+                return Ok(());
+            }
+            events
+                .recv()
+                .await
+                .map_err(|error| hya_core::CoreError::Invalid(error.to_string()))?;
+        }
+    })
+    .await
+    .map_err(|_| hya_core::CoreError::Invalid("report did not archive".into()))?
 }

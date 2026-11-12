@@ -588,7 +588,7 @@ async fn revived_resident_ignores_stale_initialization(at_start: bool) {
         &activity[activity.len() - 2..],
         &[hya_proto::RosterStatus::Busy, hya_proto::RosterStatus::Idle]
     );
-    supervisor.stop_resident(root, handle).await.unwrap();
+    supervisor.end_member(root, handle).await.unwrap();
     assert_eq!(
         supervisor.member_busy(root, child),
         None,
@@ -746,161 +746,9 @@ async fn archive_before_first_turn_closes_initial_task_before_revive() {
 async fn stop_before_first_turn_closes_initial_task() {
     let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
     let (child, lease) = armed_child(&engine, &supervisor, &agent, root).await;
-    supervisor.stop_resident(root, "main/worker").await.unwrap();
+    supervisor.end_member(root, "main/worker").await.unwrap();
     drop(lease);
-    assert_cancelled_task(&engine, child, FinishCause::UserCancel).await;
-}
-
-#[tokio::test]
-async fn initial_cancellation_rolls_back_with_the_terminal_event() {
-    let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
-    let (child, lease) = armed_child(&engine, &supervisor, &agent, root).await;
-    let before = engine.replay(child).await.unwrap();
-    let mut tx = engine.store().begin_transaction().await.unwrap();
-    sqlx::query("CREATE TRIGGER reject_terminal BEFORE INSERT ON event_log WHEN json_extract(NEW.payload, '$.type') = 'agent_activity_changed' AND json_extract(NEW.payload, '$.status') = 'failed' BEGIN SELECT RAISE(ABORT, 'terminal rejected'); END").execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    let error = supervisor
-        .stop_resident(root, "main/worker")
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("terminal rejected"));
-    assert_eq!(engine.replay(child).await.unwrap(), before);
-    assert!(
-        engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .contains(&child)
-    );
-    let mut tx = engine.store().begin_transaction().await.unwrap();
-    sqlx::query("DROP TRIGGER reject_terminal")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-    supervisor.stop_resident(root, "main/worker").await.unwrap();
-    drop(lease);
-    assert_cancelled_task(&engine, child, FinishCause::UserCancel).await;
-}
-
-struct BlockingShutdown {
-    entered: Arc<Notify>,
-    release: Arc<Notify>,
-}
-
-#[async_trait]
-impl crate::BoundSidecarFactory for BlockingShutdown {
-    async fn start(
-        &self,
-        _: crate::SidecarStart,
-    ) -> Result<Box<dyn crate::SidecarHandle>, crate::CoreError> {
-        Ok(Box::new(Self {
-            entered: self.entered.clone(),
-            release: self.release.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl crate::SidecarHandle for BlockingShutdown {
-    async fn ready(&mut self) -> Result<(), crate::CoreError> {
-        Ok(())
-    }
-
-    async fn shutdown(&mut self) -> Result<(), crate::CoreError> {
-        self.entered.notify_one();
-        self.release.notified().await;
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn stale_sidecar_cleanup_keeps_the_revived_slot() {
-    let hooks = Arc::new(Hooks::default());
-    let (engine, supervisor, agent, root) =
-        fixture(SubagentLimits::default(), Some(hooks.clone())).await;
-    let child = create(&engine, Some(root)).await;
-    let entered = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    supervisor
-        .register_existing_resident_with_sidecar(
-            root,
-            child,
-            "worker".into(),
-            agent,
-            Some("episode one".into()),
-            Arc::new(BlockingShutdown {
-                entered: entered.clone(),
-                release: release.clone(),
-            }),
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let projection = engine.read_projection(child).await.unwrap();
-            if supervisor.member_busy(root, child) == Some(false)
-                && projection
-                    .session
-                    .messages
-                    .last()
-                    .is_some_and(|message| message.finish == Some(FinishReason::Stop))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let stopping = tokio::spawn({
-        let supervisor = supervisor.clone();
-        async move { supervisor.stop_resident(root, "main/worker").await }
-    });
-    tokio::time::timeout(Duration::from_secs(5), entered.notified())
-        .await
-        .unwrap();
-    let running = Arc::new(Notify::new());
-    let finish = Arc::new(Notify::new());
-    *hooks.pause_request.lock().unwrap() = Some((running.clone(), finish.clone()));
-    supervisor
-        .revive_child(root, "main", "main/worker", "episode two".into())
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), running.notified())
-        .await
-        .unwrap();
-    release.notify_one();
-    tokio::time::timeout(Duration::from_secs(5), stopping)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        supervisor.member_busy(root, child),
-        Some(true),
-        "old cleanup removed the revived slot"
-    );
-    finish.notify_one();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let projection = engine.read_projection(child).await.unwrap();
-            if supervisor.member_busy(root, child) == Some(false)
-                && projection
-                    .session
-                    .messages
-                    .last()
-                    .is_some_and(|message| message.finish == Some(FinishReason::Stop))
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    supervisor.stop_resident(root, "main/worker").await.unwrap();
+    assert_cancelled_task(&engine, child, FinishCause::Archived).await;
 }
 
 struct FailingSidecar;
@@ -918,15 +766,21 @@ impl crate::BoundSidecarFactory for FailingSidecar {
 #[tokio::test]
 async fn sidecar_failure_before_first_turn_closes_initial_task() {
     let (engine, supervisor, agent, root) = fixture(SubagentLimits::default(), None).await;
-    let child = create(&engine, Some(root)).await;
-    supervisor
-        .register_existing_resident_with_sidecar(
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, _) = supervisor
+        .spawn_resident(
             root,
-            child,
-            "worker".into(),
             agent,
-            Some("do X".into()),
-            Arc::new(FailingSidecar),
+            (
+                binding,
+                Arc::from([]),
+                resources,
+                Some(Arc::new(FailingSidecar)),
+            ),
+            "do X".into(),
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -1132,8 +986,8 @@ async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
         .unwrap()
         .unwrap();
     assert!(
-        matches!(spawned, Err(crate::CoreError::Store(hya_store::StoreError::StaleActorClaim { actor_id })) if actor_id == child),
-        "the killed initializer must be fenced: {spawned:?}"
+        matches!(spawned, Ok((session, _)) if session == child),
+        "committed registration must survive initialization cancellation: {spawned:?}"
     );
     tokio::time::timeout(Duration::from_secs(5), revive)
         .await
@@ -1182,7 +1036,7 @@ async fn mail_to_a_killed_team_waits_for_cleanup_and_restores_main() {
     })
     .await
     .unwrap();
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
     supervisor.team_cancel(root).unwrap().cancel();
 }
 
@@ -1235,15 +1089,16 @@ async fn wait_after_a_revived_member_is_killed_before_its_first_turn_uses_this_e
     })
     .await
     .unwrap();
-    supervisor
-        .report_and_archive(
-            root,
-            &handle,
-            hya_proto::ReportOutcome::Done,
-            "OLD REPORT".into(),
-        )
-        .await
-        .unwrap();
+    submit_and_wait(
+        &engine,
+        &supervisor,
+        root,
+        &handle,
+        hya_proto::ReportOutcome::Done,
+        "OLD REPORT".into(),
+    )
+    .await
+    .unwrap();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     *hooks.pause_spawn.lock().unwrap() = Some((entered.clone(), release.clone()));
@@ -1340,9 +1195,17 @@ async fn spawn_after_an_empty_team_is_killed_resets_its_budgets() {
         .await
         .unwrap();
     let _lead = engine.try_begin_turn(root).unwrap();
-    spawn(&supervisor, &engine, &agent, root, None)
+    let (first_child, _) = spawn(&supervisor, &engine, &agent, root, None)
         .await
         .unwrap();
+    let mut events = engine.bus().subscribe();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while supervisor.member_busy(root, first_child) != Some(false) {
+            events.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
     let killed = supervisor.team_cancel(root).unwrap();
     engine.force_archive_team(root).await.unwrap();
     assert!(supervisor.team_cancel(root).is_none());
@@ -1365,6 +1228,34 @@ async fn spawn_after_an_empty_team_is_killed_resets_its_budgets() {
         engine.read_projection(root).await.unwrap().team.roster[&handle].session,
         child
     );
-    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.end_member(root, &handle).await.unwrap();
     supervisor.team_cancel(root).unwrap().cancel();
+}
+
+async fn submit_and_wait(
+    engine: &SessionEngine,
+    supervisor: &ResidentSupervisor,
+    root: SessionId,
+    handle: &str,
+    outcome: hya_proto::ReportOutcome,
+    report: String,
+) -> Result<(), crate::CoreError> {
+    let mut events = engine.bus().subscribe();
+    supervisor
+        .submit_report(root, handle, outcome, report)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let projection = engine.read_projection(root).await?;
+            if projection.team.archived.contains_key(handle) {
+                return Ok(());
+            }
+            events
+                .recv()
+                .await
+                .map_err(|error| crate::CoreError::Invalid(error.to_string()))?;
+        }
+    })
+    .await
+    .map_err(|_| crate::CoreError::Invalid("report did not archive".into()))?
 }

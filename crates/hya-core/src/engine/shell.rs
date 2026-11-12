@@ -225,6 +225,7 @@ impl SessionEngine {
         command: String,
         cancel: CancellationToken,
     ) -> Result<(MessageId, FinishReason), CoreError> {
+        self.ensure_external_turn_allowed(session).await?;
         // A shell turn is a turn: refuse (never interleave) while the session
         // already has one active.
         let lease = self.try_begin_turn(session)?;

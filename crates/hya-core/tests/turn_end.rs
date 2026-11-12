@@ -1681,7 +1681,7 @@ async fn stop_cancels_root_and_child_turns_but_only_queues_the_root() {
                 handle: "worker".into(),
                 parent: Some("main".into()),
                 agent_type: AgentName::new("hya-task"),
-                mode: hya_proto::SubagentMode::Resident,
+                mode: hya_proto::SubagentMode::Transient,
             },
         )
         .await
@@ -2444,17 +2444,42 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
     let dir = support::TestDir::new("sidecar-loss-flush");
     agent.workdir = dir.path().into();
     let root = make_session(&engine, None, "hya-main").await;
-    let child = engine
-        .create(CreateSession {
-            parent: Some(root),
-            agent: agent.name.clone(),
-            model: agent.model.clone(),
-            workdir: dir.path().to_string_lossy().into_owned(),
-            project: None,
-            kind: hya_proto::SessionKind::Project,
-        })
-        .await
-        .unwrap();
+    let sidecar = Arc::new(LossSidecar {
+        loss: CancellationToken::new(),
+        terminated: Arc::new(Notify::new()),
+        hooks,
+    });
+    let mut live = engine.bus().subscribe();
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    let (child, member_handle) = if resident {
+        let binding = engine.bind_runtime(&agent.workdir).unwrap();
+        let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+        let (child, handle, _) = supervisor
+            .spawn_resident_parked(
+                root,
+                agent.clone(),
+                (binding, Arc::from([]), resources, Some(sidecar.clone())),
+                "flush test".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        (child, Some(handle))
+    } else {
+        let child = engine
+            .create(CreateSession {
+                parent: Some(root),
+                agent: agent.name.clone(),
+                model: agent.model.clone(),
+                workdir: dir.path().to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        (child, None)
+    };
     provider.script(
         child,
         if writing {
@@ -2463,22 +2488,13 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
             Script::PartialText
         },
     );
-    let sidecar = Arc::new(LossSidecar {
-        loss: CancellationToken::new(),
-        terminated: Arc::new(Notify::new()),
-        hooks,
-    });
-    let mut live = engine.bus().subscribe();
-    let supervisor = ResidentSupervisor::start(engine.clone());
-    let run = if resident {
-        supervisor
-            .register_existing_resident_with_sidecar(
+    let run = if let Some(handle) = member_handle.as_ref() {
+        engine
+            .mail_send(
                 root,
-                child,
-                "worker".into(),
-                agent,
-                Some("work".into()),
-                sidecar.clone(),
+                hya_proto::MailEndpoint::parse(handle),
+                hya_proto::MailKind::Message,
+                "work".into(),
             )
             .await
             .unwrap();
@@ -2526,7 +2542,9 @@ async fn sidecar_loss_flushes_turn(resident: bool, hooks: bool, writing: bool) {
     }
     let events = engine.replay(child).await.unwrap();
     // Stop the slot before assertions, including on the unfixed implementation.
-    supervisor.stop_resident(root, "main/worker").await.ok();
+    if let Some(handle) = member_handle {
+        supervisor.end_member(root, &handle).await.ok();
+    }
     assert_eq!(
         assistant_finishes(&events, child)
             .iter()

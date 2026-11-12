@@ -1781,7 +1781,7 @@ mod tests {
         });
         entered.notified().await;
 
-        let stop_result = supervisor.stop_resident(root, &handle).await;
+        let stop_result = supervisor.end_member(root, &handle).await;
         assert!(
             stop_result.is_ok(),
             "resident stop must complete before stale send resumes: {stop_result:?}"

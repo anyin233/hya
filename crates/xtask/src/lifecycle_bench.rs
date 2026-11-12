@@ -302,13 +302,15 @@ async fn sample_in(n: usize, dir: &std::path::Path) -> anyhow::Result<Vec<Row>> 
             let start = Instant::now();
             for handle in handles.keys() {
                 resident
-                    .report_and_archive(
-                        root,
-                        handle,
-                        ReportOutcome::Done,
-                        "Measured answer.".into(),
-                    )
+                    .submit_report(root, handle, ReportOutcome::Done, "Measured answer.".into())
                     .await?;
+                loop {
+                    if matches!(events.recv().await?.event,
+                        Event::AgentArchived { handle: archived, .. } if archived == *handle)
+                    {
+                        break;
+                    }
+                }
             }
             rows.push(row(scenario, n, "report+archive", start, before));
         }

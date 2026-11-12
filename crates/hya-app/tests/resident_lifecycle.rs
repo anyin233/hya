@@ -36,7 +36,13 @@ async fn i1_stale_session_start_cannot_remove_revived_episode() {
         .unwrap()
         .unwrap()
         .unwrap();
+    let epoch = h.claim_epoch(child).await;
     output(&h.tool("archive", json!({"target": handle})).await);
+    assert_eq!(
+        h.claim_epoch(child).await,
+        epoch,
+        "a live initializer must end under its own claim, without Takeover"
+    );
     let revived = h.provider.script(vec![Round::text("revived episode")]);
     h.mail(&handle, revived).await.unwrap();
     plugin.gate.release();
@@ -435,7 +441,6 @@ async fn i5_post_kill_task_uses_fresh_team_without_waiting_for_other_endings() {
 }
 
 #[tokio::test]
-#[ignore = "M4-2: I6"]
 async fn i6_sidecar_start_failure_reports_failure_to_parent() {
     let test = "i6_sidecar_start_failure_reports_failure_to_parent";
     if support::lifecycle::isolated_sidecar_config(test) {
@@ -520,6 +525,7 @@ async fn i16_cancelling_archive_caller_does_not_cancel_the_ending() {
             .unwrap()
             .contains(&child)
     );
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
     h.shutdown().await;
     drop(h);
     plugin.shutdown().await;
@@ -926,7 +932,6 @@ async fn i6_workflow_cancel_records_parent_archive_reason() {
 }
 
 #[tokio::test]
-#[ignore = "M4-2: I3"]
 async fn i3_terminal_write_error_releases_in_memory_episode() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![Round::text("working")]).await;
@@ -936,6 +941,16 @@ async fn i3_terminal_write_error_releases_in_memory_episode() {
     assert!(
         matches!(&result, ToolPartState::Error { message, .. } if message.contains("M4 injected")),
         "{result:?}"
+    );
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    let direct = h
+        .engine
+        .admit_user_prompt(child, "must not revive an orphan".into())
+        .await
+        .unwrap_err();
+    assert!(
+        direct.to_string().contains("steer this subagent with mail"),
+        "{direct}"
     );
     let waited = h
         .tool("wait", json!({"targets": [handle], "timeout_secs": 0}))
@@ -968,15 +983,28 @@ async fn i3_terminal_write_error_releases_in_memory_episode() {
 }
 
 #[tokio::test]
-#[ignore = "M4-2: I4"]
 async fn i4_failed_terminal_write_can_be_reconciled() {
     let mut h = Harness::new().await;
     let (child, handle) = h.spawn(vec![Round::text("working")]).await;
     h.idle(child, &handle).await;
     let epoch = h.claim_epoch(child).await;
+    let before = h.engine.replay(child).await.unwrap();
     h.trigger("agent_archived").await;
     let failed = h.tool("archive", json!({"target": handle})).await;
     assert!(matches!(failed, ToolPartState::Error { .. }));
+    assert_eq!(
+        h.engine.replay(child).await.unwrap(),
+        before,
+        "failed archive must roll back the handoff and initial-prompt cancellation together"
+    );
+    assert!(
+        h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
     h.heal().await;
     let retried = h.tool("archive", json!({"target": handle})).await;
     output(&retried);
@@ -1044,6 +1072,18 @@ async fn i7_refused_report_delivers_a_harness_notice() {
         .iter()
         .filter(|e| matches!(&e.event, Event::SubagentReported { .. }))
         .count();
+    let child_requests = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.session == child && !request.completion.tools.is_empty())
+        .count();
+    assert_eq!(
+        child_requests, 3,
+        "empty wakes must never start another child turn"
+    );
     h.shutdown().await;
     assert!(!prematurely_archived, "the refused report was archived");
     assert_eq!(
@@ -1483,4 +1523,274 @@ async fn i17_root_delete_does_not_send_failure_mail_or_wake_members() {
         ),
         "root teardown woke a member"
     );
+}
+
+#[tokio::test]
+async fn e7_live_member_turns_are_refused_before_prompt_admission() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("idle member")]).await;
+    h.idle(child, &handle).await;
+    let before = h.engine.replay(child).await.unwrap();
+    let error = h
+        .engine
+        .admit_user_prompt(child, "direct client prompt".into())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    let error = h
+        .engine
+        .run_turn(child, &h.agent, tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    let error = h
+        .engine
+        .run_shell(
+            child,
+            &h.agent,
+            "echo must-not-run".into(),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    let error = h
+        .engine
+        .admit_command_prompt(child, "test".into(), String::new(), "must not run".into())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("steer this subagent with mail"),
+        "{error}"
+    );
+    assert_eq!(h.engine.replay(child).await.unwrap().len(), before.len());
+    let next = h.provider.script(vec![report("mail still works")]);
+    h.mail(&handle, next).await.unwrap();
+    h.archived(&handle).await;
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn e1_archive_racing_registration_never_takes_over_a_live_episode() {
+    let plugin = support::lifecycle::BlockingPlugin::new().await;
+    let mut h = Harness::with_plugins(vec![plugin.spec.clone()]).await;
+    plugin.arm();
+    let root = h.root;
+    let engine = h.engine.clone();
+    // Read the committed roster directly, before initialization publishes its
+    // envelopes. The archive must serialize with claim commit + installation.
+    let archiving = tokio::spawn(async move {
+        tokio::time::timeout(support::lifecycle::BOUND, async {
+            loop {
+                let p = engine.read_projection(root).await.unwrap();
+                if let Some((handle, entry)) = p
+                    .team
+                    .roster
+                    .iter()
+                    .find(|(handle, _)| handle.as_str() != "main")
+                {
+                    let child = entry.session;
+                    let handle = handle.clone();
+                    let receipt = engine.archive_subagent(child).await.unwrap();
+                    return (child, handle, receipt);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    });
+    let marker = h
+        .provider
+        .script(vec![Round::text("must be cancelled during init")]);
+    let spawning = h.start_tool("task", json!({"description":"registration race", "prompt":marker, "subagent_type":"hya-task", "model":"fake"})).await;
+    let (child, handle, receipt) = tokio::time::timeout(support::lifecycle::BOUND, archiving)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.session, child);
+    assert_eq!(
+        h.claim_epoch(child).await,
+        1,
+        "Takeover crossed a live registration"
+    );
+    // The child ending must release initialization on its own; cancelling
+    // the root here would race the unrelated task-admission finalization.
+    tokio::time::timeout(support::lifecycle::BOUND, spawning)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    plugin.gate.release();
+    let revived = h.provider.script(vec![report("revived once")]);
+    h.mail(&handle, revived).await.unwrap();
+    h.archived(&handle).await;
+    let child_requests = h
+        .provider
+        .captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.session == child && !r.completion.tools.is_empty())
+        .count();
+    assert_eq!(child_requests, 1);
+    assert_eq!(h.claim_epoch(child).await, 2);
+    h.shutdown().await;
+    drop(h);
+    plugin.shutdown().await;
+}
+
+#[tokio::test]
+async fn i3_report_write_failure_releases_episode_and_next_archive_reconciles() {
+    let mut h = Harness::new().await;
+    h.trigger("agent_archived").await;
+    let (child, handle) = h.spawn(vec![report("report cannot commit")]).await;
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        while h.built.resident_supervisor().episode_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed report write retained the episode");
+    assert!(
+        h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    let waited = h
+        .tool("wait", json!({"targets":[handle],"timeout_secs":0}))
+        .await;
+    assert!(!output(&waited).to_string().contains("working"));
+    h.heal().await;
+    output(&h.tool("archive", json!({"target":handle})).await);
+    assert_eq!(h.claim_epoch(child).await, 2);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn i3_sidecar_start_and_terminal_write_failure_leaves_an_orphan() {
+    let test = "i3_sidecar_start_and_terminal_write_failure_leaves_an_orphan";
+    if support::lifecycle::isolated_sidecar_config(test) {
+        return;
+    }
+    support::lifecycle::install_sidecar_bundle().await;
+    let path = std::path::PathBuf::from(std::env::var_os("XDG_DATA_HOME").unwrap())
+        .join("m4-sidecar-control.json");
+    std::fs::write(path, json!({"refuse_start":true}).to_string()).unwrap();
+    let mut h = Harness::new().await;
+    h.trigger("agent_archived").await;
+    let (child, handle) = h
+        .spawn_agent("m4-sidecar-worker", vec![Round::text("must not run")])
+        .await;
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        while h.built.resident_supervisor().episode_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed startup ending retained the episode");
+    assert!(
+        h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    assert!(
+        h.provider
+            .captured
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.session != child)
+    );
+    h.heal().await;
+    output(&h.tool("archive", json!({"target":handle})).await);
+    assert_eq!(h.claim_epoch(child).await, 2);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn e1_orphan_archives_and_revival_share_the_registration_lock() {
+    let mut h = Harness::new().await;
+    let (child, handle) = h.spawn(vec![Round::text("first episode")]).await;
+    h.idle(child, &handle).await;
+    h.trigger("agent_archived").await;
+    assert!(matches!(
+        h.tool("archive", json!({"target":handle})).await,
+        ToolPartState::Error { .. }
+    ));
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    h.heal().await;
+    let next = h.provider.script(vec![Round::text("revived episode")]);
+    let engine = h.engine.clone();
+    let root = h.root;
+    let address = handle.clone();
+    let reviving = tokio::spawn(async move {
+        let mut events = engine.bus().subscribe();
+        loop {
+            if engine
+                .read_projection(root)
+                .await
+                .unwrap()
+                .team
+                .archived
+                .contains_key(&address)
+            {
+                break;
+            }
+            events.recv().await.unwrap();
+        }
+        engine
+            .mail_send(
+                root,
+                hya_proto::MailEndpoint::parse(&address),
+                hya_proto::MailKind::Message,
+                next,
+            )
+            .await
+            .unwrap();
+    });
+    let (first, second) = tokio::time::timeout(support::lifecycle::BOUND, async {
+        tokio::join!(
+            h.engine.archive_subagent(child),
+            h.engine.archive_subagent(child)
+        )
+    })
+    .await
+    .unwrap();
+    for result in [first, second] {
+        if let Err(error) = result {
+            assert!(error.to_string().contains("already archived"), "{error}");
+        }
+    }
+    tokio::time::timeout(support::lifecycle::BOUND, reviving)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        h.claim_epoch(child).await,
+        3,
+        "an archive took over the revived live episode"
+    );
+    let p = h.engine.read_projection(h.root).await.unwrap();
+    if p.team.roster.contains_key(&handle) {
+        h.idle(child, &handle).await;
+        output(&h.tool("archive", json!({"target":handle})).await);
+    }
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+    h.shutdown().await;
 }

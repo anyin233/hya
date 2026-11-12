@@ -48,7 +48,7 @@ use hya_proto::{
     ToolCallId, scope,
 };
 use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Notify, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{
@@ -171,13 +171,14 @@ enum SlotStatus {
 /// A report accepted from the `report` tool, executed once the actor is at
 /// rest (ADR-0015): the gate was checked at call time; the archive runs after
 /// the current turn ends and re-checks.
+#[derive(Clone)]
 struct PendingReport {
     outcome: ReportOutcome,
     report: String,
 }
 
 /// One resident (or the main actor) inside a team.
-struct SlotState {
+struct Episode {
     handle: String,
     agent: AgentSpec,
     /// Immutable runtime snapshot retained for every activation of this slot.
@@ -203,13 +204,12 @@ struct SlotState {
     kill_finalized: bool,
     /// Slot-local cancellation, inherited from the team's cancellation token.
     cancel: CancellationToken,
-    /// One-shot explicit stop request consumed by the resident task.
-    stop_request: Option<StopRequest>,
+    ending: Option<Ending>,
+    done: watch::Sender<Option<Result<(), CoreError>>>,
+    /// The committed initial directive is an input even when no mail is owed.
+    initial_prompt: Option<hya_proto::MessageId>,
     /// Accepted-but-not-yet-executed terminal report (ADR-0015).
-    pending_archive: Option<PendingReport>,
-    /// An `archive` is stopping this slot: it owes no more turns, whatever
-    /// mail arrives before the archive marker commits.
-    archiving: bool,
+    report: Option<PendingReport>,
     /// The user cancelled this slot's or an ancestor's turn: the harness
     /// starts no turn on it (owed work stays queued) until the user acts on
     /// it again with a prompt or a steer.
@@ -225,79 +225,52 @@ struct SlotState {
     notify: Arc<Notify>,
 }
 
-struct StopRequest {
-    terminate: bool,
-    reply: oneshot::Sender<Result<(), CoreError>>,
+/// The first terminal request owns the ending; later callers only wait.
+#[derive(Clone)]
+enum Ending {
+    Reported(PendingReport),
+    Failed(String),
+    Archived(String),
 }
 
-struct StopCompletion {
-    outcome: Mutex<Option<Result<(), CoreError>>>,
-    notify: Notify,
-}
-
-impl StopCompletion {
-    fn new() -> Self {
-        Self {
-            outcome: Mutex::new(None),
-            notify: Notify::new(),
-        }
-    }
-
-    fn outcome(&self) -> Option<Result<(), CoreError>> {
-        match self.outcome.lock() {
-            Ok(outcome) => outcome.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
-    }
-
-    fn complete(&self, result: Result<(), CoreError>) {
-        let should_notify = match self.outcome.lock() {
-            Ok(mut current) => {
-                if current.is_none() {
-                    *current = Some(result);
-                    true
-                } else {
-                    false
-                }
-            }
-            Err(poisoned) => {
-                let mut current = poisoned.into_inner();
-                if current.is_none() {
-                    *current = Some(result);
-                    true
-                } else {
-                    false
-                }
-            }
-        };
-        if should_notify {
-            self.notify.notify_waiters();
-        }
-    }
-
-    async fn wait(&self) -> Result<(), CoreError> {
-        loop {
-            let notified = self.notify.notified();
-            if let Some(outcome) = self.outcome() {
-                return outcome;
-            }
-            notified.await;
+impl Ending {
+    fn cause(&self) -> FinishCause {
+        match self {
+            Self::Archived(_) => FinishCause::Archived,
+            Self::Failed(_) => FinishCause::Other,
+            Self::Reported(_) => FinishCause::UserCancel,
         }
     }
 }
 
-impl SlotState {
+impl Episode {
+    fn request_end(
+        &mut self,
+        engine: &SessionEngine,
+        session: SessionId,
+        ending: Ending,
+    ) -> watch::Receiver<Option<Result<(), CoreError>>> {
+        let done = self.done.subscribe();
+        if self.ending.is_none() {
+            engine.cancel_turn(session, ending.cause());
+            self.ending = Some(ending);
+            self.report = None;
+            self.cancel.cancel();
+            self.notify.notify_one();
+        }
+        done
+    }
+
     /// Whether this slot owes a turn (mail, a synthesis directive, or its initial
     /// directive). The single source of truth for "is there work?" under the lock.
     fn has_work(&self) -> bool {
-        !self.archiving && (self.pending || self.synth_pending)
+        self.ending.is_none() && (self.pending || self.synth_pending)
     }
 }
 
 /// The mutable, lock-guarded state of one team.
 struct TeamState {
-    residents: HashMap<SessionId, SlotState>,
-    stop_completions: HashMap<String, Arc<StopCompletion>>,
+    residents: HashMap<SessionId, Episode>,
     /// Number of non-idle residents (incl. main). Quiescence = this is 0.
     busy: usize,
     killed: bool,
@@ -347,6 +320,7 @@ struct RunPlan {
     synth: bool,
     claim: Option<ActorClaim>,
     cancel: CancellationToken,
+    initial_prompt: Option<hya_proto::MessageId>,
     /// The session's single-active-turn claim, taken atomically with the
     /// decision to run and held until the turn ends.
     lease: TurnLease,
@@ -427,11 +401,8 @@ enum Action {
         claim: Option<ActorClaim>,
         became_idle: bool,
     },
-    /// Explicitly stop one resident and report process cleanup to the caller.
-    StopResident {
-        terminate: bool,
-        reply: oneshot::Sender<Result<(), CoreError>>,
-    },
+    /// The episode task runs the requested ending after its current turn.
+    End(Ending),
     /// The team was killed; the resident task must exit. `killed_now` is set for
     /// the single caller that observed the transition, so kill side-effects run once.
     Stop { killed_now: bool },
@@ -460,7 +431,6 @@ impl TeamActor {
             drained: Notify::new(),
             state: Mutex::new(TeamState {
                 residents: HashMap::new(),
-                stop_completions: HashMap::new(),
                 busy: 0,
                 killed: false,
                 work_seq: 0,
@@ -477,6 +447,7 @@ impl TeamActor {
     /// The caller holds registration, so a kill cannot cross installation.
     fn install_main(self: &Arc<Self>, context: MainActivation) {
         let notify = Arc::new(Notify::new());
+        let cancel = self.cancel.child_token();
         {
             let mut state = self.lock();
             if state.residents.contains_key(&self.root) {
@@ -486,7 +457,7 @@ impl TeamActor {
             state.main_session = Some(self.root);
             state.residents.insert(
                 self.root,
-                SlotState {
+                Episode {
                     handle: scope::ROOT_HANDLE.into(),
                     agent: context.agent,
                     binding: context.binding,
@@ -498,14 +469,15 @@ impl TeamActor {
                     is_main: true,
                     status: SlotStatus::Idle,
                     pending: false,
-                    pending_archive: None,
-                    archiving: false,
+                    report: None,
                     user_stopped: false,
                     synth_pending: false,
                     claim: None,
                     kill_finalized: false,
-                    cancel: self.cancel.child_token(),
-                    stop_request: None,
+                    cancel: cancel.clone(),
+                    ending: None,
+                    done: watch::channel(None).0,
+                    initial_prompt: None,
                     cursor: 0,
                     last_activity: None,
                     last_heartbeat_emit: None,
@@ -513,7 +485,46 @@ impl TeamActor {
                 },
             );
         }
-        tokio::spawn(resident_task(self.clone(), self.root, None, notify));
+        tokio::spawn(episode_task(
+            self.clone(),
+            self.root,
+            None,
+            notify,
+            cancel,
+            None,
+        ));
+    }
+
+    fn install_episode(
+        self: &Arc<Self>,
+        session: SessionId,
+        slot: Episode,
+        init: Option<EpisodeInit>,
+    ) {
+        let claim = slot.claim;
+        let cancel = slot.cancel.clone();
+        let notify = slot.notify.clone();
+        let pending = slot.has_work();
+        {
+            let mut state = self.lock();
+            assert!(
+                !state.residents.contains_key(&session),
+                "episode installed twice"
+            );
+            state.work_seq = state.work_seq.saturating_add(1);
+            state.residents.insert(session, slot);
+        }
+        tokio::spawn(episode_task(
+            self.clone(),
+            session,
+            claim,
+            notify.clone(),
+            cancel,
+            init,
+        ));
+        if pending {
+            notify.notify_one();
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, TeamState> {
@@ -671,11 +682,8 @@ impl TeamActor {
         else {
             return Action::Stop { killed_now: false };
         };
-        if let Some(request) = slot.stop_request.take() {
-            return Action::StopResident {
-                terminate: request.terminate,
-                reply: request.reply,
-            };
+        if let Some(ending) = slot.ending.clone() {
+            return Action::End(ending);
         }
         if killed {
             if !slot.kill_finalized {
@@ -710,6 +718,7 @@ impl TeamActor {
                 }
             };
             let synth = slot.synth_pending;
+            let initial_prompt = slot.initial_prompt;
             let claim = slot.claim;
             let cursor = slot.cursor;
             let agent = slot.agent.clone();
@@ -724,16 +733,12 @@ impl TeamActor {
             let cancel = slot.cancel.child_token();
             slot.pending = false;
             slot.synth_pending = false;
+            // Reserve the start window before published registration events
+            // can be observed as busy activity and race the boundary heartbeat.
+            slot.last_heartbeat_emit = Some(Instant::now());
             if slot.status == SlotStatus::Idle {
                 slot.status = SlotStatus::Busy;
                 st.busy += 1;
-            }
-            // Charge the per-team turn budget; a runaway (endless re-wake) trips it.
-            if let Some(gov) = self.engine.governor()
-                && gov.charge_team_turn(self.root) == TeamBudget::Exceeded
-            {
-                self.kill_locked(&mut st, "per-team turn budget exceeded");
-                return Action::Stop { killed_now: true };
             }
             Action::Run(Box::new(RunPlan {
                 agent,
@@ -747,6 +752,7 @@ impl TeamActor {
                 is_main,
                 cursor,
                 synth,
+                initial_prompt,
                 claim,
                 cancel,
                 lease,
@@ -842,6 +848,9 @@ impl TeamActor {
                 return;
             }
             let slot = entry.remove();
+            if slot.done.borrow().is_none() {
+                slot.done.send_replace(Some(Ok(())));
+            }
             if slot.status == SlotStatus::Busy {
                 state.busy = state.busy.saturating_sub(1);
             }
@@ -885,17 +894,6 @@ impl TeamActor {
             .residents
             .get(&session)
             .is_none_or(|slot| slot.claim.as_ref() != claim || slot.kill_finalized)
-    }
-
-    fn remove_stop_completion(&self, handle: &str, completion: &Arc<StopCompletion>) {
-        let mut state = self.lock();
-        if state
-            .stop_completions
-            .get(handle)
-            .is_some_and(|current| Arc::ptr_eq(current, completion))
-        {
-            state.stop_completions.remove(handle);
-        }
     }
 
     /// If the team just went fully idle with new work since the last synthesis,
@@ -1286,6 +1284,7 @@ impl TeamActor {
             is_main,
             cursor,
             synth,
+            initial_prompt,
             claim,
             cancel,
             lease,
@@ -1347,7 +1346,7 @@ impl TeamActor {
             })
             .unwrap_or_default();
 
-        if is_main && !synth && new_mail.is_empty() {
+        if initial_prompt.is_none() && !synth && new_mail.is_empty() {
             let mut st = self.lock();
             if let Some(slot) = st
                 .residents
@@ -1359,6 +1358,15 @@ impl TeamActor {
             return Ok(false);
         }
 
+        // An empty notification is not a turn and consumes no team budget.
+        if self
+            .engine
+            .governor()
+            .is_some_and(|gov| gov.charge_team_turn(self.root) == TeamBudget::Exceeded)
+        {
+            self.kill("per-team turn budget exceeded").await;
+            return Err(CoreError::Cancelled);
+        }
         let task_label = if synth && is_main {
             "synthesizing".to_string()
         } else if let Some((from, _)) = new_mail.first() {
@@ -1420,7 +1428,7 @@ impl TeamActor {
                 }
             }
         }
-        let mut admitted_prompt = None;
+        let mut admitted_prompt = initial_prompt;
         for (from, body) in &new_mail {
             if !self.owns_slot(session, claim.as_ref()) {
                 return Ok(false);
@@ -1461,6 +1469,7 @@ impl TeamActor {
                 return Ok(false);
             };
             slot.cursor = slot.cursor.max(inbox_len);
+            slot.initial_prompt = None;
         }
         // Exactly one turn, under the team-wide cancel so a budget kill stops it.
         match (claim.as_ref(), agents, resources) {
@@ -1568,88 +1577,42 @@ impl TeamActor {
             .collect()
     }
 
-    /// Whether the slot holds an accepted report not yet executed.
-    fn has_pending_archive(&self, session: SessionId, claim: Option<&ActorClaim>) -> bool {
-        self.lock()
-            .residents
-            .get(&session)
-            .is_some_and(|slot| slot.claim.as_ref() == claim && slot.pending_archive.is_some())
-    }
-
-    /// Take the slot's accepted report for execution (ADR-0015). The slot is
-    /// marked archiving until the report commits (or is refused), so it owes
-    /// no turn meanwhile and a `wait` keeps seeing it as finishing.
-    fn take_pending_archive(
+    fn pending_report(
         &self,
         session: SessionId,
         claim: Option<&ActorClaim>,
     ) -> Option<PendingReport> {
-        let mut state = self.lock();
-        let slot = state
+        self.lock()
             .residents
-            .get_mut(&session)
-            .filter(|slot| slot.claim.as_ref() == claim)?;
-        let pending = slot.pending_archive.take()?;
-        slot.archiving = true;
-        Some(pending)
+            .get(&session)
+            .filter(|slot| slot.claim.as_ref() == claim && slot.ending.is_none())
+            .and_then(|slot| slot.report.clone())
     }
 
-    /// Drop a refused report. New mail must be handled before a fresh report.
-    fn drop_pending_archive(&self, session: SessionId, claim: Option<&ActorClaim>) {
-        let mut state = self.lock();
-        if let Some(slot) = state
-            .residents
-            .get_mut(&session)
-            .filter(|slot| slot.claim.as_ref() == claim)
-        {
-            slot.archiving = false;
-        }
-    }
-
-    /// Execute an accepted report at rest: gate re-check, shared terminal
-    /// sequence, then local slot cleanup. A refused report is never retried.
-    async fn run_pending_archive(
+    fn complete_episode(
         &self,
         session: SessionId,
         claim: Option<&ActorClaim>,
-        pending: PendingReport,
-    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
-        let canonical = {
-            let state = self.lock();
-            let Some(slot) = state
-                .residents
-                .get(&session)
-                .filter(|slot| slot.claim.as_ref() == claim)
+        result: Result<(), CoreError>,
+    ) {
+        let done = {
+            let mut state = self.lock();
+            let std::collections::hash_map::Entry::Occupied(entry) = state.residents.entry(session)
             else {
-                return Ok(hya_store::ResidentArchiveOutcome::Committed);
+                return;
             };
-            slot.handle.clone()
+            if entry.get().claim.as_ref() != claim {
+                return;
+            }
+            let slot = entry.remove();
+            if slot.status == SlotStatus::Busy {
+                state.busy = state.busy.saturating_sub(1);
+            }
+            self.maybe_fire_quiescence(&mut state);
+            slot.done
         };
-        if !self.owns_slot(session, claim) {
-            return Ok(hya_store::ResidentArchiveOutcome::Committed);
-        }
-        let PendingReport { outcome, report } = pending;
-        let outcome = archive_reported_agent(
-            &self.engine,
-            self.root,
-            &canonical,
-            session,
-            claim,
-            outcome,
-            report,
-            ArchiveReason::Reported,
-            false,
-        )
-        .await?;
-        match outcome {
-            hya_store::ResidentArchiveOutcome::Committed => {
-                self.remove_slot(session, claim);
-            }
-            hya_store::ResidentArchiveOutcome::Refused => {
-                self.drop_pending_archive(session, claim);
-            }
-        }
-        Ok(outcome)
+        self.release_team_budget_if_empty();
+        done.send_replace(Some(result));
     }
 
     /// Handle one `MailSent` for this team: charge the message budget, count the
@@ -1706,8 +1669,18 @@ impl TeamActor {
                         }
                         continue;
                     }
-                    slot.pending = true;
-                    slot.notify.notify_one();
+                    let inbox_len = projection
+                        .team
+                        .inboxes
+                        .get(&slot.handle)
+                        .map_or(0, Vec::len);
+                    let durable = projection.team.roster.get(&slot.handle).map_or(0, |entry| {
+                        usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX)
+                    });
+                    if inbox_len > slot.cursor.max(durable) {
+                        slot.pending = true;
+                        slot.notify.notify_one();
+                    }
                 }
             }
         }
@@ -1853,18 +1826,133 @@ fn resident_delivery_allowed(
 /// The resident actor loop for one session: park at zero cost, then run turns
 /// (with follow-ups for mail that arrived mid-turn) until it owes none, then park
 /// again. Exits when the team is killed or the supervisor is dropped.
-async fn resident_task(
+struct EpisodeInit {
+    binding: TurnBinding,
+    agent: hya_proto::AgentName,
+    parent: SessionId,
+    envelopes: Vec<hya_proto::Envelope>,
+    ready: oneshot::Sender<Result<(), CoreError>>,
+}
+
+async fn initialize_episode(
+    team: &TeamActor,
+    claim: &ActorClaim,
+    cancel: &CancellationToken,
+    init: EpisodeInit,
+) -> Result<(), CoreError> {
+    let EpisodeInit {
+        binding,
+        agent,
+        parent,
+        envelopes,
+        ready,
+    } = init;
+    let session = claim.actor_id;
+    let created = envelopes.iter().any(|envelope| {
+        matches!(envelope.event,
+        Event::SessionCreated { session: id, .. } if id == session)
+    });
+    let initial = envelopes
+        .iter()
+        .rev()
+        .find_map(|envelope| match &envelope.event {
+            Event::TextDelta {
+                session: id,
+                message,
+                part,
+                delta,
+            } if *id == session => Some((*message, *part, delta.clone())),
+            _ => None,
+        });
+    let hooks = async {
+        if created {
+            team.engine.notify_session_start(session).await;
+        }
+        for hooks in team
+            .engine
+            .replace_session_hooks(session, &binding, agent.as_str())
+        {
+            hooks.session_start(SessionLifecycleInput { session }).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {},
+        () = hooks => {},
+    }
+    // Registration is already durable. Even cancellation must publish it before
+    // the terminal events; a stale initializer can never publish after revival.
+    for envelope in envelopes {
+        team.engine.publish_envelope(envelope);
+    }
+    let initialize = async {
+        if let Some((message, part, original)) = initial {
+            let text = team
+                .engine
+                .user_text_after_hooks(&binding, agent.as_str(), session, original.clone())
+                .await;
+            if text != original {
+                team.engine
+                    .commit_resident_mutation(
+                        claim,
+                        session,
+                        vec![Event::TextReplace {
+                            session,
+                            message,
+                            part,
+                            text,
+                        }],
+                    )
+                    .await?;
+            }
+        }
+        if let Some(hooks) = team.engine.session_hook_dispatcher(parent) {
+            hooks
+                .agent_spawn(AgentSpawnInput {
+                    parent: team.root,
+                    child: session,
+                })
+                .await;
+        }
+        Ok::<(), CoreError>(())
+    };
+    let result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Ok(()),
+        result = initialize => result,
+    };
+    let _ = ready.send(result.clone());
+    result
+}
+
+async fn episode_task(
     team: Arc<TeamActor>,
     session: SessionId,
     mut task_claim: Option<ActorClaim>,
     notify: Arc<Notify>,
+    cancel: CancellationToken,
+    init: Option<EpisodeInit>,
 ) {
     let mut sidecar_handle: Option<Box<dyn SidecarHandle>> = None;
     let mut sidecar_tools: Arc<[ResolvedTool]> = Arc::from([]);
     let mut sidecar_hooks: Option<Arc<dyn HookDispatcher>> = None;
-    let mut stop_requires_terminate = false;
-    let mut stop_cleanup_pending = false;
-    let mut stop_cleanup_requires_request = false;
+    if let Some(init) = init {
+        let Some(claim) = task_claim.as_ref() else {
+            return;
+        };
+        let result = initialize_episode(&team, claim, &cancel, init).await;
+        if let Err(error) = result {
+            finish_episode(
+                &team,
+                claim,
+                Ending::Failed(format!("resident initialization failed: {error}")),
+                &mut sidecar_handle,
+                None,
+            )
+            .await;
+            return;
+        }
+    }
     loop {
         if !team.owns_slot(session, task_claim.as_ref()) {
             if let Some(handle) = sidecar_handle.as_mut() {
@@ -1872,40 +1960,58 @@ async fn resident_task(
             }
             return;
         }
-        // At rest: execute an accepted report (ADR-0015). The gate re-check
-        // inside refuses stale reports; the member must report again after
-        // handling mail or children that prevented its archive.
-        if let Some(pending) = team.take_pending_archive(session, task_claim.as_ref()) {
-            let result = team
-                .run_pending_archive(session, task_claim.as_ref(), pending)
-                .await;
-            if !team.owns_slot(session, task_claim.as_ref()) {
-                continue;
-            }
-            match result {
-                Ok(hya_store::ResidentArchiveOutcome::Committed) => return,
-                Ok(hya_store::ResidentArchiveOutcome::Refused) => {}
-                Err(error) => {
-                    tracing::warn!(%session, %error, "resident report archive failed");
-                    team.drop_pending_archive(session, task_claim.as_ref());
+        let ending = team
+            .lock()
+            .residents
+            .get(&session)
+            .and_then(|slot| slot.ending.clone());
+        if let (Some(claim), Some(ending)) = (task_claim.as_ref(), ending) {
+            finish_episode(&team, claim, ending, &mut sidecar_handle, None).await;
+            return;
+        }
+        if let (Some(claim), Some(pending)) = (
+            task_claim.as_ref(),
+            team.pending_report(session, task_claim.as_ref()),
+        ) {
+            let ending = Ending::Reported(pending);
+            match commit_episode_ending(&team, claim, &ending).await {
+                Err(CoreError::Cancelled) => {
+                    if !team.lock().killed {
+                        continue;
+                    }
+                    if let Some(slot) = team
+                        .lock()
+                        .residents
+                        .get_mut(&session)
+                        .filter(|slot| slot.claim == task_claim)
+                    {
+                        slot.report = None;
+                    }
+                }
+                Ok(hya_store::ResidentArchiveOutcome::Refused) => {
+                    let mut state = team.lock();
+                    if let Some(slot) = state
+                        .residents
+                        .get_mut(&session)
+                        .filter(|slot| slot.claim == task_claim)
+                    {
+                        slot.report = None;
+                    }
+                }
+                result => {
+                    finish_episode(
+                        &team,
+                        claim,
+                        ending,
+                        &mut sidecar_handle,
+                        Some(result.map(|_| ())),
+                    )
+                    .await;
+                    return;
                 }
             }
         }
-        if stop_cleanup_pending {
-            notify.notified().await;
-            if stop_cleanup_requires_request {
-                let waiting_for_request = {
-                    let state = team.lock();
-                    state
-                        .residents
-                        .get(&session)
-                        .is_some_and(|slot| slot.claim == task_claim && slot.stop_request.is_none())
-                };
-                if waiting_for_request {
-                    continue;
-                }
-            }
-        } else if let Some(loss_token) = sidecar_handle
+        if let Some(loss_token) = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.loss_token())
         {
@@ -1958,72 +2064,51 @@ async fn resident_task(
                                 team.remove_slot(session, task_claim.as_ref());
                                 return;
                             }
-                            stop_cleanup_pending = true;
-                            team.finish_run(session, task_claim.as_ref());
-                            break;
+                            team.complete_episode(session, task_claim.as_ref(), finalized);
+                            return;
                         }
                     }
                     if sidecar_handle.is_none()
                         && let Some(factory) = plan.sidecar_factory.clone()
                     {
-                        let activation = async {
-                            let mut handle = factory.start(SidecarStart::resident()).await?;
-                            if let Err(error) = handle.ready().await {
-                                let _ = handle.terminate().await;
-                                return Err(error);
+                        let cancel = plan.cancel.clone();
+                        let started = tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => Err(CoreError::Cancelled),
+                            result = factory.start(SidecarStart::resident()) => result,
+                        };
+                        let activation = match started {
+                            Ok(mut handle) => {
+                                let result = tokio::select! {
+                                    biased;
+                                    _ = cancel.cancelled() => Err(CoreError::Cancelled),
+                                    result = handle.ready() => result,
+                                };
+                                sidecar_handle = Some(handle);
+                                result
                             }
-                            let tool_bindings = handle.tool_bindings();
-                            let hook_dispatcher = handle
+                            Err(error) => Err(error),
+                        };
+                        if let Err(error) = activation {
+                            drop(plan);
+                            let Some(claim) = claim.as_ref() else {
+                                return;
+                            };
+                            finish_episode(
+                                &team,
+                                claim,
+                                Ending::Failed(format!("sidecar start failed: {error}")),
+                                &mut sidecar_handle,
+                                None,
+                            )
+                            .await;
+                            return;
+                        }
+                        if let Some(handle) = sidecar_handle.as_ref() {
+                            sidecar_tools = handle.tool_bindings();
+                            sidecar_hooks = handle
                                 .hook_dispatcher()
                                 .map(crate::bundle_hooks::restricted_sidecar_hooks);
-                            Ok::<
-                                (
-                                    Box<dyn SidecarHandle>,
-                                    Arc<[ResolvedTool]>,
-                                    Option<Arc<dyn HookDispatcher>>,
-                                ),
-                                CoreError,
-                            >((handle, tool_bindings, hook_dispatcher))
-                        }
-                        .await;
-                        if !team.owns_slot(session, task_claim.as_ref()) {
-                            if let Ok((mut handle, _, _)) = activation {
-                                let _ = handle.terminate().await;
-                            }
-                            continue;
-                        }
-                        match activation {
-                            Ok((handle, tool_bindings, hook_dispatcher)) => {
-                                sidecar_tools = tool_bindings;
-                                sidecar_hooks = hook_dispatcher;
-                                sidecar_handle = Some(handle);
-                            }
-                            Err(err) => {
-                                let reason = format!("turn error: {err}");
-                                match archive_stopped_agent(
-                                    &team.engine,
-                                    team.root,
-                                    &handle,
-                                    session,
-                                    claim.as_ref(),
-                                    ArchiveReason::Killed,
-                                    MemberRunStatus::Failed,
-                                    FinishCause::Other,
-                                    &reason,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        team.remove_slot(session, task_claim.as_ref());
-                                        return;
-                                    }
-                                    Err(_error) => {
-                                        stop_cleanup_pending = true;
-                                        team.finish_run(session, task_claim.as_ref());
-                                        break;
-                                    }
-                                }
-                            }
                         }
                     }
                     let loss_token = sidecar_handle
@@ -2038,18 +2123,54 @@ async fn resident_task(
                             None => turn.await,
                         }
                     });
-                    let (turn_result, sidecar_lost) = if let Some(loss_token) = loss_token {
-                        tokio::select! {
-                            biased;
-                            _ = loss_token.cancelled() => {
-                                turn_cancel.cancel();
-                                (run.await.and(Err(CoreError::Cancelled)), true)
+                    let mut completion = Box::pin(async {
+                        if let Some(loss_token) = loss_token {
+                            tokio::select! {
+                                biased;
+                                _ = loss_token.cancelled() => {
+                                    turn_cancel.cancel();
+                                    (run.as_mut().await.and(Err(CoreError::Cancelled)), true)
+                                }
+                                result = &mut run => (result, false),
                             }
-                            result = &mut run => (result, false),
+                        } else {
+                            (run.as_mut().await, false)
                         }
-                    } else {
-                        (run.await, false)
+                    });
+                    let (turn_result, sidecar_lost) = tokio::select! {
+                        result = &mut completion => result,
+                        _ = cancel.cancelled() => {
+                            let ending = team.lock().residents.get(&session).and_then(|slot| slot.ending.clone());
+                            if let Some(ending) = ending {
+                                match tokio::time::timeout(DRAIN_DEADLINE, &mut completion).await {
+                                    Ok(result) => result,
+                                    Err(_) => {
+                                        let close = async {
+                                            if let Some(claim) = claim.as_ref() {
+                                                team.engine.close_resident_turn(claim, ending.cause()).await?;
+                                            }
+                                            Ok::<(), CoreError>(())
+                                        };
+                                        // Keep polling the turn while its message lock is acquired;
+                                        // it may itself be finishing a fenced append under that lock.
+                                        tokio::select! {
+                                            result = &mut completion => result,
+                                            result = close => {
+                                                if let Err(error) = result {
+                                                    tracing::error!(%session, ?claim, %error, "episode straggler close failed");
+                                                }
+                                                (Err(CoreError::Cancelled), false)
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                completion.as_mut().await
+                            }
+                        }
                     };
+                    drop(completion);
+                    drop(run);
                     if !team.owns_slot(session, task_claim.as_ref()) {
                         continue;
                     }
@@ -2075,27 +2196,34 @@ async fn resident_task(
                                 if !team.owns_slot(session, task_claim.as_ref()) {
                                     continue;
                                 }
-                                sidecar_tools = Arc::from([]);
-                                sidecar_hooks = None;
                                 if let Some(mut stale_handle) = sidecar_handle.take() {
                                     let _ = stale_handle.terminate().await;
                                 }
                                 let reason = format!("resident recovery failed: {error}");
-                                match team
-                                    .engine
-                                    .finalize_resident_failure(
-                                        &old_claim, team.root, &handle, &reason,
-                                    )
-                                    .await
+                                match archive_stopped_agent(
+                                    &team.engine,
+                                    team.root,
+                                    &handle,
+                                    old_claim.actor_id,
+                                    Some(&old_claim),
+                                    ArchiveReason::Killed,
+                                    MemberRunStatus::Failed,
+                                    FinishCause::Other,
+                                    &reason,
+                                )
+                                .await
                                 {
                                     Ok(()) => {
                                         team.remove_slot(session, task_claim.as_ref());
                                         return;
                                     }
-                                    Err(_error) => {
-                                        stop_cleanup_pending = true;
-                                        team.finish_run(session, task_claim.as_ref());
-                                        break;
+                                    Err(error) => {
+                                        team.complete_episode(
+                                            session,
+                                            task_claim.as_ref(),
+                                            Err(error),
+                                        );
+                                        return;
                                     }
                                 }
                             }
@@ -2143,24 +2271,30 @@ async fn resident_task(
                                 }
                                 task_claim = Some(recovered.claim);
                                 let reason = format!("resident recovery failed: {error}");
-                                match team
-                                    .engine
-                                    .finalize_resident_failure(
-                                        &recovered.claim,
-                                        team.root,
-                                        &handle,
-                                        &reason,
-                                    )
-                                    .await
+                                match archive_stopped_agent(
+                                    &team.engine,
+                                    team.root,
+                                    &handle,
+                                    recovered.claim.actor_id,
+                                    Some(&recovered.claim),
+                                    ArchiveReason::Killed,
+                                    MemberRunStatus::Failed,
+                                    FinishCause::Other,
+                                    &reason,
+                                )
+                                .await
                                 {
                                     Ok(()) => {
                                         team.remove_slot(session, task_claim.as_ref());
                                         return;
                                     }
-                                    Err(_error) => {
-                                        stop_cleanup_pending = true;
-                                        team.finish_run(session, task_claim.as_ref());
-                                        break;
+                                    Err(error) => {
+                                        team.complete_episode(
+                                            session,
+                                            task_claim.as_ref(),
+                                            Err(error),
+                                        );
+                                        return;
                                     }
                                 }
                             }
@@ -2176,10 +2310,18 @@ async fn resident_task(
                         }
                         task_claim = Some(recovered.claim);
                         if termination_error.is_some() {
-                            match team
-                                .engine
-                                .finalize_resident_stop(&recovered.claim, team.root, &handle)
-                                .await
+                            match archive_stopped_agent(
+                                &team.engine,
+                                team.root,
+                                &handle,
+                                recovered.claim.actor_id,
+                                Some(&recovered.claim),
+                                ArchiveReason::Killed,
+                                MemberRunStatus::Cancelled,
+                                FinishCause::UserCancel,
+                                "resident stopped",
+                            )
+                            .await
                             {
                                 Ok(()) => {
                                     // A missing slot means local cleanup already completed; the
@@ -2187,10 +2329,9 @@ async fn resident_task(
                                     team.remove_slot(session, task_claim.as_ref());
                                     return;
                                 }
-                                Err(_error) => {
-                                    stop_cleanup_pending = true;
-                                    team.finish_run(session, task_claim.as_ref());
-                                    break;
+                                Err(error) => {
+                                    team.complete_episode(session, task_claim.as_ref(), Err(error));
+                                    return;
                                 }
                             }
                         }
@@ -2228,54 +2369,38 @@ async fn resident_task(
                                 .await;
                         }
                         Err(err) => {
-                            // Engine-synthesized terminality (ADR-0015): a
-                            // terminal turn error IS the agent's failure
-                            // report — degraded handoff, archive, exit. The
-                            // parent can revive with the handoff context.
-                            let reason = format!("turn error: {err}");
-                            let finalized = archive_reported_agent(
-                                &team.engine,
-                                team.root,
-                                &handle,
-                                session,
-                                claim.as_ref(),
-                                ReportOutcome::Failed,
-                                reason,
-                                ArchiveReason::Reported,
-                                true,
+                            let Some(claim) = claim.as_ref() else {
+                                return;
+                            };
+                            finish_episode(
+                                &team,
+                                claim,
+                                Ending::Failed(format!("turn error: {err}")),
+                                &mut sidecar_handle,
+                                None,
                             )
                             .await;
-                            if finalized.is_ok() {
-                                team.remove_slot(session, task_claim.as_ref());
-                                return;
-                            }
-                            stop_cleanup_pending = true;
-                            break;
+                            return;
                         }
                     }
                     // An accepted report executes at rest before any
                     // follow-up turn: mail the turn already steered in owes
                     // no new episode, and genuinely unread mail fails the
                     // at-rest gate re-check, which re-arms the wake.
-                    if team.has_pending_archive(session, task_claim.as_ref()) {
+                    if team.pending_report(session, task_claim.as_ref()).is_some()
+                        || team
+                            .lock()
+                            .residents
+                            .get(&session)
+                            .is_some_and(|slot| slot.ending.is_some())
+                    {
                         break;
                     }
                 }
-                Action::StopResident { terminate, reply } => {
-                    stop_requires_terminate |= terminate;
-                    let cleanup = match sidecar_handle.as_mut() {
-                        Some(handle) if stop_requires_terminate => handle.terminate().await,
-                        Some(handle) => handle.shutdown().await,
-                        None => Ok(()),
-                    };
-                    if let Err(error) = cleanup {
-                        stop_cleanup_pending = true;
-                        let _ = reply.send(Err(error));
-                        break;
+                Action::End(ending) => {
+                    if let Some(claim) = task_claim.as_ref() {
+                        finish_episode(&team, claim, ending, &mut sidecar_handle, None).await;
                     }
-                    sidecar_handle.take();
-                    team.remove_slot(session, task_claim.as_ref());
-                    let _ = reply.send(Ok(()));
                     return;
                 }
                 Action::Idle {
@@ -2312,9 +2437,7 @@ async fn resident_task(
                     if let Some(handle) = sidecar_handle.as_mut()
                         && handle.terminate().await.is_err()
                     {
-                        stop_requires_terminate = true;
-                        stop_cleanup_pending = true;
-                        stop_cleanup_requires_request = true;
+                        notify.notified().await;
                         break;
                     }
                     sidecar_handle.take();
@@ -2341,6 +2464,134 @@ pub struct ResidentSupervisor {
     /// → the member's last assistant message when it was reported stopped.
     /// In-memory only: after a restart a stopped member is reported once more.
     wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
+}
+
+/// The owner calls this only after its turn has gone. The registration lock
+/// protects the separate orphan path; neither path waits for a turn lease.
+async fn commit_episode_ending(
+    team: &TeamActor,
+    claim: &ActorClaim,
+    ending: &Ending,
+) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+    let (handle, child, cancel) = {
+        let state = team.lock();
+        let slot = state
+            .residents
+            .get(&claim.actor_id)
+            .filter(|slot| slot.claim == Some(*claim))
+            .ok_or_else(|| CoreError::Invalid("episode ownership changed".into()))?;
+        (slot.handle.clone(), claim.actor_id, slot.cancel.clone())
+    };
+    let projection = team.engine.read_projection(team.root).await?;
+    let expected_work = projection
+        .team
+        .roster
+        .get(&handle)
+        .map(|entry| (entry.resident_cursor, entry.resident_work));
+    let handoff = match ending {
+        Ending::Reported(_) => {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(CoreError::Cancelled),
+                handoff = team.engine.terminal_handoff_claimed(child) => handoff,
+            }
+        }
+        _ => team.engine.degraded_terminal_handoff(child).await,
+    };
+    let (reason, status, report, note, check_gate) = match ending {
+        Ending::Reported(pending) => (
+            ArchiveReason::Reported,
+            MemberRunStatus::Cancelled,
+            Some((pending.outcome, pending.report.clone())),
+            pending.report.clone(),
+            true,
+        ),
+        Ending::Failed(note) => (
+            ArchiveReason::Reported,
+            MemberRunStatus::Failed,
+            Some((ReportOutcome::Failed, note.clone())),
+            note.clone(),
+            false,
+        ),
+        Ending::Archived(note) => (
+            ArchiveReason::ArchivedByParent,
+            MemberRunStatus::Cancelled,
+            None,
+            note.clone(),
+            false,
+        ),
+    };
+    let (outcome, envelopes, admissions) = team
+        .engine
+        .store()
+        .finalize_resident_archive(
+            hya_store::ResidentArchiveOwner::Claim(claim),
+            team.root,
+            &handle,
+            hya_store::ResidentArchive {
+                actor: child,
+                generation: handoff.generation,
+                doc: handoff.doc,
+                degraded: handoff.degraded,
+                reason,
+                note,
+                member_status: status,
+                report,
+                check_gate,
+                expected_work,
+            },
+            ending.cause(),
+        )
+        .await?;
+    team.engine
+        .publish_resident_finalization((envelopes, admissions));
+    Ok(outcome)
+}
+
+/// Finish once, even on a failed store write. The durable active claim then
+/// belongs to an orphan, which a later archive reconciles with Takeover.
+async fn finish_episode(
+    team: &TeamActor,
+    claim: &ActorClaim,
+    mut ending: Ending,
+    sidecar: &mut Option<Box<dyn SidecarHandle>>,
+    committed: Option<Result<(), CoreError>>,
+) {
+    if committed.is_none() {
+        let mut state = team.lock();
+        if let Some(slot) = state
+            .residents
+            .get_mut(&claim.actor_id)
+            .filter(|slot| slot.claim == Some(*claim))
+        {
+            ending = slot.ending.get_or_insert(ending).clone();
+        }
+    }
+    if let Some(mut handle) = sidecar.take() {
+        let stopped = tokio::time::timeout(Duration::from_secs(5), handle.terminate()).await;
+        let failure = match stopped {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error.to_string()),
+            Err(_) => Some("deadline exceeded".into()),
+        };
+        if let Some(error) = failure {
+            let note = match &mut ending {
+                Ending::Archived(note) | Ending::Failed(note) => note,
+                Ending::Reported(report) => &mut report.report,
+            };
+            note.push_str(&format!("; sidecar did not stop: {error}"));
+        }
+    }
+    let result = match committed {
+        Some(result) => result,
+        None => commit_episode_ending(team, claim, &ending)
+            .await
+            .map(|_| ()),
+    };
+    if let Err(error) = &result {
+        tracing::error!(session = %claim.actor_id, ?claim, %error, "episode terminal transition failed; leaving orphan");
+    }
+    team.complete_episode(claim.actor_id, Some(claim), result);
 }
 
 /// Prepare a handoff, then commit report/mail/archive and claim release in
@@ -2381,31 +2632,49 @@ pub(crate) async fn archive_reported_agent(
             engine.terminal_handoff_claimed(child).await
         };
 
-        let (outcome, envelopes, admissions) = engine
-            .store()
-            .finalize_resident_archive(
-                claim.map_or(
+        let archive = hya_store::ResidentArchive {
+            actor: child,
+            generation: handoff.generation,
+            doc: handoff.doc,
+            degraded: handoff.degraded,
+            reason,
+            note: report.clone(),
+            member_status: MemberRunStatus::Cancelled,
+            report: Some((outcome, report)),
+            check_gate: !force_degraded,
+            expected_work,
+        };
+        let outcome = if let Some(claim) = claim {
+            let (outcome, envelopes, admissions) = engine
+                .store()
+                .finalize_resident_archive(
+                    hya_store::ResidentArchiveOwner::Claim(claim),
+                    root,
+                    canonical,
+                    archive,
+                    FinishCause::UserCancel,
+                )
+                .await?;
+            engine.publish_resident_finalization((envelopes, admissions));
+            outcome
+        } else if let Some(supervisor) = engine.archive_reviver() {
+            supervisor
+                .reconcile_orphan(root, canonical, archive, FinishCause::UserCancel)
+                .await?
+        } else {
+            let (outcome, envelopes, admissions) = engine
+                .store()
+                .finalize_resident_archive(
                     hya_store::ResidentArchiveOwner::Takeover,
-                    hya_store::ResidentArchiveOwner::Claim,
-                ),
-                root,
-                canonical,
-                hya_store::ResidentArchive {
-                    actor: child,
-                    generation: handoff.generation,
-                    doc: handoff.doc,
-                    degraded: handoff.degraded,
-                    reason,
-                    note: report.clone(),
-                    member_status: MemberRunStatus::Cancelled,
-                    report: Some((outcome, report)),
-                    check_gate: !force_degraded,
-                    expected_work,
-                },
-                FinishCause::UserCancel,
-            )
-            .await?;
-        engine.publish_resident_finalization((envelopes, admissions));
+                    root,
+                    canonical,
+                    archive,
+                    FinishCause::UserCancel,
+                )
+                .await?;
+            engine.publish_resident_finalization((envelopes, admissions));
+            outcome
+        };
         Ok(outcome)
     }
     .await;
@@ -2755,6 +3024,44 @@ impl TurnBoundaryObserver for ResidentSupervisor {
 /// supervisor is the engine's [`ArchiveReviver`].
 #[async_trait::async_trait]
 impl ArchiveReviver for ResidentSupervisor {
+    fn has_episode(&self, session: SessionId) -> bool {
+        self.team_with_resident(session).is_some_and(|team| {
+            team.lock()
+                .residents
+                .get(&session)
+                .is_some_and(|slot| slot.claim.is_some())
+        })
+    }
+
+    async fn reconcile_orphan(
+        &self,
+        root: SessionId,
+        handle: &str,
+        archive: hya_store::ResidentArchive,
+        cause: FinishCause,
+    ) -> Result<hya_store::ResidentArchiveOutcome, CoreError> {
+        let (team, _registration) = self.team_for(root).await?;
+        if team.lock().residents.contains_key(&archive.actor) {
+            return Err(CoreError::Invalid(
+                "a live episode owns this archive; request its ending".into(),
+            ));
+        }
+        let (outcome, envelopes, admissions) = self
+            .engine
+            .store()
+            .finalize_resident_archive(
+                hya_store::ResidentArchiveOwner::Takeover,
+                root,
+                handle,
+                archive,
+                cause,
+            )
+            .await?;
+        self.engine
+            .publish_resident_finalization((envelopes, admissions));
+        Ok(outcome)
+    }
+
     fn resident_claim(&self, root: SessionId, child: SessionId) -> Option<ActorClaim> {
         self.teams().get(&root).and_then(|team| {
             team.lock()
@@ -3059,6 +3366,23 @@ impl ResidentSupervisor {
         report
     }
 
+    /// Number of in-memory member episodes (the claim-less lead is excluded).
+    /// A failed terminal write releases this ownership even while its durable
+    /// claim remains active for later reconciliation.
+    #[must_use]
+    pub fn episode_count(&self) -> usize {
+        self.teams()
+            .values()
+            .map(|team| {
+                team.lock()
+                    .residents
+                    .values()
+                    .filter(|slot| slot.claim.is_some())
+                    .count()
+            })
+            .sum()
+    }
+
     /// Whether the resident slot for `session` has work in flight: a running
     /// turn, owed mail or directive, or an accepted report still to execute.
     /// `None` when this process tracks no such slot.
@@ -3069,8 +3393,8 @@ impl ResidentSupervisor {
         Some(
             slot.status == SlotStatus::Busy
                 || slot.has_work()
-                || slot.pending_archive.is_some()
-                || slot.archiving
+                || slot.report.is_some()
+                || slot.ending.is_some()
                 || self.engine.turn_active(session),
         )
     }
@@ -3083,7 +3407,7 @@ impl ResidentSupervisor {
             team.lock()
                 .residents
                 .get(&session)
-                .is_some_and(|slot| slot.archiving)
+                .is_some_and(|slot| slot.ending.is_some() || slot.report.is_some())
         })
     }
 
@@ -3145,145 +3469,39 @@ impl ResidentSupervisor {
         })
     }
 
-    /// Stop and deregister a resident handle under `root`.
-    pub async fn stop_resident(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
-        let team = self.teams().get(&root).cloned();
-        let Some(team) = team else {
-            return self.stop_terminal_projection(root, handle).await;
-        };
-
-        let mut selected = None;
-        let mut waiting = None;
-        let mut selection_error = None;
-        {
-            let mut state = team.lock();
-            if let Some(completion) = state.stop_completions.get(handle) {
-                waiting = Some(completion.clone());
-            } else if let Some((&session, slot)) = state
+    /// Request an archive and wait for the episode's own ending. Dropping
+    /// this wait never cancels the episode task.
+    pub async fn end_member(&self, root: SessionId, handle: &str) -> Result<(), CoreError> {
+        let live = self.teams().get(&root).cloned().and_then(|team| {
+            team.lock()
                 .residents
-                .iter_mut()
+                .iter()
                 .find(|(_, slot)| slot.handle == handle)
-            {
-                if slot.is_main {
-                    selection_error = Some(CoreError::Invalid(
-                        "cannot stop resident main actor".to_string(),
-                    ));
-                } else if let Some(claim) = slot.claim {
-                    let completion = Arc::new(StopCompletion::new());
-                    let terminate = slot.status == SlotStatus::Busy;
-                    let (reply, receiver) = oneshot::channel();
-                    let stop_request = StopRequest { terminate, reply };
-                    slot.pending = false;
-                    slot.synth_pending = false;
-                    slot.cancel.cancel();
-                    slot.notify.notify_one();
-                    state
-                        .stop_completions
-                        .insert(handle.to_string(), completion.clone());
-                    selected = Some((session, claim, stop_request, receiver, completion));
-                } else {
-                    selection_error = Some(CoreError::Invalid(
-                        "resident has no active claim".to_string(),
-                    ));
-                }
-            }
-        }
-        if let Some(error) = selection_error {
-            return Err(error);
-        }
-        if let Some(completion) = waiting {
-            return completion.wait().await;
-        }
-        let Some((session, claim, stop_request, receiver, completion)) = selected else {
-            return self.stop_terminal_projection(root, handle).await;
-        };
-
-        let leader_team = team.clone();
-        let leader_handle = handle.to_string();
-        let leader_completion = completion.clone();
-        tokio::spawn(async move {
-            let durable = leader_team
-                .engine
-                .finalize_resident_stop(&claim, root, &leader_handle)
-                .await;
-            let Err(durable_error) = durable else {
-                let post_commit = {
-                    let mut state = leader_team.lock();
-                    match state.residents.get_mut(&session) {
-                        Some(slot)
-                            if slot.handle == leader_handle
-                                && slot.claim == Some(claim)
-                                && slot.stop_request.is_none() =>
-                        {
-                            slot.stop_request = Some(stop_request);
-                            slot.notify.notify_one();
-                            Ok(Some(receiver))
-                        }
-                        Some(slot) if slot.claim != Some(claim) => Ok(None),
-                        Some(_) => Err(CoreError::Invalid(
-                            "resident stop request already queued".to_string(),
-                        )),
-                        // The durable finalizer can race the activation-failure path's local
-                        // cleanup.  A missing slot here means that cleanup already completed.
-                        None => Ok(None),
-                    }
-                };
-                let cleanup = match post_commit {
-                    Err(error) => Err(error),
-                    Ok(None) => Ok(()),
-                    Ok(Some(receiver)) => match receiver.await {
-                        Ok(result) => result,
-                        Err(_) => {
-                            if !leader_team.owns_slot(session, Some(&claim)) {
-                                Ok(())
-                            } else {
-                                Err(CoreError::Invalid(
-                                    "resident stop task exited before cleanup".to_string(),
-                                ))
-                            }
-                        }
-                    },
-                };
-                leader_completion.complete(cleanup);
-                leader_team.remove_stop_completion(&leader_handle, &leader_completion);
-                return;
-            };
-            leader_completion.complete(Err(durable_error));
-            leader_team.remove_stop_completion(&leader_handle, &leader_completion);
+                .map(|(session, _)| *session)
         });
-        completion.wait().await
-    }
-
-    async fn stop_terminal_projection(
-        &self,
-        root: SessionId,
-        handle: &str,
-    ) -> Result<(), CoreError> {
+        if let Some(child) = live {
+            self.stop_and_archive_live(root, handle, child, "Workflow run cancelled")
+                .await?;
+            return Ok(());
+        }
         let projection = self.engine.read_projection(root).await?;
         if projection.team.archived.contains_key(handle) {
             return Ok(());
         }
-        let Some(entry) = projection.team.roster.get(handle) else {
-            return Err(CoreError::Invalid(format!("unknown resident `{handle}`")));
-        };
-        if entry.mode == SubagentMode::Resident
-            && matches!(entry.status, RosterStatus::Done | RosterStatus::Failed)
-        {
-            Ok(())
-        } else if entry.mode != SubagentMode::Resident {
-            Err(CoreError::Invalid(format!(
-                "mail target `{handle}` is not a resident"
-            )))
-        } else {
-            Err(CoreError::Invalid(format!(
-                "resident `{handle}` is not terminal"
-            )))
-        }
+        let child = projection
+            .team
+            .roster
+            .get(handle)
+            .ok_or_else(|| CoreError::Invalid(format!("unknown resident `{handle}`")))?
+            .session;
+        self.stop_and_archive_live(root, handle, child, "Workflow run cancelled")
+            .await?;
+        Ok(())
     }
 
     /// Projection-only report-gate check (ADR-0015): the handle must be live,
     /// its inbox drained, and it must have no live children. The tool surface
-    /// calls this for fast feedback; [`Self::report_and_archive`] re-checks it.
+    /// calls this for fast feedback; the episode re-checks it at rest.
     ///
     /// # Errors
     /// Returns [`CoreError::Invalid`] for each gate failure.
@@ -3301,92 +3519,6 @@ impl ResidentSupervisor {
         canonical: &str,
     ) -> Result<hya_proto::Projection, CoreError> {
         report_gate_projection(&self.engine, root, canonical).await
-    }
-
-    /// Terminal report + immediate archive (ADR-0015).
-    ///
-    /// The precheck provides prompt feedback; the store rechecks the gate after
-    /// handoff preparation and commits all terminal effects before publication.
-    /// The caller then tears down the live slot.
-    ///
-    /// # Errors
-    /// Returns [`CoreError::Invalid`] for every gate failure (not live, main
-    /// actor, still working, unread mail, live children).
-    pub async fn report_and_archive(
-        &self,
-        root: SessionId,
-        handle: &str,
-        outcome: ReportOutcome,
-        report: String,
-    ) -> Result<(), CoreError> {
-        let (canonical, child, claim) = {
-            let team = self.teams().get(&root).cloned().ok_or_else(|| {
-                CoreError::Invalid(format!("resident `{handle}` has no live team"))
-            })?;
-            let state = team.lock();
-            let (&session, slot) = state
-                .residents
-                .iter()
-                .find(|(_, slot)| slot.handle == handle)
-                .ok_or_else(|| CoreError::Invalid(format!("resident `{handle}` is not live")))?;
-            if slot.is_main {
-                return Err(CoreError::Invalid(
-                    "the main actor cannot report".to_string(),
-                ));
-            }
-            if slot.status == SlotStatus::Busy {
-                return Err(CoreError::Invalid(format!(
-                    "resident `{handle}` is still working; report between turns"
-                )));
-            }
-            (slot.handle.clone(), session, slot.claim)
-        };
-
-        // Projection-level gate (unread mail / live children); re-checked here
-        // even for pre-checked tool callers.
-        self.report_gate_state(root, &canonical).await?;
-        let outcome = archive_reported_agent(
-            &self.engine,
-            root,
-            &canonical,
-            child,
-            claim.as_ref(),
-            outcome,
-            report,
-            ArchiveReason::Reported,
-            false,
-        )
-        .await?;
-        if outcome == hya_store::ResidentArchiveOutcome::Refused {
-            return Ok(());
-        }
-
-        // 6. Slot teardown: idle by the gate, so a plain stop handshake ends
-        //    the resident task and releases the team budget counters.
-        let team = self.teams().get(&root).cloned();
-        if let Some(team) = team {
-            let (reply, receiver) = oneshot::channel();
-            let queued = {
-                let mut state = team.lock();
-                match state.residents.get_mut(&child) {
-                    Some(slot) if slot.claim == claim => {
-                        slot.pending = false;
-                        slot.synth_pending = false;
-                        slot.stop_request = Some(StopRequest {
-                            terminate: false,
-                            reply,
-                        });
-                        slot.notify.notify_one();
-                        true
-                    }
-                    _ => false,
-                }
-            };
-            if queued {
-                let _ = receiver.await;
-            }
-        }
-        Ok(())
     }
 
     /// The `report` tool entry (ADR-0015): gate feedback now, archive once the
@@ -3421,7 +3553,7 @@ impl ResidentSupervisor {
                     "the main actor cannot report".to_string(),
                 ));
             }
-            slot.pending_archive = Some(PendingReport { outcome, report });
+            slot.report = Some(PendingReport { outcome, report });
             slot.notify.notify_one();
         }
         Ok(())
@@ -3523,68 +3655,52 @@ impl ResidentSupervisor {
         child: SessionId,
         note: &str,
     ) -> Result<bool, CoreError> {
-        let team = self.teams().get(&root).cloned();
-        let slot_claim = team.as_ref().and_then(|team| {
+        if child == root || handle == scope::ROOT_HANDLE {
+            return Err(CoreError::Invalid("the team lead is never archived".into()));
+        }
+        // This is the same lock held from registration/revival's claim commit
+        // through installation. Keep it until Takeover commits for an orphan.
+        let existing = self.teams().get(&root).cloned();
+        let (team, registration) = match existing {
+            Some(team) => {
+                let registration = team.registration.clone().lock_owned().await;
+                (team, registration)
+            }
+            None => self.team_for(root).await?,
+        };
+        let requested = {
             let mut state = team.lock();
             state.residents.get_mut(&child).map(|slot| {
-                // No further turn: owed mail, a directive, or an accepted
-                // report are dropped; the archive supersedes them.
-                slot.archiving = true;
-                slot.pending = false;
-                slot.synth_pending = false;
-                slot.pending_archive = None;
-                slot.claim
+                let cancelled = self.engine.turn_active(child);
+                let done = slot.request_end(&self.engine, child, Ending::Archived(note.into()));
+                (done, cancelled)
             })
-        });
-        // A claim-less archive acquires ownership only inside the finalizer's
-        // transaction; an earlier active-actor query cannot establish it.
-        let claim = slot_claim.flatten();
-        let cancelled = self
-            .engine
-            .stop_turn(child, FinishCause::Archived, DRAIN_DEADLINE)
-            .await;
-        if let Err(error) = archive_stopped_agent(
+        };
+        if let Some((mut done, cancelled)) = requested {
+            drop(registration);
+            loop {
+                if let Some(result) = done.borrow().clone() {
+                    return result.map(|()| cancelled);
+                }
+                done.changed().await.map_err(|_| {
+                    CoreError::Invalid("episode exited without its ending result".into())
+                })?;
+            }
+        }
+        archive_stopped_agent(
             &self.engine,
             root,
             handle,
             child,
-            claim.as_ref(),
+            None,
             ArchiveReason::ArchivedByParent,
             MemberRunStatus::Cancelled,
             FinishCause::Archived,
             note,
         )
-        .await
-        {
-            if let Some(team) = team.as_ref()
-                && let Some(slot) = team.lock().residents.get_mut(&child)
-                && slot.claim == claim
-            {
-                slot.archiving = false;
-            }
-            return Err(error);
-        }
-        // Slot teardown: the task observes its missing slot (and a terminate
-        // request if it is still parked) and exits, terminating its sidecar.
-        if let Some(team) = team {
-            {
-                let mut state = team.lock();
-                if let Some(slot) = state
-                    .residents
-                    .get_mut(&child)
-                    .filter(|slot| slot.claim == claim)
-                {
-                    let (reply, _receiver) = oneshot::channel();
-                    slot.stop_request = Some(StopRequest {
-                        terminate: true,
-                        reply,
-                    });
-                    slot.notify.notify_one();
-                }
-            }
-            team.remove_slot(child, claim.as_ref());
-        }
-        Ok(cancelled)
+        .await?;
+        drop(registration);
+        Ok(false)
     }
 
     /// Revive one archived direct child of `parent` with `body` as the wake
@@ -3689,7 +3805,7 @@ impl ResidentSupervisor {
         let parent_path = scope::parent_path(&canonical).unwrap_or(scope::ROOT_HANDLE);
         let leaf = scope::leaf(&canonical).to_string();
         let arming = format!("[mail from {parent}] {body}");
-        self.register_existing_resident_at(
+        self.register_episode(
             root,
             child,
             parent_path.to_string(),
@@ -3932,7 +4048,7 @@ impl ResidentSupervisor {
             directive: registration_directive,
             tool_call,
         });
-        self.register_existing_resident_at(
+        self.register_episode(
             root,
             session,
             parent_path,
@@ -4032,10 +4148,13 @@ impl ResidentSupervisor {
             .engine
             .bind_session_runtime(session, &agent.workdir)
             .await?;
-        self.register_existing_resident_with_agents(
+        let parent_path = self.engine.parent_agent_path(root, session).await;
+        let leaf = scope::leaf(&handle).to_string();
+        self.register_episode(
             root,
             session,
-            handle,
+            parent_path,
+            leaf,
             agent,
             ResidentRuntimeContext::Bound(binding),
             ResidentActivation {
@@ -4050,72 +4169,11 @@ impl ResidentSupervisor {
         .await
     }
 
-    /// Register an already-created resident with a request-scoped sidecar factory.
-    /// The factory remains opaque and in-memory; activation starts lazily on the
-    /// resident's first owed turn.
-    pub async fn register_existing_resident_with_sidecar(
-        &self,
-        root: SessionId,
-        session: SessionId,
-        handle: String,
-        agent: AgentSpec,
-        initial: Option<String>,
-        sidecar_factory: Arc<dyn BoundSidecarFactory>,
-    ) -> Result<(), CoreError> {
-        let binding = self
-            .engine
-            .bind_session_runtime(session, &agent.workdir)
-            .await?;
-        self.register_existing_resident_with_agents(
-            root,
-            session,
-            handle,
-            agent,
-            ResidentRuntimeContext::Bound(binding),
-            ResidentActivation {
-                events: Vec::new(),
-                parent_claim: None,
-                initial,
-                guidance: None,
-                route: None,
-                sidecar_factory: Some(sidecar_factory),
-            },
-        )
-        .await
-    }
-
-    async fn register_existing_resident_with_agents(
-        &self,
-        root: SessionId,
-        session: SessionId,
-        handle: String,
-        agent: AgentSpec,
-        runtime: ResidentRuntimeContext,
-        activation: ResidentActivation,
-    ) -> Result<(), CoreError> {
-        // `handle` arrives either as a canonical path (from `spawn_resident`) or
-        // as a bare leaf (from the public `register_existing_resident*` entry
-        // points). Taking its leaf and re-deriving the unit from the session's
-        // own lineage normalizes both into one canonical path.
-        let parent_path = self.engine.parent_agent_path(root, session).await;
-        let leaf = scope::leaf(&handle).to_string();
-        self.register_existing_resident_at(
-            root,
-            session,
-            parent_path,
-            leaf,
-            agent,
-            runtime,
-            activation,
-        )
-        .await
-    }
-
     /// Register a resident at an **explicit** canonical path (ADR-0015 revive):
     /// lineage-derived parents disappear from the roster once archived, so
     /// revival must pass the archived entry's own parent path and leaf.
     #[allow(clippy::too_many_arguments)]
-    async fn register_existing_resident_at(
+    async fn register_episode(
         &self,
         root: SessionId,
         session: SessionId,
@@ -4183,7 +4241,32 @@ impl ResidentSupervisor {
         }
         let channel_policy =
             ChannelPolicy::from_binding(&binding)?.snapshot_for(agent.name.as_str());
-        let (team, registration) = self.team_for(root).await?;
+        let (mut team, mut registration) = self.team_for(root).await?;
+        loop {
+            let previous = team
+                .lock()
+                .residents
+                .get(&session)
+                .map(|slot| slot.done.subscribe());
+            let Some(mut done) = previous else {
+                break;
+            };
+            if !projection.team.archived.contains_key(&handle) {
+                return Err(CoreError::Invalid(
+                    "resident already has a live episode".into(),
+                ));
+            }
+            drop(registration);
+            loop {
+                if done.borrow().is_some() {
+                    break;
+                }
+                done.changed().await.map_err(|_| {
+                    CoreError::Invalid("previous episode exited without completion".into())
+                })?;
+            }
+            (team, registration) = self.team_for(root).await?;
+        }
         let (claim, envelopes) = self
             .engine
             .store()
@@ -4197,172 +4280,54 @@ impl ResidentSupervisor {
             .get(&parent_path)
             .map_or(root, |entry| entry.session);
         let notify = Arc::new(Notify::new());
-        let task_binding = binding.clone();
-        let task_agent = agent.name.clone();
-        {
-            let mut st = team.lock();
-            // New work exists (the initial directive), so a later quiescence fires.
-            st.work_seq = st.work_seq.saturating_add(1);
-            st.residents.insert(
-                session,
-                SlotState {
-                    handle: handle.clone(),
-                    agent,
-                    binding,
-                    agents,
-                    resources,
-                    guidance,
-                    route,
-                    sidecar_factory,
-                    is_main: false,
-                    status: SlotStatus::Idle,
-                    pending: has_initial,
-                    pending_archive: None,
-                    archiving: false,
-                    user_stopped: false,
-                    synth_pending: false,
-                    claim: Some(claim),
-                    kill_finalized: false,
-                    cancel: team.cancel.child_token(),
-                    stop_request: None,
-                    cursor: 0,
-                    last_activity: None,
-                    last_heartbeat_emit: None,
-                    notify: notify.clone(),
-                },
-            );
-        }
-        drop(registration);
-        // No await between commit, slot installation and spawning this owner.
-        // Dropping the caller during a plugin RPC cannot strand the child.
-        let (ready, initialized) = oneshot::channel();
-        tokio::spawn(async move {
-            let result = async {
-                if !team.owns_slot(session, Some(&claim)) {
-                    return Ok(());
-                }
-                let created = envelopes.iter().any(|envelope| {
-                    matches!(
-                        envelope.event, Event::SessionCreated { session: id, .. } if id == session
-                    )
-                });
-                let initial = envelopes
-                    .iter()
-                    .rev()
-                    .find_map(|envelope| match &envelope.event {
-                        Event::TextDelta {
-                            session: id,
-                            message,
-                            part,
-                            delta,
-                        } if *id == session => Some((*message, *part, delta.clone())),
-                        _ => None,
-                    });
-                if created {
-                    team.engine.notify_session_start(session).await;
-                }
-                let fresh = {
-                    let state = team.lock();
-                    if !state
-                        .residents
-                        .get(&session)
-                        .is_some_and(|slot| slot.claim == Some(claim))
-                    {
-                        return Ok(());
-                    }
-                    team.engine
-                        .update_session_channel_policy(session, channel_policy);
-                    team.engine
-                        .replace_session_hooks(session, &task_binding, task_agent.as_str())
-                };
-                for hooks in fresh {
-                    if !team.owns_slot(session, Some(&claim)) {
-                        return Ok(());
-                    }
-                    hooks.session_start(SessionLifecycleInput { session }).await;
-                }
-                for envelope in envelopes {
-                    if !team.owns_slot(session, Some(&claim)) {
-                        return Ok(());
-                    }
-                    team.engine.publish_envelope(envelope);
-                }
-                if let Some((message, part, original)) = initial {
-                    let text = team
-                        .engine
-                        .user_text_after_hooks(
-                            &task_binding,
-                            task_agent.as_str(),
-                            session,
-                            original.clone(),
-                        )
-                        .await;
-                    if !team.owns_slot(session, Some(&claim)) {
-                        return Ok(());
-                    }
-                    if text != original {
-                        team.engine
-                            .commit_resident_mutation(
-                                &claim,
-                                session,
-                                vec![Event::TextReplace {
-                                    session,
-                                    message,
-                                    part,
-                                    text,
-                                }],
-                            )
-                            .await?;
-                    }
-                }
-                Ok::<(), CoreError>(())
-            }
-            .await;
-            if !team.owns_slot(session, Some(&claim)) {
-                let _ = ready.send(Ok(()));
-                return;
-            }
-            if let Err(error) = result {
-                let reason = format!("resident initialization failed: {error}");
-                let finalized = team
-                    .engine
-                    .finalize_resident_failure(&claim, root, &handle, &reason)
-                    .await;
-                let _ = ready.send(Err(error));
-                if finalized.is_ok() {
-                    team.remove_slot(session, Some(&claim));
-                    return;
-                }
-                if !team.owns_slot(session, Some(&claim)) {
-                    return;
-                }
-                if let Some(slot) = team.lock().residents.get_mut(&session)
-                    && slot.claim == Some(claim)
-                {
-                    slot.archiving = true;
-                }
-            } else {
-                if let Some(hooks) = team.engine.session_hook_dispatcher(parent_session) {
-                    hooks
-                        .agent_spawn(AgentSpawnInput {
-                            parent: root,
-                            child: session,
-                        })
-                        .await;
-                }
-                let _ = ready.send(Ok(()));
-            }
-            // Yield lets a successful caller observe the armed registration
-            // before its first turn; the driver survives a dropped receiver.
-            tokio::task::yield_now().await;
-            if !team.owns_slot(session, Some(&claim)) {
-                return;
-            }
-            if has_initial {
-                notify.notify_one();
-            }
-            resident_task(team, session, Some(claim), notify).await;
+        let initial_prompt = envelopes.iter().find_map(|envelope| match envelope.event {
+            Event::MessageStarted {
+                session: id,
+                message,
+                role: hya_proto::Role::User,
+                ..
+            } if id == session => Some(message),
+            _ => None,
         });
+        let (ready, initialized) = oneshot::channel();
+        let init = EpisodeInit {
+            binding: binding.clone(),
+            agent: agent.name.clone(),
+            parent: parent_session,
+            envelopes,
+            ready,
+        };
+        team.install_episode(
+            session,
+            Episode {
+                handle: handle.clone(),
+                agent,
+                binding,
+                agents,
+                resources,
+                guidance,
+                route,
+                sidecar_factory,
+                is_main: false,
+                status: SlotStatus::Idle,
+                pending: has_initial,
+                report: None,
+                user_stopped: false,
+                synth_pending: false,
+                claim: Some(claim),
+                kill_finalized: false,
+                cancel: team.cancel.child_token(),
+                ending: None,
+                done: watch::channel(None).0,
+                initial_prompt,
+                cursor: 0,
+                last_activity: None,
+                last_heartbeat_emit: None,
+                notify: notify.clone(),
+            },
+            Some(init),
+        );
+        drop(registration);
         initialized
             .await
             .map_err(|_| CoreError::Invalid("resident initialization task exited".into()))??;
@@ -4380,6 +4345,7 @@ impl ResidentSupervisor {
         disposition: ResidentRecovery,
     ) -> Result<(), CoreError> {
         let (binding, agents, resources, sidecar_factory) = resolved;
+        let (team, _registration) = self.team_for(root).await?;
         self.engine
             .store()
             .validate_actor_claim(&recovered.claim)
@@ -4398,50 +4364,59 @@ impl ResidentSupervisor {
                     queued_after: true,
                     ..
                 }
-        );
-        let (team, _registration) = self.team_for(root).await?;
-        let notify = Arc::new(Notify::new());
+        ) || projection
+            .team
+            .inboxes
+            .get(&handle)
+            .is_some_and(|inbox| u64::try_from(inbox.len()).unwrap_or(u64::MAX) > cursor);
+        if team
+            .lock()
+            .residents
+            .contains_key(&recovered.claim.actor_id)
         {
-            let mut state = team.lock();
-            state.residents.insert(
-                recovered.claim.actor_id,
-                SlotState {
-                    handle,
-                    agent,
-                    binding,
-                    agents: Some(agents),
-                    resources: Some(resources),
-                    // Ephemeral guidance is not durable; recovery invents nothing.
-                    guidance: None,
-                    route: None,
-                    sidecar_factory,
-                    is_main: false,
-                    status: SlotStatus::Idle,
-                    pending,
-                    pending_archive: None,
-                    archiving: false,
-                    user_stopped: false,
-                    synth_pending: false,
-                    claim: Some(recovered.claim),
-                    kill_finalized: false,
-                    cancel: team.cancel.child_token(),
-                    stop_request: None,
-                    cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
-                    last_activity: None,
-                    last_heartbeat_emit: None,
-                    notify: notify.clone(),
-                },
-            );
+            return Err(CoreError::Invalid("resident already has an episode".into()));
         }
-        tokio::spawn(resident_task(
-            team,
+        let actor = self
+            .engine
+            .read_projection(recovered.claim.actor_id)
+            .await?;
+        let initial_prompt = matches!(disposition, ResidentRecovery::Queued { .. })
+            .then(|| actor.session.messages.last())
+            .flatten()
+            .filter(|message| message.role == hya_proto::Role::User)
+            .map(|message| message.id);
+        let notify = Arc::new(Notify::new());
+        team.install_episode(
             recovered.claim.actor_id,
-            Some(recovered.claim),
-            notify.clone(),
-        ));
-        if pending {
-            notify.notify_one();
-        }
+            Episode {
+                handle,
+                agent,
+                binding,
+                agents: Some(agents),
+                resources: Some(resources),
+                // Ephemeral guidance is not durable; recovery invents nothing.
+                guidance: None,
+                route: None,
+                sidecar_factory,
+                is_main: false,
+                status: SlotStatus::Idle,
+                pending,
+                report: None,
+                user_stopped: false,
+                synth_pending: false,
+                claim: Some(recovered.claim),
+                kill_finalized: false,
+                cancel: team.cancel.child_token(),
+                ending: None,
+                done: watch::channel(None).0,
+                initial_prompt,
+                cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
+                last_activity: None,
+                last_heartbeat_emit: None,
+                notify: notify.clone(),
+            },
+            None,
+        );
         Ok(())
     }
 }
