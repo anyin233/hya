@@ -39,6 +39,8 @@ use tokio_util::sync::CancellationToken;
 /// How a scripted session's next stream behaves.
 #[derive(Clone, Copy)]
 enum Script {
+    PartialText,
+    Write,
     /// Open a tool part, then stream nothing more until cancelled.
     Hang,
     /// Park until `release`, then answer with one text part.
@@ -98,6 +100,53 @@ impl Provider for ScriptProvider {
         *self.streams.lock().unwrap().entry(session).or_default() += 1;
         let script = self.scripts.lock().unwrap().remove(&session);
         match script {
+            Some(Script::Write) => Ok(Box::pin(stream::iter(
+                FakeProvider::materialize(
+                    &[
+                        FakeStep::ToolCall {
+                            name: "write".into(),
+                            input: json!({"path":"partial.txt","content":"saved"}),
+                        },
+                        FakeStep::Finish(FinishReason::ToolCalls),
+                    ],
+                    session,
+                    message,
+                )
+                .into_iter()
+                .map(Ok),
+            ))),
+            Some(Script::PartialText) => {
+                let part = PartId::new();
+                let reasoning = PartId::new();
+                Ok(Box::pin(
+                    stream::iter(vec![
+                        Ok(Event::ReasoningStart {
+                            reason: None,
+                            session,
+                            message,
+                            part: reasoning,
+                        }),
+                        Ok(Event::ReasoningDelta {
+                            session,
+                            message,
+                            part: reasoning,
+                            delta: "thinking".into(),
+                        }),
+                        Ok(Event::TextStart {
+                            session,
+                            message,
+                            part,
+                        }),
+                        Ok(Event::TextDelta {
+                            session,
+                            message,
+                            part,
+                            delta: "partial answer".into(),
+                        }),
+                    ])
+                    .chain(stream::pending()),
+                ))
+            }
             Some(Script::Hang) => {
                 self.entered.notify_one();
                 let open = Event::ToolInputStart {
@@ -1768,5 +1817,141 @@ async fn stop_restores_a_shell_call_after_its_shutdown_io_error() {
             .unwrap()
             .iter()
             .any(|entry| matches!(entry.event, Event::ToolResult { .. }))
+    );
+}
+
+#[tokio::test]
+async fn cancel_partial_text_preserves_live_bytes_in_replay() {
+    for cause in [
+        FinishCause::UserCancel,
+        FinishCause::Shutdown,
+        FinishCause::Other,
+    ] {
+        let (engine, agent, provider) = engine_with_script().await;
+        let session = make_session(&engine, None, "hya-main").await;
+        engine
+            .admit_user_prompt(session, "answer".into())
+            .await
+            .unwrap();
+        provider.script(session, Script::PartialText);
+        let mut live = engine.bus().subscribe();
+        let runner = engine.clone();
+        let turn = tokio::spawn(async move {
+            runner
+                .run_turn(session, &agent, CancellationToken::new())
+                .await
+        });
+        let observed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Event::TextDelta { delta, .. } = live.recv().await.unwrap().event {
+                    break delta;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(engine.cancel_turn(session, cause));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), turn)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            FinishReason::Cancelled
+        );
+        let replay = engine.replay(session).await.unwrap();
+        let saved: String = replay
+            .iter()
+            .filter_map(|e| match &e.event {
+                Event::TextReplace { text, .. } if text == &observed => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(saved, observed);
+        assert_eq!(replay.iter().filter(|e| matches!(&e.event, Event::ReasoningReplace { text, .. } if text == "thinking")).count(), 1);
+    }
+}
+
+struct WriteThenWait {
+    written: Notify,
+}
+#[async_trait]
+impl Tool for WriteThenWait {
+    fn name(&self) -> &str {
+        "write"
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: ToolName::new("write"),
+            description: "write and wait".into(),
+            input_schema: json!({"type":"object"}),
+            output_schema: None,
+        }
+    }
+    async fn execute(
+        &self,
+        ctx: &ToolCtx,
+        _: serde_json::Value,
+    ) -> Result<serde_json::Value, ToolError> {
+        tokio::fs::write(ctx.workdir.join("partial.txt"), "saved").await?;
+        self.written.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn cancel_written_tool_records_file_changes_before_finish() {
+    let provider = Arc::new(ScriptProvider::default());
+    let tools = Arc::new(ToolRegistry::builtins());
+    tools.remove("write");
+    let tool = Arc::new(WriteThenWait {
+        written: Notify::new(),
+    });
+    tools.register(tool.clone()).unwrap();
+    let (engine, mut agent) = scripted_engine(provider.clone(), tools).await;
+    let dir = support::TestDir::new("cancel-written-tool");
+    agent.workdir = dir.path().to_path_buf();
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("hya-main"),
+            model: ModelRef::new("hya/offline"),
+            workdir: dir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "write".into())
+        .await
+        .unwrap();
+    provider.script(session, Script::Write);
+    let runner = engine.clone();
+    let turn = tokio::spawn(async move {
+        runner
+            .run_turn(session, &agent, CancellationToken::new())
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), tool.written.notified())
+        .await
+        .unwrap();
+    engine.cancel_turn(session, FinishCause::UserCancel);
+    assert_eq!(turn.await.unwrap().unwrap(), FinishReason::Cancelled);
+    let replay = engine.replay(session).await.unwrap();
+    let files = replay
+        .iter()
+        .position(|e| matches!(e.event, Event::FilesChanged { .. }))
+        .unwrap();
+    let finish = replay
+        .iter()
+        .rposition(|e| matches!(e.event, Event::MessageFinished { .. }))
+        .unwrap();
+    assert!(files < finish);
+    assert_eq!(
+        tokio::fs::read_to_string(dir.path().join("partial.txt"))
+            .await
+            .unwrap(),
+        "saved"
     );
 }
