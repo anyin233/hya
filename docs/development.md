@@ -257,7 +257,7 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
-`startup-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`,
+`startup-bench`, `lifecycle-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`,
 `package-native-tool-library`, `stage-first-party-bundles`, `gen-api`, and
 `release-rehearsal`.
 
@@ -265,6 +265,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | --- | --- |
 | `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. `--db <seed.db>` runs every sample against a fresh copy of an existing database and prints the `HYA_STARTUP_TRACE` phase waterfall; `--timeout-secs N` (default 30) bounds the wait for the listen line. |
+| `lifecycle-bench` | Offline app-wired task lifecycle timings and store counts. See [Lifecycle benchmark](#lifecycle-benchmark). |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
@@ -362,3 +363,48 @@ The feature's documentation must state, at minimum:
 Keep docs grounded in shipped behavior. If a table or schema reserves space for
 future functionality that is not wired into the current read path, say that
 plainly.
+
+### Lifecycle benchmark
+
+`CARGO_BUILD_JOBS=8 cargo run --locked -p xtask -- lifecycle-bench` measures
+app-wired native `task` spawning, a read-tool turn with streamed text, terminal
+report/archive, and mail-driven revival, with 1, 16 and 64 workers under one root.
+It uses an offline fake provider and a temporary file-backed WAL SQLite database.
+Workers pause at provider entry so spawning and revival can be measured separately
+from their work. Completion is observed on the event bus, without polling SQL.
+
+Output rows contain `scenario` (`A` initial episode, `B` revived episode), `n`,
+`phase`, `wall_ms`, and `counts` (`statements`, `transactions`, `events`, `bytes`).
+`scenario` and `phase` are strings, `n` is an unsigned integer, `wall_ms` is a
+floating-point number, and each count is an unsigned integer. Phases are `spawn`,
+`work`, `report+archive`, and `revive`; A has no revive row and B has no spawn row.
+Use `--json` for a JSON array of these rows. Baselines use the same array with
+`wall_ms` omitted. `--check` takes one baseline file path and exits nonzero on a
+count mismatch; `--json` is a flag and can be combined with `--check`.
+SQL statements include transaction
+control; transactions count only commits containing event inserts; bytes count
+UTF-8 event JSON, excluding SQLite framing, indexes and side tables.
+
+Store instrumentation is compiled only with `hya-store/lifecycle-bench`, enabled
+by xtask. SQLite trace callbacks count executed statements and event payloads;
+commit/rollback observation distinguishes durable appends. Callbacks add counting
+and allocation overhead, but execute no SQL and add no transactions. The product
+code path stays the same. Callback overhead affects scheduling and wall time;
+these are instrumented timings.
+The optional direct `libsqlite3-sys` dependency uses SQLx's existing locked version
+because SQLx exposes no statement-trace registration API.
+
+`--check crates/xtask/lifecycle-baseline.json` compares events and append
+transactions exactly;
+timings are informational and never gate shared CI. SQL statement tolerance is ±2
+per phase: a projection-tail read can cross the asynchronous phase boundary.
+Payload byte tolerance is the empirical allowance ±`3*(n+1)`. Persisted tool
+durations vary in decimal width. Concurrent handle assignment also changes the
+root task's truncated output: clipping different text changes JSON escaping and
+serialized byte length. The allowance covers both observed sources; it is not a
+claim that payload sizes are deterministic. The raw counts stay visible;
+we do not normalize stored payloads or suppress read statements. Changes beyond
+these bounds fail; event and transaction differences always fail. After an
+intentional lifecycle change, repeat five runs, investigate any count variation, then replace the baseline
+with reviewed `--json` output. Compare timing min/median/max on the same machine;
+relative spread is `(max-min)/median`, not a performance regression threshold.

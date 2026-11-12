@@ -7,6 +7,9 @@
 //! NOTE: PRAGMAs (WAL etc.) are set via connect options, NOT a migration — `WAL`
 //! cannot run inside the transaction sqlx wraps migrations in.
 
+#[cfg(feature = "lifecycle-bench")]
+pub mod bench;
+
 mod admission;
 mod agent_effort_preference;
 mod agent_model_preference;
@@ -386,10 +389,11 @@ impl SessionStore {
             Some(paths) => opts.filename(&paths.database),
             None => opts,
         };
-        let pool = SqlitePoolOptions::new()
-            .max_connections(8)
-            .connect_with(opts)
-            .await?;
+        let pool_options = SqlitePoolOptions::new().max_connections(8);
+        #[cfg(feature = "lifecycle-bench")]
+        let pool_options =
+            pool_options.after_connect(|connection, _| Box::pin(bench::install(connection)));
+        let pool = pool_options.connect_with(opts).await?;
         Self::migrate(&pool).await?;
         let runtime_owner = paths.map_or_else(RuntimeOwnerState::memory, RuntimeOwnerState::file);
         *runtime_owner

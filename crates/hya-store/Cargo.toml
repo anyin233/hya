@@ -10,7 +10,11 @@ version-reference = "backend"
 [lints]
 workspace = true
 
+[features]
+lifecycle-bench = ["dep:libsqlite3-sys"]
+
 [dependencies]
+libsqlite3-sys = { version = "=0.30.1", optional = true }
 futures = { workspace = true }
 semver = "1"
 hya-bundle = { workspace = true }
