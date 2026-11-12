@@ -7397,7 +7397,7 @@ export default {
         let lead = engine
             .create(CreateSession {
                 parent: None,
-                agent: AgentName::new("build"),
+                agent: AgentName::new("worker"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
                 project: None,
@@ -7455,6 +7455,9 @@ export default {
             ..
         } = resolved;
         let sidecar_factory = sidecar_factory.expect("resident Bun must capture sidecar factory");
+        let _lead_turn = engine
+            .try_begin_turn(lead)
+            .expect("hold the calling lead turn");
         let supervisor = ResidentSupervisor::start(engine.clone());
         let (child, handle) = supervisor
             .spawn_resident(
@@ -7655,7 +7658,7 @@ export default {
         let lead = engine
             .create(CreateSession {
                 parent: None,
-                agent: AgentName::new("build"),
+                agent: AgentName::new("worker"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
                 project: None,
@@ -7755,6 +7758,9 @@ for line in sys.stdin:
             sidecar_factory,
             ..
         } = resolved;
+        let _lead_turn = engine
+            .try_begin_turn(lead)
+            .expect("hold the calling lead turn");
         let supervisor = ResidentSupervisor::start(engine.clone());
         let (child, handle) = supervisor
             .spawn_resident(
@@ -7992,7 +7998,7 @@ for line in sys.stdin:
         let lead = engine
             .create(CreateSession {
                 parent: None,
-                agent: AgentName::new("build"),
+                agent: AgentName::new("worker"),
                 model: ModelRef::new("fake"),
                 workdir: workdir.to_string_lossy().into_owned(),
                 project: None,
@@ -8119,6 +8125,9 @@ for line in sys.stdin:
             sidecar_factory,
             ..
         } = resolved;
+        let _lead_turn = engine
+            .try_begin_turn(lead)
+            .expect("hold the calling lead turn");
         let supervisor = ResidentSupervisor::start(engine.clone());
         let (child, handle) = supervisor
             .spawn_resident(
