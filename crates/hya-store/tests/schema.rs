@@ -134,7 +134,6 @@ async fn fresh_schema_reopens_and_contains_only_current_tables() {
             "model_effort_preference",
             "open_assistant_message",
             "pending_interaction",
-            "pending_interaction_reply",
             "pending_resume",
             "project",
             "project_root",

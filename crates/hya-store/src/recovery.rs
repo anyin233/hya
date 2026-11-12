@@ -35,19 +35,15 @@ pub struct InterruptedTurnRecovery {
 /// Terminal events that close every open assistant message of `session`:
 /// `ToolError` for each pending/running tool part, then one
 /// `MessageFinished { Cancelled }` per open assistant message carrying `cause`.
-/// With `close_members`, `MemberFinished { Cancelled }` is also emitted for
-/// each spawning/running member row with no spawning call or whose spawning
-/// call is still open — right when the process owning the members is going
-/// away (crash recovery, drain deadline). A handoff checkpoint passes `false`:
-/// its members stay live across the cutover and are revived by the successor's
-/// resident recovery, so their rows must keep running.
+/// `MemberFinished { Cancelled }` is also emitted for each spawning/running
+/// member row with no spawning call or whose spawning call is still open.
+/// A resident whose spawning call already returned is recovered separately.
 pub(crate) fn open_turn_terminal_events(
     session: SessionId,
     projection: &Projection,
     reason: &str,
     code: &str,
     cause: Option<FinishCause>,
-    close_members: bool,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     // Tool calls the dying turn still had open. A member spawned by a call
@@ -68,23 +64,21 @@ pub(crate) fn open_turn_terminal_events(
             _ => None,
         })
         .collect();
-    if close_members {
-        for member in &projection.session.members {
-            if matches!(
-                member.status,
-                MemberRunStatus::Spawning | MemberRunStatus::Running
-            ) && member
-                .tool_call
-                .is_none_or(|call| open_calls.contains(&call))
-            {
-                events.push(Event::MemberFinished {
-                    session,
-                    member: member.member,
-                    status: MemberRunStatus::Cancelled,
-                    summary: reason.to_string(),
-                    child: member.child,
-                });
-            }
+    for member in &projection.session.members {
+        if matches!(
+            member.status,
+            MemberRunStatus::Spawning | MemberRunStatus::Running
+        ) && member
+            .tool_call
+            .is_none_or(|call| open_calls.contains(&call))
+        {
+            events.push(Event::MemberFinished {
+                session,
+                member: member.member,
+                status: MemberRunStatus::Cancelled,
+                summary: reason.to_string(),
+                child: member.child,
+            });
         }
     }
     for message in &projection.session.messages {
@@ -194,7 +188,7 @@ impl SessionStore {
             .iter()
             .any(|message| message.role == Role::Assistant && message.finish.is_none());
         let events = if has_open_message {
-            open_turn_terminal_events(session, &projection, reason, code, Some(cause), true)
+            open_turn_terminal_events(session, &projection, reason, code, Some(cause))
         } else {
             Vec::new()
         };

@@ -157,34 +157,7 @@ impl QuestionRequests {
     ) -> bool {
         let entry = self.take(session, id).await;
         let Some(entry) = entry else {
-            let valid = self
-                .store
-                .list_pending_interactions()
-                .await
-                .ok()
-                .is_some_and(|rows| {
-                    rows.into_iter().any(|row| {
-                        row.id == id && row.kind == "question" && row.session == Some(session)
-                    })
-                });
-            if !valid {
-                return false;
-            }
-            let payload = serde_json::json!({
-                "answers": answers,
-                "session": session.to_string(),
-            });
-            let queued = hya_store::PendingInteractionReply {
-                id: id.to_string(),
-                kind: "question".to_string(),
-                payload: payload.to_string(),
-                created_at: hya_proto::now_millis(),
-            };
-            return self
-                .store
-                .queue_pending_interaction_reply(&queued)
-                .await
-                .is_ok();
+            return false;
         };
         let event_answers = answers.clone();
         let ok = entry
@@ -204,31 +177,7 @@ impl QuestionRequests {
     pub(crate) async fn reject(&self, session: SessionId, id: &str) -> bool {
         let entry = self.take(session, id).await;
         let Some(entry) = entry else {
-            let valid = self
-                .store
-                .list_pending_interactions()
-                .await
-                .ok()
-                .is_some_and(|rows| {
-                    rows.into_iter().any(|row| {
-                        row.id == id && row.kind == "question" && row.session == Some(session)
-                    })
-                });
-            if !valid {
-                return false;
-            }
-            let queued = hya_store::PendingInteractionReply {
-                id: id.to_string(),
-                kind: "question".to_string(),
-                payload: serde_json::json!({"reject": true, "session": session.to_string()})
-                    .to_string(),
-                created_at: hya_proto::now_millis(),
-            };
-            return self
-                .store
-                .queue_pending_interaction_reply(&queued)
-                .await
-                .is_ok();
+            return false;
         };
         let ok = reject_entry(entry);
         if ok {
