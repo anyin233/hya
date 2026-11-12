@@ -4,6 +4,7 @@
 //! here rather than in CI config or a shell script:
 //!
 //! - `startup-bench` — measure backend startup latency.
+//! - `lifecycle-bench` — measure offline task lifecycle store costs.
 //! - `matrix-check` — verify the agent test matrix in `docs/testing/` still
 //!   matches the scenarios the suites actually declare.
 //! - `package-bundle` — validate a source tree and emit deterministic public
@@ -25,6 +26,7 @@
 mod first_party_release;
 mod gen_api;
 mod gen_relay;
+mod lifecycle_bench;
 mod matrix_check;
 mod package_bundle;
 mod release_rehearsal;
@@ -41,13 +43,14 @@ fn main() {
         Some("package-native-tool-library") => package_bundle::run_native_library(args.collect()),
         Some("stage-first-party-bundles") => first_party_release::run(args.collect()),
         Some("release-rehearsal") => release_rehearsal::run(args.collect()),
+        Some("lifecycle-bench") => lifecycle_bench::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
         Some("matrix-check") => matrix_check::run(args.collect()),
         Some("gen-api") => gen_api::run(args.collect()),
         Some("gen-relay") => gen_relay::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <startup-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api|gen-relay>"
+                "usage: cargo xtask <startup-bench|lifecycle-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api|gen-relay>"
             );
             Ok(())
         }

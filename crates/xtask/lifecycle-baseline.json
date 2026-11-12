@@ -1,0 +1,20 @@
+[
+  {"scenario": "A","n": 1,"phase": "spawn","counts": {"bytes": 5926,"events": 28,"statements": 134,"transactions": 18}},
+  {"scenario": "A","n": 1,"phase": "work","counts": {"bytes": 3446,"events": 18,"statements": 86,"transactions": 14}},
+  {"scenario": "A","n": 1,"phase": "report+archive","counts": {"bytes": 1123,"events": 5,"statements": 18,"transactions": 1}},
+  {"scenario": "B","n": 1,"phase": "revive","counts": {"bytes": 3525,"events": 21,"statements": 79,"transactions": 8}},
+  {"scenario": "B","n": 1,"phase": "work","counts": {"bytes": 3446,"events": 18,"statements": 86,"transactions": 14}},
+  {"scenario": "B","n": 1,"phase": "report+archive","counts": {"bytes": 1123,"events": 5,"statements": 17,"transactions": 1}},
+  {"scenario": "A","n": 16,"phase": "spawn","counts": {"bytes": 56753,"events": 283,"statements": 1109,"transactions": 123}},
+  {"scenario": "A","n": 16,"phase": "work","counts": {"bytes": 55204,"events": 288,"statements": 1376,"transactions": 224}},
+  {"scenario": "A","n": 16,"phase": "report+archive","counts": {"bytes": 18133,"events": 80,"statements": 302,"transactions": 16}},
+  {"scenario": "B","n": 16,"phase": "revive","counts": {"bytes": 56631,"events": 336,"statements": 1250,"transactions": 128}},
+  {"scenario": "B","n": 16,"phase": "work","counts": {"bytes": 55203,"events": 288,"statements": 1376,"transactions": 224}},
+  {"scenario": "B","n": 16,"phase": "report+archive","counts": {"bytes": 18133,"events": 80,"statements": 303,"transactions": 16}},
+  {"scenario": "A","n": 64,"phase": "spawn","counts": {"bytes": 204915,"events": 1099,"statements": 4229,"transactions": 459}},
+  {"scenario": "A","n": 64,"phase": "work","counts": {"bytes": 220894,"events": 1152,"statements": 5504,"transactions": 896}},
+  {"scenario": "A","n": 64,"phase": "report+archive","counts": {"bytes": 72587,"events": 320,"statements": 1215,"transactions": 64}},
+  {"scenario": "B","n": 64,"phase": "revive","counts": {"bytes": 226601,"events": 1344,"statements": 4995,"transactions": 512}},
+  {"scenario": "B","n": 64,"phase": "work","counts": {"bytes": 220894,"events": 1152,"statements": 5504,"transactions": 896}},
+  {"scenario": "B","n": 64,"phase": "report+archive","counts": {"bytes": 72587,"events": 320,"statements": 1214,"transactions": 64}}
+]

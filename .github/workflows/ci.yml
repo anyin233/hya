@@ -72,6 +72,7 @@ jobs:
       # --no-fail-fast: one failing crate must not hide the failures behind it.
       - name: test
         run: cargo test --workspace --exclude hya-e2e --no-fail-fast
+      - run: cargo run --locked -p xtask -- lifecycle-bench --check crates/xtask/lifecycle-baseline.json
 
   e2e:
     runs-on: ubuntu-latest
