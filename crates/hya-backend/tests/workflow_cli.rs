@@ -330,6 +330,12 @@ fn cli_installs_and_runs_shipped_argus_workflowbundle() -> Result<(), Box<dyn st
         combined_text(&installed)
     );
 
+    let info = workflow_command(&env)
+        .args(["workflow", "info", "argus", "--json"])
+        .output()?;
+    assert!(info.status.success(), "{}", combined_text(&info));
+    let info: serde_json::Value = serde_json::from_slice(&info.stdout)?;
+
     let run = workflow_command(&env)
         .args([
             "workflow",
@@ -348,6 +354,10 @@ fn cli_installs_and_runs_shipped_argus_workflowbundle() -> Result<(), Box<dyn st
     let result: serde_json::Value = serde_json::from_slice(&run.stdout)?;
     assert_eq!(result["kind"], "run");
     assert_eq!(result["result"]["run"]["workflow"]["name"], "argus");
+    assert_eq!(
+        result["result"]["run"]["workflow"], info["workflow"]["identity"],
+        "catalog-only inspection and execution must resolve the same installed identity"
+    );
     assert_eq!(result["result"]["run"]["status"], "completed");
     assert_eq!(
         result["result"]["run"]["stages"].as_array().map(Vec::len),
@@ -402,6 +412,16 @@ fn cli_read_only_commands_and_duplicate_inputs_leave_the_database_unchanged()
             combined_text(&output)
         );
     }
+    assert!(
+        !env.hya_config.join("config.yaml").exists(),
+        "catalog inspection must not bootstrap runtime configuration"
+    );
+    assert!(
+        !env.root
+            .join("home/.local/share/hya/bundles/registry.sqlite3")
+            .exists(),
+        "catalog inspection must not create a bundle registry"
+    );
     let duplicate = workflow_command(&env)
         .arg("--db")
         .arg(&db)
@@ -425,6 +445,28 @@ fn cli_read_only_commands_and_duplicate_inputs_leave_the_database_unchanged()
         !db.exists(),
         "catalog reads or rejected input created a database"
     );
+    Ok(())
+}
+
+#[test]
+fn cli_catalog_inspection_ignores_runtime_configuration() -> Result<(), Box<dyn std::error::Error>>
+{
+    let env = IsolatedEnv::new("catalog-only")?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+    let config = env.hya_config.join("config.yaml");
+    // Runtime resolution would report this malformed config and fall back offline.
+    fs::write(&config, "providers: [\n")?;
+    for args in [
+        vec!["workflow", "list", "--json"],
+        vec!["workflow", "info", "echo-input", "--json"],
+    ] {
+        let output = workflow_command(&env).args(args).output()?;
+        assert!(output.status.success(), "{}", combined_text(&output));
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert!(matches!(value["kind"].as_str(), Some("list" | "info")));
+        assert!(output.stderr.is_empty(), "{}", combined_text(&output));
+    }
+    assert_eq!(fs::read_to_string(config)?, "providers: [\n");
     Ok(())
 }
 
@@ -486,21 +528,13 @@ fn cli_use_and_state_share_an_existing_session_across_processes()
         combined_text(&sessions)
     );
     let sessions_stdout = String::from_utf8(sessions.stdout)?;
-    // The listing also holds the run's archived stage sessions; the root
-    // Session is the one that started first.
-    let session = sessions_stdout
+    let roots = sessions_stdout
         .lines()
-        .filter_map(|line| {
-            let started = line
-                .split_whitespace()
-                .find_map(|field| field.strip_prefix("started_ms="))?
-                .parse::<u64>()
-                .ok()?;
-            Some((started, line.split_whitespace().next()?))
-        })
-        .min_by_key(|(started, _)| *started)
-        .map(|(_, id)| id)
-        .ok_or("durable Workflow run did not create a listed Session")?;
+        .filter(|line| line.starts_with("hysec_"))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 1, "only the Workflow root should be listed");
+    let session = roots[0];
 
     let selected = workflow_command(&env)
         .arg("--db")

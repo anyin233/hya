@@ -220,6 +220,46 @@ async fn exec_goes_through_the_server_that_holds_the_database() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn goal_and_loop_leave_no_temporary_databases_on_success_or_error() -> TestResult {
+    let scratch = Scratch::new("private-memory")?;
+    let temporary = scratch.0.join("tmp");
+    std::fs::create_dir(&temporary)?;
+    for (args, succeeds) in [
+        (vec!["-p", "one goal", "--max-iterations", "1"], true),
+        (
+            vec!["--model", "missing/model", "-p", "fail before evaluation"],
+            false,
+        ),
+        (vec!["loop", "--target", "done", "--until", "true"], true),
+        (
+            vec!["loop", "--target", "broken", "--until", "exit 2"],
+            false,
+        ),
+    ] {
+        let output = scratch
+            .hya()
+            .env("TMPDIR", &temporary)
+            .arg("--db")
+            .arg(scratch.db())
+            .args(&args)
+            .output()?;
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "{args:?}: {}",
+            text(&output)
+        );
+        assert!(!scratch.db().exists(), "goal/loop must keep ignoring --db");
+        let files = std::fs::read_dir(&temporary)?.collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            files.is_empty(),
+            "{args:?} leaked temporary files: {files:?}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn exec_that_cannot_be_routed_exits_75_naming_the_server() -> TestResult {
     let scratch = Scratch::new("exec-unroutable")?;
@@ -288,6 +328,20 @@ async fn workflow_use_run_and_state_go_through_the_server() -> TestResult {
     let state: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(state["kind"], "state");
     assert_eq!(state["state"]["run"]["status"], "completed");
+
+    for (action, archived) in [("archive", true), ("unarchive", false)] {
+        let output = scratch.run(&["sessions", action, session])?;
+        assert!(output.status.success(), "{}", text(&output));
+        let info = hya_sdk_v1::V1Sdk::new(&server.url, "")
+            .get_session(session)
+            .await?;
+        assert_eq!(info.archived, archived);
+    }
+    assert_eq!(
+        std::fs::read_to_string(scratch.lock())?.trim(),
+        server.child.id().to_string(),
+        "Workflow and archive actions use the existing server"
+    );
 
     // `--revision` on a run has no /v1 field: fail fast instead.
     let output = scratch.run(&[
