@@ -887,76 +887,6 @@ impl TeamActor {
         }
     }
 
-    fn replace_recovered_claim(
-        &self,
-        session: SessionId,
-        expected: ActorClaim,
-        recovered: ActorClaim,
-        disposition: ResidentRecovery,
-    ) -> Result<(), CoreError> {
-        let (cursor, pending) = match disposition {
-            ResidentRecovery::Idle => (None, false),
-            ResidentRecovery::Queued { inbox_cursor } => (
-                Some(usize::try_from(inbox_cursor).map_err(|_| {
-                    CoreError::Invalid("resident inbox cursor exceeds usize".to_string())
-                })?),
-                true,
-            ),
-            ResidentRecovery::AbortedRunning {
-                inbox_cursor,
-                queued_after,
-            } => (
-                Some(usize::try_from(inbox_cursor).map_err(|_| {
-                    CoreError::Invalid("resident inbox cursor exceeds usize".to_string())
-                })?),
-                queued_after,
-            ),
-        };
-        let mut state = self.lock();
-        let slot = state
-            .residents
-            .get_mut(&session)
-            .ok_or_else(|| CoreError::Invalid("resident recovery slot missing".to_string()))?;
-        if slot.claim != Some(expected) {
-            return Err(CoreError::Invalid(
-                "resident recovery claim changed before replacement".to_string(),
-            ));
-        }
-        slot.claim = Some(recovered);
-        if matches!(disposition, ResidentRecovery::AbortedRunning { .. }) {
-            slot.initial_prompt = None;
-        }
-        if let Some(cursor) = cursor {
-            slot.cursor = cursor;
-        }
-        slot.pending |= pending;
-        Ok(())
-    }
-
-    fn remove_slot(&self, session: SessionId, claim: Option<&ActorClaim>) {
-        {
-            let mut state = self.lock();
-            let std::collections::hash_map::Entry::Occupied(entry) = state.residents.entry(session)
-            else {
-                return;
-            };
-            if entry.get().claim.as_ref() != claim {
-                return;
-            }
-            let slot = entry.remove();
-            if slot.done.borrow().is_none() {
-                slot.done.send_replace(Some(Ok(())));
-            }
-            if slot.status == SlotStatus::Busy {
-                state.busy = state.busy.saturating_sub(1);
-            }
-            if state.main_session == Some(session) {
-                state.main_session = None;
-            }
-        }
-        self.forget_episode(session, claim);
-    }
-
     fn forget_episode(&self, session: SessionId, claim: Option<&ActorClaim>) {
         if let Some(supervisor) = self.supervisor.upgrade() {
             let mut episodes = supervisor
@@ -1939,7 +1869,7 @@ async fn initialize_episode(
 async fn episode_task(
     team: Arc<TeamActor>,
     session: SessionId,
-    mut task_claim: Option<ActorClaim>,
+    task_claim: Option<ActorClaim>,
     notify: Arc<Notify>,
     cancel: CancellationToken,
     init: Option<EpisodeInit>,
@@ -1985,8 +1915,8 @@ async fn episode_task(
             }
         }
         if !team.owns_slot(session, task_claim.as_ref()) {
-            if let Some(handle) = sidecar_handle.as_mut() {
-                let _ = handle.terminate().await;
+            if let Some(error) = stop_sidecar(&mut sidecar_handle).await {
+                tracing::warn!(%session, %error, "stale episode sidecar did not stop");
             }
             return;
         }
@@ -2052,8 +1982,8 @@ async fn episode_task(
                 _ = loss_token.cancelled() => {
                     sidecar_tools = Arc::from([]);
                     sidecar_hooks = None;
-                    if let Some(mut handle) = sidecar_handle.take() {
-                        let _ = handle.terminate().await;
+                    if let Some(error) = stop_sidecar(&mut sidecar_handle).await {
+                        tracing::warn!(%session, %error, "idle sidecar did not stop");
                     }
                     continue;
                 }
@@ -2075,33 +2005,11 @@ async fn episode_task(
                     if sidecar_handle
                         .as_ref()
                         .is_some_and(|cached| !cached.is_healthy())
-                        && let Some(mut stale_handle) = sidecar_handle.take()
                     {
                         sidecar_tools = Arc::from([]);
                         sidecar_hooks = None;
-                        if let Err(err) = stale_handle.terminate().await {
-                            if !team.owns_slot(session, task_claim.as_ref()) {
-                                continue;
-                            }
-                            let reason = format!("turn error: {err}");
-                            let finalized = archive_stopped_agent(
-                                &team.engine,
-                                team.root,
-                                &handle,
-                                session,
-                                claim.as_ref(),
-                                ArchiveReason::Killed,
-                                MemberRunStatus::Failed,
-                                FinishCause::Other,
-                                &reason,
-                            )
-                            .await;
-                            if finalized.is_ok() {
-                                team.remove_slot(session, task_claim.as_ref());
-                                return;
-                            }
-                            team.complete_episode(session, task_claim.as_ref(), finalized);
-                            return;
+                        if let Some(error) = stop_sidecar(&mut sidecar_handle).await {
+                            tracing::warn!(%session, %error, "idle sidecar did not stop");
                         }
                     }
                     if sidecar_handle.is_none()
@@ -2159,223 +2067,87 @@ async fn episode_task(
                             None => turn.await,
                         }
                     });
-                    let mut completion = Box::pin(async {
-                        if let Some(loss_token) = loss_token {
-                            tokio::select! {
-                                biased;
-                                _ = loss_token.cancelled() => {
-                                    turn_cancel.cancel();
-                                    (run.as_mut().await.and(Err(CoreError::Cancelled)), true)
-                                }
-                                result = &mut run => (result, false),
-                            }
-                        } else {
-                            (run.as_mut().await, false)
+                    let loss = async {
+                        match loss_token {
+                            Some(token) => token.cancelled().await,
+                            None => std::future::pending().await,
                         }
-                    });
-                    let (turn_result, sidecar_lost) = tokio::select! {
-                        result = &mut completion => result,
-                        _ = cancel.cancelled() => {
-                            if team.lock().residents.get(&session).is_none_or(|slot| slot.ending.is_none()) {
-                                team.kill(Ending::Shutdown(FinishCause::Shutdown)).await;
+                    };
+                    let mut sidecar_lost = false;
+                    let result = tokio::select! {
+                        biased;
+                        () = loss => {
+                            sidecar_lost = true;
+                            turn_cancel.cancel();
+                            if let Some(slot) = team.lock().residents.get_mut(&session).filter(|slot| slot.claim == task_claim) {
+                                slot.request_end(&team.engine, session, Ending::Failed("activation sidecar lost".into()));
                             }
-                            let ending = team.lock().residents.get(&session).and_then(|slot| slot.ending.clone());
-                            if let Some(ending) = ending {
-                                match tokio::time::timeout(DRAIN_DEADLINE, &mut completion).await {
-                                    Ok(result) => result,
-                                    Err(_) => {
-                                        let close = async {
-                                            if let Some(claim) = claim.as_ref() {
-                                                team.engine.close_resident_turn(claim, ending.cause()).await?;
+                            None
+                        }
+                        _ = cancel.cancelled() => None,
+                        result = &mut run => Some(result),
+                    };
+                    let turn_result = match result {
+                        Some(result) => result,
+                        None => {
+                            let cause = team
+                                .lock()
+                                .residents
+                                .get(&session)
+                                .and_then(|slot| slot.ending.as_ref().map(Ending::cause))
+                                .unwrap_or(FinishCause::Shutdown);
+                            // Poll the own turn before any ending writes: it can
+                            // hold the connection those writes would need.
+                            match tokio::time::timeout(DRAIN_DEADLINE, &mut run).await {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    let close = async {
+                                        if let Some(claim) = claim.as_ref() {
+                                            team.engine.close_resident_turn(claim, cause).await?;
+                                        }
+                                        Ok::<(), CoreError>(())
+                                    };
+                                    // Closing shares the turn's message lock. Keep
+                                    // polling its owner until close finishes.
+                                    tokio::select! {
+                                        result = &mut run => result,
+                                        result = close => {
+                                            if let Err(error) = result {
+                                                tracing::error!(%session, ?claim, %error, "episode straggler close failed");
                                             }
-                                            Ok::<(), CoreError>(())
-                                        };
-                                        // Keep polling the turn while its message lock is acquired;
-                                        // it may itself be finishing a fenced append under that lock.
-                                        tokio::select! {
-                                            result = &mut completion => result,
-                                            result = close => {
-                                                if let Err(error) = result {
-                                                    tracing::error!(%session, ?claim, %error, "episode straggler close failed");
-                                                }
-                                                (Err(CoreError::Cancelled), false)
-                                            }
+                                            Err(CoreError::Cancelled)
                                         }
                                     }
                                 }
-                            } else {
-                                completion.as_mut().await
                             }
                         }
                     };
-                    drop(completion);
                     drop(run);
-                    if !team.owns_slot(session, task_claim.as_ref()) {
-                        continue;
+                    if cancel.is_cancelled()
+                        && team
+                            .lock()
+                            .residents
+                            .get(&session)
+                            .is_none_or(|slot| slot.ending.is_none())
+                    {
+                        team.kill(Ending::Shutdown(FinishCause::Shutdown)).await;
                     }
-                    let running_loss = claim.is_some()
-                        && matches!(&turn_result, Err(CoreError::Cancelled))
-                        && (sidecar_lost
-                            || sidecar_handle
-                                .as_ref()
-                                .is_some_and(|cached| !cached.is_healthy()));
-                    if running_loss {
-                        let Some(old_claim) = claim else {
-                            team.finish_run(session, task_claim.as_ref());
-                            continue;
+                    sidecar_lost |= sidecar_handle
+                        .as_ref()
+                        .is_some_and(|cached| !cached.is_healthy());
+                    if sidecar_lost {
+                        let Some(claim) = claim.as_ref() else {
+                            unreachable!("only member episodes have sidecars");
                         };
-                        let recovered = match team
-                            .engine
-                            .store()
-                            .recover_claim(old_claim.actor_id, old_claim.owner_run_id)
-                            .await
-                        {
-                            Ok(recovered) => recovered,
-                            Err(error) => {
-                                if !team.owns_slot(session, task_claim.as_ref()) {
-                                    continue;
-                                }
-                                if let Some(mut stale_handle) = sidecar_handle.take() {
-                                    let _ = stale_handle.terminate().await;
-                                }
-                                let reason = format!("resident recovery failed: {error}");
-                                match archive_stopped_agent(
-                                    &team.engine,
-                                    team.root,
-                                    &handle,
-                                    old_claim.actor_id,
-                                    Some(&old_claim),
-                                    ArchiveReason::Killed,
-                                    MemberRunStatus::Failed,
-                                    FinishCause::Other,
-                                    &reason,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        team.remove_slot(session, task_claim.as_ref());
-                                        return;
-                                    }
-                                    Err(error) => {
-                                        team.complete_episode(
-                                            session,
-                                            task_claim.as_ref(),
-                                            Err(error),
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
-                        };
-                        if !team.owns_slot(session, task_claim.as_ref()) {
-                            continue;
-                        }
-                        sidecar_tools = Arc::from([]);
-                        sidecar_hooks = None;
-                        let termination_error = match sidecar_handle.take() {
-                            Some(mut stale_handle) => {
-                                stale_handle.terminate().await.err().map(|error| {
-                                    CoreError::Invalid(format!(
-                                        "terminate resident sidecar during recovery: {error}"
-                                    ))
-                                })
-                            }
-                            None => Some(CoreError::Invalid(
-                                "resident sidecar disappeared during recovery".to_string(),
-                            )),
-                        };
-                        if !team.owns_slot(session, task_claim.as_ref()) {
-                            continue;
-                        }
-                        let report = match team
-                            .engine
-                            .recover_resident_actor(&recovered, team.root, &handle)
-                            .await
-                        {
-                            Ok(report) => report,
-                            Err(error) => {
-                                if !team.owns_slot(session, task_claim.as_ref()) {
-                                    continue;
-                                }
-                                let claim_replaced = team
-                                    .replace_recovered_claim(
-                                        session,
-                                        old_claim,
-                                        recovered.claim,
-                                        ResidentRecovery::Idle,
-                                    )
-                                    .is_ok();
-                                if !claim_replaced {
-                                    continue;
-                                }
-                                task_claim = Some(recovered.claim);
-                                let reason = format!("resident recovery failed: {error}");
-                                match archive_stopped_agent(
-                                    &team.engine,
-                                    team.root,
-                                    &handle,
-                                    recovered.claim.actor_id,
-                                    Some(&recovered.claim),
-                                    ArchiveReason::Killed,
-                                    MemberRunStatus::Failed,
-                                    FinishCause::Other,
-                                    &reason,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        team.remove_slot(session, task_claim.as_ref());
-                                        return;
-                                    }
-                                    Err(error) => {
-                                        team.complete_episode(
-                                            session,
-                                            task_claim.as_ref(),
-                                            Err(error),
-                                        );
-                                        return;
-                                    }
-                                }
-                            }
-                        };
-                        if let Err(_error) = team.replace_recovered_claim(
-                            session,
-                            old_claim,
-                            recovered.claim,
-                            report.work,
-                        ) {
-                            team.finish_run(session, task_claim.as_ref());
-                            return;
-                        }
-                        task_claim = Some(recovered.claim);
-                        if termination_error.is_some() {
-                            match archive_stopped_agent(
-                                &team.engine,
-                                team.root,
-                                &handle,
-                                recovered.claim.actor_id,
-                                Some(&recovered.claim),
-                                ArchiveReason::Killed,
-                                MemberRunStatus::Cancelled,
-                                FinishCause::UserCancel,
-                                "resident stopped",
-                            )
-                            .await
-                            {
-                                Ok(()) => {
-                                    // A missing slot means local cleanup already completed; the
-                                    // durable finalizer has already made the stop terminal.
-                                    team.remove_slot(session, task_claim.as_ref());
-                                    return;
-                                }
-                                Err(error) => {
-                                    team.complete_episode(session, task_claim.as_ref(), Err(error));
-                                    return;
-                                }
-                            }
-                        }
-                        team.finish_run(session, task_claim.as_ref());
-                        continue;
+                        finish_episode(
+                            &team,
+                            claim,
+                            Ending::Failed("activation sidecar lost".into()),
+                            &mut sidecar_handle,
+                            None,
+                        )
+                        .await;
+                        return;
                     }
                     // Flip the slot idle BEFORE recording the roster activity:
                     // observers gate on "roster says idle" (the report gate),
@@ -2520,7 +2292,7 @@ async fn commit_episode_ending(
         }
         _ => team.engine.degraded_terminal_handoff(child).await,
     };
-    let (reason, status, report, mut note, check_gate) = match ending {
+    let (reason, status, mut report, mut note, check_gate) = match ending {
         Ending::Reported(pending) => (
             ArchiveReason::Reported,
             match pending.outcome {
@@ -2545,6 +2317,9 @@ async fn commit_episode_ending(
     };
     if let Some(error) = sidecar_error {
         note.push_str(&format!("; sidecar did not stop: {error}"));
+        if let Some((_, report)) = &mut report {
+            report.clone_from(&note);
+        }
     }
     let (outcome, envelopes, admissions) = team
         .engine
@@ -2596,15 +2371,7 @@ async fn finish_episode(
             ending = slot.ending.get_or_insert(ending).clone();
         }
     }
-    let sidecar_error = if let Some(mut handle) = sidecar.take() {
-        match tokio::time::timeout(Duration::from_secs(5), handle.terminate()).await {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
-            Err(_) => Some("deadline exceeded".into()),
-        }
-    } else {
-        None
-    };
+    let sidecar_error = stop_sidecar(sidecar).await;
     if committed.is_some()
         && let Some(error) = &sidecar_error
     {
@@ -2634,54 +2401,16 @@ async fn finish_episode(
     }
 }
 
-/// Explicit stop uses the same terminal transaction without parent report mail.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn archive_stopped_agent(
-    engine: &SessionEngine,
-    root: SessionId,
-    canonical: &str,
-    child: SessionId,
-    claim: Option<&ActorClaim>,
-    reason: ArchiveReason,
-    member_status: MemberRunStatus,
-    cause: FinishCause,
-    note: &str,
-) -> Result<(), CoreError> {
-    if child == root || canonical == scope::ROOT_HANDLE {
-        return Err(CoreError::Invalid(
-            "the team lead is never archived".to_string(),
-        ));
-    }
-    let handoff = engine.degraded_terminal_handoff(child).await;
+/// A lost or ending sidecar cannot hold the episode beyond its stop deadline.
+const SIDECAR_STOP_DEADLINE: Duration = Duration::from_secs(5);
 
-    let (_, envelopes, admissions) = engine
-        .store()
-        .finalize_resident_archive(
-            hya_store::ResidentArchiveOwner::Claim(claim.ok_or_else(|| {
-                CoreError::Invalid("sidecar recovery requires its episode claim".into())
-            })?),
-            root,
-            canonical,
-            hya_store::ResidentArchive {
-                actor: child,
-                generation: handoff.generation,
-                doc: handoff.doc,
-                degraded: handoff.degraded,
-                reason,
-                note: note.into(),
-                member_status,
-                report: None,
-                check_gate: false,
-                expected_work: None,
-            },
-            cause,
-        )
-        .await
-        .inspect_err(|error| {
-            tracing::error!(session = %child, %error, "resident terminal transition failed");
-        })?;
-    engine.publish_resident_finalization((envelopes, admissions));
-    Ok(())
+async fn stop_sidecar(sidecar: &mut Option<Box<dyn SidecarHandle>>) -> Option<String> {
+    let mut handle = sidecar.take()?;
+    match tokio::time::timeout(SIDECAR_STOP_DEADLINE, handle.terminate()).await {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error.to_string()),
+        Err(_) => Some("deadline exceeded".into()),
+    }
 }
 
 /// One resolved `archive`/`wait` target inside a team.

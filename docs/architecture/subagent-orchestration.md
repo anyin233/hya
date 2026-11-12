@@ -709,8 +709,8 @@ The task flushes its current turn before archiving. Startup and turn errors end
 with `SubagentReported { outcome: failed }`, parent DM mail, a degraded handoff,
 and `AgentArchived { reason: reported }`. Parent/user/Workflow archives instead
 write `MemberFinished { status: cancelled }` and reason `archived_by_parent`,
-without report mail. Team kill, teardown and shutdown retain their separate
-internal finalizer pending their lifecycle conversion.
+without report mail. Team kill, teardown, shutdown and sidecar loss all use
+this same episode-owned ending sequence.
 
 For example, `archive({"target":"main/hya-task-scout","reason":"stop review"})`
 requests that member's ending; `send` to its DM can revive it afterward. A refused
@@ -797,3 +797,21 @@ registration envelopes before the episode's terminal envelopes. Cancellation
 during initialization returns a failed spawn outcome. Archive publication occurs
 after the episode leaves memory and before completion is resolved, preventing a
 new registration from overtaking the old archive on the bus.
+
+### Sidecar loss during an activation
+
+The episode owns the turn future until it completes. Sidecar loss cancels the
+turn's child token, requests a failed ending, and awaits the cancelled result for
+up to five seconds. At that deadline it closes a straggler's message under the
+same claim before dropping the future. It then stops the sidecar within another
+five seconds and commits the failure report and parent DM mail, handoff, archive
+and claim release. `AgentArchived` is published only after the episode has left
+memory. A slow or failed sidecar stop adds its diagnostic to the ending note.
+
+The terminal failure note is `activation sidecar lost`, the member status and
+report outcome are `failed`, and the archive reason is `reported`. To continue,
+the parent sends mail to that member, starting a new episode. No in-process
+claim recovery occurs. An idle sidecar loss discards only the handle; the next
+wake starts a fresh sidecar within the same episode, without a failure report.
+Startup recovery after process restart remains unchanged. These rules add no
+public tool parameters or events.

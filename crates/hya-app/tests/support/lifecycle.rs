@@ -1190,3 +1190,60 @@ impl hya_core::SidecarHandle for EndingSidecar {
         }
     }
 }
+
+/// Sidecar loss and handle disposal observed through the public activation seam.
+#[derive(Clone)]
+pub struct LossSidecar {
+    pub loss: tokio_util::sync::CancellationToken,
+    pub starts: Arc<std::sync::atomic::AtomicUsize>,
+    pub drops: Arc<std::sync::atomic::AtomicUsize>,
+    pub dropped: Arc<tokio::sync::Notify>,
+}
+
+struct LossHandle {
+    probe: LossSidecar,
+    loss: tokio_util::sync::CancellationToken,
+}
+
+impl Drop for LossHandle {
+    fn drop(&mut self) {
+        self.probe
+            .drops
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.probe.dropped.notify_one();
+    }
+}
+
+#[async_trait]
+impl hya_core::BoundSidecarFactory for LossSidecar {
+    async fn start(
+        &self,
+        _: hya_core::SidecarStart,
+    ) -> Result<Box<dyn hya_core::SidecarHandle>, hya_core::CoreError> {
+        let first = self
+            .starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0;
+        Ok(Box::new(LossHandle {
+            probe: self.clone(),
+            loss: if first {
+                self.loss.clone()
+            } else {
+                tokio_util::sync::CancellationToken::new()
+            },
+        }))
+    }
+}
+
+#[async_trait]
+impl hya_core::SidecarHandle for LossHandle {
+    async fn ready(&mut self) -> Result<(), hya_core::CoreError> {
+        Ok(())
+    }
+    async fn shutdown(&mut self) -> Result<(), hya_core::CoreError> {
+        Ok(())
+    }
+    fn loss_token(&self) -> Option<tokio_util::sync::CancellationToken> {
+        Some(self.loss.clone())
+    }
+}

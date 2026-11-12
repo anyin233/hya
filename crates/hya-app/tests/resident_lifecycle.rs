@@ -160,8 +160,8 @@ async fn observe_sidecar_loss() -> (
 }
 
 #[tokio::test]
-async fn i8_sidecar_loss_flushes_cooperative_stream_before_recovery() {
-    let test = "i8_sidecar_loss_flushes_cooperative_stream_before_recovery";
+async fn i8_sidecar_loss_flushes_cooperative_stream_before_failure() {
+    let test = "i8_sidecar_loss_flushes_cooperative_stream_before_failure";
     if support::lifecycle::isolated_sidecar_config(test) {
         return;
     }
@@ -181,7 +181,6 @@ async fn i8_sidecar_loss_flushes_cooperative_stream_before_recovery() {
 }
 
 #[tokio::test]
-#[ignore = "M4-4: I6"]
 async fn i6_sidecar_loss_reports_failure_to_parent() {
     let test = "i6_sidecar_loss_reports_failure_to_parent";
     if support::lifecycle::isolated_sidecar_config(test) {
@@ -229,18 +228,55 @@ async fn blocked_sidecar() -> (
 }
 
 #[tokio::test]
-#[ignore = "M4-4: I2"]
 async fn i2_archive_bounds_stuck_turn_and_sidecar_termination() {
     let test = "i2_archive_bounds_stuck_turn_and_sidecar_termination";
     if support::lifecycle::isolated_sidecar_config(test) {
         return;
     }
     let (mut h, plugin, mut control, child, handle) = blocked_sidecar().await;
+    let epoch = h.claim_epoch(child).await;
+    let began = std::time::Instant::now();
+    let mut events = h.engine.bus().subscribe();
     let mut ending = h.start_tool("archive", json!({"target":handle})).await;
-    let bounded = tokio::time::timeout(support::lifecycle::BOUND, &mut ending)
-        .await
-        .is_ok();
+    let (completion, closed_after) = tokio::join!(
+        tokio::time::timeout(support::lifecycle::BOUND, &mut ending),
+        tokio::time::timeout(support::lifecycle::BOUND, async {
+            loop {
+                let event = events.recv().await.unwrap();
+                if matches!(event.event, Event::MessageFinished {
+                    session, role: hya_proto::Role::Assistant,
+                    finish: hya_proto::FinishReason::Cancelled,
+                    cause: Some(hya_proto::FinishCause::Archived), ..
+                } if session == child)
+                {
+                    break began.elapsed();
+                }
+            }
+        })
+    );
+    let bounded = completion.is_ok();
     let root = h.engine.read_projection(h.root).await.unwrap();
+    assert!(
+        closed_after.unwrap() >= std::time::Duration::from_secs(5),
+        "straggler was dropped before its cancellation deadline"
+    );
+    assert_eq!(
+        h.claim_epoch(child).await,
+        epoch,
+        "straggler close must retain the episode claim"
+    );
+    assert!(!h.engine.turn_active(child));
+    let close = h.engine.replay(child).await.unwrap();
+    assert!(close.iter().any(|e| matches!(
+        &e.event,
+        Event::MessageFinished {
+            role: hya_proto::Role::Assistant,
+            finish: hya_proto::FinishReason::Cancelled,
+            cause: Some(hya_proto::FinishCause::Archived),
+            ..
+        }
+    )));
+    assert_eq!(h.built.resident_supervisor().episode_count(), 0);
     plugin.gate.release();
     control.shutdown().await;
     drop(control);
@@ -2330,4 +2366,110 @@ async fn i18_shutdown_reconciles_an_already_orphaned_member() {
             .contains(&child)
     );
     assert_eq!(h.claim_epoch(child).await, epoch + 1);
+}
+
+#[tokio::test]
+async fn i6_idle_sidecar_loss_drops_handle_and_next_wake_starts_fresh() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = Harness::new().await;
+    let probe = Arc::new(support::lifecycle::LossSidecar {
+        loss: tokio_util::sync::CancellationToken::new(),
+        starts: Arc::new(AtomicUsize::new(0)),
+        drops: Arc::new(AtomicUsize::new(0)),
+        dropped: Arc::new(tokio::sync::Notify::new()),
+    });
+    let (child, handle) = h
+        .spawn_with_sidecar(vec![Round::text("first activation")], probe.clone())
+        .await
+        .unwrap();
+    h.idle(child, &handle).await;
+    let epoch = h.claim_epoch(child).await;
+    probe.loss.cancel();
+    tokio::time::timeout(support::lifecycle::BOUND, probe.dropped.notified())
+        .await
+        .unwrap();
+    assert_eq!(probe.drops.load(Ordering::SeqCst), 1);
+    let events = h.engine.replay(h.root).await.unwrap();
+    assert!(!events.iter().any(|e| matches!(&e.event, Event::SubagentReported { child: reported, .. } if *reported == child)));
+    assert!(
+        h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    let marker = h
+        .provider
+        .script(vec![Round::text("fresh sidecar activation")]);
+    h.mail(&handle, marker).await.unwrap();
+    h.until(child, |p| p.session.messages.iter().any(|m| m.parts.iter().any(|part| matches!(part, hya_proto::PartProjection::Text { text, .. } if text == "fresh sidecar activation")))).await;
+    h.idle(child, &handle).await;
+    assert_eq!(probe.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(h.claim_epoch(child).await, epoch);
+    h.shutdown().await;
+    assert_eq!(probe.drops.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn i8_running_sidecar_loss_removes_episode_before_archive_publication() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = Harness::new().await;
+    let probe = Arc::new(support::lifecycle::LossSidecar {
+        loss: tokio_util::sync::CancellationToken::new(),
+        starts: Arc::new(AtomicUsize::new(0)),
+        drops: Arc::new(AtomicUsize::new(0)),
+        dropped: Arc::new(tokio::sync::Notify::new()),
+    });
+    let gate = Arc::new(Gate::default());
+    let mut bus = h.engine.bus().subscribe();
+    let (child, handle) = h
+        .spawn_with_sidecar(
+            vec![Round::text("flush before failure").stream_gated(gate.clone())],
+            probe.clone(),
+        )
+        .await
+        .unwrap();
+    gate.arrived().await;
+    let epoch = h.claim_epoch(child).await;
+    probe.loss.cancel();
+    tokio::time::timeout(support::lifecycle::BOUND, async {
+        loop {
+            let event = bus.recv().await.unwrap();
+            if matches!(event.event, Event::AgentArchived { child: archived, .. } if archived == child) {
+                assert_eq!(h.built.resident_supervisor().episode_count(), 0);
+                assert_eq!(probe.drops.load(Ordering::SeqCst), 1);
+                break;
+            }
+        }
+    }).await.unwrap();
+    assert!(
+        !h.engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&child)
+    );
+    assert_eq!(
+        h.claim_epoch(child).await,
+        epoch,
+        "sidecar loss must not recover the claim"
+    );
+    let root = h.engine.replay(h.root).await.unwrap();
+    assert_eq!(root.iter().filter(|e| matches!(&e.event, Event::SubagentReported { child: reported, outcome: hya_proto::ReportOutcome::Failed, report, .. } if *reported == child && report == "activation sidecar lost")).count(), 1);
+    assert_eq!(root.iter().filter(|e| matches!(&e.event, Event::MailSent { from, body, .. } if from == &handle && body.contains("activation sidecar lost"))).count(), 1);
+    let events = h.engine.replay(child).await.unwrap();
+    assert!(events.iter().any(|e| matches!(
+        &e.event,
+        Event::MessageFinished {
+            role: hya_proto::Role::Assistant,
+            finish: hya_proto::FinishReason::Cancelled,
+            ..
+        }
+    )));
+    assert!(events.iter().any(
+        |e| matches!(&e.event, Event::TextReplace { text, .. } if text == "flush before failure")
+    ));
+    h.shutdown().await;
 }

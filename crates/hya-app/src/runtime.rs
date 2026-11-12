@@ -8027,7 +8027,7 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn resident_running_sidecar_loss_fences_epoch_and_resumes_queued_mail_once() {
+    async fn resident_running_sidecar_loss_reports_failure_before_mail_revives_new_epoch() {
         let env_root = tempdir();
         let workdir = env_root.join("agent-workdir");
         let env_guard = EnvGuard::with_home(&env_root, &workdir);
@@ -8038,13 +8038,6 @@ for line in sys.stdin:
                 .expect("resident running loss fixture catalog"),
         ));
         let provider = FakeProvider::scripted_turns(vec![
-            vec![
-                FakeStep::ToolCall {
-                    name: "echo".to_string(),
-                    input: json!({}),
-                },
-                FakeStep::Finish(FinishReason::ToolCalls),
-            ],
             vec![
                 FakeStep::ToolCall {
                     name: "echo".to_string(),
@@ -8088,7 +8081,6 @@ for line in sys.stdin:
         let old_generation = binding.generation();
         let staging_root = tempdir();
         let marker_socket = temp_socket("rrlm");
-        let incarnation_claim = staging_root.join("resident-running-loss-incarnation");
         let release_socket = temp_socket("rrlr");
         let marker_listener = std::os::unix::net::UnixListener::bind(&marker_socket)
             .expect("bind resident running loss marker listener");
@@ -8096,22 +8088,12 @@ for line in sys.stdin:
             .expect("bind resident running loss release listener");
         let marker_literal = serde_json::to_string(marker_socket.to_string_lossy().as_ref())
             .expect("encode resident running loss marker socket");
-        let claim_literal = serde_json::to_string(incarnation_claim.to_string_lossy().as_ref())
-            .expect("encode resident running loss incarnation claim");
         let release_literal = serde_json::to_string(release_socket.to_string_lossy().as_ref())
             .expect("encode resident running loss release socket");
         let fixture = r#"
 import json, os, socket, sys
 marker_socket = __MARKER_SOCKET__
-claim_path = __CLAIM_PATH__
 release_socket = __RELEASE_SOCKET__
-try:
-    fd = os.open(claim_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    os.close(fd)
-    incarnation = 1
-except FileExistsError:
-    incarnation = 2
-first_call = True
 def send_marker(label):
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(marker_socket)
@@ -8129,30 +8111,19 @@ for line in sys.stdin:
             "workspaceAdapters": []
         }
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
-        if incarnation == 2:
-            send_marker("second")
     elif method == "tool/call":
-        if incarnation == 1 and first_call:
-            first_call = False
-            send_marker("first")
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(release_socket)
-            sock.recv(1)
-            sock.close()
-            sys.stdout.close()
-            break
-        result = {
-            "ok": True,
-            "output": {"title": "", "output": str(os.getpid()), "metadata": {}},
-            "time_ms": 0
-        }
-        print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+        send_marker("first")
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(release_socket)
+        sock.recv(1)
+        sock.close()
+        sys.stdout.close()
+        break
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": True}), flush=True)
         break
 "#
         .replace("__MARKER_SOCKET__", &marker_literal)
-        .replace("__CLAIM_PATH__", &claim_literal)
         .replace("__RELEASE_SOCKET__", &release_literal);
         let environment = BundleSidecarEnvironment::from_command(
             vec!["python3".to_string(), "-c".to_string(), fixture],
@@ -8252,12 +8223,11 @@ for line in sys.stdin:
                 .expect("first resident running marker must arrive")
                 .expect("first resident running marker task must join")
                 .expect("first resident running marker must be readable");
-        let (first_label, first_pid) = first_marker
+        let (first_label, _first_pid) = first_marker
             .trim()
             .split_once(':')
             .expect("first resident running marker must contain label and pid");
         assert_eq!(first_label, "first");
-        let first_pid = first_pid.to_string();
 
         engine
             .mail_send(
@@ -8268,11 +8238,17 @@ for line in sys.stdin:
             )
             .await
             .expect("send queued resident running mail");
+        // Revival of executable capabilities is M4-6; this new episode needs
+        // only the replacement agent's prompt and binding.
+        let mut replacement_bundle = materialized_bundle("resident-running-replacement");
+        replacement_bundle.tools.clear();
+        replacement_bundle.hooks.clear();
+        replacement_bundle.extensions.clear();
+        replacement_bundle.agents[0].resource_view = ResourceView::default();
+        replacement_bundle.agents[0].hook_refs.clear();
         let replacement = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle(
-                "resident-running-replacement",
-            )]))
-            .expect("replacement resident running catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([replacement_bundle]))
+                .expect("replacement resident running catalog"),
         ));
         let replacement_generation = engine
             .runtime_registry()
@@ -8285,13 +8261,6 @@ for line in sys.stdin:
             .expect("bind replacement resident running generation");
         assert_eq!(fresh_binding.generation(), replacement_generation);
 
-        let second_marker_task = tokio::task::spawn_blocking(move || {
-            use std::io::BufRead as _;
-            let (stream, _) = marker_listener.accept()?;
-            let mut line = String::new();
-            std::io::BufReader::new(stream).read_line(&mut line)?;
-            Ok::<String, std::io::Error>(line)
-        });
         let mut release_stream =
             tokio::time::timeout(std::time::Duration::from_secs(5), release_task)
                 .await
@@ -8303,42 +8272,65 @@ for line in sys.stdin:
             .write_all(b"x")
             .expect("release first resident sidecar exactly once");
 
-        let second_marker =
-            tokio::time::timeout(std::time::Duration::from_secs(5), second_marker_task)
-                .await
-                .expect("second resident running marker must arrive")
-                .expect("second resident running marker task must join")
-                .expect("second resident running marker must be readable");
-        let (second_label, second_pid) = second_marker
-            .trim()
-            .split_once(':')
-            .expect("second resident running marker must contain label and pid");
-        assert_eq!(second_label, "second");
-        let second_pid = second_pid.to_string();
-
-        let observed_finishes = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            let mut finishes = Vec::new();
-            while finishes.len() < 2 {
+        tokio::time::timeout(Duration::from_secs(11), async {
+            loop {
                 let envelope = bus.recv().await.expect("resident running bus remains open");
-                if let Event::MessageFinished {
-                    session,
-                    role: hya_proto::Role::Assistant,
-                    finish,
-                    ..
-                } = &envelope.event
-                    && *session == child
-                {
-                    finishes.push(*finish);
+                if matches!(envelope.event, Event::AgentArchived { child: archived, .. } if archived == child) {
+                    break;
                 }
             }
-            finishes
-        })
-        .await
-        .expect("resident running child finishes must arrive");
+        }).await.expect("running loss must end the episode");
+        assert_eq!(supervisor.episode_count(), 0);
+        assert!(
+            !engine
+                .store()
+                .active_actor_ids()
+                .await
+                .unwrap()
+                .contains(&child)
+        );
+        let root_events = engine.replay(lead).await.unwrap();
+        assert_eq!(root_events.iter().filter(|e| matches!(&e.event,
+            Event::SubagentReported { child: reported, outcome: hya_proto::ReportOutcome::Failed, report, .. }
+            if *reported == child && report.contains("activation sidecar lost")
+        )).count(), 1);
+        let root = engine.read_projection(lead).await.unwrap();
         assert_eq!(
-            observed_finishes,
-            vec![FinishReason::Cancelled, FinishReason::Stop],
-            "running loss must cancel the old turn before queued mail stops"
+            root.team.archived[&handle].reason,
+            hya_proto::ArchiveReason::Reported
+        );
+        assert_eq!(
+            root_events
+                .iter()
+                .filter(|e| matches!(&e.event,
+                    Event::ResidentWorkStarted { actor_session, .. } if *actor_session == child
+                ))
+                .count(),
+            1,
+            "queued mail must not recover the failed episode in process"
+        );
+
+        engine
+            .mail_send(
+                lead,
+                MailEndpoint::Handle(handle.clone()),
+                MailKind::Message,
+                "new episode after resident sidecar loss".into(),
+            )
+            .await
+            .expect("mail must revive the failed member");
+        let revived = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let envelope = bus.recv().await.expect("revived resident bus remains open");
+                if matches!(envelope.event, Event::MessageFinished { session, role: hya_proto::Role::Assistant, finish: FinishReason::Stop, .. } if session == child) {
+                    break;
+                }
+            }
+        }).await;
+        assert!(
+            revived.is_ok(),
+            "revived episode failed: {:?}",
+            engine.read_projection(child).await.unwrap()
         );
 
         let child_events = engine
@@ -8361,7 +8353,7 @@ for line in sys.stdin:
         assert_eq!(
             durable_finishes,
             vec![FinishReason::Cancelled, FinishReason::Stop],
-            "durable child finishes must preserve cancellation before queued stop"
+            "durable child finishes must preserve the failed episode before revival"
         );
         let assistant_messages = child_events
             .iter()
@@ -8402,12 +8394,10 @@ for line in sys.stdin:
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(tool_results.len(), 1);
-        assert_eq!(
-            tool_results[0].get("output").and_then(Value::as_str),
-            Some(second_pid.as_str())
+        assert!(
+            tool_results.is_empty(),
+            "the lost sidecar must not publish a successful tool result"
         );
-        assert_ne!(first_pid, second_pid);
 
         let tool_errors = child_events
             .iter()
@@ -8422,7 +8412,7 @@ for line in sys.stdin:
             .collect::<Vec<_>>();
         assert_eq!(tool_errors.len(), 1);
         // Sidecar loss cancels the running turn; the tool reports its own
-        // cancelled result before the stale claim is fenced.
+        // cancelled result before the episode releases its unchanged claim.
         assert_eq!(
             tool_errors[0]
                 .0
@@ -8466,12 +8456,10 @@ for line in sys.stdin:
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(!recorded_generations.is_empty());
-        assert!(
-            recorded_generations
-                .iter()
-                .all(|generation| *generation == old_generation),
-            "resident queued work must retain its original binding generation"
+        assert_eq!(
+            recorded_generations,
+            vec![old_generation, replacement_generation],
+            "revival starts a new episode with the current binding"
         );
         assert_eq!(
             root_events
@@ -8488,9 +8476,12 @@ for line in sys.stdin:
         );
 
         supervisor
-            .team_cancel(lead)
-            .expect("resident running team cancel token")
-            .cancel();
+            .end_member(lead, &handle)
+            .await
+            .expect("archive revived resident");
+        if let Some(cancel) = supervisor.team_cancel(lead) {
+            cancel.cancel();
+        }
         drop(env_guard);
         std::fs::remove_dir_all(staging_root).expect("cleanup resident running loss staging root");
         std::fs::remove_dir_all(env_root).expect("cleanup resident running loss env root");
