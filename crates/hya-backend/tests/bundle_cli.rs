@@ -2467,3 +2467,31 @@ resources:
     fs::remove_dir_all(&data_root)?;
     Ok(())
 }
+
+#[test]
+fn healthy_install_activates_despite_unrelated_failed_process()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let daemon = BundleDaemon::start(&root)?;
+    let source = hya_bundle::BundleSource::new(
+        "dead-process",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            "kind: Bundle\nidentity: { id: acme/dead-process, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }\n",
+        )],
+    );
+    let dead = root.join("dead.hyabundle");
+    fs::write(&dead, hya_bundle::write_public_package(&source)?)?;
+    let failed = daemon.command(&["install", "-y", dead.to_str().ok_or("dead path")?])?;
+    assert!(!failed.status.success());
+    let healthy = checked_package(&root, "healthy-live", "[true]")?;
+    let installed = daemon.command(&["install", "-y", healthy.to_str().ok_or("healthy path")?])?;
+    assert_success("healthy install", &installed);
+    assert!(
+        String::from_utf8_lossy(&installed.stdout).contains("activation: active in the backend")
+    );
+    assert!(String::from_utf8_lossy(&installed.stderr).contains("acme/dead-process"));
+    drop(daemon);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

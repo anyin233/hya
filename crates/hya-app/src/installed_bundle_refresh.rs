@@ -487,11 +487,83 @@ impl InstalledBundleRefresh {
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
-        let installed_refs = installed.iter().map(Arc::as_ref).collect::<Vec<_>>();
-        let first_party_refs = first_party.iter().map(Arc::as_ref).collect::<Vec<_>>();
-        let composition = compose(
+        let previous = self.base_catalogs();
+        let mut errors = unreadable_errors;
+        let mut published = Vec::new();
+        let mut sources = BTreeMap::new();
+        let mut watched = Vec::new();
+        for catalog in installed {
+            let bundle = &catalog.bundles()[0];
+            let id = &bundle.identity().id;
+            if disabled.contains(id) {
+                published.push(catalog);
+                continue;
+            }
+            // Remember attempted config even on failure, so binds retry only
+            // when input changes. Explicit refresh forces another attempt.
+            let config = crate::bundle_runtime::BundleRuntimeConfig::capture(
+                bundle,
+                catalog.bundle_process(id),
+                config_resolver
+                    .location(id)
+                    .map_err(|error| CoreError::Invalid(error.to_string()))?,
+            );
+            if config.watched() {
+                watched.push((config.location().file().to_path_buf(), config.digest()));
+            }
+            match compose(
+                &[],
+                &[catalog.as_ref()],
+                &[],
+                &disabled,
+                &config_resolver,
+                &self.sources,
+                self.host_reads.as_ref(),
+            )
+            .await
+            {
+                Ok(composition) => {
+                    sources.extend(composition.sources);
+                    published.push(catalog);
+                }
+                Err(error) => {
+                    errors.push((id.clone(), error.to_string()));
+                    if let Some(old) = previous
+                        .installed
+                        .iter()
+                        .find(|old| old.bundles()[0].identity().id == *id)
+                    {
+                        published.push(Arc::clone(old));
+                        let cache = self.sources.lock();
+                        for key in cache.base.iter().filter(|key| key.0 == *id) {
+                            if let Some(source) = cache.entries.get(key) {
+                                sources.insert(key.clone(), source.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let installed = published;
+        let enabled = installed
+            .iter()
+            .filter(|catalog| !disabled.contains(&catalog.bundles()[0].identity().id))
+            .collect::<Vec<_>>();
+        let first_party_refs = first_party
+            .iter()
+            .filter(|catalog| {
+                let bundle = &catalog.bundles()[0];
+                !enabled.iter().any(|installed| {
+                    let installed = &installed.bundles()[0];
+                    installed.identity().id == bundle.identity().id
+                        || installed.namespace() == bundle.namespace()
+                })
+            })
+            .map(Arc::as_ref)
+            .collect::<Vec<_>>();
+        let first = compose(
             &[],
-            &installed_refs,
+            &[],
             &first_party_refs,
             &disabled,
             &config_resolver,
@@ -499,6 +571,22 @@ impl InstalledBundleRefresh {
             self.host_reads.as_ref(),
         )
         .await?;
+        sources.extend(first.sources);
+        watched.extend(first.watched);
+        let mut catalogs = enabled
+            .into_iter()
+            .map(|catalog| catalog.as_ref())
+            .collect::<Vec<_>>();
+        catalogs.extend(
+            first_party_refs
+                .into_iter()
+                .filter(|catalog| !disabled.contains(&catalog.bundles()[0].identity().id)),
+        );
+        let composition = Composition {
+            bundles: Arc::new(BundleCatalog::from_verified_catalogs(&catalogs)?),
+            sources,
+            watched,
+        };
         let static_sources = composition.runtime_sources();
         let agent_catalog = Arc::new(AgentCatalog::new(Arc::clone(&composition.bundles))?);
         runtime.refresh(|candidate| {
@@ -518,7 +606,7 @@ impl InstalledBundleRefresh {
                 installed,
                 disabled,
                 first_party,
-                unreadable_errors: unreadable_errors.clone(),
+                unreadable_errors: errors.clone(),
             });
         }
         self.initialized.store(true, Ordering::Release);
@@ -527,10 +615,10 @@ impl InstalledBundleRefresh {
         if let Some(generation) = registry_generation {
             *applied_generation = generation;
         }
-        if unreadable_errors.is_empty() {
+        if errors.is_empty() {
             Ok(true)
         } else {
-            Err(CoreError::BundleRefresh(unreadable_errors))
+            Err(CoreError::BundleRefresh(errors))
         }
     }
 
@@ -606,6 +694,10 @@ impl RuntimeCatalogRefresh for InstalledBundleRefresh {
     }
 
     async fn refresh_explicit(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        // Retry failed sources even when their inputs have not changed.
+        if !self.base_catalogs().unreadable_errors.is_empty() {
+            self.initialized.store(false, Ordering::Release);
+        }
         let changed = self.refresh_if_changed(runtime).await?;
         let base = self.base_catalogs();
         if base.unreadable_errors.is_empty() {

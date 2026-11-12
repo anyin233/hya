@@ -684,7 +684,7 @@ resources:
 }
 
 #[tokio::test]
-async fn failed_bundle_process_start_preserves_the_published_generation() {
+async fn failed_bundle_process_start_retains_only_its_source() {
     let root = temp_path("failed-process-root");
     std::fs::create_dir_all(&root).unwrap();
     let registry_path = root.join("registry.db");
@@ -759,13 +759,14 @@ for line in sys.stdin:
         vec![SourceFile::new(
             "bundle.yaml",
             br#"kind: Bundle
-identity: { id: acme/bad-process, version: 1.0.0, publisher: acme }
+identity: { id: acme/old-process, version: 2.0.0, publisher: acme }
 extensions:
   process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }
 "#,
         )],
     ))
     .unwrap();
+    registry.uninstall("acme/old-process").await.unwrap();
     registry
         .install(
             &[],
@@ -779,19 +780,57 @@ extensions:
         )
         .await
         .unwrap();
-    assert!(refresh.refresh_if_changed(&runtime).await.is_err());
-    let after = runtime.bind_turn(&root).unwrap();
-    assert_eq!(
-        before.generation(),
-        after.generation(),
-        "failed startup must never publish a partial candidate"
+    let healthy = prepare_package(BundleSource::new(
+        "healthy",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            "kind: Bundle\nidentity: { id: acme/healthy, version: 1.0.0, publisher: acme }\n",
+        )],
+    ))
+    .unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x75; 32],
+                prepared_digest: healthy.digest().into(),
+                prepared_bytes: healthy.bytes().to_vec(),
+                installed_at: 5,
+            },
+        )
+        .await
+        .unwrap();
+    let error = refresh.refresh_if_changed(&runtime).await.unwrap_err();
+    assert!(
+        matches!(error, hya_core::CoreError::BundleRefresh(ref errors) if errors.len() == 1 && errors[0].0 == "acme/old-process"),
+        "{error}"
     );
+    assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
+    let after = runtime.bind_turn(&root).unwrap();
+    assert!(after.generation() > before.generation());
     assert!(
         after
             .bundle_catalog()
             .bundles()
             .iter()
-            .all(|bundle| bundle.identity().id != "acme/bad-process")
+            .any(|bundle| bundle.identity().id == "acme/healthy")
+    );
+    assert!(
+        hya_core::RuntimeCatalogRefresh::refresh_explicit(&refresh, &runtime)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        after
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .find(|bundle| bundle.identity().id == "acme/old-process")
+            .unwrap()
+            .identity()
+            .version,
+        "1.0.0"
     );
     for (label, binding) in [("retained", &before), ("fresh", &after)] {
         let tool = binding
@@ -806,7 +845,20 @@ extensions:
         assert_eq!(output["generation"], "OLD_PROCESS");
         assert_eq!(output["input"]["phase"], label);
     }
-    registry.uninstall("acme/bad-process").await.unwrap();
+    registry.uninstall("acme/old-process").await.unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x76; 32],
+                prepared_digest: prepared.digest().into(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 6,
+            },
+        )
+        .await
+        .unwrap();
     refresh.refresh_if_changed(&runtime).await.unwrap();
     assert!(
         runtime

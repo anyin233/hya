@@ -97,9 +97,9 @@ A bundle update goes live in four steps, each of which can refuse it:
    the durable `sessions.db`), `install` calls `Catalog.RefreshBundles` so the
    backend prepares the new generation now, and requires the installed id at
    its prepared digest to be published: `activation: active in the backend
-   (pid N); the next turn uses it`. A generation that fails to prepare (a
+   (pid N); the next turn uses it`. A bundle that fails to prepare (a
    process that does not start, tools that do not match the manifest) keeps
-   the previous generation serving and `install` exits 1 with
+   its previous publication serving and `install` exits 1 with
    `installed but not activated; the backend keeps the previous bundles: …`
    (the install stays written; fix and install again). A project install
    outside a registered Project is not loaded by any session and says so.
@@ -131,11 +131,13 @@ turn/catalog bind); see [Configuration](configuration.md#reloading-configured-pl
 
 `catalog.updated` is emitted when the refresh published a new generation.
 
-The installed base still publishes as a whole when preparing enabled runtime
-processes: one process failure keeps the previous base generation. Consequently,
-a new enabled installation can still fail its activation proof if an unrelated
-installed process prevents publication. Unreadable registry rows are skipped
-independently and do not have this effect.
+Installed bundles publish independently: a process that fails to start keeps
+that bundle's previous catalog and connection, or stays absent if it never
+loaded. Healthy installations still activate. Failures carry the bundle id in
+`errors[]`; an operation on another bundle succeeds with a warning. Automatic
+binds do not repeat a failed attempt until registry or watched configuration
+inputs change. An explicit refresh retries failed sources even with unchanged
+inputs.
 
 ### Management API
 
