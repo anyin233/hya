@@ -276,10 +276,10 @@ async fn quiescence_wakes_main_to_synthesize() {
     );
 }
 
-/// Reports already delivered to the lead during its own turn must not trigger
-/// a second synthesis turn after the lead has answered.
+/// Preparing a report notice without committing its tool result leaves the
+/// report unread, so the lead still owes a wake after its current turn.
 #[tokio::test]
-async fn reports_consumed_in_lead_turn_do_not_wake_synthesis() {
+async fn preparing_a_report_notice_keeps_the_lead_wake_owed() {
     let (engine, agent) = engine_with(SubagentLimits::default()).await;
     let root = make_root(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
@@ -338,8 +338,8 @@ async fn reports_consumed_in_lead_turn_do_not_wake_synthesis() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         assistant_turns(&engine, root).await,
-        0,
-        "delivered report must not wake a second lead turn"
+        1,
+        "preparing a notice must leave the report owed to a lead wake"
     );
 }
 
