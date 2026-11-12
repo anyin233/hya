@@ -587,9 +587,8 @@ impl SessionStore {
         Ok(exists != 0)
     }
 
-    /// Delete ledger and event rows for a session *and every descendant*
-    /// (`session.parent_id` tree); returns whether the root itself had event
-    /// rows. Materialized `session` rows are kept.
+    /// Delete all state owned by a session and every descendant in one
+    /// transaction; returns whether the root itself had event rows.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
         self.delete_session_where(session, None).await
     }
@@ -598,8 +597,8 @@ impl SessionStore {
     /// descendants), but only when its log still ends at `last_seq` (the
     /// newest sequence the caller checked). Returns `false`, deleting
     /// nothing, when the log grew since (or the session is gone). The check
-    /// and the delete are one write statement, so no append can land between
-    /// them.
+    /// and the deletes share one write transaction, so no append can land
+    /// between them.
     pub async fn delete_session_at(
         &self,
         session: SessionId,
@@ -675,6 +674,26 @@ impl SessionStore {
                     .await?;
             }
         }
+        for tree_key in &tree_keys {
+            sqlx::query("DELETE FROM admission_journal WHERE root_session_id = ? OR actor_id = ?")
+                .bind(tree_key.as_slice())
+                .bind(tree_key.as_slice())
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM resident_actor_claim WHERE actor_id = ?")
+                .bind(tree_key.as_slice())
+                .execute(&mut *tx)
+                .await?;
+        }
+        // Remove the complete tree in one statement to satisfy the self FK.
+        sqlx::query(
+            "WITH RECURSIVE tree(id) AS ( \
+                 SELECT ? UNION SELECT s.id FROM session s JOIN tree t ON s.parent_id = t.id \
+             ) DELETE FROM session WHERE id IN (SELECT id FROM tree)",
+        )
+        .bind(session.storage_key())
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         self.projections.remove_all(sessions);
         Ok(deleted)
@@ -1037,6 +1056,135 @@ pub(crate) fn decode_event(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod event_contract_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deletion_removes_every_session_owned_table() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let root = SessionId::new();
+        let child = SessionId::new();
+        let other = SessionId::new();
+        for (session, parent) in [(root, None), (child, Some(root)), (other, None)] {
+            store
+                .append_event(
+                    session,
+                    &Event::SessionCreated {
+                        session,
+                        parent,
+                        agent: "build".into(),
+                        model: "fake".into(),
+                        workdir: "/tmp".into(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
+                    },
+                )
+                .await
+                .unwrap();
+            store
+                .append_event(
+                    session,
+                    &Event::MessageStarted {
+                        session,
+                        message: hya_proto::MessageId::new(),
+                        role: hya_proto::Role::Assistant,
+                        agent: None,
+                        model: None,
+                    },
+                )
+                .await
+                .unwrap();
+            store.read_projection(session).await.unwrap();
+            store.put_file_blob(session, "hash", &[1]).await.unwrap();
+            for sql in [
+                "INSERT INTO projection_snapshot VALUES (?, 1, 1, X'01')",
+                "INSERT INTO pending_resume VALUES (?, 'message', NULL, 1)",
+                "INSERT INTO resident_actor_claim VALUES (?, 1, randomblob(16), 'active')",
+                "INSERT INTO admission_journal (operation_id, source_tool_call_id, root_session_id, request_fingerprint, state, admission_units, created_at, updated_at) VALUES (randomblob(16), randomblob(16), ?, randomblob(32), 'accepted', 1, 1, 1)",
+            ] {
+                sqlx::query(sql)
+                    .bind(session.storage_key())
+                    .execute(&store.pool)
+                    .await
+                    .unwrap();
+            }
+        }
+        // An actor-bound admission can belong to a different root.
+        sqlx::query("INSERT INTO admission_journal (operation_id, source_tool_call_id, root_session_id, actor_id, actor_epoch, request_fingerprint, state, admission_units, created_at, updated_at) VALUES (randomblob(16), randomblob(16), ?, ?, 1, randomblob(32), 'accepted', 1, 1, 1)")
+            .bind(other.storage_key()).bind(child.storage_key()).execute(&store.pool).await.unwrap();
+        for sql in [
+            "INSERT INTO project VALUES ('project', 'Project', 1, 1, 0)",
+            "INSERT INTO project_root VALUES ('project', '/tmp', 0)",
+            "INSERT INTO saved_permission VALUES ('grant', 'project', 'read', '*', 1)",
+            "INSERT INTO saved_permission VALUES ('global-grant', 'global', 'read', '*', 1)",
+            "INSERT INTO agent_model_preference VALUES ('build', 'fake', 'fake')",
+            "INSERT INTO model_effort_preference VALUES ('fake', 'fake', 'high', 1)",
+            "INSERT INTO agent_effort_preference VALUES ('build', 'high', 1)",
+        ] {
+            sqlx::query(sql).execute(&store.pool).await.unwrap();
+        }
+        // A late failure must roll back the event and auxiliary deletes too.
+        sqlx::query("CREATE TRIGGER reject_delete BEFORE DELETE ON session BEGIN SELECT RAISE(ABORT, 'delete blocked'); END")
+            .execute(&store.pool).await.unwrap();
+        assert!(store.delete_session(root).await.is_err());
+        assert_eq!(store.replay(root).await.unwrap().len(), 2);
+        assert!(store.file_blob(child, "hash").await.unwrap().is_some());
+        sqlx::query("DROP TRIGGER reject_delete")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert!(store.delete_session(root).await.unwrap());
+        for (table, column) in [
+            ("session", "id"),
+            ("event_log", "session_id"),
+            ("open_assistant_message", "session_id"),
+            ("pending_resume", "session_id"),
+            ("projection_snapshot", "session_id"),
+            ("file_blob", "session_id"),
+            ("resident_actor_claim", "actor_id"),
+            ("admission_journal", "root_session_id"),
+        ] {
+            for session in [root, child] {
+                let count: i64 =
+                    sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?"))
+                        .bind(session.storage_key())
+                        .fetch_one(&store.pool)
+                        .await
+                        .unwrap();
+                assert_eq!(count, 0, "{table} retains {session}");
+            }
+            let count: i64 =
+                sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?"))
+                    .bind(other.storage_key())
+                    .fetch_one(&store.pool)
+                    .await
+                    .unwrap();
+            assert!(count > 0, "{table} lost unrelated state");
+        }
+        for table in [
+            "project",
+            "project_root",
+            "saved_permission",
+            "agent_model_preference",
+            "model_effort_preference",
+            "agent_effort_preference",
+        ] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                count,
+                if table == "saved_permission" { 2 } else { 1 },
+                "{table}"
+            );
+        }
+        let actors: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM admission_journal WHERE actor_id = ?")
+                .bind(child.storage_key())
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(actors, 0);
+    }
 
     #[tokio::test]
     async fn unknown_event_tags_fail_replay_with_row_context() {

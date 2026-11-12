@@ -360,16 +360,24 @@ row is not required for a session to be listed.
 
 ### `delete_session`
 
-One transaction:
+`delete_session(session: SessionId) -> Result<bool, StoreError>` removes the
+session and every descendant in the `session.parent_id` tree in one transaction:
 
-1. `DELETE FROM event_log WHERE session_id = ?`
-2. `DELETE FROM open_assistant_message WHERE session_id = ?`
-3. `DELETE FROM pending_resume WHERE session_id = ?`
-4. `DELETE FROM projection_snapshot WHERE session_id = ?`
-5. `DELETE FROM file_blob WHERE session_id = ?`
+- `event_log` (including mailbox, channel, and Workflow state),
+- `open_assistant_message`, `pending_resume`, `projection_snapshot`, `file_blob`,
+- `admission_journal` rows whose root **or actor** belongs to the tree,
+- `resident_actor_claim` rows for tree members,
+- the materialized `session` rows themselves.
 
-After the commit the session's in-process cached projection is dropped.
-Returns whether any **event_log** rows were removed.
+Project configuration (`project`, `project_root`), saved Project/global permissions,
+and database-wide Agent/model preferences are retained. Session-scoped permission
+grants are not persisted. No independent mailbox/channel tables exist.
+
+`delete_session_at(session: SessionId, last_seq: EventSeq)` performs the same
+cleanup only if the root log still ends at `last_seq`; otherwise it returns
+`false` and changes nothing. Both methods return whether the root had event rows.
+After commit, cached projections for the whole tree are dropped. Project queries
+use the surviving session rows without compensating event-existence filters.
 
 ## Projection Reads
 
