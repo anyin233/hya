@@ -807,3 +807,8 @@ models are surfaced through `hya models`, the v1 catalog routes
 (`GET /v1/models`, `GET /v1/providers`, and the bootstrap snapshot), and
 saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.
+
+Tool argument decoding is strict across Chat Completions, Responses, and
+Anthropic streams. Invalid or truncated argument JSON returns
+`ProviderError::Decode` with the tool name and JSON parse location. No
+`ToolCallRequested` with a substituted null input is emitted for that call.

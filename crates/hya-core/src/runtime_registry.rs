@@ -2505,9 +2505,9 @@ impl TurnBinding {
             selected_bundle_skill_ids: Arc::new(Vec::new()),
             canonical_hook_ids: Arc::from(hook_refs),
         };
-        if let Ok(partitions) = self.collect_resource_candidates(&policy)
-            && let Ok(selected) = select_candidates_globally(&policy, &partitions)
         {
+            let partitions = self.collect_resource_candidates(&policy)?;
+            let selected = select_candidates_globally(&policy, &partitions)?;
             policy.selected_bundle_tool_ids = Arc::new(
                 selected
                     .tool
@@ -2550,9 +2550,40 @@ impl TurnBinding {
         stable_id: &str,
         plane: AgentToolPlane,
     ) -> Result<AgentResourcePolicy, BundleError> {
-        let mut policy = self.agent_resource_policy(stable_id)?;
-        policy.plane = plane;
-        Ok(policy)
+        let definition = self.snapshot.catalog.require(stable_id)?;
+        let bundle_id = definition.origin.bundle_id().map(str::to_string);
+        let (resource_view, hook_refs) = match bundle_id.as_deref() {
+            None => (
+                crate::builtin_agents::preset_agent(stable_id)
+                    .map(|agent| agent.resource_view.clone())
+                    .unwrap_or_default(),
+                Vec::new(),
+            ),
+            Some(_) => {
+                let (_, agent) = self
+                    .snapshot
+                    .catalog
+                    .bundles()
+                    .resolve_agent_entry(stable_id)
+                    .ok_or_else(|| BundleError::UnknownAgentId {
+                        agent_id: stable_id.to_string(),
+                    })?;
+                (agent.resource_view.clone(), agent.hook_refs.clone())
+            }
+        };
+        Ok(AgentResourcePolicy {
+            bundle_id,
+            plane,
+            resource_view,
+            spawn_rights: self
+                .snapshot
+                .catalog
+                .spawnable(stable_id)
+                .is_ok_and(|agents| !agents.is_empty()),
+            selected_bundle_tool_ids: Arc::new(Vec::new()),
+            selected_bundle_skill_ids: Arc::new(Vec::new()),
+            canonical_hook_ids: Arc::from(hook_refs),
+        })
     }
 
     /// Report whether the selected agent's effective resource view needs a
@@ -7560,8 +7591,7 @@ agent:
             .bind_turn(Path::new("/tmp/hya-filter-alias"))
             .unwrap();
         for agent_id in ["allow-alias", "deny-alias"] {
-            let policy = binding.agent_resource_policy(agent_id).unwrap();
-            match binding.compile_agent_resources(&policy) {
+            match binding.agent_resource_policy(agent_id) {
                 Err(BundleError::UnknownResourceReference { reference, .. }) => {
                     assert_eq!(reference, "patch");
                 }

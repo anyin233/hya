@@ -52,16 +52,16 @@ impl AnthropicDecoder {
         }
     }
 
-    fn close(&mut self) -> Vec<Event> {
+    fn close(&mut self) -> Result<Vec<Event>, ProviderError> {
         if self.finished {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         self.finished = true;
         let (session, message) = (self.session, self.message);
         let mut out = Vec::new();
         for (_, block) in std::mem::take(&mut self.blocks) {
             if matches!(block.kind, BlockKind::Tool) {
-                let input = block.tool.input();
+                let input = block.tool.input()?;
                 out.push(Event::ToolCallRequested {
                     session,
                     message,
@@ -85,7 +85,7 @@ impl AnthropicDecoder {
             tokens: (!self.usage.is_zero()).then_some(self.usage),
             cause: None,
         });
-        out
+        Ok(out)
     }
 
     fn record_usage(&mut self, usage: &Value) {
@@ -302,13 +302,13 @@ impl Decoder for AnthropicDecoder {
                     self.record_usage(usage);
                 }
             }
-            Some("message_stop") => out.extend(self.close()),
+            Some("message_stop") => out.extend(self.close()?),
             _ => {}
         }
         Ok(out)
     }
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
-        Ok(self.close())
+        self.close()
     }
 }
 
