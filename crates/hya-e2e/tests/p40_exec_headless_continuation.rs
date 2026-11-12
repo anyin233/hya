@@ -12,7 +12,8 @@ use hya_e2e::{E2eEnv, E2eEnvBuilder, ScriptStep, text_step, tool_step};
 use serde_json::json;
 
 const ROOT: &str = "You are hya";
-const NOTICE: &str = "HEADLESS RUN";
+/// Every harness notice opens with this; the hya-main prompt names `HEADLESS RUN` bare.
+const NOTICE: &str = "HEADLESS RUN —";
 
 /// Run `hya exec --json [extra..] prompt` direct (its own db, so it does not
 /// route to the env's `serve`) with the env's config and FakeLlm.
