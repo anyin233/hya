@@ -706,12 +706,20 @@ async fn saving_a_project_bundle_model_writes_only_that_projects_file() {
         .claim_runtime_owner(owner)
         .expect("claim runtime owner");
     let router = Arc::new(ProviderRouter::new().with(Arc::new(hya_provider::DevProvider::new())));
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        store.clone(),
+        router,
+        harness.runtime.clone(),
+        permission,
+        EventBus::default(),
+    ));
     let config_file = state.join("config-home/hya/config.yaml");
     let control = hya_app::PersistentAgentModelControl::load(
         store,
         owner,
         Arc::clone(&harness.runtime),
-        router,
+        engine,
     )
     .await
     .unwrap()

@@ -42,6 +42,7 @@ const POST_SPAWN_MUTATION: &str = "POST_SPAWN_SOURCE_MUTATION_MARKER";
 struct AdmissionFixture {
     engine: Arc<SessionEngine>,
     spawner: SpawnerPlane,
+    sender: BoundSpawnSender,
     parent: SessionId,
     provider_calls: Arc<AtomicUsize>,
     resident: Arc<ResidentSupervisor>,
@@ -137,6 +138,9 @@ impl Provider for CountingProvider {
     }
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        if model.as_str().starts_with("hya/") {
+            return None;
+        }
         self.inner.capabilities(model)
     }
 
@@ -471,7 +475,6 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         spawn_rx,
         engine.clone(),
         base.clone(),
-        provider_router,
         Arc::new(CategoryRegistry::default()),
         resident,
     );
@@ -1067,8 +1070,15 @@ async fn admission_fixture_with_store_and_gate(
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        provider_router,
-        Arc::new(CategoryRegistry::default()),
+        Arc::new(CategoryRegistry::from_entries(
+            std::collections::HashMap::from([(
+                "live".to_string(),
+                hya_core::CategoryEntry {
+                    model: ModelRef::new("hya/offline"),
+                    fallback: vec![ModelRef::new("fake")],
+                },
+            )]),
+        )),
         resident.clone(),
     );
 
@@ -1089,6 +1099,7 @@ async fn admission_fixture_with_store_and_gate(
     AdmissionFixture {
         engine,
         spawner,
+        sender: spawn_sender,
         parent,
         provider_calls,
         resident,
@@ -1282,7 +1293,6 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         forward_rx,
         engine.clone(),
         base,
-        router,
         Arc::new(CategoryRegistry::default()),
         resident,
     );
@@ -1405,7 +1415,6 @@ async fn guidance_spawn_fixture(
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        provider_router,
         Arc::new(CategoryRegistry::default()),
         resident,
     );
@@ -2161,7 +2170,6 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
         spawn_rx,
         engine.clone(),
         base.clone(),
-        provider_router,
         Arc::new(CategoryRegistry::default()),
         resident,
     );
@@ -2409,7 +2417,6 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         spawn_rx,
         engine.clone(),
         base,
-        provider_router,
         Arc::new(CategoryRegistry::default()),
         resident,
     );
@@ -2602,4 +2609,44 @@ async fn batch_children_enter_provider_before_either_completes() {
     for outcome in outcomes {
         wait_member_turn_done(&fixture.engine, &outcome.session).await;
     }
+}
+
+#[tokio::test]
+async fn spawn_uses_provider_published_after_supervisor_startup() {
+    let fixture = admission_fixture(1).await;
+    fixture.engine.publish_provider_catalog(
+        Arc::new(ProviderRouter::new().with(Arc::new(hya_provider::DevProvider::new()))),
+        fixture.engine.provider_catalog_snapshot(),
+    );
+    fixture
+        .engine
+        .runtime_registry()
+        .publish_agent_model_preferences(std::collections::BTreeMap::from([(
+            "quick".to_string(),
+            ModelRef::new("hya/offline"),
+        )]));
+    let binding = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
+    let result = fixture
+        .sender
+        .for_binding(&binding)
+        .for_session_with_agents(fixture.parent, fixture.agents.clone())
+        .spawn(
+            operation(),
+            vec![SpawnMember {
+                description: "live provider".to_string(),
+                prompt: "hello".to_string(),
+                subagent_type: "quick".to_string(),
+                category: Some("live".to_string()),
+                ..SpawnMember::default()
+            }],
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let child = fixture
+        .engine
+        .read_projection(result[0].session.parse().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(child.session.model, Some(ModelRef::new("hya/offline")));
 }

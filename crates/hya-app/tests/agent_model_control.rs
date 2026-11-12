@@ -34,7 +34,15 @@ async fn control_loads_validates_persists_and_publishes_preferences() {
 
     let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
-    let control = PersistentAgentModelControl::load(store.clone(), owner, runtime.clone(), router)
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        store.clone(),
+        router,
+        runtime.clone(),
+        permission,
+        EventBus::default(),
+    ));
+    let control = PersistentAgentModelControl::load(store.clone(), owner, runtime.clone(), engine)
         .await
         .unwrap();
 
@@ -119,8 +127,16 @@ async fn failed_owner_fenced_mutation_keeps_the_published_snapshot() {
         .expect("claim runtime owner");
     let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(DevProvider::new())));
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let engine = Arc::new(SessionEngine::new(
+        store.clone(),
+        router,
+        runtime.clone(),
+        permission,
+        EventBus::default(),
+    ));
     let control =
-        PersistentAgentModelControl::load(store, OwnerRunId::new(), runtime.clone(), router)
+        PersistentAgentModelControl::load(store, OwnerRunId::new(), runtime.clone(), engine)
             .await
             .unwrap();
     let binding = runtime.bind_turn(std::path::Path::new(".")).unwrap();
@@ -151,10 +167,6 @@ async fn control_accepts_models_of_routes_the_engine_published_after_startup() {
     let runtime = support::test_runtime(Arc::new(ToolRegistry::builtins()), &[]);
     // Startup has no model routes; a provider is added live later.
     let startup = Arc::new(ProviderRouter::new());
-    let control =
-        PersistentAgentModelControl::load(store.clone(), owner, runtime.clone(), startup.clone())
-            .await
-            .unwrap();
     let (permission, _asks) = PermissionPlane::new(PermissionRules::new(Vec::new()));
     let engine = Arc::new(SessionEngine::new(
         store,
@@ -163,7 +175,14 @@ async fn control_accepts_models_of_routes_the_engine_published_after_startup() {
         permission,
         EventBus::default(),
     ));
-    control.follow_engine_router(&engine);
+    let control = PersistentAgentModelControl::load(
+        engine.store().clone(),
+        owner,
+        runtime.clone(),
+        engine.clone(),
+    )
+    .await
+    .unwrap();
     let binding = runtime.bind_turn(std::path::Path::new(".")).unwrap();
     let offline = || Some(AgentModelIdentity::new("hya", "offline"));
 

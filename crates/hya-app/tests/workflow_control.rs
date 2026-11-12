@@ -451,10 +451,21 @@ async fn selected_run_rejects_same_name_source_substitution() {
 async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
     let root = project_root();
     write_workflow(&root, "deliver", "DELIVER");
+    let path = root.join(".hya/workflows/deliver.hya.md");
+    let source = std::fs::read_to_string(&path).expect("read Workflow");
+    std::fs::write(
+        &path,
+        source.replace(
+            "    agent: hya-task",
+            "    agent: hya-task\n    model:\n      id: fake/model",
+        ),
+    )
+    .expect("write explicit stage model");
     let provider = hya_provider::FakeProvider::scripted(vec![hya_provider::FakeStep::Text(
         "DELIVERED".to_string(),
     )]);
-    let router = hya_provider::ProviderRouter::new().with(std::sync::Arc::new(provider));
+    let live_router = hya_provider::ProviderRouter::new().with(std::sync::Arc::new(provider));
+    let router = hya_provider::ProviderRouter::new();
     let agent = agent_with_model("fake/model", None);
     let store = SessionStore::connect_memory().await.expect("store");
     let mut built = build_session_engine(
@@ -469,6 +480,16 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
     .expect("build engine");
     let engine = built.engine();
     let control = built.workflow_control();
+    engine.publish_provider_catalog(
+        std::sync::Arc::new(live_router),
+        engine.provider_catalog_snapshot(),
+    );
+    engine
+        .runtime_registry()
+        .publish_agent_model_preferences(BTreeMap::from([(
+            "hya-task".to_string(),
+            hya_proto::ModelRef::new("fake/model"),
+        )]));
     let session = engine
         .create(CreateSession {
             parent: None,

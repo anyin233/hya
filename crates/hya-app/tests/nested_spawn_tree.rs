@@ -63,7 +63,6 @@ async fn nested_spawn() -> NestedSpawn {
         spawn_rx,
         engine.clone(),
         agent.clone(),
-        provider_router,
         Arc::new(CategoryRegistry::default()),
         resident,
     );

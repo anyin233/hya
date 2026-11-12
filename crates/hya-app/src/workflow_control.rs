@@ -629,7 +629,7 @@ pub struct WorkflowControl {
     base_agent: AgentSpec,
     resident_supervisor: Arc<ResidentSupervisor>,
     owner: OwnerRunId,
-    routing: WorkflowRoutingContext,
+    categories: Arc<CategoryRegistry>,
     active_runs: Arc<std::sync::Mutex<BTreeMap<SessionId, ActiveWorkflowRun>>>,
 }
 
@@ -642,14 +642,13 @@ impl WorkflowControl {
         resident_supervisor: Arc<ResidentSupervisor>,
         owner: OwnerRunId,
         categories: Arc<CategoryRegistry>,
-        router: Arc<hya_provider::ProviderRouter>,
     ) -> Self {
         Self {
             engine,
             base_agent,
             resident_supervisor,
             owner,
-            routing: WorkflowRoutingContext::new(categories, router),
+            categories,
             active_runs: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
     }
@@ -926,11 +925,10 @@ impl WorkflowControl {
             .runtime_semantic_fingerprint_v1(&binding)
             .ok_or(WorkflowControlError::RuntimeUnavailable)?;
         let caller_name = invocation.caller.as_deref().unwrap_or(caller.as_str());
-        let relevant_preferences = workflow_agent_model_preferences(
-            entry.workflow(),
-            &binding,
-            self.routing.router.as_ref(),
-        );
+        let routing =
+            WorkflowRoutingContext::new(self.categories.clone(), self.engine.provider_router());
+        let relevant_preferences =
+            workflow_agent_model_preferences(entry.workflow(), &binding, routing.router.as_ref());
         let request_hash = workflow_request_hash(
             entry.identity(),
             caller_name,
@@ -979,7 +977,7 @@ impl WorkflowControl {
             },
             inputs,
             resident_supervisor: Some(self.resident_supervisor.clone()),
-            routing: Some(self.routing.clone()),
+            routing: Some(routing),
         };
         let prepared = prepare_workflow_run_for_actor(
             self.engine.clone(),
