@@ -29,7 +29,7 @@ use super::session::parse_session;
 /// run-registry entry is held by the spawned task until the turn ends, so
 /// clients see the session busy for exactly the turn's duration. The shared
 /// tail of every `create_turn` kind and restart restore.
-fn spawn_turn_run(
+async fn spawn_turn_run(
     st: &ServerState,
     session: SessionId,
     run: RunGuard,
@@ -38,6 +38,12 @@ fn spawn_turn_run(
     external_dirs: Vec<PathBuf>,
     explicit_model: Option<ModelRef>,
 ) {
+    if let Some((paused, barrier)) = &st.turn_spawn_barrier
+        && *paused == session
+    {
+        barrier.wait().await;
+        barrier.wait().await;
+    }
     let engine = st.engine.clone();
     tokio::spawn(async move {
         if let Err(error) = engine
@@ -103,7 +109,8 @@ async fn resume_turn(st: &ServerState, session: SessionId) -> Result<bool, V1Err
         turn.guidance,
         external_dirs,
         None,
-    );
+    )
+    .await;
     Ok(true)
 }
 
@@ -253,7 +260,8 @@ async fn create_turn(
                 turn.guidance,
                 external_dirs,
                 None,
-            );
+            )
+            .await;
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Command(command)) => {
@@ -327,7 +335,8 @@ async fn create_turn(
                 turn.guidance,
                 external_dirs,
                 explicit_model,
-            );
+            )
+            .await;
             Ok(Json(running_turn(session, &message.to_string())))
         }
         Some(Kind::Shell(shell)) => {

@@ -228,7 +228,8 @@ impl SessionEngine {
         // A shell turn is a turn: refuse (never interleave) while the session
         // already has one active.
         let lease = self.try_begin_turn(session)?;
-        let cancel = lease.bind_cancel(&cancel);
+        let caller_cancel = cancel;
+        let cancel = lease.bind_cancel(&caller_cancel);
         let message = MessageId::new();
         lease.set_message(message);
         let prepare = async {
@@ -237,7 +238,7 @@ impl SessionEngine {
             let workdir = session_workdir(agent, &projection);
             let binding = tokio::select! {
                 biased;
-                () = self.turn_gate.drain_cancel.cancelled() => return Ok((message, FinishReason::Cancelled)),
+                () = cancel.cancelled() => return Ok((message, FinishReason::Cancelled)),
                 binding = self.bind_session_runtime(session, &workdir) => binding?,
             };
             let stable_id = projection
@@ -254,7 +255,7 @@ impl SessionEngine {
             let bound_hooks = binding.bundle_hooks_for_agent(stable_id);
             let operation = async {
                 let message_guard = self.turn_gate.message_guard(session).await;
-                if self.turn_gate.cancel_cause(session) == Some(hya_proto::FinishCause::Shutdown) {
+                if cancel.is_cancelled() {
                     return Ok((message, FinishReason::Cancelled));
                 }
                 self.emit(
@@ -320,7 +321,11 @@ impl SessionEngine {
             }
         };
         let mut outcome = prepare.await;
-        let cause = self.turn_gate.cancel_cause(session);
+        let cause = self.turn_gate.cancel_cause(session).or_else(|| {
+            caller_cancel
+                .is_cancelled()
+                .then_some(hya_proto::FinishCause::UserCancel)
+        });
         if matches!(outcome, Err(CoreError::Cancelled))
             && cause == Some(hya_proto::FinishCause::Shutdown)
         {
