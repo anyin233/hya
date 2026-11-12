@@ -88,11 +88,7 @@ async fn e1_unfinished_todos_continue_the_run() {
             todo_status(&[("1", "completed"), ("2", "in_progress")]),
             text_step("Item one is done."),
             bash("echo working"),
-            todo_status(&[
-                ("2", "completed"),
-                ("3", "completed"),
-                ("4", "blocked"),
-            ]),
+            todo_status(&[("2", "completed"), ("3", "completed"), ("4", "blocked")]),
             text_step("FINAL_ANSWER"),
             text_step("ROOT_EXTRA"),
         ],
@@ -106,7 +102,10 @@ async fn e1_unfinished_todos_continue_the_run() {
         "notice missing: {}",
         requests[3]
     );
-    assert!(!requests[3].contains("#1 ["), "completed items are not listed");
+    assert!(
+        !requests[3].contains("#1 ["),
+        "completed items are not listed"
+    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("FINAL_ANSWER"));
     assert_eq!(env.fake.route_remaining(ROOT).unwrap(), Some(1));
 }
