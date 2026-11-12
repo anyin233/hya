@@ -6,7 +6,7 @@
 //! under theirs; events carry only the hash. Rows are scoped to the session
 //! and removed with it.
 
-use hya_proto::{Envelope, Event, EventSeq, SessionId, now_millis};
+use hya_proto::{Envelope, Event, SessionId};
 use sqlx::Row;
 
 use crate::{SessionStore, StoreError};
@@ -47,7 +47,7 @@ impl SessionStore {
         &self,
         session: SessionId,
         blobs: &[(String, Vec<u8>)],
-        events: &[Event],
+        events: Vec<Event>,
     ) -> Result<Vec<Envelope>, StoreError> {
         let key = session.storage_key();
         let mut tx = self.pool.begin().await?;
@@ -66,24 +66,7 @@ impl SessionStore {
         }
         let mut envelopes = Vec::with_capacity(events.len());
         for event in events {
-            let ts_millis = now_millis();
-            let payload = serde_json::to_string(event)?;
-            let row = sqlx::query(
-                "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq",
-            )
-            .bind(&key)
-            .bind(payload)
-            .bind(ts_millis)
-            .fetch_one(&mut *tx)
-            .await?;
-            let seq: i64 = row.try_get("seq")?;
-            crate::materialize::materialize_event_side_tables(&mut tx, session, event, ts_millis)
-                .await?;
-            envelopes.push(Envelope {
-                seq: EventSeq(seq.max(0) as u64),
-                ts_millis,
-                event: event.clone(),
-            });
+            envelopes.push(crate::append_event_in_transaction(&mut tx, session, event).await?);
         }
         tx.commit().await?;
         Ok(envelopes)
