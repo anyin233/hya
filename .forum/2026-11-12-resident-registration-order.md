@@ -8,6 +8,17 @@ then drives the resident. Dropping the spawning caller does not drop that task.
 Group-channel lookup must run inside the `BEGIN IMMEDIATE` registration
 transaction; a projection read before it can split concurrent siblings.
 
+# What happens if a lifecycle hook outlives its resident episode?
+
+The detached initializer and resident driver retain the slot's exact claim.
+After awaited work, stale tasks stop before publishing, replacing session maps,
+updating the slot, or taking more work. Hook/policy map replacement happens
+under the same team lock as the claim check. Cleanup removes only a matching
+claim, including after delayed sidecar shutdown; it cannot delete a revived
+episode's slot. Sidecar recovery transfers the driver to its recovered claim
+only when the existing slot accepts that replacement. Supervisor tests block
+`session.start`, `agent.spawn`, and sidecar shutdown across archive/revive.
+
 # Why does cancelling an unstarted directive need a nonempty assistant answer?
 
 The request mapper omits empty assistant messages. A start/finish cancellation
