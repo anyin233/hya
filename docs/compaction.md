@@ -200,3 +200,8 @@ the omp budgets — is what the ladder relies on, and that is what ships.
 | Config file/env resolution | [`crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) |
 | Wire events and strategies | [`crates/hya-proto/src/event.rs`](../crates/hya-proto/src/event.rs) |
 | Artifact spill sink | [`crates/hya-core/src/engine/spill.rs`](../crates/hya-core/src/engine/spill.rs), [`crates/hya-tool/src/handle/`](../crates/hya-tool/src/handle/) |
+
+Marker publication is atomic: each persisted reduction writes its completed
+system marker and `ContextCompacted` range event in one transaction, then
+publishes the committed events. Persistence and actor-fence errors fail the
+turn; they do not cause the ladder to try another method.
