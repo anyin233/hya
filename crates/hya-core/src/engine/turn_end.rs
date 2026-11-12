@@ -298,6 +298,20 @@ impl SessionEngine {
         finish: FinishReason,
         cause: Option<FinishCause>,
     ) -> Result<(), CoreError> {
+        self.close_turn_message_with_tokens(actor_claim, session, message, finish, cause, None)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn close_turn_message_with_tokens(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        finish: FinishReason,
+        cause: Option<FinishCause>,
+        tokens: Option<hya_proto::TokenUsage>,
+    ) -> Result<(), CoreError> {
         let _message_guard = self.turn_gate.message_guard(session).await;
         let projection = self.store.read_projection(session).await?;
         let Some(entry) = projection
@@ -325,7 +339,7 @@ impl SessionEngine {
                             message,
                             role: Role::Assistant,
                             finish,
-                            tokens: None,
+                            tokens,
                             cause,
                         },
                     ],
@@ -405,7 +419,7 @@ impl SessionEngine {
                 message,
                 role: Role::Assistant,
                 finish,
-                tokens: None,
+                tokens,
                 cause,
             },
         )

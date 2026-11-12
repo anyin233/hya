@@ -61,10 +61,11 @@ impl SessionEngine {
         stream: EventStream,
         actor_claim: Option<&ActorClaim>,
         attribution: RoundAttribution,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<StreamRound, RoundFailure> {
         let mut tokens = None;
         let collected = self
-            .drain_stream_round(session, message, stream, actor_claim, &mut tokens)
+            .drain_stream_round(session, message, stream, actor_claim, &mut tokens, cancel)
             .await;
         if let Some(usage) = tokens.filter(|usage: &TokenUsage| !usage.is_zero()) {
             let record = self
@@ -108,6 +109,7 @@ impl SessionEngine {
         mut stream: EventStream,
         actor_claim: Option<&ActorClaim>,
         tokens: &mut Option<TokenUsage>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<(Vec<ToolCallReq>, FinishReason), RoundFailure> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
@@ -115,7 +117,18 @@ impl SessionEngine {
         let mut active_text_part = None;
         let mut finish = FinishReason::Stop;
         let mut saw_text = false;
-        while let Some(item) = stream.next().await {
+        loop {
+            let item = tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    finish = FinishReason::Cancelled;
+                    break;
+                }
+                item = stream.next() => match item {
+                    Some(item) => item,
+                    None => break,
+                },
+            };
             if let Err(error) = self.validate_actor_claim(actor_claim).await {
                 return Err(RoundFailure {
                     error,
@@ -255,6 +268,12 @@ impl SessionEngine {
                 }
                 event => self.emit_for_actor(actor_claim, session, event).await?,
             }
+        }
+        if let Some(part) = active_text_part
+            && let Some(text) = text_parts.text(part)
+        {
+            self.persist_text_part(actor_claim, session, message, part, text)
+                .await?;
         }
         // A stream that ends without a part's `ReasoningEnd` still keeps the
         // thinking it streamed: only its deltas were live-only.

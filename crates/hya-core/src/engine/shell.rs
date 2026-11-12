@@ -294,10 +294,8 @@ impl SessionEngine {
                 )
                 .await?;
 
-                let finish = tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => FinishReason::Cancelled,
-                    outcome = self.execute_shell_part(
+                let finish = self
+                    .execute_shell_part(
                         ShellPart {
                             session,
                             message,
@@ -310,8 +308,8 @@ impl SessionEngine {
                         &agent,
                         &resources,
                         cancel.clone(),
-                    ) => outcome?,
-                };
+                    )
+                    .await?;
                 Ok((message, finish))
             };
             if bound_hooks.is_empty() {
@@ -419,80 +417,87 @@ impl SessionEngine {
         let started = std::time::Instant::now();
         // Prior content of the files the command may change (revert).
         let mut file_capture = super::file_snapshot::FileCapture::None;
-        let result = match resources.resolve_tool(&tool) {
-            Some(resolved) => {
-                let workspace = self
-                    .session_workspace(session, &projection, binding.workdir())
-                    .await;
-                let mut permission = self
-                    .mode_permission_plane(binding, session, Some(&agent.name))
-                    .await?
-                    .for_session(session)
-                    .with_grant_scope(workspace.grant_scope);
-                if let Some(hooks) = activation_hook_for(session) {
-                    permission = permission.prepend_interceptor(Arc::new(
-                        crate::bundle_hooks::BundlePermissionInterceptor::new(hooks),
-                    ));
-                }
-                // Outermost: the user's own command never asks (Deny still wins).
-                let permission = permission.prepend_interceptor(Arc::new(UserShellApproval));
-                let authorized = {
-                    authorize_tool_call(
-                        &resolved,
-                        &input,
-                        permission,
-                        shell_part.message,
-                        shell_part.call,
-                    )
-                    .await
-                };
-                match authorized {
-                    Ok(permission) => {
-                        let channel_policy = crate::ChannelPolicy::from_binding(binding)?
-                            .snapshot_for(agent.name.as_str());
-                        let ctx = ToolCtx {
-                            workflows: hya_tool::WorkflowPlane::disconnected(),
-                            permission,
-                            interaction: self.interaction.for_session(session),
-                            spawner: self.spawner.for_binding(binding).for_session_with_agents(
-                                session,
-                                agent_roster(binding, agent.name.as_str())?,
-                            ),
-                            operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
-                            mailbox: self
-                                .mailbox
-                                .for_session(session)
-                                .with_channel_policy(channel_policy),
-                            project_activity: self.project_activity.for_session(session),
-                            lifecycle: self
-                                .lifecycle
-                                .for_session(session)
-                                .with_channel_policy(channel_policy),
-                            session: Some(session),
-                            parent_session: projection.session.parent,
-                            todo: self.todo.clone(),
-                            skills: resources.skill_plane(),
-                            artifacts: self.artifacts.clone(),
-                            agents: agent_roster(binding, agent.name.as_str())?,
-                            websearch: self.websearch.clone(),
-                            lsp: self.lsp.clone(),
-                            formatter: self.formatter.clone(),
-                            workdir: binding.workdir().to_path_buf(),
-                            roots: workspace.roots,
-                            cancel,
-                        };
-                        file_capture = Box::pin(super::file_snapshot::capture_before(
-                            resolved.tool.name(),
-                            &input,
-                            binding.workdir(),
-                        ))
+        let collect_tool = async {
+            Ok::<_, CoreError>(match resources.resolve_tool(&tool) {
+                Some(resolved) => {
+                    let workspace = self
+                        .session_workspace(session, &projection, binding.workdir())
                         .await;
-                        resolved.tool.execute(&ctx, input).await
+                    let mut permission = self
+                        .mode_permission_plane(binding, session, Some(&agent.name))
+                        .await?
+                        .for_session(session)
+                        .with_grant_scope(workspace.grant_scope);
+                    if let Some(hooks) = activation_hook_for(session) {
+                        permission = permission.prepend_interceptor(Arc::new(
+                            crate::bundle_hooks::BundlePermissionInterceptor::new(hooks),
+                        ));
                     }
-                    Err(error) => Err(error),
+                    // Outermost: the user's own command never asks (Deny still wins).
+                    let permission = permission.prepend_interceptor(Arc::new(UserShellApproval));
+                    let authorized = {
+                        authorize_tool_call(
+                            &resolved,
+                            &input,
+                            permission,
+                            shell_part.message,
+                            shell_part.call,
+                        )
+                        .await
+                    };
+                    match authorized {
+                        Ok(permission) => {
+                            let channel_policy = crate::ChannelPolicy::from_binding(binding)?
+                                .snapshot_for(agent.name.as_str());
+                            let ctx = ToolCtx {
+                                workflows: hya_tool::WorkflowPlane::disconnected(),
+                                permission,
+                                interaction: self.interaction.for_session(session),
+                                spawner: self.spawner.for_binding(binding).for_session_with_agents(
+                                    session,
+                                    agent_roster(binding, agent.name.as_str())?,
+                                ),
+                                operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
+                                mailbox: self
+                                    .mailbox
+                                    .for_session(session)
+                                    .with_channel_policy(channel_policy),
+                                project_activity: self.project_activity.for_session(session),
+                                lifecycle: self
+                                    .lifecycle
+                                    .for_session(session)
+                                    .with_channel_policy(channel_policy),
+                                session: Some(session),
+                                parent_session: projection.session.parent,
+                                todo: self.todo.clone(),
+                                skills: resources.skill_plane(),
+                                artifacts: self.artifacts.clone(),
+                                agents: agent_roster(binding, agent.name.as_str())?,
+                                websearch: self.websearch.clone(),
+                                lsp: self.lsp.clone(),
+                                formatter: self.formatter.clone(),
+                                workdir: binding.workdir().to_path_buf(),
+                                roots: workspace.roots,
+                                cancel: cancel.clone(),
+                            };
+                            file_capture = Box::pin(super::file_snapshot::capture_before(
+                                resolved.tool.name(),
+                                &input,
+                                binding.workdir(),
+                            ))
+                            .await;
+                            resolved.tool.execute(&ctx, input).await
+                        }
+                        Err(error) => Err(error),
+                    }
                 }
-            }
-            None => Err(ToolError::Other("unknown tool: bash".to_string())),
+                None => Err(ToolError::Other("unknown tool: bash".to_string())),
+            })
+        };
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(ToolError::Cancelled),
+            result = collect_tool => result?,
         };
         let mut artifact_guard =
             BashArtifactGuard::capture(&tool, result.as_ref().ok(), binding.workdir());
